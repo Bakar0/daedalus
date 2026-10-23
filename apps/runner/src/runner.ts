@@ -577,12 +577,15 @@ export class Runner {
     )
       return;
     this.#sleepAskedAt = now;
-    // The Mac first, so its sessions read as asleep at once.
-    if (this.#channel) this.#send({ t: "workspace.sleeping" });
-    await this.#askToSleep();
+    // Only once the gateway took it: a refused sleep leaves the sessions
+    // running, as the Mac must then see them. The gateway may drop this
+    // runner before it answers; the Mac then learns from the channel going.
+    if ((await this.#askToSleep()) && this.#channel)
+      this.#send({ t: "workspace.sleeping" });
   }
 
-  async #askToSleep(): Promise<void> {
+  /** Whether the gateway accepted the sleep. */
+  async #askToSleep(): Promise<boolean> {
     const url = new URL(
       `/v1/workspaces/${this.#o.workspaceId}/sleep`,
       this.#o.gatewayUrl,
@@ -595,8 +598,10 @@ export class Runner {
       this.#log(
         `asked the gateway to sleep this workspace: ${response.status}`,
       );
+      return response.ok;
     } catch (error) {
       this.#log(`sleep request failed: ${(error as Error).message}`);
+      return false;
     }
   }
 }

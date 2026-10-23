@@ -12,6 +12,7 @@ gateway:
     nodePort: null # only used when type is NodePort
   limits:
     workspacesPerUser: 5
+  collectSeconds: 3600 # how often the gateway deletes what retention says is unused
 workspace:
   storageClass: ""
   storageSize: 20Gi
@@ -27,6 +28,9 @@ workspace:
   maxResources: { cpu: "4", memory: 8Gi }
   runtimeClassName: "" # "gvisor" to sandbox workspace pods
   idleMinutes: 15 # runner asks the gateway to sleep it after this long with nothing working
+  # The gateway deletes a workspace (pod, volumes, token, record) asleep this
+  # long, Mac or not; its Mac then falls back to the copy it kept. 0 never.
+  retention: { asleepDays: 30 }
 tenant:
   # Each workspace has 2 PVCs (data and state) and a runner container that
   # requests 50m CPU, 64Mi memory and 64Mi ephemeral storage. Size the quota for

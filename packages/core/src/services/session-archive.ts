@@ -2,7 +2,7 @@ import type { AgentSession, Workspace } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "./agents";
-import type { SessionMoves } from "./session-move";
+import type { WorkspaceMoveResult, WorkspaceMoves } from "./workspace-move";
 import type { WorkspaceService } from "./workspaces";
 
 /** What archiving a cloud copy away needs from the cloud service. */
@@ -13,131 +13,70 @@ export interface ArchiveCloud {
 
 /**
  * - `archived`: done.
- * - `needsApproval`: moving it home would bring files that steer agents;
- *   asked as a move asks, then again with `approved`.
- * - `needsConfirmation`: its cloud workspace cannot be reached, or the move
- *   failed; with `withoutCloudChanges` it is archived with what this Mac has.
+ * - `needsApproval`: the workspace comes home from the cloud first, and
+ *   that brings files that steer agents; asked as a move asks, then again
+ *   with `approved`.
+ * - `needsSmaller`: it cannot come home, being over a cap.
  */
-export type SessionArchiveResult =
-  | { status: "archived"; session: AgentSession }
-  | { status: "needsApproval"; paths: string[] }
-  | { status: "needsConfirmation"; reason: string };
-
-/** As a session's, naming the session that asks. */
 export type WorkspaceArchiveResult =
   | { status: "archived"; workspace: Workspace }
-  | { status: "needsApproval"; sessionId: string; paths: string[] }
-  | { status: "needsConfirmation"; sessionId: string; reason: string };
+  | Extract<WorkspaceMoveResult, { status: "needsApproval" | "needsSmaller" }>;
 
 export interface SessionArchiveOptions {
   repositories: SqliteRepositories;
   agents: AgentService;
   workspaces: WorkspaceService;
-  moves: SessionMoves;
+  workspaceMoves: WorkspaceMoves;
   cloud: ArchiveCloud;
 }
 
 /**
- * Archiving where the cloud is involved. A cloud session comes home first,
- * conversation and code, and is archived as a session of this Mac; restoring
- * it is then local. Archiving a workspace does that for every cloud session,
- * then deletes the cloud copy; deleting a workspace deletes it too.
+ * Archiving and deleting where the cloud is involved. A workspace in the
+ * cloud comes home before it is archived; its cloud copy is deleted with
+ * it, as it is when a workspace is deleted or removed. A session archives
+ * where it runs.
  */
 export class SessionArchive {
   constructor(private readonly options: SessionArchiveOptions) {}
 
-  async archiveSession(input: {
+  archiveSession(input: {
     sessionId: string;
     force?: boolean;
-    approved?: string[];
-    withoutCloudChanges?: boolean;
-  }): Promise<SessionArchiveResult> {
-    const { agents, moves } = this.options;
-    const agent = await agents.get(input.sessionId);
-    if (!agent.hostId || agent.archivedAt)
-      return {
-        status: "archived",
-        session: await agents.archive(agent.id, input.force),
-      };
-    if (input.withoutCloudChanges)
-      return { status: "archived", session: await this.#leaveCloud(agent) };
-    let moved: AgentSession;
-    try {
-      const result = await moves.move({
-        sessionId: agent.id,
-        to: "local",
-        ...(input.approved ? { approved: input.approved } : {}),
-      });
-      if (result.status === "needsApproval") return result;
-      moved = result.session;
-      // Its notice is about working on; an archived session does not.
-      moves.dismiss(agent.id);
-    } catch (error) {
-      return {
-        status: "needsConfirmation",
-        reason: error instanceof Error ? error.message : String(error),
-      };
-    }
-    return {
-      status: "archived",
-      session: await agents.archive(moved.id, input.force),
-    };
-  }
-
-  /**
-   * Archives a cloud session with what this Mac has, the cloud's work left
-   * in the cloud copy. One that came from this Mac goes back to the folder
-   * and conversation it left with; one born in the cloud has nothing here,
-   * so it stays a cloud session, archived.
-   */
-  async #leaveCloud(agent: AgentSession): Promise<AgentSession> {
-    const { agents, moves, repositories } = this.options;
-    const folder = await moves.movedFrom(agent.id);
-    // Its pod may be gone: nothing there is stopped, it reads as ended.
-    const ended: AgentSession = {
-      ...agent,
-      ...(agent.status === "running" || agent.status === "starting"
-        ? { status: "lost", endedAt: new Date().toISOString() }
-        : {}),
-    };
-    if (!folder) {
-      const archived = {
-        ...ended,
-        archivedAt: new Date().toISOString(),
-      };
-      repositories.updateAgent(archived);
-      return archived;
-    }
-    repositories.updateAgent(ended);
-    repositories.setAgentPlace(agent.id, {
-      hostId: null,
-      workingDirectory: folder,
-    });
-    await moves.forget(agent.id);
-    return agents.archive(agent.id, true);
+  }): Promise<AgentSession> {
+    return this.options.agents.archive(input.sessionId, input.force);
   }
 
   async archiveWorkspace(input: {
     reference: string;
-    approved?: Record<string, string[]>;
-    withoutCloudChanges?: boolean;
+    approved?: string[];
   }): Promise<WorkspaceArchiveResult> {
-    const { repositories, workspaces, cloud } = this.options;
+    const { repositories, workspaces, workspaceMoves, cloud } = this.options;
     const workspace = await workspaces.get(input.reference);
     if (workspace.archivedAt) return { status: "archived", workspace };
-    const inCloud = repositories
-      .listAgents({ workspaceId: workspace.id })
-      .filter((session) => session.hostId && !session.archivedAt);
-    for (const session of inCloud) {
-      const approved = input.approved?.[session.id];
-      const result = await this.archiveSession({
-        sessionId: session.id,
-        force: true,
-        ...(approved ? { approved } : {}),
-        ...(input.withoutCloudChanges ? { withoutCloudChanges: true } : {}),
-      });
-      if (result.status !== "archived")
-        return { ...result, sessionId: session.id };
+    if (workspace.place === "cloud") {
+      let moved: WorkspaceMoveResult;
+      try {
+        // Nothing runs in an archived workspace: no turn is waited for.
+        moved = await workspaceMoves.move({
+          workspace: workspace.id,
+          to: "mac",
+          stopWorking: true,
+          ...(input.approved ? { approved: input.approved } : {}),
+        });
+      } catch (error) {
+        throw new DaedalusError(
+          "CONFLICT",
+          `${workspace.name} could not come home from the cloud, so it is not archived: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      if (moved.status === "needsApproval" || moved.status === "needsSmaller")
+        return moved;
+      if (moved.status !== "moved")
+        throw new DaedalusError(
+          "CONFLICT",
+          `${workspace.name} could not come home from the cloud, so it is not archived`,
+        );
+      workspaceMoves.dismiss(workspace.id);
     }
     // Before the workspace is archived, so a gateway that cannot be reached
     // leaves it as it was, to try again.

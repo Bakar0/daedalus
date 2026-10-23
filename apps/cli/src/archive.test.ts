@@ -1,10 +1,6 @@
 import { describe, expect, test } from "vitest";
-import type { AgentSession, Workspace } from "@daedalus/core";
-import {
-  approvedPaths,
-  archivedOrExplain,
-  workspaceArchivedOrExplain,
-} from "./archive";
+import type { Workspace } from "@daedalus/core";
+import { approvedPaths, workspaceArchivedOrExplain } from "./archive";
 
 describe("archiving from the CLI", () => {
   test("--approve takes a comma list", () => {
@@ -16,11 +12,7 @@ describe("archiving from the CLI", () => {
     expect(approvedPaths(",")).toBeUndefined();
   });
 
-  test("an archived session or workspace comes back as it is", () => {
-    const session = { id: "s1" } as AgentSession;
-    expect(archivedOrExplain({ status: "archived", session }, "s1")).toBe(
-      session,
-    );
+  test("an archived workspace comes back as it is", () => {
     const workspace = { id: "w1" } as Workspace;
     expect(
       workspaceArchivedOrExplain({ status: "archived", workspace }, "w1"),
@@ -29,32 +21,23 @@ describe("archiving from the CLI", () => {
 
   test("what the app would ask names the flag that answers it", () => {
     expect(() =>
-      archivedOrExplain(
-        { status: "needsApproval", paths: ["app/CLAUDE.md", "app/.envrc"] },
-        "s1",
+      workspaceArchivedOrExplain(
+        { status: "needsApproval", paths: ["CLAUDE.md", "repos/app/.envrc"] },
+        "ops",
       ),
     ).toThrow(
-      "Look at them, then run 'daedal agent archive s1 --approve app/CLAUDE.md,app/.envrc'",
-    );
-    expect(() =>
-      archivedOrExplain(
-        { status: "needsConfirmation", reason: "The runner is offline" },
-        "s1",
-      ),
-    ).toThrow(
-      "This session cannot come home from the cloud: The runner is offline. To archive it with only what this Mac has, leaving the cloud's changes behind, run 'daedal agent archive s1 --without-cloud-changes'",
+      "Look at them, then run 'daedal workspace archive ops --approve CLAUDE.md,repos/app/.envrc'",
     );
     expect(() =>
       workspaceArchivedOrExplain(
-        { status: "needsApproval", sessionId: "s2", paths: ["app/CLAUDE.md"] },
+        {
+          status: "needsSmaller",
+          items: [
+            { what: "app", bytes: 2048 * 1048576, maxBytes: 1024 * 1048576 },
+          ],
+        },
         "ops",
       ),
-    ).toThrow("'daedal agent archive s2 --approve app/CLAUDE.md'");
-    expect(() =>
-      workspaceArchivedOrExplain(
-        { status: "needsConfirmation", sessionId: "s2", reason: "gone" },
-        "ops",
-      ),
-    ).toThrow("'daedal workspace archive ops --without-cloud-changes'");
+    ).toThrow("app is 2048 MB, over 1024 MB");
   });
 });

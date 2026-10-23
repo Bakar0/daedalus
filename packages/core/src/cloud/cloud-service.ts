@@ -24,6 +24,8 @@ import {
   SignInOffers,
 } from "./sign-in-pages";
 import {
+  CLOUD_COLLECTED_NOTICE,
+  CLOUD_COLLECTED_REASON,
   CLOUD_SLEEP_REASON,
   cloudHostId,
   cloudHostWorkspace,
@@ -36,7 +38,7 @@ import type { AgentSession } from "../domain";
 import type { CloudLaunchExtras } from "../services/agents";
 import { CloudAccount, type CloudSignIn } from "./cloud-account";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { readKeychainPassword } from "@daedalus/platform";
 import type { AccountProfile } from "../config";
 import {
@@ -283,6 +285,9 @@ export class CloudService {
         workspaces: [],
       };
     const base = { gatewayUrl: signIn.gatewayUrl, email: signIn.user.email };
+    // Read before the list: a link made while it is on its way is not one
+    // the gateway forgot.
+    const linked = this.options.repositories.cloudWorkspaceLinks();
     let listed: CloudWorkspace[];
     try {
       listed = await this.list();
@@ -294,6 +299,7 @@ export class CloudService {
         workspaces: [],
       };
     }
+    await this.#forgetCollected(linked, listed);
     const workspaces: LinkedCloudWorkspace[] = [];
     for (const item of listed) {
       const workspaceId = this.options.repositories.workspaceForCloud(
@@ -524,6 +530,80 @@ export class CloudService {
     const result = await (await this.#client()).sleepWorkspace(workspaceId);
     this.#endSessions(workspaceId, "lost", CLOUD_SLEEP_REASON);
     return result;
+  }
+
+  /**
+   * Links whose copy the gateway no longer has, its collection having
+   * deleted it after a long sleep: forgotten, so the next cloud session
+   * makes a new copy. A session still in one stays lost and says why.
+   */
+  async #forgetCollected(
+    linked: string[],
+    listed: CloudWorkspace[],
+  ): Promise<void> {
+    const present = new Set(listed.map((item) => item.workspaceId));
+    for (const cloudId of linked) {
+      if (present.has(cloudId)) continue;
+      // Asked on its own, so a list that left one out cannot drop its link.
+      const gone = await this.#client()
+        .then((client) => client.getWorkspace(cloudId))
+        .then(
+          () => false,
+          (error: unknown) =>
+            error instanceof DaedalusError &&
+            error.details?.gatewayCode === "NOT_FOUND",
+        );
+      if (!gone) continue;
+      this.#endSessions(cloudId, "lost", CLOUD_COLLECTED_REASON);
+      for (const session of this.options.repositories.listAgents({
+        status: "lost",
+      }))
+        if (
+          session.hostId === cloudHostId(cloudId) &&
+          session.lostReason === CLOUD_SLEEP_REASON
+        )
+          this.options.repositories.updateAgent({
+            ...session,
+            lostReason: CLOUD_COLLECTED_REASON,
+          });
+      this.#fallBackToBackup(cloudId);
+      await this.account.unpin(cloudId).catch(() => undefined);
+      this.options.repositories.unlinkCloudWorkspace(cloudId);
+      this.options.hosts.unregister(cloudHostId(cloudId));
+      this.options.log?.("cloud_workspace_collected", { workspaceId: cloudId });
+    }
+  }
+
+  /**
+   * A workspace that lived in a copy the gateway collected lives on this
+   * Mac again, at the folder it left as a backup: its sessions there, lost,
+   * and a notice on it until the user dismisses it.
+   */
+  #fallBackToBackup(cloudId: string): void {
+    const { repositories } = this.options;
+    const workspaceId = repositories.workspaceForCloud(cloudId);
+    if (
+      !workspaceId ||
+      repositories.workspacePlace(workspaceId).place !== "cloud"
+    )
+      return;
+    const workspace = repositories.findWorkspace(workspaceId);
+    if (!workspace) return;
+    const hostId = cloudHostId(cloudId);
+    repositories.setWorkspacePlace(
+      workspaceId,
+      { place: "mac", notice: CLOUD_COLLECTED_NOTICE },
+      repositories
+        .listAgents({ workspaceId })
+        .filter((session) => session.hostId === hostId)
+        .map((session) => ({
+          id: session.id,
+          hostId: null,
+          workingDirectory: isAbsolute(session.workingDirectory)
+            ? session.workingDirectory
+            : join(workspace.path, session.workingDirectory),
+        })),
+    );
   }
 
   /** Deletes the pod, its volume and its token; the local workspace stays. */
@@ -1006,6 +1086,19 @@ export class CloudService {
       // Its sessions end with the pod; opening one wakes and resumes it.
       onWorkspaceSleeping: (workspaceId) =>
         this.#endSessions(workspaceId, "lost", CLOUD_SLEEP_REASON),
+      // The gateway drops a runner as it sleeps the pod, often before the
+      // runner can say so: a runner gone from an asleep workspace took its
+      // sessions with it.
+      onRunner: (workspaceId, linked) => {
+        if (linked) return;
+        void (async () => {
+          const current = await (
+            await this.#client()
+          ).getWorkspace(workspaceId);
+          if (current.status === "sleeping")
+            this.#endSessions(workspaceId, "lost", CLOUD_SLEEP_REASON);
+        })().catch(() => undefined);
+      },
       ...(this.options.connect ? { connect: this.options.connect } : {}),
       ...(this.options.log ? { log: this.options.log } : {}),
     });

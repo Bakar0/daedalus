@@ -324,7 +324,8 @@ export async function markLast(
 }
 
 /**
- * Lays a fetched snapshot down in `dir`: the branch at its commit, the
+ * Lays a fetched snapshot down in `dir`: the branch at its commit (or the
+ * commit alone, detached, when `branch` is undefined), the
  * working tree with staged, unstaged and untracked changes as they were, and
  * the index as it was. Files the side had untracked at `previous` and the
  * snapshot no longer has are removed.
@@ -332,7 +333,7 @@ export async function markLast(
 export async function applySnapshot(
   side: MoveSide,
   dir: string,
-  branch: string,
+  branch: string | undefined,
   snapshot: RepositorySnapshot,
   previous?: string,
 ): Promise<void> {
@@ -351,15 +352,25 @@ export async function applySnapshot(
         .split("\0")
         .filter(Boolean)
     : [];
-  await git(side, dir, ["check-ref-format", "--branch", branch]);
-  await git(side, dir, [
-    "checkout",
-    "--quiet",
-    "-f",
-    "-B",
-    branch,
-    snapshot.head,
-  ]);
+  if (branch === undefined)
+    await git(side, dir, [
+      "checkout",
+      "--quiet",
+      "-f",
+      "--detach",
+      snapshot.head,
+    ]);
+  else {
+    await git(side, dir, ["check-ref-format", "--branch", branch]);
+    await git(side, dir, [
+      "checkout",
+      "--quiet",
+      "-f",
+      "-B",
+      branch,
+      snapshot.head,
+    ]);
+  }
   await git(side, dir, [
     "restore",
     `--source=${snapshot.work}`,

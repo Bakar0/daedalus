@@ -48,6 +48,7 @@ let base: string;
 /** The runner listener, which only the in-cluster Service exposes. */
 let runnerBase: string;
 let logs: string[];
+let collect: ReturnType<typeof createGateway>["collect"];
 /** The controller's backoff waits, which pass at once here. */
 let waits: number[];
 const sockets: WebSocket[] = [];
@@ -72,6 +73,7 @@ function start(overrides: Record<string, string> = {}) {
     relay: new Relay(),
     log: (message) => logs.push(message),
   });
+  collect = gateway.collect;
   server = Bun.serve({ ...gateway.public, port: 0 });
   runnerServer = Bun.serve({ ...gateway.runner, port: 0 });
   base = `http://localhost:${server.port}`;
@@ -1048,4 +1050,116 @@ describe("isolation between users", () => {
     await api(b.token, "DELETE", `/v1/workspaces/${WS_A}`);
     expect(kube.pod(`u-${a.user.id}`, `ws-${WS_A}`)).toBeDefined();
   });
+});
+
+describe("collection", () => {
+  const DAY = 86_400_000;
+  const later = (ms: number) => new Date(Date.now() + ms);
+
+  async function asleep(email: string, workspaceId = WS_A) {
+    const { token, user } = await login(email);
+    await api(token, "POST", "/v1/workspaces", createBody(workspaceId));
+    await api(token, "POST", `/v1/workspaces/${workspaceId}/sleep`);
+    return { token, userId: user.id };
+  }
+
+  test("a workspace asleep 30 days is deleted with its namespace; an awake one never", async () => {
+    const { token, userId } = await asleep("a@example.com");
+    const awake = await login("b@example.com");
+    await api(awake.token, "POST", "/v1/workspaces", createBody(WS_B));
+    const listed = await api(token, "GET", `/v1/workspaces/${WS_A}`);
+    expect(listed.json.sleptAt).toBeString();
+    // The retired disposable mark is no route.
+    expect(
+      (
+        await api(token, "POST", `/v1/workspaces/${WS_A}/disposable`, {
+          disposable: true,
+        })
+      ).status,
+    ).toBe(404);
+
+    expect(await collect(later(29 * DAY))).toEqual({
+      workspaces: [],
+      namespaces: [],
+    });
+    expect(await collect(later(31 * DAY))).toEqual({
+      workspaces: [WS_A],
+      namespaces: [],
+    });
+    expect((await api(token, "GET", `/v1/workspaces/${WS_A}`)).status).toBe(
+      404,
+    );
+    expect(kube.paths().some((path) => path.includes(`u-${userId}`))).toBe(
+      false,
+    );
+    // The awake one is untouched, however long.
+    expect(
+      (await api(awake.token, "GET", `/v1/workspaces/${WS_B}`)).status,
+    ).toBe(200);
+  });
+
+  test("an empty user namespace goes; one not named for its label stays", async () => {
+    const { token, userId } = await asleep("a@example.com");
+    await api(token, "DELETE", `/v1/workspaces/${WS_A}`);
+    // As a delete that failed half-way leaves it.
+    kube.objects.set(`/api/v1/namespaces/u-${userId}`, {
+      metadata: {
+        name: `u-${userId}`,
+        labels: { "daedalus.dev/user": userId },
+      },
+    });
+    // Labelled, but not the gateway's name for that user.
+    kube.objects.set("/api/v1/namespaces/team-tools", {
+      metadata: { name: "team-tools", labels: { "daedalus.dev/user": userId } },
+    });
+    kube.objects.set("/api/v1/namespaces/u-unlabelled", {
+      metadata: { name: "u-unlabelled" },
+    });
+    expect(await collect()).toEqual({
+      workspaces: [],
+      namespaces: [`u-${userId}`],
+    });
+    expect(kube.paths()).toContain("/api/v1/namespaces/team-tools");
+    expect(kube.paths()).toContain("/api/v1/namespaces/u-unlabelled");
+  });
+
+  test("a rule set to 0 is off, and a failed delete is retried next pass", async () => {
+    await stop();
+    start({ DAEDALUS_WORKSPACE_ASLEEP_DAYS: "0" });
+    await asleep("a@example.com");
+    expect((await collect(later(365 * DAY))).workspaces).toEqual([]);
+
+    await stop();
+    start();
+    const request = kube.request.bind(kube);
+    let refuse = true;
+    kube.request = async (method, path, body) =>
+      refuse && method === "DELETE" && path.includes("/pods/")
+        ? { status: 500, body: { message: "etcd is down" } }
+        : request(method, path, body);
+    expect((await collect(later(31 * DAY))).workspaces).toEqual([]);
+    expect(logs.some((line) => line.includes("Collecting workspace"))).toBe(
+      true,
+    );
+    refuse = false;
+    expect((await collect(later(31 * DAY))).workspaces).toEqual([WS_A]);
+  });
+});
+
+test("a database from before collection gets its columns, asleep ones from now", async () => {
+  await stop();
+  const { Database } = await import("bun:sqlite");
+  rmSync(join(dir, "gateway.sqlite"), { force: true });
+  const old = new Database(join(dir, "gateway.sqlite"), { create: true });
+  old.run(`CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
+CREATE TABLE workspaces (user_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL,
+  mac_id TEXT NOT NULL, mac_key TEXT NOT NULL, cpu TEXT, memory TEXT, runner_key TEXT,
+  sleeping INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, PRIMARY KEY (user_id, workspace_id));
+INSERT INTO users VALUES ('u1', 'a@example.com', '2026-01-01');
+INSERT INTO workspaces VALUES ('u1', '${WS_A}', 'A', '${MAC_A}', 'k', NULL, NULL, NULL, 1, '2026-01-01');`);
+  old.close();
+  const before = Date.now();
+  start();
+  const [row] = store.allWorkspaces();
+  expect(Date.parse(row!.sleptAt!)).toBeGreaterThanOrEqual(before - 1_000);
 });

@@ -48,6 +48,17 @@ export interface WorkspaceDto {
   /** The account each provider's sessions start on; null is the default. */
   defaultClaudeAccount: string | null;
   defaultCodexAccount: string | null;
+  /**
+   * `cloud` while the workspace lives in its cloud copy: every session,
+   * terminal and file is there. Absent while it is on this Mac.
+   */
+  place?: "cloud";
+  /**
+   * Shown on the workspace until `workspaceNoticeDismiss`: it came back to
+   * this Mac from its backup because the cloud copy was deleted after 30
+   * days asleep, or what came home when it was archived.
+   */
+  cloudNotice?: string;
 }
 
 export interface TaskDto {
@@ -139,6 +150,7 @@ export type AutoRebirthDto = number | "off" | null;
  * out of a session, early enough that the note is written before the window
  * fills.
  */
+
 export const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
 
 /**
@@ -975,6 +987,30 @@ export interface CloudPreparingDto {
 }
 
 /**
+ * A workspace moving between this Mac and its cloud copy
+ * (artifacts/cloud-sessions/workspace-move-design.md). The workspace shows
+ * it moving while an entry exists and is not `failed` or `moved`; Cancel
+ * only while `waiting`.
+ */
+export interface WorkspaceMoveDto {
+  workspaceId: string;
+  to: "cloud" | "mac";
+  /**
+   * `moved`: done, with a `notice` the workspace shows as a one-line banner
+   * until `workspaceMoveDismiss`.
+   */
+  phase: "waiting" | "stopping" | "copying" | "starting" | "failed" | "moved";
+  /** "Waiting for 2 sessions to end their turns", "Copying repos/app". */
+  detail?: string;
+  /** Set when `failed`; the entry stays 30 s so the header can show it. */
+  message?: string;
+  notice?: string;
+}
+
+/**
+ * @deprecated Sessions no longer move one by one; a workspace moves
+ * (`WorkspaceMoveDto`). Never sent; kept until the window stops reading it.
+ *
  * A session moving between this Mac and its workspace's cloud pod
  * (artifacts/cloud-sessions/move-design.md). The card shows it moving
  * while an entry exists and is not `failed`; Cancel only while `waiting`.
@@ -997,6 +1033,34 @@ export interface SessionMoveDto {
    */
   notice?: string;
 }
+
+/** A session a move names: id and name, the name shown as plain text. */
+export interface MoveSessionNameDto {
+  id: string;
+  name: string;
+}
+
+/**
+ * How a workspace move ended when it did not throw. Nothing changed unless
+ * `moved`.
+ * - `needsApproval`: moving home brings files that steer agents or run on
+ *   this Mac (paths relative to the workspace, from the pod: plain text);
+ *   ask, then call again with them as `approved`.
+ * - `busy`: these sessions wait on the user's answer, so their turn will not
+ *   end; ask, then call again with `stopWorking`.
+ * - `needsStopped`: Codex or custom sessions run, which the cloud cannot
+ *   run; the user stops them first.
+ * - `needsSmaller`: what is over its cap, in bytes.
+ */
+export type WorkspaceMoveResultDto =
+  | { status: "moved"; workspace: WorkspaceDto; notice?: string }
+  | { status: "needsApproval"; paths: string[] }
+  | { status: "busy"; sessions: MoveSessionNameDto[] }
+  | { status: "needsStopped"; sessions: MoveSessionNameDto[] }
+  | {
+      status: "needsSmaller";
+      items: { what: string; bytes: number; maxBytes: number }[];
+    };
 
 /**
  * The user's remote MCP servers a cloud session could use. None goes to the
@@ -1124,8 +1188,10 @@ export interface DesktopSnapshotDto {
   cloudSignIns?: CloudSignInDto[];
   /** Workspaces whose cloud copy a new session waits for. */
   cloudPreparing?: CloudPreparingDto[];
-  /** Sessions moving between this Mac and the cloud. */
+  /** @deprecated Never sent: see `SessionMoveDto`. */
   sessionMoves?: SessionMoveDto[];
+  /** Workspaces moving between this Mac and the cloud. */
+  workspaceMoves?: WorkspaceMoveDto[];
   settings: DesktopSettingsDto;
 }
 
@@ -1261,20 +1327,17 @@ export interface DesktopRpcSchema {
         { host: string; paste: boolean }
       >;
       /**
-       * Moves a Claude session between this Mac and its workspace's cloud
-       * pod; resolves when the move ends. `needsApproval` lists files that
-       * steer an agent or run on open, changed in the pod: ask the user,
-       * then call again with them as `approved`. On failure it throws and
-       * the session keeps running where it was.
+       * @deprecated Sessions no longer move one by one: the host refuses
+       * these. Move the workspace with `workspaceMove`.
        */
       agentMove: Request<
         { sessionId: string; to: "cloud" | "local"; approved?: string[] },
         | { status: "moved"; session: AgentSessionDto; notice?: string }
         | { status: "needsApproval"; paths: string[] }
       >;
-      /** Only while the move waits for the session's turn to end. */
+      /** @deprecated See `agentMove`. */
       agentMoveCancel: Request<{ sessionId: string }, null>;
-      /** Clears a `moved` entry's notice from the session view. */
+      /** @deprecated See `agentMove`. */
       agentMoveDismiss: Request<{ sessionId: string }, null>;
       cloudSignInDismiss: Request<
         { requestId?: string; sessionId?: string },
@@ -1366,21 +1429,41 @@ export interface DesktopRpcSchema {
        */
       workspaceReorder: Request<{ references: string[] }, WorkspaceDto[]>;
       /**
-       * Moves the workspace's cloud sessions home and archives them, deletes
-       * its cloud copy, then archives it. A cloud session that asks stops it
-       * there: answer, then call again with `approved` (by session id) or
-       * `withoutCloudChanges`, which covers every cloud session.
+       * Archives a workspace. One in the cloud comes home first, its
+       * sessions stopped (an answer other than `archived` is that move's:
+       * ask, then call again with `approved`); its cloud copy is deleted,
+       * then it is archived. A failed move home throws, and nothing changes.
        */
       workspaceArchive: Request<
+        { reference: string; approved?: string[] },
+        | { status: "archived"; workspace: WorkspaceDto }
+        | Extract<
+            WorkspaceMoveResultDto,
+            { status: "needsApproval" | "needsSmaller" }
+          >
+      >;
+      /**
+       * Moves a whole workspace between this Mac and its cloud copy;
+       * resolves when the move ends (progress is `workspaceMoves` in the
+       * snapshot). Working sessions are waited for, up to 30 minutes,
+       * unless `stopWorking`. On failure it throws and the workspace stays
+       * where it was, its sessions resumed.
+       */
+      workspaceMove: Request<
         {
           reference: string;
-          approved?: Record<string, string[]>;
-          withoutCloudChanges?: boolean;
+          to: "cloud" | "mac";
+          approved?: string[];
+          stopWorking?: boolean;
         },
-        | { status: "archived"; workspace: WorkspaceDto }
-        | { status: "needsApproval"; sessionId: string; paths: string[] }
-        | { status: "needsConfirmation"; sessionId: string; reason: string }
+        WorkspaceMoveResultDto
       >;
+      /** Only while the move waits for turns to end. */
+      workspaceMoveCancel: Request<{ reference: string }, null>;
+      /** Clears a `moved` entry's notice. */
+      workspaceMoveDismiss: Request<{ reference: string }, null>;
+      /** Clears `WorkspaceDto.cloudNotice`. */
+      workspaceNoticeDismiss: Request<{ reference: string }, null>;
       workspaceRestore: Request<{ reference: string }, WorkspaceDto>;
       /** Archived workspaces only; deletes the folder and everything in it. */
       workspaceDelete: Request<{ reference: string }, WorkspaceDto>;
@@ -1736,11 +1819,6 @@ export interface DesktopRpcSchema {
            * are the lead's.
            */
           teamId?: string;
-          /**
-           * Runs in the workspace's cloud pod (`daedal cloud spawn`): Claude
-           * or a terminal, with no account profile and no abilities.
-           */
-          cloud?: boolean;
         },
         AgentSessionDto
       >;
@@ -1844,23 +1922,10 @@ export interface DesktopRpcSchema {
         { workspace: string; sessionIds: string[] },
         AgentSessionDto[]
       >;
-      /**
-       * A cloud session moves home first and is archived as this Mac's.
-       * `needsApproval`: the move would bring files that steer agents; ask,
-       * then call again with `approved`. `needsConfirmation`: its cloud
-       * workspace cannot be reached or the move failed (`reason`); with
-       * `withoutCloudChanges` it is archived with what this Mac has.
-       */
+      /** Archives a session where it runs, on this Mac or in the cloud. */
       agentArchive: Request<
-        {
-          id: string;
-          force?: boolean;
-          approved?: string[];
-          withoutCloudChanges?: boolean;
-        },
-        | { status: "archived"; session: AgentSessionDto }
-        | { status: "needsApproval"; paths: string[] }
-        | { status: "needsConfirmation"; reason: string }
+        { id: string; force?: boolean },
+        { status: "archived"; session: AgentSessionDto }
       >;
       agentRestore: Request<{ id: string }, AgentSessionDto>;
       /**

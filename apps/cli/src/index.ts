@@ -3,6 +3,7 @@ import {
   CLOUD_CALLER_VARIABLE,
   CLOUD_MARK_VARIABLE,
   cloudMark,
+  podWorkingDirectory,
   createApplicationContext,
   DaedalusError,
   ingestHook,
@@ -28,11 +29,7 @@ import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
-import {
-  approvedPaths,
-  archivedOrExplain,
-  workspaceArchivedOrExplain,
-} from "./archive";
+import { approvedPaths, workspaceArchivedOrExplain } from "./archive";
 import {
   execCommand,
   execJsonFlag,
@@ -40,7 +37,7 @@ import {
   secretHelp,
 } from "./secrets";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
 import packageJson from "../../../package.json";
 
@@ -101,7 +98,7 @@ Usage:
   daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
   daedal team <say|chat|list|goal> ... [--json]
   daedal secret <list|set|remove> ... [--json]
-  daedal cloud <login|status|logout|create|list|get|sleep|wake|delete|spawn> ... [--json]
+  daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
   daedal exec [--secret <NAME>]... -- <command> [<args>...]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
   daedal notify "<message>" [--level info|success|error] [--desktop] [--json]
@@ -128,7 +125,9 @@ const commandHelp: Record<string, string> = {
       [--default-model <model>|none] [--auto-rebirth <percent>|off|default]
       [--default-claude-account <account>|default]
       [--default-codex-account <account>|default]
-  daedal workspace archive <workspace> [--without-cloud-changes]
+  daedal workspace archive <workspace> [--approve <path>,...]
+  daedal workspace move <workspace> --to cloud|mac [--approve <path>,...]
+      [--stop-working]
   daedal workspace restore <workspace>
   daedal workspace delete <workspace> --force
   daedal workspace remove <workspace> [--delete-files] --force
@@ -152,7 +151,19 @@ context passes that percent of the window; see 'agent continue'. 'default'
 (the default) takes the app's global setting, which is off until set in
 Settings > Sessions; 'off' turns it off for this workspace whatever that
 says. A session can override it with 'daedal session rebirth-at'. The
-desktop app runs the check about once a second.`,
+desktop app runs the check about once a second.
+
+'move' takes the whole workspace to its cloud copy, or home to this Mac:
+every repository worktree (commits, staged, unstaged and untracked changes,
+never ignored files), the other files of the folder, and every Claude
+conversation. It waits for working sessions to end their turns (up to 30
+minutes) unless --stop-working stops them at once, then resumes them on the
+other side. In the cloud, every session and terminal of the workspace runs
+there, and this Mac keeps its folder as it was, as a backup. Moving home
+lists files changed in the cloud that steer an agent or run on this Mac,
+such as .claude/, CLAUDE.md or .envrc, and stops unless --approve names
+them; sessions come home asking before they act. On a failure the
+workspace stays where it was.`,
   task: `Task commands:
   daedal task create [--workspace <workspace>] --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
   daedal task list [--workspace <workspace>] [--status <status>]
@@ -195,8 +206,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent wait [--session <agent-id>] [--workspace <workspace>] [--for attention|idle] [--timeout <seconds>]
   daedal agent attach <agent-id>
   daedal agent send <agent-id> <text>
-  daedal agent archive <agent-id> [--force] [--approve <path>,...]
-      [--without-cloud-changes]
+  daedal agent archive <agent-id> [--force]
   daedal agent rebirth <agent-id>
   daedal agent continue [<agent-id>] [--note-file <path|->] [--provider <codex|claude>] [--model <model>] [--account <account>] [--message <text>]
   daedal agent restore <agent-id>
@@ -620,22 +630,74 @@ async function workspaceCommand(
     return 0;
   }
   if (action === "archive") {
-    const parsed = parseArguments(args, [], ["without-cloud-changes"]);
+    const parsed = parseArguments(args, ["approve"]);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal workspace archive <workspace> [--without-cloud-changes]",
+      "daedal workspace archive <workspace> [--approve <path>,...]",
     );
+    const approved = approvedPaths(parsed.values.approve);
     const archived = await context.archive.archiveWorkspace({
       reference: parsed.positionals[0]!,
-      ...(parsed.flags.has("without-cloud-changes")
-        ? { withoutCloudChanges: true }
-        : {}),
+      ...(approved ? { approved } : {}),
     });
     const result = workspaceArchivedOrExplain(archived, parsed.positionals[0]!);
     printResult(result, json, () =>
       console.log(`Archived workspace ${result.slug}`),
     );
+    return 0;
+  }
+  if (action === "move") {
+    const usage =
+      "daedal workspace move <workspace> --to cloud|mac [--approve <path>,...] [--stop-working]";
+    const parsed = parseArguments(args, ["to", "approve"], ["stop-working"]);
+    expectPositionals(parsed.positionals, 1, usage);
+    const to = parsed.values.to;
+    if (to !== "cloud" && to !== "mac")
+      throw new DaedalusError("VALIDATION", "--to is cloud or mac");
+    const approved = approvedPaths(parsed.values.approve);
+    const result = await context.workspaceMoves.move({
+      workspace: parsed.positionals[0]!,
+      to,
+      ...(approved?.length ? { approved } : {}),
+      ...(parsed.flags.has("stop-working") ? { stopWorking: true } : {}),
+    });
+    if (result.status !== "moved") {
+      printResult(result, json, () => {
+        if (result.status === "needsApproval") {
+          console.log(
+            "These files changed in the cloud and steer an agent or run on this Mac; move again with --approve <path>,... naming them:",
+          );
+          for (const path of result.paths) console.log(`  ${path}`);
+        } else if (result.status === "busy") {
+          console.log(
+            "These sessions wait for an answer, so their turns will not end; answer them, or move again with --stop-working:",
+          );
+          for (const session of result.sessions)
+            console.log(`  ${session.name} (${session.id})`);
+        } else if (result.status === "needsStopped") {
+          console.log(
+            "These Codex or custom sessions run, and the cloud cannot run them; stop them first:",
+          );
+          for (const session of result.sessions)
+            console.log(`  ${session.name} (${session.id})`);
+        } else {
+          console.log("Too big to move:");
+          for (const item of result.items)
+            console.log(
+              `  ${item.what}: ${item.bytes} bytes, at most ${item.maxBytes}`,
+            );
+        }
+      });
+      return 1;
+    }
+    context.workspaceMoves.dismiss(result.workspace.id);
+    printResult(result.workspace, json, () => {
+      console.log(
+        `Moved workspace ${result.workspace.slug} to ${to === "cloud" ? "the cloud" : "this Mac"}`,
+      );
+      if (result.notice) console.log(result.notice);
+    });
     return 0;
   }
   if (action === "restore") {
@@ -1107,12 +1169,10 @@ async function agentCommand(
   if (action === "revive") return agentReviveCommand(context, args, json);
   const parsed = parseArguments(
     args,
-    action === "archive" ? ["after-pid", "approve"] : [],
-    action === "stop" || action === "delete"
+    action === "archive" ? ["after-pid"] : [],
+    action === "stop" || action === "delete" || action === "archive"
       ? ["force"]
-      : action === "archive"
-        ? ["force", "without-cloud-changes"]
-        : [],
+      : [],
   );
   if (action === "get") {
     expectPositionals(parsed.positionals, 1, "daedal agent get <agent-id>");
@@ -1170,7 +1230,7 @@ async function agentCommand(
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal agent archive <agent-id> [--force] [--approve <path>,...] [--without-cloud-changes]",
+      "daedal agent archive <agent-id> [--force]",
     );
     // Undocumented: how `agent continue` archives the session it runs in
     // once it has exited. See `archiveAfterExit`.
@@ -1188,16 +1248,10 @@ async function agentCommand(
       );
       return 0;
     }
-    const approved = approvedPaths(parsed.values.approve);
-    const archived = await context.archive.archiveSession({
+    const result = await context.archive.archiveSession({
       sessionId: (await context.agents.get(parsed.positionals[0]!)).id,
       force: parsed.flags.has("force"),
-      ...(approved ? { approved } : {}),
-      ...(parsed.flags.has("without-cloud-changes")
-        ? { withoutCloudChanges: true }
-        : {}),
     });
-    const result = archivedOrExplain(archived, parsed.positionals[0]!);
     printResult(result, json, () => console.log(`Archived agent ${result.id}`));
     return 0;
   }
@@ -2012,7 +2066,17 @@ async function repositoryCommand(
       repository: required(parsed.values.repository, "--repository"),
       branch: parsed.values.branch,
     });
-    printResult(result, json, () => console.log(result.path));
+    // A session in the cloud works in the pod, at the pod's path.
+    const owner = await context.agents.get(result.sessionId);
+    const path = owner.hostId
+      ? podWorkingDirectory(
+          relative(
+            (await context.workspaces.get(owner.workspaceId)).path,
+            result.path,
+          ),
+        )
+      : result.path;
+    printResult({ ...result, path }, json, () => console.log(path));
     return 0;
   }
   throw new DaedalusError(

@@ -72,7 +72,10 @@ export class CloudSessions {
     // one was resuming it.
     if (current.status === "running" || current.status === "starting")
       return current;
-    return agents.reviveLost(sessionId);
+    // Never asleep after all: its pod kept it running.
+    return (
+      (await agents.reclaimLiveCloud(sessionId)) ?? agents.reviveLost(sessionId)
+    );
   }
 
   /**
@@ -105,7 +108,9 @@ export class CloudSessions {
     await Promise.all(
       [...ended].map(async (sessionId) => {
         if ((await agents.get(sessionId)).status === "lost")
-          await agents.reviveLost(sessionId).catch(() => undefined);
+          await (async () =>
+            (await agents.reclaimLiveCloud(sessionId)) ??
+            agents.reviveLost(sessionId))().catch(() => undefined);
       }),
     );
     return woken;

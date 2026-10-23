@@ -294,8 +294,6 @@ export class TeamService {
     provider?: string;
     model?: string;
     account?: string | null;
-    /** The lead's workspace's cloud host, to run the member in its pod. */
-    host?: string;
   }): Promise<{ session: AgentSession; handle: string; note?: TeamSayResult }> {
     const team = this.get(input.team);
     // Optional: a member added without them starts with only its place in
@@ -330,7 +328,6 @@ export class TeamService {
       ...(input.name ? { name: input.name } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.account !== undefined ? { account: input.account } : {}),
-      ...(input.host ? { host: input.host } : {}),
       // A team reads as one color on the board.
       ...(team.lead.color ? { color: team.lead.color } : {}),
       message:

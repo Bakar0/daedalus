@@ -100,6 +100,10 @@ spec:
               value: {{ .Values.workspace.runtimeClassName | quote }}
             - name: DAEDALUS_WORKSPACE_IDLE_MINUTES
               value: {{ .Values.workspace.idleMinutes | quote }}
+            - name: DAEDALUS_WORKSPACE_ASLEEP_DAYS
+              value: {{ .Values.workspace.retention.asleepDays | quote }}
+            - name: DAEDALUS_GATEWAY_COLLECT_SECONDS
+              value: {{ .Values.gateway.collectSeconds | quote }}
             - name: DAEDALUS_TENANT_DIR
               value: /etc/daedalus/tenant
           readinessProbe:

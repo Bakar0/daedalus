@@ -52,6 +52,14 @@ export interface Workspace {
    */
   defaultClaudeAccount: string | null;
   defaultCodexAccount: string | null;
+  /**
+   * Where it lives: `cloud` while its cloud copy holds it and every session
+   * runs there; absent on this Mac. Changed only by a workspace move, by
+   * archive, and by the fallback to this Mac's backup.
+   */
+  place?: "cloud";
+  /** What the user is told about the last change of place, until dismissed. */
+  cloudNotice?: string;
 }
 
 /** `claude:default`, `claude:<profile id>`, `codex:default`, … */

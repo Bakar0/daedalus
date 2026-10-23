@@ -13,8 +13,23 @@ export const cloudHostId = (workspaceId: string): string => `ws:${workspaceId}`;
 export const cloudHostWorkspace = (hostId: string): string | undefined =>
   hostId.startsWith("ws:") ? hostId.slice(3) : undefined;
 
+/** Why something that needs this Mac's folder is refused. */
+export const IN_CLOUD_MESSAGE =
+  "This workspace runs in the cloud; move it home to this Mac first";
+
 /** Why a session whose cloud workspace went to sleep is lost. */
 export const CLOUD_SLEEP_REASON = "The cloud workspace went to sleep";
+
+/** Why a session is lost whose cloud copy the gateway deleted, unused. */
+export const CLOUD_COLLECTED_REASON =
+  "Its cloud copy was deleted after 30 days asleep; the workspace is back on this Mac from its backup";
+
+/**
+ * Shown on a workspace that fell back to this Mac's backup because the
+ * gateway deleted its cloud copy.
+ */
+export const CLOUD_COLLECTED_NOTICE =
+  "Back on this Mac as it was when it moved to the cloud: its cloud copy was deleted after 30 days asleep, with the work done there.";
 
 /** Whether a session is lost only because its cloud workspace sleeps. */
 export const asleepInCloud = (session: {

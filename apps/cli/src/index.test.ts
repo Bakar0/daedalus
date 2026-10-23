@@ -1352,7 +1352,7 @@ describe("cloud commands", () => {
           ).stdout,
         ).toContain("Signed in as alice@example.com");
         await cli(home, ["workspace", "create", "Remote", "--json"]);
-        const notCloud = await cli(home, ["cloud", "spawn", "remote"], env);
+        const notCloud = await cli(home, ["cloud", "get", "remote"], env);
         expect(notCloud.stderr).toContain("has no cloud workspace");
         const made = await cli(home, ["cloud", "create", "remote"], env);
         expect(made.exitCode).toBe(0);
@@ -1382,7 +1382,7 @@ describe("cloud commands", () => {
         );
         // The link to the local workspace goes with the cloud one.
         expect(
-          (await cli(home, ["cloud", "spawn", "remote"], env)).stderr,
+          (await cli(home, ["cloud", "get", "remote"], env)).stderr,
         ).toContain("has no cloud workspace");
       } finally {
         gateway.stop(true);

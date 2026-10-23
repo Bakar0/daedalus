@@ -64,6 +64,7 @@ const requests: Array<{
   path: string;
   body?: string;
 }> = [];
+const created: Record<string, unknown[]> = {};
 const fakeFetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
   const url = new URL(String(input));
   const method = init?.method ?? "GET";
@@ -81,11 +82,13 @@ const fakeFetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
       token: `token-${url.port}`,
     });
   }
+  // What each gateway made, which it lists as a real one does.
+  const made = (created[url.origin] ??= []);
   if (url.pathname === "/v1/workspaces" && method === "GET")
-    return json(200, { workspaces: [] });
+    return json(200, { workspaces: made });
   if (url.pathname === "/v1/workspaces" && method === "POST") {
     const request = JSON.parse(body!) as { workspaceId: string; name: string };
-    return json(201, {
+    const workspace = {
       workspaceId: request.workspaceId,
       name: request.name,
       status: "running",
@@ -93,7 +96,9 @@ const fakeFetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
       runnerOnline: true,
       runnerKey: `runner-${url.port}`,
       createdAt: new Date().toISOString(),
-    });
+    };
+    made.push(workspace);
+    return json(201, workspace);
   }
   return json(404, { error: { code: "NOT_FOUND", message: "No such" } });
 }) as typeof fetch;

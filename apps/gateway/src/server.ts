@@ -6,7 +6,7 @@ import type {
   GatewayUser,
 } from "@daedalus/remote-protocol";
 import type { GatewayConfig } from "./config";
-import { Controller, workspaceStatus } from "./controller";
+import { Controller, namespaceFor, workspaceStatus } from "./controller";
 import { KubeError } from "./kube";
 import { parseQuantity } from "./quantity";
 import {
@@ -29,6 +29,12 @@ import {
  * on the caller's own rows only; another user's workspace is looked up with
  * the caller's id and so is simply not found.
  */
+
+/** What one collection pass deleted. */
+export interface CollectResult {
+  workspaces: string[];
+  namespaces: string[];
+}
 
 export interface GatewayDeps {
   config: GatewayConfig;
@@ -187,6 +193,7 @@ export function createGateway(deps: GatewayDeps) {
       runnerOnline,
       runnerKey: row.runnerKey,
       createdAt: row.createdAt,
+      sleptAt: row.sleptAt,
     };
   }
 
@@ -207,6 +214,7 @@ export function createGateway(deps: GatewayDeps) {
       memory: request.resources?.memory ?? null,
       runnerKey: null,
       sleeping: false,
+      sleptAt: null,
       createdAt: new Date().toISOString(),
     };
     if (store.workspaces(userId).length >= config.maxWorkspaces)
@@ -427,5 +435,49 @@ export function createGateway(deps: GatewayDeps) {
   });
 
   /** One set of options per port, sharing the one relay. */
-  return { public: listen("public"), runner: listen("runner") };
+  /**
+   * One collection pass. A workspace asleep past its retention is deleted
+   * as DELETE does, and the namespace of a user with no workspace left
+   * goes too. One that fails is logged and tried again next pass.
+   */
+  async function collect(now = new Date()): Promise<CollectResult> {
+    const { asleepMs } = config.retention;
+    const result: CollectResult = { workspaces: [], namespaces: [] };
+    for (const row of store.allWorkspaces()) {
+      if (!row.sleeping || !row.sleptAt) continue;
+      const asleep = now.getTime() - Date.parse(row.sleptAt);
+      if (asleepMs <= 0 || asleep < asleepMs) continue;
+      try {
+        await remove(row);
+        result.workspaces.push(row.workspaceId);
+        log(
+          `Collected workspace ${row.workspaceId}, asleep since ${row.sleptAt}`,
+        );
+      } catch (error) {
+        log(`Collecting workspace ${row.workspaceId} failed: ${String(error)}`);
+      }
+    }
+    let tenants: string[];
+    try {
+      tenants = await controller.tenants();
+    } catch (error) {
+      log(`Listing namespaces to collect failed: ${String(error)}`);
+      return result;
+    }
+    for (const userId of tenants) {
+      // Read now, not before the list: a user making a workspace has its
+      // record before its namespace.
+      if (store.workspaces(userId).length) continue;
+      try {
+        await controller.deleteTenant(userId);
+        result.namespaces.push(namespaceFor(userId));
+        log(`Collected namespace ${namespaceFor(userId)}, with no workspace`);
+      } catch (error) {
+        log(`Collecting ${namespaceFor(userId)} failed: ${String(error)}`);
+      }
+    }
+    return result;
+  }
+
+  return { public: listen("public"), runner: listen("runner"), collect };
 }

@@ -444,7 +444,7 @@ const remoteStarted = remote.start().catch((error) =>
 // is open, so both use the one device identity rather than racing to make it.
 // A cloud session asking for a sign-in page shows on its card at once.
 context.cloud.signIns.onChange(() => announce("external"));
-context.moves.onChange(() => announce("external"));
+context.workspaceMoves.onChange(() => announce("external"));
 context.cloud.onPreparingChange(() => announce("external"));
 void remoteStarted
   .then(() => context.cloud.hold())

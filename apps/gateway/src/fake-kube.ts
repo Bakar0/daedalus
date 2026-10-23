@@ -73,6 +73,22 @@ export class FakeKube implements KubeApi {
       return { status: 201, body: stored };
     }
 
+    // A namespace list by label, the one list the gateway makes.
+    const list = /^\/api\/v1\/namespaces\?labelSelector=(.+)$/.exec(path);
+    if (list && method === "GET") {
+      const label = decodeURIComponent(list[1]!);
+      const items = [...this.objects.entries()]
+        .filter(
+          ([key, object]) =>
+            /^\/api\/v1\/namespaces\/[^/]+$/.test(key) &&
+            label in
+              (((object.metadata as Record<string, unknown>)?.labels ??
+                {}) as Record<string, unknown>),
+        )
+        .map(([, object]) => object);
+      return { status: 200, body: { kind: "NamespaceList", items } };
+    }
+
     const object = this.objects.get(path);
     if (!object) return fail(404, "not found");
     if (method === "GET") return { status: 200, body: object };

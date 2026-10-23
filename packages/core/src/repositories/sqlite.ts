@@ -36,6 +36,15 @@ export interface CloudOwner {
   userId: string;
 }
 
+/**
+ * Where a workspace lives, and what the user is told about the last change
+ * of place until they dismiss it.
+ */
+export interface WorkspacePlace {
+  place: "mac" | "cloud";
+  notice: string | null;
+}
+
 interface WorkspaceRow {
   id: string;
   slug: string;
@@ -53,7 +62,16 @@ interface WorkspaceRow {
   account_models: string;
   default_claude_account: string | null;
   default_codex_account: string | null;
+  /** From `workspace_places`, joined. */
+  place: string | null;
+  place_notice: string | null;
 }
+
+/** A workspace with where it lives. */
+const WORKSPACES = `SELECT workspaces.*, workspace_places.place AS place,
+  workspace_places.notice AS place_notice
+  FROM workspaces LEFT JOIN workspace_places
+  ON workspace_places.workspace_id = workspaces.id`;
 
 interface TaskIdRow {
   task_number: number;
@@ -194,7 +212,12 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => {
     defaultClaudeAccount: row.default_claude_account,
     defaultCodexAccount: row.default_codex_account,
   };
-  return { ...workspace, defaultModel: derivedDefaultModel(workspace) };
+  return {
+    ...workspace,
+    defaultModel: derivedDefaultModel(workspace),
+    ...(row.place === "cloud" ? { place: "cloud" as const } : {}),
+    ...(row.place_notice ? { cloudNotice: row.place_notice } : {}),
+  };
 };
 
 const taskFromRow = (row: TaskRow): Task => ({
@@ -464,7 +487,7 @@ export class SqliteRepositories {
 
   listWorkspaces(): Workspace[] {
     return this.database
-      .query<WorkspaceRow, []>("SELECT * FROM workspaces ORDER BY position, id")
+      .query<WorkspaceRow, []>(`${WORKSPACES} ORDER BY position, id`)
       .all()
       .map(workspaceFromRow);
   }
@@ -495,13 +518,13 @@ export class SqliteRepositories {
 
   findWorkspace(reference: string): Workspace | undefined {
     const byId = this.database
-      .query<WorkspaceRow, [string]>("SELECT * FROM workspaces WHERE id = ?")
+      .query<WorkspaceRow, [string]>(`${WORKSPACES} WHERE workspaces.id = ?`)
       .get(reference);
     const row =
       byId ??
       this.database
         .query<WorkspaceRow, [string]>(
-          "SELECT * FROM workspaces WHERE slug = ?",
+          `${WORKSPACES} WHERE workspaces.slug = ?`,
         )
         .get(reference);
     return row ? workspaceFromRow(row) : undefined;
@@ -1062,6 +1085,62 @@ export class SqliteRepositories {
     this.database.query("DELETE FROM agent_sessions WHERE id = ?").run(id);
   }
 
+  /** Where a workspace lives; `mac` when nothing moved it. */
+  workspacePlace(workspaceId: string): WorkspacePlace {
+    const row = this.database
+      .query<{ place: string; notice: string | null }, [string]>(
+        "SELECT place, notice FROM workspace_places WHERE workspace_id = ?",
+      )
+      .get(workspaceId);
+    return {
+      place: row?.place === "cloud" ? "cloud" : "mac",
+      notice: row?.notice ?? null,
+    };
+  }
+
+  /** The workspaces that live in the cloud now. */
+  cloudPlacedWorkspaces(): string[] {
+    return this.database
+      .query<{ workspace_id: string }, []>(
+        "SELECT workspace_id FROM workspace_places WHERE place = 'cloud'",
+      )
+      .all()
+      .map((row) => row.workspace_id);
+  }
+
+  /**
+   * Moves a workspace and each of its sessions to their new places in one
+   * transaction: a finished workspace move, or the fallback to the backup.
+   */
+  setWorkspacePlace(
+    workspaceId: string,
+    place: WorkspacePlace,
+    sessions: {
+      id: string;
+      hostId: string | null;
+      workingDirectory: string;
+    }[] = [],
+  ): void {
+    this.transaction(() => {
+      this.database
+        .query(
+          `INSERT INTO workspace_places (workspace_id, place, notice)
+           VALUES (?, ?, ?)
+           ON CONFLICT (workspace_id) DO UPDATE SET place = excluded.place,
+             notice = excluded.notice`,
+        )
+        .run(workspaceId, place.place, place.notice);
+      for (const session of sessions) this.setAgentPlace(session.id, session);
+    });
+  }
+
+  /** Clears the workspace's notice, leaving its place. */
+  dismissWorkspaceNotice(workspaceId: string): void {
+    this.database
+      .query("UPDATE workspace_places SET notice = NULL WHERE workspace_id = ?")
+      .run(workspaceId);
+  }
+
   /** The gateway account this Mac is signed in to, as cloud links name it. */
   cloudOwner(): CloudOwner | undefined {
     const row = this.database
@@ -1130,6 +1209,19 @@ export class SqliteRepositories {
         )
         .get(cloudId, owner.gatewayUrl, owner.userId)?.workspace_id ?? undefined
     );
+  }
+
+  /** The cloud ids this Mac links for the signed-in account. */
+  cloudWorkspaceLinks(): string[] {
+    const owner = this.cloudOwner();
+    if (!owner) return [];
+    return this.database
+      .query<{ cloud_id: string }, [string, string]>(
+        `SELECT cloud_id FROM cloud_workspace_links
+         WHERE gateway_url = ? AND user_id = ?`,
+      )
+      .all(owner.gatewayUrl, owner.userId)
+      .map((row) => row.cloud_id);
   }
 
   /** Links a local workspace to a cloud id of the signed-in account. */

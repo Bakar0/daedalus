@@ -27,6 +27,10 @@
  *                                   idle sleep. Another id is 404; every
  *                                   other route with a runner token is 401.
  *   DELETE /v1/workspaces/:id       -> 204; deletes the pod, its volume and token
+ *
+ * Collection: a workspace asleep DAEDALUS_WORKSPACE_ASLEEP_DAYS (30) is
+ * deleted as DELETE does; a `u-<userId>` namespace labelled for a user with no
+ * workspace left goes too.
  *   GET    /v1/connect              WebSocket. A user token joins as
  *                                   `mac:<macId>` (query `macId`); a runner
  *                                   token joins as `ws:<workspaceId>` and
@@ -86,6 +90,8 @@ export interface CloudWorkspace {
    */
   runnerKey: string | null;
   createdAt: string;
+  /** When it went to sleep, while asleep; a long sleep deletes it. */
+  sleptAt?: string | null;
 }
 
 export type GatewayErrorCode =

@@ -59,6 +59,7 @@ export * from "./services/read-model";
 export * from "./services/session-inbox";
 export * from "./services/secrets";
 export * from "./services/secret-mask";
-export * from "./services/session-move";
+export * from "./services/workspace-move";
+export * from "./services/cloud-folder";
 export * from "./services/session-archive";
 export { claudeProjectKey, podWorkingDirectory } from "./services/move-side";

@@ -45,6 +45,10 @@ export interface GatewayConfig {
   };
   /** Directory holding the chart's `daedalus-tenant` ConfigMap files. */
   tenantDir: string;
+  /** How long a workspace may stay asleep before it is deleted; 0 never. */
+  retention: { asleepMs: number };
+  /** How often collection runs. */
+  collectMs: number;
 }
 
 export function loadConfig(env: Record<string, string | undefined>) {
@@ -60,6 +64,12 @@ export function loadConfig(env: Record<string, string | undefined>) {
     if (value === null || value <= 0)
       throw new Error(`${name} is not a positive quantity`);
     return value;
+  };
+  const amount = (name: string, fallback: string, unitMs: number) => {
+    const value = Number(get(name, fallback));
+    if (!Number.isFinite(value) || value < 0)
+      throw new Error(`${name} is not a number of at least 0`);
+    return Math.round(value * unitMs);
   };
   const maxWorkspaces = Number(get("DAEDALUS_GATEWAY_MAX_WORKSPACES", "5"));
   if (!Number.isInteger(maxWorkspaces) || maxWorkspaces < 1)
@@ -104,6 +114,13 @@ export function loadConfig(env: Record<string, string | undefined>) {
       idleMinutes: get("DAEDALUS_WORKSPACE_IDLE_MINUTES", "15"),
     },
     tenantDir: get("DAEDALUS_TENANT_DIR", "/etc/daedalus/tenant"),
+    retention: {
+      asleepMs: amount("DAEDALUS_WORKSPACE_ASLEEP_DAYS", "30", 86_400_000),
+    },
+    collectMs: Math.max(
+      1_000,
+      amount("DAEDALUS_GATEWAY_COLLECT_SECONDS", "3600", 1_000),
+    ),
   };
   if (config.port === config.runnerPort && config.port !== 0)
     throw new Error("The public and runner ports must differ");

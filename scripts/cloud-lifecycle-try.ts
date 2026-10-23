@@ -4,7 +4,12 @@
  *
  *   bun run scripts/cloud-lifecycle-try.ts archive   # archive brings a cloud-born session home, then the workspace's cloud copy goes
  *   bun run scripts/cloud-lifecycle-try.ts sleep     # the pod sleeps after 15 idle minutes; a message wakes and resumes it
+ *   bun run scripts/cloud-lifecycle-try.ts gc        # the gateway deletes a disposable copy asleep past its period
  *   bun run scripts/cloud-lifecycle-try.ts cleanup   # deletes what a run left
+ *
+ * gc needs a gateway with a short disposable period and pass, for example
+ * helm upgrade … --set workspace.retention.disposableHours=0.02
+ * --set gateway.collectSeconds=30.
  *
  * It runs from a home of its own (~/.daedalus-lifecycle-try-dev, file vault),
  * as user lifecycle-try@test.com on the gateway at http://localhost:8080, and
@@ -34,8 +39,13 @@ const GATEWAY = process.env.GATEWAY_URL ?? "http://localhost:8080";
 const EMAIL = "lifecycle-try@test.com";
 
 const mode = process.argv[2];
-if (mode !== "archive" && mode !== "sleep" && mode !== "cleanup") {
-  console.error("Usage: cloud-lifecycle-try.ts archive|sleep|cleanup");
+if (
+  mode !== "archive" &&
+  mode !== "sleep" &&
+  mode !== "gc" &&
+  mode !== "cleanup"
+) {
+  console.error("Usage: cloud-lifecycle-try.ts archive|sleep|gc|cleanup");
   process.exit(2);
 }
 
@@ -214,6 +224,12 @@ try {
     if (!archived.ok) fail(`archive: ${archived.error.message}`);
     if (archived.ok && archived.data.status !== "archived")
       fail(`archive asked first: ${JSON.stringify(archived.data)}`);
+    check(
+      archived.ok &&
+        archived.data.status === "archived" &&
+        Boolean(archived.data.notice?.includes("Came home: app, notes.")),
+      "the archive says what came home",
+    );
     say(`archived home in ${Math.round((Date.now() - started) / 1000)} s`);
     const home = await agents.get(session.id);
     check(
@@ -257,9 +273,21 @@ try {
       "its folders are this Mac's",
     );
 
-    // Archiving the workspace deletes its cloud copy.
+    // Archiving the workspace asks about what never came home, then
+    // deletes its cloud copy.
     started = Date.now();
-    const gone = await rpc.workspaceArchive({ reference: workspace.id });
+    const asked = await rpc.workspaceArchive({ reference: workspace.id });
+    if (!asked.ok) fail(`workspace archive: ${asked.error.message}`);
+    check(
+      asked.ok &&
+        asked.data.status === "needsCloudDecision" &&
+        asked.data.lost.some((line) => line.includes("loose.txt")),
+      "the loose file left in the pod is asked about",
+    );
+    const gone = await rpc.workspaceArchive({
+      reference: workspace.id,
+      cloudCopy: "delete",
+    });
     if (!gone.ok) fail(`workspace archive: ${gone.error.message}`);
     check(
       gone.ok && gone.data.status === "archived",
@@ -302,6 +330,69 @@ try {
     say(
       "PASS: archive brought the cloud-born session home and removed the cloud copy",
     );
+    process.exit(0);
+  }
+
+  if (mode === "gc") {
+    const kept = await context.workspaces.create({
+      name: `lifecycle-kept-${Date.now().toString(36)}`,
+    });
+    await cloud.prepareForSession(workspace.id);
+    await cloud.prepareForSession(kept.id);
+    const disposableId = repositories.cloudWorkspaceId(workspace.id)!;
+    const keptId = repositories.cloudWorkspaceId(kept.id)!;
+    check(
+      await context.archive.markIfDisposable(workspace.id),
+      "the Mac marks an empty copy disposable",
+    );
+    check(
+      (await cloud.get(disposableId)).disposable === true,
+      "the gateway records it",
+    );
+    await cloud.sleep(workspace.id);
+    await cloud.sleep(kept.id);
+    const started = Date.now();
+    let gone = false;
+    while (!gone && Date.now() - started < 5 * 60_000) {
+      await Bun.sleep(10_000);
+      gone = !(await cloud.list()).some(
+        (item) => item.workspaceId === disposableId,
+      );
+    }
+    check(
+      gone,
+      `the gateway deleted the disposable copy ${Math.round((Date.now() - started) / 1000)} s after it slept`,
+    );
+    const left = await runCommand("kubectl", [
+      "--context",
+      "kind-daedalus",
+      "get",
+      "pods,pvc,secrets",
+      "-A",
+      "-o",
+      "name",
+    ]);
+    check(
+      !left.stdout.includes(disposableId),
+      "its pod, volumes and token are gone",
+    );
+    check(
+      (await cloud.get(keptId)).status === "sleeping",
+      "the copy not marked disposable stays, asleep",
+    );
+    const state = await rpc.cloudState({});
+    check(
+      state.ok &&
+        !state.data.workspaces.some((item) => item.cloudId === disposableId) &&
+        repositories.cloudWorkspaceId(workspace.id) === undefined,
+      "the Mac forgets the collected copy's link",
+    );
+    check(
+      repositories.cloudWorkspaceId(kept.id) === keptId,
+      "and keeps the other one's",
+    );
+    await cloud.delete(kept.id);
+    say("PASS: the gateway collected the disposable copy and kept the other");
     process.exit(0);
   }
 
