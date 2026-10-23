@@ -61,7 +61,7 @@ describe("seedClaudeState", () => {
 
   test("trusts a session's own folder too, so its CLAUDE.md import is allowed", () => {
     const folder = "/workspace/worktrees/unassigned/claude-1";
-    const seeded = seedClaudeState(seedClaudeState(undefined), folder);
+    const seeded = seedClaudeState(seedClaudeState(undefined), [folder]);
     const projects = JSON.parse(seeded!).projects;
     for (const path of ["/workspace", folder])
       expect(projects[path]).toEqual({
@@ -69,7 +69,7 @@ describe("seedClaudeState", () => {
         hasClaudeMdExternalIncludesApproved: true,
         hasClaudeMdExternalIncludesWarningShown: true,
       });
-    expect(seedClaudeState(seeded, folder)).toBeUndefined();
+    expect(seedClaudeState(seeded, [folder])).toBeUndefined();
   });
 
   test("starts a missing or broken file afresh", () => {

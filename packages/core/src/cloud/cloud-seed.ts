@@ -61,19 +61,19 @@ const render = (value: Json) => `${JSON.stringify(value, null, 2)}\n`;
 
 /**
  * `.claude.json` with onboarding done and the workspace trusted, with the
- * session's own folder when it has one, or undefined when it already says
- * all that. A session folder's CLAUDE.md imports the workspace's AGENTS.md,
- * so without its own entry Claude stops on asking to allow that import.
- * Every other key is kept, the account Claude records after a sign-in
- * among them.
+ * sessions' folders given, or undefined when it already says all that. The
+ * workspace's CLAUDE.md imports its AGENTS.md, from outside a session's
+ * folder, so without that folder's own entry Claude stops on asking to
+ * allow the import. Every other key is kept, the account Claude records
+ * after a sign-in among them.
  */
 export function seedClaudeState(
   text: string | undefined,
-  folder = POD_WORKSPACE,
+  sessionFolders: readonly string[] = [],
 ): string | undefined {
   const state = parseObject(text);
   const projects = isObject(state.projects) ? state.projects : {};
-  const folders = [...new Set([POD_WORKSPACE, folder])];
+  const folders = [...new Set([POD_WORKSPACE, ...sessionFolders])];
   const trusted = (path: string) => {
     const project = projects[path];
     return (

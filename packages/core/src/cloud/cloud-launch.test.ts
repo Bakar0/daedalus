@@ -204,9 +204,18 @@ describe("cloud launch seeding", () => {
       // The built-in files, then the user's setup (claude-sync-seeder.ts).
       expect(pod.writes).toBe(2);
 
-      // A second session finds it all there but its own folder's trust.
-      await context.agents.spawn({ workspace: workspace.id });
-      expect(pod.writes).toBe(3);
+      // A second session writes its folder's trust with the first's, so a
+      // Claude still starting, writing back the file as it read it, cannot
+      // leave either out: here one such write dropped the first's.
+      pod.files.set(".home/.claude.json", JSON.stringify({ projects: {} }));
+      const second = await context.agents.spawn({ workspace: workspace.id });
+      const projects = JSON.parse(
+        pod.files.get(".home/.claude.json")!,
+      ).projects;
+      for (const item of [session, second])
+        expect(
+          projects[posix.join("/workspace", item.workingDirectory)],
+        ).toMatchObject({ hasClaudeMdExternalIncludesApproved: true });
       context.close();
     });
   });
