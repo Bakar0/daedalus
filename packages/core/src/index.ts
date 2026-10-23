@@ -60,4 +60,5 @@ export * from "./services/session-inbox";
 export * from "./services/secrets";
 export * from "./services/secret-mask";
 export * from "./services/session-move";
+export * from "./services/session-archive";
 export { claudeProjectKey, podWorkingDirectory } from "./services/move-side";
