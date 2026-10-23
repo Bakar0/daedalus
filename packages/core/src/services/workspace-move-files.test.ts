@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { LocalMoveSide } from "./move-side";
@@ -35,7 +42,13 @@ async function podArchive(files: Record<string, string>): Promise<string> {
     await writeFile(join(staging, path), text);
   }
   const archive = join(base, "files.tar");
-  await local.run(staging, "tar", ["-c", "-f", archive, ...Object.keys(files)]);
+  // As the pod's GNU tar packs it: no `._` entries.
+  await local.run(
+    staging,
+    "tar",
+    ["-c", "-f", archive, ...Object.keys(files)],
+    { COPYFILE_DISABLE: "1" },
+  );
   return archive;
 }
 
@@ -110,3 +123,96 @@ describe("files coming home from the pod", () => {
     expect(await readFile(join(root, "BRIEF.md"), "utf8")).toBe("brief\n");
   });
 });
+
+/** One tar header block, as GNU tar writes it, with a correct checksum. */
+function header(name: string, type: string, size: number): Uint8Array {
+  const block = new Uint8Array(512);
+  const put = (text: string, at: number) =>
+    block.set(new TextEncoder().encode(text), at);
+  put(name, 0);
+  put("0000644\0", 100);
+  put(`${size.toString(8).padStart(11, "0")}\0`, 124);
+  put(type, 156);
+  put("ustar  \0", 257);
+  block.fill(32, 148, 156);
+  const sum = block.reduce((total, byte) => total + byte, 0);
+  put(`${sum.toString(8).padStart(6, "0")}\0 `, 148);
+  return block;
+}
+
+/** An archive of the given header blocks and data, ended as tar ends one. */
+async function handMade(...parts: Uint8Array[]): Promise<string> {
+  const archive = join(base, "hand.tar");
+  const padded = parts.map((part) => {
+    const out = new Uint8Array(Math.ceil(part.length / 512) * 512);
+    out.set(part);
+    return out;
+  });
+  await writeFile(archive, Buffer.concat([...padded, new Uint8Array(1024)]));
+  return archive;
+}
+
+describe("reading the pod's archive", () => {
+  const unpack = async (archive: string, maxBytes?: number) => {
+    const scratch = join(base, "scratch");
+    await mkdir(scratch, { recursive: true });
+    try {
+      return await unpackFromPod(local, archive, scratch, {
+        ...(maxBytes ? { maxBytes } : {}),
+      });
+    } finally {
+      // Nothing is written when anything is refused.
+      if (!(await readdir(scratch)).length)
+        await rm(scratch, { recursive: true });
+    }
+  };
+
+  test("takes regular files and GNU long names", async () => {
+    const long = `notes/${"n".repeat(120)}.md`;
+    const archive = await handMade(
+      header("notes/a.md", "0", 2),
+      new TextEncoder().encode("a\n"),
+      header("././@LongLink", "L", long.length + 1),
+      new TextEncoder().encode(`${long}\0`),
+      header(long.slice(0, 99), "0", 2),
+      new TextEncoder().encode("b\n"),
+    );
+    expect(await unpack(archive)).toEqual([long, "notes/a.md"].sort());
+    expect(await readFile(join(base, "scratch", long), "utf8")).toBe("b\n");
+  });
+
+  test("refuses sparse, special and global entries before writing anything", async () => {
+    for (const type of ["S", "3", "4", "6", "2", "1", "5", "g"]) {
+      const archive = await handMade(
+        header("notes/a.md", "0", 2),
+        new TextEncoder().encode("a\n"),
+        header("notes/b.md", type, 0),
+      );
+      await expect(unpack(archive)).rejects.toBeInstanceOf(Error);
+      expect(await exists(join(base, "scratch", "notes", "a.md"))).toBe(false);
+    }
+  });
+
+  test("refuses a header whose checksum is wrong", async () => {
+    const bad = header("notes/a.md", "0", 2);
+    bad[0] = "m".charCodeAt(0);
+    await expect(
+      unpack(await handMade(bad, new TextEncoder().encode("a\n"))),
+    ).rejects.toMatchObject({ code: "DEPENDENCY" });
+  });
+
+  test("stops at the cap on unpacked bytes", async () => {
+    const archive = await handMade(
+      header("notes/a.md", "0", 600),
+      new Uint8Array(600).fill(97),
+    );
+    await expect(unpack(archive, 512)).rejects.toThrow("more than 512 bytes");
+    expect(await unpack(archive, 600)).toEqual(["notes/a.md"]);
+  });
+});
+
+const exists = (path: string) =>
+  readFile(path).then(
+    () => true,
+    () => false,
+  );

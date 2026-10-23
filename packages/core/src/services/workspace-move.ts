@@ -770,6 +770,7 @@ export class WorkspaceMoves {
       const arrived = await unpackFromPod(this.#local, archive, unpacked, {
         expected: new Set(podFiles),
         skip,
+        maxBytes: MAX_FILES_BYTES,
       });
       const macInstructions = sessionInstructionsTemplate(workspace.path);
       // Daedalus's own, as the approval left them out: a session born in the
