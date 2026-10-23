@@ -720,7 +720,17 @@ export class CloudService {
       host instanceof RemoteSessionHost
         ? this.seed(host, {
             ...options,
-            folder: podWorkingDirectory(session.workingDirectory),
+            // Every session's in the pod, not this one's alone: a Claude
+            // still starting writes back the file as it read it, and would
+            // drop a folder added after that.
+            folders: [
+              session,
+              ...this.options.repositories.listAgents({
+                workspaceId: session.workspaceId,
+              }),
+            ]
+              .filter((item) => item.hostId === session.hostId)
+              .map((item) => podWorkingDirectory(item.workingDirectory)),
           })
         : Promise.resolve();
     if (profile?.kind === "bedrock") {
@@ -813,8 +823,8 @@ export class CloudService {
       awsSections?: AwsSsoCopy["sections"];
       /** This Mac's approvals of the organization's managed settings. */
       consent?: string;
-      /** The session's folder in the pod, trusted with the workspace. */
-      folder?: string;
+      /** The sessions' folders in the pod, trusted with the workspace. */
+      folders?: string[];
     },
   ): Promise<void> {
     const files: { path: string; text: string }[] = [];
@@ -825,7 +835,7 @@ export class CloudService {
       CLOUD_SEED_PATHS.claudeState,
       seedClaudeState(
         await host.readText(CLOUD_SEED_PATHS.claudeState),
-        options.folder,
+        options.folders,
       ),
     );
     put(

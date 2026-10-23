@@ -58,7 +58,18 @@ class FakeCloudHost implements SessionHost {
   constructor(readonly id: string) {}
 
   readonly files = new Map<string, Uint8Array>();
+  /** Claude conversations by id: the sessions here had turns. */
+  readonly conversations = new Set<string>();
   async run(command: { executable: string; args: string[] }) {
+    // A conversation is there once a launch started it (see `start`).
+    if (command.executable === "test" && command.args[0] === "-f") {
+      const id = /([^/]+)\.jsonl$/.exec(command.args[1] ?? "")?.[1];
+      return {
+        exitCode: id && this.conversations.has(id) ? 0 : 1,
+        stdout: "",
+        stderr: "",
+      };
+    }
     // A folder is free until something writes in it.
     const free =
       command.executable === "test" &&
@@ -80,6 +91,8 @@ class FakeCloudHost implements SessionHost {
   async start(launch: SessionHostLaunch) {
     this.launches.push(launch);
     this.sessions.add(launch.session);
+    const started = launch.args.indexOf("--session-id");
+    if (started >= 0) this.conversations.add(launch.args[started + 1]!);
   }
   async isLive(session: string) {
     return this.sessions.has(session);
@@ -270,6 +283,24 @@ describe("cloud sessions", () => {
       expect(context.repositories.findAgent(session.id)?.status).toBe(
         "running",
       );
+      context.close();
+    });
+  });
+
+  test("a lost cloud session that never had a turn starts its conversation", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, host } = await setUp(home);
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+      });
+      host.sessions.clear();
+      host.conversations.clear();
+      await context.agents.reconcile(new Set());
+      const revived = await context.agents.reviveLost(session.id);
+      expect(revived.status).toBe("running");
+      const launch = host.launches.at(-1)!;
+      expect(launch.args.slice(-2)).toEqual(["--session-id", session.id]);
+      expect(launch.args).not.toContain("--resume");
       context.close();
     });
   });

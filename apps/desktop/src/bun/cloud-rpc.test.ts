@@ -64,11 +64,22 @@ class FakeCloudHost implements SessionHost {
   constructor(readonly id: string) {}
 
   readonly files = new Map<string, Uint8Array>();
+  /** Claude conversations by id: the sessions here had turns. */
+  readonly conversations = new Set<string>();
   /** Every command fails, as a runner that lost its volume would. */
   broken = false;
   async run(command: { executable: string; args: string[] }) {
     if (this.broken)
       return { exitCode: 1, stdout: "", stderr: "no such volume" };
+    // A conversation is there once a launch started it (see `start`).
+    if (command.executable === "test" && command.args[0] === "-f") {
+      const id = /([^/]+)\.jsonl$/.exec(command.args[1] ?? "")?.[1];
+      return {
+        exitCode: id && this.conversations.has(id) ? 0 : 1,
+        stdout: "",
+        stderr: "",
+      };
+    }
     // A folder is free until something writes in it.
     const free =
       command.executable === "test" &&
@@ -90,6 +101,8 @@ class FakeCloudHost implements SessionHost {
   async start(launch: SessionHostLaunch) {
     this.launches.push(launch);
     this.sessions.add(launch.session);
+    const started = launch.args.indexOf("--session-id");
+    if (started >= 0) this.conversations.add(launch.args[started + 1]!);
   }
   async isLive(session: string) {
     return this.sessions.has(session);
