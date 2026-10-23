@@ -223,6 +223,94 @@ function RebirthChoices({
   );
 }
 
+/** An action a card can show, offered in its menu with a pin toggle. */
+export interface MenuAction {
+  id: string;
+  label: string;
+  /** Shown on the card as well as here. */
+  pinned: boolean;
+  onPin: (pinned: boolean) => void;
+  run: () => void;
+  disabled?: boolean;
+  /** Asks once more before running, with this as what confirming does. */
+  confirm?: string;
+}
+
+function PinIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
+      <path
+        d="M9.8 2.2 13.8 6.2 11.6 7.1 9.4 9.3 9.6 12.4 8.6 13.4 6.2 11 3.4 13.8 2.2 12.6 5 9.8 2.6 7.4 3.6 6.4 6.7 6.6 8.9 4.4Z"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.2"
+      />
+    </svg>
+  );
+}
+
+/**
+ * The menu's own rows for a card's actions: each runs its action, and its
+ * pin puts it on the card or takes it off. The pin is not a menuitem, so
+ * choosing it leaves the menu open.
+ */
+function MenuActions({ actions }: { actions: MenuAction[] }) {
+  if (!actions.length) return null;
+  return (
+    <>
+      {actions.map((action) => (
+        <div
+          className="menu-pin-row"
+          data-action={action.id}
+          data-pinned={action.pinned ? "true" : undefined}
+          key={action.id}
+        >
+          {action.confirm ? (
+            <ConfirmButton
+              armedTitle={action.confirm}
+              className="quiet menu-item menu-item-danger"
+              data-testid={`menu-action-${action.id}`}
+              disabled={action.disabled}
+              onConfirm={action.run}
+              title={`${action.label}. Asks once more.`}
+              type="button"
+            >
+              <span className="menu-item-label">{action.label}</span>
+            </ConfirmButton>
+          ) : (
+            <button
+              className="quiet menu-item"
+              data-testid={`menu-action-${action.id}`}
+              disabled={action.disabled}
+              onClick={action.run}
+              role="menuitem"
+              type="button"
+            >
+              <span className="menu-item-label">{action.label}</span>
+            </button>
+          )}
+          <button
+            aria-label={`${action.pinned ? "Unpin" : "Pin"} ${action.label}`}
+            aria-pressed={action.pinned}
+            className="quiet menu-pin"
+            data-testid={`pin-${action.id}`}
+            onClick={() => action.onPin(!action.pinned)}
+            title={
+              action.pinned
+                ? "Pinned: also on the card. Click to keep it in this menu only."
+                : "Pin it to the card"
+            }
+            type="button"
+          >
+            <PinIcon />
+          </button>
+        </div>
+      ))}
+      <hr className="menu-separator" />
+    </>
+  );
+}
+
 export function SessionMenu({
   name,
   pinned,
@@ -239,6 +327,7 @@ export function SessionMenu({
   onAutoRebirth,
   onRoutines,
   onOrchestration,
+  actions = [],
 }: {
   name: string;
   pinned: boolean;
@@ -260,6 +349,8 @@ export function SessionMenu({
   onAutoRebirth: (value: AutoRebirthDto) => void;
   onRoutines: (granted: boolean) => void;
   onOrchestration: (granted: boolean) => void;
+  /** Its card's actions, each with a pin. */
+  actions?: MenuAction[];
 }) {
   return (
     <Menu
@@ -272,6 +363,7 @@ export function SessionMenu({
       summaryClassName="session-card-action"
       title="Rename, pin, color, rebirth and abilities"
     >
+      <MenuActions actions={actions} />
       <button
         className="quiet menu-item"
         onClick={onRename}
@@ -385,6 +477,7 @@ export function WorkspaceMenu({
   onRename,
   onAutoRebirth,
   cloud,
+  actions = [],
 }: {
   name: string;
   /** The workspace's own rebirth threshold; null takes the global one. */
@@ -395,6 +488,8 @@ export function WorkspaceMenu({
   onAutoRebirth: (value: AutoRebirthDto) => void;
   /** Its cloud copy, while it has one and this Mac is signed in. */
   cloud?: WorkspaceCloudControls;
+  /** Its card's other actions, each with a pin. */
+  actions?: MenuAction[];
 }) {
   return (
     <Menu
@@ -405,8 +500,9 @@ export function WorkspaceMenu({
       placement="left"
       summary={<MenuDots />}
       summaryClassName="session-card-action"
-      title="Rename and rebirth"
+      title="Workspace settings"
     >
+      <MenuActions actions={actions} />
       <button
         className="quiet menu-item"
         onClick={onRename}

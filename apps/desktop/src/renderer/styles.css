@@ -769,8 +769,8 @@ button:not(
   align-items: center;
   display: flex;
   min-width: 0;
-  /* Room for the +, the one action always showing. */
-  padding-right: 26px;
+  /* Room for Settings and the +, the actions always showing. */
+  padding-right: 50px;
 }
 /* A long name is cut short with an ellipsis. */
 .workspace-group .workspace-card-name > span:first-child {
@@ -779,12 +779,11 @@ button:not(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Terminal, secrets, archive and settings come in on hover, to the left of
-   the +. */
+/* Pinned terminal, secrets and archive come in on hover, to the left of
+   Settings and the +, which always show. */
 .workspace-group .workspace-terminal-action,
 .workspace-group .workspace-secrets-action,
-.workspace-group .workspace-card-archive,
-.workspace-group .workspace-card-menu {
+.workspace-group .workspace-card-archive {
   display: none !important;
 }
 .workspace-group
@@ -792,8 +791,7 @@ button:not(
   :is(
     .workspace-terminal-action,
     .workspace-secrets-action,
-    .workspace-card-archive,
-    .workspace-card-menu
+    .workspace-card-archive
   ) {
   display: flex !important;
 }
@@ -8353,7 +8351,7 @@ dd {
 /* The workspace row keeps its count clear of the + in its corner; the
    actions that come in on hover take the count's place. */
 .workspace-group > .workspace-card > .workspace-item {
-  padding-right: 28px;
+  padding-right: 52px;
 }
 .workspace-group > .workspace-card:hover .workspace-insight-copy,
 .workspace-group > .workspace-card:focus-within .workspace-insight-copy {
@@ -8728,4 +8726,36 @@ dd {
   .session-card-title
   > strong {
   padding-right: 0;
+}
+/* A card action in its menu: the action, and its pin to the card. */
+.menu-pin-row {
+  align-items: center;
+  display: flex;
+}
+.menu-pin-row > .menu-item {
+  flex: 1;
+}
+.menu-pin {
+  align-items: center;
+  border-radius: 5px !important;
+  color: var(--muted) !important;
+  display: flex;
+  height: 24px;
+  justify-content: center;
+  margin-right: 4px;
+  opacity: 0.5;
+  padding: 0 !important;
+  width: 24px;
+}
+.menu-pin svg {
+  height: 13px;
+  width: 13px;
+}
+.menu-pin-row:hover .menu-pin,
+.menu-pin:focus-visible {
+  opacity: 1;
+}
+.menu-pin[aria-pressed="true"] {
+  color: var(--accent) !important;
+  opacity: 1;
 }

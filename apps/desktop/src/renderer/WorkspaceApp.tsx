@@ -59,6 +59,7 @@ import { LargeFileBar } from "./LargeFileBar";
 import { CloudPasteCodeBar, CloudSignInPanel } from "./CloudSignInBar";
 import { SessionOpening } from "./SessionOpening";
 import { rememberedRunsOn, rememberRunsOn, RunsOn } from "./RunsOn";
+import { usePins } from "./pins";
 import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
@@ -112,7 +113,12 @@ import type { DiffTarget } from "./files/EditorArea";
 import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
-import { ColorSwatches, SessionMenu, WorkspaceMenu } from "./SessionMenu";
+import {
+  ColorSwatches,
+  SessionMenu,
+  WorkspaceMenu,
+  type MenuAction,
+} from "./SessionMenu";
 import { useCloudState } from "./CloudPanel";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
@@ -2035,6 +2041,8 @@ export function WorkspaceApp({
   // The cloud sign-in and the cloud workspaces, from the gateway. Asked on a
   // timer rather than with every snapshot: each answer is a gateway request.
   const cloudState = useCloudState(client, 10_000);
+  // Which card actions show on the cards; the rest live in their menus.
+  const { pins, pin } = usePins();
   const cloudByWorkspace = useMemo(
     () =>
       new Map(
@@ -3073,6 +3081,53 @@ export function WorkspaceApp({
         <CloudActionIcon />
       </button>
     );
+  };
+
+  /** A session's card actions, for its menu with their pins. */
+  const sessionMenuActions = (
+    session: AgentSessionDto,
+    holdsRoutines: boolean,
+  ): MenuAction[] => {
+    const to = moveTarget(session);
+    const agent =
+      session.kind === "agent" &&
+      (session.provider === "claude" || session.provider === "codex");
+    return [
+      ...(agent
+        ? [
+            {
+              id: "rebirth",
+              label: "Rebirth",
+              pinned: pins.session.has("rebirth"),
+              onPin: (on: boolean) => pin("session", "rebirth", on),
+              disabled: sessionActions.pending(session.id),
+              run: () => void continueInNewAgent(session),
+            },
+          ]
+        : []),
+      ...(cloudActionFor(session)
+        ? [
+            {
+              id: "cloud",
+              label: session.hostId ? "Move to this Mac" : "Move to cloud",
+              pinned: pins.session.has("cloud"),
+              onPin: (on: boolean) => pin("session", "cloud", on),
+              disabled: !to || sessionActions.pending(`move:${session.id}`),
+              run: () => to && void moveSession(session, to),
+            },
+          ]
+        : []),
+      {
+        id: "archive",
+        label: "Archive",
+        pinned: pins.session.has("archive"),
+        onPin: (on: boolean) => pin("session", "archive", on),
+        confirm: holdsRoutines
+          ? "Running work stops and its routines pause. Restoring the session resumes both."
+          : "Running work stops. Its conversation can be restored and resumed later.",
+        run: () => void archiveSession(session),
+      },
+    ];
   };
 
   async function moveSession(
@@ -5290,7 +5345,8 @@ export function WorkspaceApp({
               +
             </button>
           )}
-          {session.kind === "agent" &&
+          {pins.session.has("rebirth") &&
+            session.kind === "agent" &&
             (session.provider === "claude" || session.provider === "codex") && (
               <button
                 aria-label={`Rebirth ${sessionName(session)}`}
@@ -5312,26 +5368,29 @@ export function WorkspaceApp({
                 <RebirthIcon />
               </button>
             )}
-          {cloudActionFor(session)}
-          <ConfirmButton
-            aria-label={`Archive ${sessionName(session)} session`}
-            armedTitle={
-              holdsRoutines
-                ? "Running work stops and its routines pause. Restoring the session resumes both."
-                : "Running work stops. Its conversation can be restored and resumed later."
-            }
-            className="session-card-action session-card-hover-action"
-            onConfirm={() => void archiveSession(session)}
-            title={
-              holdsRoutines
-                ? "Archive session and pause its routines"
-                : "Archive session"
-            }
-          >
-            <ArchiveIcon />
-          </ConfirmButton>
+          {pins.session.has("cloud") && cloudActionFor(session)}
+          {pins.session.has("archive") && (
+            <ConfirmButton
+              aria-label={`Archive ${sessionName(session)} session`}
+              armedTitle={
+                holdsRoutines
+                  ? "Running work stops and its routines pause. Restoring the session resumes both."
+                  : "Running work stops. Its conversation can be restored and resumed later."
+              }
+              className="session-card-action session-card-hover-action"
+              onConfirm={() => void archiveSession(session)}
+              title={
+                holdsRoutines
+                  ? "Archive session and pause its routines"
+                  : "Archive session"
+              }
+            >
+              <ArchiveIcon />
+            </ConfirmButton>
+          )}
           {/* Last, so rebirth and archive open to its left on hover. */}
           <SessionMenu
+            actions={sessionMenuActions(session, holdsRoutines)}
             autoRebirth={session.autoRebirthPercent}
             color={session.color}
             inheritedRebirth={inheritedRebirth}
@@ -6481,37 +6540,71 @@ export function WorkspaceApp({
                         </span>
                       </button>
                       <span className="workspace-card-actions" data-no-drag>
-                        <button
-                          aria-label={`Open ${item.name} in integrated terminal`}
-                          className="session-card-action workspace-terminal-action"
-                          disabled={!item.available || busy}
-                          onClick={() => void createIntegratedTerminal(item)}
-                          title="Open in integrated terminal"
-                          type="button"
-                        >
-                          <SessionLaunchIcon />
-                        </button>
-                        <button
-                          aria-label={`Secrets of ${item.name}`}
-                          className="session-card-action workspace-secrets-action"
-                          disabled={busy}
-                          onClick={() => setSecretsWorkspace(item)}
-                          title="Secrets"
-                          type="button"
-                        >
-                          <KeyIcon />
-                        </button>
-                        <ConfirmButton
-                          aria-label={`Archive ${item.name} workspace`}
-                          armedTitle="All its sessions stop and move to their archived list. The workspace and its sessions can be restored later."
-                          className="session-card-action workspace-card-archive"
-                          disabled={busy}
-                          onConfirm={() => void archiveWorkspace(item)}
-                          title="Archive workspace"
-                        >
-                          <ArchiveIcon />
-                        </ConfirmButton>
+                        {pins.workspace.has("terminal") && (
+                          <button
+                            aria-label={`Open ${item.name} in integrated terminal`}
+                            className="session-card-action workspace-terminal-action"
+                            disabled={!item.available || busy}
+                            onClick={() => void createIntegratedTerminal(item)}
+                            title="Open in integrated terminal"
+                            type="button"
+                          >
+                            <SessionLaunchIcon />
+                          </button>
+                        )}
+                        {pins.workspace.has("secrets") && (
+                          <button
+                            aria-label={`Secrets of ${item.name}`}
+                            className="session-card-action workspace-secrets-action"
+                            disabled={busy}
+                            onClick={() => setSecretsWorkspace(item)}
+                            title="Secrets"
+                            type="button"
+                          >
+                            <KeyIcon />
+                          </button>
+                        )}
+                        {pins.workspace.has("archive") && (
+                          <ConfirmButton
+                            aria-label={`Archive ${item.name} workspace`}
+                            armedTitle="All its sessions stop and move to their archived list. The workspace and its sessions can be restored later."
+                            className="session-card-action workspace-card-archive"
+                            disabled={busy}
+                            onConfirm={() => void archiveWorkspace(item)}
+                            title="Archive workspace"
+                          >
+                            <ArchiveIcon />
+                          </ConfirmButton>
+                        )}
                         <WorkspaceMenu
+                          actions={[
+                            {
+                              id: "terminal",
+                              label: "Open in terminal",
+                              pinned: pins.workspace.has("terminal"),
+                              onPin: (on) => pin("workspace", "terminal", on),
+                              disabled: !item.available || busy,
+                              run: () => void createIntegratedTerminal(item),
+                            },
+                            {
+                              id: "secrets",
+                              label: "Secrets",
+                              pinned: pins.workspace.has("secrets"),
+                              onPin: (on) => pin("workspace", "secrets", on),
+                              disabled: busy,
+                              run: () => setSecretsWorkspace(item),
+                            },
+                            {
+                              id: "archive",
+                              label: "Archive workspace",
+                              pinned: pins.workspace.has("archive"),
+                              onPin: (on) => pin("workspace", "archive", on),
+                              disabled: busy,
+                              confirm:
+                                "All its sessions stop and move to their archived list. The workspace and its sessions can be restored later.",
+                              run: () => void archiveWorkspace(item),
+                            },
+                          ]}
                           autoRebirth={item.autoRebirthPercent}
                           inheritedRebirth={
                             snapshot?.settings.autoRebirthPercent ?? null
