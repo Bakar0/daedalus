@@ -373,6 +373,7 @@ export async function createApplicationContext(
     agents,
     hosts,
     cloud,
+    content: workspaceContent,
     // Read from disk: a hook's event may have come through another process.
     activity: async (sessionId) =>
       (await activity.binding(sessionId))?.activity ??

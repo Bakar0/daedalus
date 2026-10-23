@@ -44,8 +44,20 @@ function setup(move: () => Promise<SessionMoveResult>) {
   } as unknown as SessionMoves;
   const archive = new SessionArchive({
     repositories: {
+      // As the database does: host and folder change only through
+      // setAgentPlace.
       updateAgent: (agent: AgentSession) => {
-        row = agent;
+        row = {
+          ...agent,
+          hostId: row.hostId,
+          workingDirectory: row.workingDirectory,
+        };
+      },
+      setAgentPlace: (
+        _id: string,
+        place: { hostId: string | null; workingDirectory: string },
+      ) => {
+        row = { ...row, ...place };
       },
     } as unknown as SqliteRepositories,
     agents,

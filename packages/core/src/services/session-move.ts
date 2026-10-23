@@ -2,11 +2,17 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { writeFileAtomic } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
-import type { AgentActivity, AgentSession, SessionWorktree } from "../domain";
+import type {
+  AgentActivity,
+  AgentSession,
+  SessionWorktree,
+  Workspace,
+  WorkspaceRepository,
+} from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "./agents";
-import { cloudHostWorkspace } from "./cloud-launch";
+import { CLOUD_WORKING_DIRECTORY, cloudHostWorkspace } from "./cloud-launch";
 import {
   applySnapshot,
   caseCollisions,
@@ -75,6 +81,30 @@ export interface MoveCloud {
   prepareForSession(workspaceReference: string): Promise<string>;
 }
 
+/**
+ * What a session born in the cloud needs on this Mac to come home: a session
+ * folder, and session worktrees for the repositories attached to the
+ * workspace. `WorkspaceContentService` has it.
+ */
+export interface MoveContent {
+  prepareSession(input: {
+    workspace: Workspace;
+    sessionId: string;
+    provider?: string;
+  }): Promise<{ workingDirectory: string }>;
+  createSessionWorktree(input: {
+    session: string;
+    repository: string;
+    branch?: string;
+    folder?: string;
+  }): Promise<SessionWorktree>;
+  removeSessionWorktree(input: {
+    session: string;
+    repository: string;
+    force?: boolean;
+  }): Promise<SessionWorktree>;
+}
+
 export interface SessionMovesOptions {
   config: DaedalusConfig;
   repositories: SqliteRepositories;
@@ -82,6 +112,8 @@ export interface SessionMovesOptions {
   agents: AgentService;
   hosts: SessionHosts;
   cloud: MoveCloud;
+  /** For a session born in the cloud; without it, such a session stays. */
+  content?: MoveContent;
   /** What the session is doing, as the durable activity record says. */
   activity: (sessionId: string) => Promise<AgentActivity | undefined>;
   /** How long a move waits for the session's turn to end. */
@@ -106,6 +138,17 @@ interface MoveRecord {
 /** Shown on the session after it comes back from the cloud. */
 export const MOVED_BACK_NOTICE =
   "Back on this Mac in ask-before-acting mode, since the cloud wrote part of this conversation. Press Shift+Tab in the session to switch modes.";
+
+/** Added when a session born in the cloud left files outside git there. */
+export const LEFT_IN_CLOUD_NOTICE =
+  "Files outside its git repositories stayed in the cloud copy.";
+
+/** A folder name one level under a session's pod folder that a move takes. */
+const REPOSITORY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+/** In the pod's root, but other sessions' or Daedalus's own, never taken. */
+const POD_ROOT_OWNED = new Set(["worktrees"]);
+/** git's empty tree: what a repository with no base on this Mac starts from. */
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 /** A transcript, its subagents and saved tool output. */
 const MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
@@ -402,12 +445,8 @@ export class SessionMoves {
         "This session already runs on this Mac",
       );
     const record = await this.#record(sessionId);
-    if (!record)
-      throw new DaedalusError(
-        "CONFLICT",
-        "Only a session that moved to the cloud from this Mac can move back yet",
-      );
     const workspace = await workspaces.getActive(agent.workspaceId);
+    if (!record) return this.#bornHome(agent, workspace, state, approved);
     const worktrees = repositories
       .listSessionWorktrees({ sessionId })
       .map((worktree) => ({
@@ -601,6 +640,341 @@ export class SessionMoves {
     }
   }
 
+  /**
+   * Brings home a session born in the cloud, which has no folder or
+   * worktrees on this Mac (move-design.md, section 5): its conversation, into
+   * a new session folder, and every git repository one level under its pod
+   * folder, as full bundles. One named like a repository attached to the
+   * workspace becomes a session worktree on the pod's branch, any other a
+   * plain folder. The pod keeps its copies, which other cloud sessions may
+   * share. Everything the pod sends is checked in a scratch repository
+   * before this Mac changes.
+   */
+  async #bornHome(
+    agent: AgentSession,
+    workspace: Workspace,
+    state: SessionMoveState & { cancel: AbortController },
+    approved: string[],
+  ): Promise<SessionMoveResult> {
+    const { repositories, agents, cloud, content } = this.options;
+    if (!content || agent.workingDirectory !== CLOUD_WORKING_DIRECTORY)
+      throw new DaedalusError(
+        "CONFLICT",
+        "This session's folder in the cloud is not one it can come home from",
+      );
+    const sessionId = agent.id;
+    this.#update(state, { detail: "Waking the cloud workspace" });
+    if ((await cloud.prepareForSession(workspace.id)) !== agent.hostId)
+      throw new DaedalusError(
+        "CONFLICT",
+        "This session's cloud workspace is no longer this workspace's",
+      );
+    const pod = this.#pod(agent.hostId!);
+    const attached = repositories.listWorkspaceRepositories(workspace.id);
+    const { found, others } = await this.#podRepositories(
+      pod,
+      agent.workingDirectory,
+    );
+    const bases = new Map<string, string>();
+    for (const { name } of found) {
+      const repository = homeRepository(attached, name);
+      const base = repository
+        ? await this.#macHead(repository).catch(() => undefined)
+        : undefined;
+      bases.set(name, base ?? EMPTY_TREE);
+    }
+    const baseIn = async (side: MoveSide, dir: string, name: string) => {
+      const base = bases.get(name)!;
+      return base !== EMPTY_TREE &&
+        (await side.run(dir, "git", ["cat-file", "-e", `${base}^{commit}`]))
+          .exitCode === 0
+        ? base
+        : EMPTY_TREE;
+    };
+
+    // Asked before the session stops, as a move back asks.
+    const allowed = new Set(approved);
+    const asking: string[] = [];
+    for (const { name, dir } of found) {
+      const now = await snapshotRepository(pod, dir);
+      for (const path of await this.#steering(
+        pod,
+        dir,
+        await baseIn(pod, dir, name),
+        now,
+      ))
+        if (!allowed.has(`${name}/${path}`)) asking.push(`${name}/${path}`);
+    }
+    if (asking.length) {
+      this.#moves.delete(sessionId);
+      this.#changed();
+      return { status: "needsApproval", paths: [...new Set(asking)].sort() };
+    }
+
+    const stopped = await this.#stopAfterTurn(agent, state);
+    const scratch = `${POD_SCRATCH}/${sessionId}`;
+    const localScratch = join(
+      this.options.config.home,
+      "tmp",
+      "moves",
+      sessionId,
+    );
+    // What this Mac gained, taken away again if the move fails.
+    const made: { worktree?: string; folder?: string } = {};
+    const madeWorktrees: string[] = [];
+    try {
+      this.#update(state, { phase: "copying", detail: undefined });
+      await rm(localScratch, { recursive: true, force: true });
+      await mkdir(localScratch, { recursive: true, mode: 0o700 });
+      const received: {
+        name: string;
+        dir: string;
+        bundle: string;
+        branch: string;
+        snapshot: RepositorySnapshot;
+      }[] = [];
+      for (const [index, { name, dir }] of found.entries()) {
+        this.#update(state, { detail: `Copying ${name}` });
+        const snapshot = await snapshotRepository(pod, dir);
+        const branch = await this.#podBranch(pod, dir, sessionId);
+        const podBundle = `${scratch}/${index}.bundle`;
+        await must(pod, ".", "mkdir", ["-p", "--", scratch]);
+        await writeBundle(pod, dir, sessionId, snapshot, [], podBundle);
+        const bytes = await pod.readFile(podBundle);
+        if (!bytes)
+          throw new DaedalusError(
+            "DEPENDENCY",
+            "The cloud workspace wrote no bundle",
+          );
+        if (bytes.length > MAX_BUNDLE_BYTES)
+          throw new DaedalusError(
+            "CONFLICT",
+            `${name}'s bundle is ${bytes.length} bytes; a move carries at most ${MAX_BUNDLE_BYTES}`,
+          );
+        const bundle = join(localScratch, `${index}.bundle`);
+        await this.#local.writeFile(bundle, bytes);
+        // Checked where nothing of this Mac's is: a repository of its own.
+        const check = join(localScratch, `check-${index}`);
+        await mkdir(check, { recursive: true });
+        await must(this.#local, check, "git", ["init", "--quiet"]);
+        const fetched = await fetchBundle(
+          this.#local,
+          check,
+          sessionId,
+          bundle,
+        );
+        for (const commit of [fetched.head, fetched.index, fetched.work]) {
+          const collisions = await caseCollisions(this.#local, check, commit);
+          if (collisions.length)
+            throw new DaedalusError(
+              "CONFLICT",
+              `The cloud copy of ${name} has names that differ only in case, which this Mac cannot hold apart: ${collisions.slice(0, 5).join(", ")}`,
+            );
+        }
+        for (const path of await this.#steering(
+          this.#local,
+          check,
+          await baseIn(this.#local, check, name),
+          fetched,
+        ))
+          if (!allowed.has(`${name}/${path}`))
+            throw new DaedalusError(
+              "CONFLICT",
+              `${name}/${path} changed in the cloud after it was approved; move the session again`,
+            );
+        received.push({ name, dir, bundle, branch, snapshot: fetched });
+      }
+
+      this.#update(state, { detail: "Copying the conversation" });
+      const podFolder = podWorkingDirectory(agent.workingDirectory);
+      const transcript = await readTranscript(
+        pod,
+        POD_PROJECTS,
+        claudeProjectKey(podFolder),
+        agent.providerSessionId!,
+        MAX_TRANSCRIPT_BYTES,
+      );
+
+      // Nothing on this Mac changed until here.
+      const shortFolder = await content.prepareSession({
+        workspace,
+        sessionId,
+        provider: "claude",
+      });
+      const macFolder = shortFolder.workingDirectory;
+      made.folder = macFolder;
+      const rewritten = appendedTranscript({
+        pod: transcript,
+        sent: [],
+        mac: () => undefined,
+        rewrite: (text) =>
+          rewriteTranscript(text, {
+            from: podFolder,
+            to: macFolder,
+            permissionMode: MOVED_BACK_PERMISSION_MODE,
+            strict: true,
+          }),
+      });
+      for (const { name, dir, bundle, branch, snapshot } of received) {
+        this.#update(state, { detail: `Laying down ${name}` });
+        const repository = homeRepository(attached, name);
+        let path: string;
+        let onBranch = branch;
+        if (repository) {
+          const worktree = await this.#homeWorktree(
+            content,
+            sessionId,
+            repository,
+            branch,
+            macFolder,
+          );
+          madeWorktrees.push(repository.id);
+          path = worktree.path;
+          onBranch = worktree.branchName;
+        } else {
+          path = join(macFolder, name);
+          await mkdir(path, { recursive: true });
+          await must(this.#local, path, "git", [
+            "init",
+            "--quiet",
+            "-b",
+            branch,
+          ]);
+        }
+        const fetched = await fetchBundle(this.#local, path, sessionId, bundle);
+        sameSnapshot(fetched, snapshot);
+        await applySnapshot(this.#local, path, onBranch, fetched);
+        await markLast(this.#local, path, sessionId, fetched.work);
+        await markLast(pod, dir, sessionId, fetched.work);
+      }
+      const macProjects = agents.claudeProjectsDirectory(agent);
+      await writeTranscript(
+        this.#local,
+        macProjects,
+        claudeProjectKey(macFolder),
+        rewritten,
+      );
+
+      this.#update(state, { phase: "starting", detail: undefined });
+      const moved = await agents.resumeAfterMove(
+        { ...stopped, hostId: null, workingDirectory: macFolder },
+        MOVED_BACK_PERMISSION_MODE,
+      );
+      made.folder = undefined;
+      madeWorktrees.length = 0;
+      return {
+        status: "moved",
+        session: moved,
+        notice: others
+          ? `${MOVED_BACK_NOTICE} ${LEFT_IN_CLOUD_NOTICE}`
+          : MOVED_BACK_NOTICE,
+      };
+    } catch (error) {
+      for (const repository of madeWorktrees)
+        await content
+          .removeSessionWorktree({
+            session: sessionId,
+            repository,
+            force: true,
+          })
+          .catch(() => undefined);
+      if (made.folder)
+        await rm(made.folder, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      await this.#resumeWhereItWas(stopped, agent, error);
+      throw error;
+    } finally {
+      await rm(localScratch, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+      await pod.remove(scratch).catch(() => undefined);
+    }
+  }
+
+  /**
+   * The git repositories one level under a pod folder, and whether anything
+   * else is there. Dot folders (Claude's home, Daedalus's scratch) and the
+   * folder moved sessions live in are not this session's.
+   */
+  async #podRepositories(
+    pod: PodMoveSide,
+    folder: string,
+  ): Promise<{ found: { name: string; dir: string }[]; others: boolean }> {
+    // `ls` rather than `find -printf`, which the Mac's find has not.
+    const listed = await must(pod, folder, "ls", ["-1A"]);
+    const found: { name: string; dir: string }[] = [];
+    let others = false;
+    for (const name of listed.split("\n").filter(Boolean).sort()) {
+      if (name.startsWith(".") || POD_ROOT_OWNED.has(name)) continue;
+      const dir = folder === "." ? name : `${folder}/${name}`;
+      if (REPOSITORY_NAME.test(name) && (await isRepository(pod, dir)))
+        found.push({ name, dir });
+      else others = true;
+    }
+    return { found, others };
+  }
+
+  /** The pod's branch, if this Mac would take it as one, else a new name. */
+  async #podBranch(
+    pod: PodMoveSide,
+    dir: string,
+    sessionId: string,
+  ): Promise<string> {
+    const current = (
+      await pod.run(dir, "git", ["branch", "--show-current"])
+    ).stdout.trim();
+    if (
+      current &&
+      (
+        await this.#local.run(".", "git", [
+          "check-ref-format",
+          "--branch",
+          current,
+        ])
+      ).exitCode === 0
+    )
+      return current;
+    return `cloud-${sessionId.slice(0, 8)}`;
+  }
+
+  /** This Mac's tip of an attached repository, for what changed since. */
+  async #macHead(repository: WorkspaceRepository): Promise<string> {
+    return must(this.#local, repository.canonicalPath, "git", [
+      "rev-parse",
+      "--verify",
+      `${repository.baseCommit ?? "HEAD"}^{commit}`,
+    ]);
+  }
+
+  /** A session worktree on the pod's branch, renamed when the name is taken. */
+  async #homeWorktree(
+    content: MoveContent,
+    sessionId: string,
+    repository: WorkspaceRepository,
+    branch: string,
+    folder: string,
+  ): Promise<SessionWorktree> {
+    try {
+      return await content.createSessionWorktree({
+        session: sessionId,
+        repository: repository.id,
+        branch,
+        folder,
+      });
+    } catch (error) {
+      if (!(error instanceof DaedalusError) || error.code !== "CONFLICT")
+        throw error;
+      if (!/already exists/.test(error.message)) throw error;
+      return content.createSessionWorktree({
+        session: sessionId,
+        repository: repository.id,
+        branch: `${branch}-${sessionId.slice(0, 8)}`,
+        folder,
+      });
+    }
+  }
+
   /** Paths that steer an agent and differ from what this Mac last had. */
   async #steering(
     side: MoveSide,
@@ -777,6 +1151,18 @@ function inside(root: string, path: string): string {
     );
   return rel || ".";
 }
+
+/** The attached repository a pod folder of this name comes home as. */
+const homeRepository = (
+  attached: WorkspaceRepository[],
+  name: string,
+): WorkspaceRepository | undefined =>
+  attached.find(
+    (repository) =>
+      repository.name === name &&
+      repository.access === "write" &&
+      repository.status === "ready",
+  );
 
 const repositoryName = (worktree: SessionWorktree): string =>
   worktree.path.split("/").at(-1) ?? worktree.path;
