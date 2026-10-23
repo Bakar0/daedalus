@@ -241,6 +241,9 @@ export class PodMoveSide implements MoveSide {
   }
 }
 
+/** Where Claude keeps conversations in the pod, from its workspace root. */
+export const POD_CLAUDE_PROJECTS = ".home/.claude/projects";
+
 /** Claude's folder for a working directory: every other character a dash. */
 export const claudeProjectKey = (workingDirectory: string): string =>
   workingDirectory.replace(/[^a-zA-Z0-9]/g, "-");

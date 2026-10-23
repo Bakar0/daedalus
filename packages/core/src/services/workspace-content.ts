@@ -22,6 +22,7 @@ import type {
 } from "../domain";
 import { updateSettings, type DaedalusConfig } from "../config";
 import { DaedalusError } from "../errors";
+import { requireOnMac } from "./cloud-launch";
 import { removeSkillLink } from "./skills";
 import type { SqliteRepositories } from "../repositories";
 import {
@@ -526,7 +527,7 @@ export class WorkspaceContentService {
     const workspaces = await this.workspaces.listWithHealth();
     await Promise.all(
       workspaces
-        .filter((item) => item.available)
+        .filter((item) => item.available && item.workspace.place !== "cloud")
         .map((item) =>
           syncWorkspaceInstructionFiles(
             item.workspace.path,
@@ -558,6 +559,7 @@ export class WorkspaceContentService {
         "VALIDATION",
         "Journal summary must not be empty",
       );
+    requireOnMac(workspace);
     await ensureWorkspaceContentFiles(
       workspace.path,
       this.config.home,
@@ -587,6 +589,7 @@ export class WorkspaceContentService {
     worktrees: SessionWorktree[];
     references: WorkspaceRepository[];
   }> {
+    requireOnMac(input.workspace);
     await ensureWorkspaceContentFiles(
       input.workspace.path,
       this.config.home,

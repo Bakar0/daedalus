@@ -24,7 +24,7 @@ import { cloudHostId } from "./cloud-launch";
 import { claudeProjectKey, LocalMoveSide, type PodAccess } from "./move-side";
 import { podSessionInstructions } from "./cloud-folder";
 import { sessionInstructionsTemplate } from "./workspace-content";
-import { unpackFromPod } from "./workspace-move-files";
+import { packMac, unpackFromPod } from "./workspace-move-files";
 import { MOVED_HOME_NOTICE, WorkspaceMoves } from "./workspace-move";
 import type { SessionHosts } from "./session-hosts";
 import type { WorkspaceService } from "./workspaces";
@@ -170,6 +170,7 @@ async function setup() {
     hostId: string | null;
     cwd: string;
     mode?: string;
+    fresh?: boolean;
   }[] = [];
   const activity: Record<string, string> = {};
   const pod = fakePod(podRoot);
@@ -179,12 +180,16 @@ async function setup() {
       sessions.set(id, stopped);
       return stopped;
     },
-    resumeAfterMove: async (agent: AgentSession, mode?: string) => {
+    resumeAfterMove: async (
+      agent: AgentSession,
+      options: { permissionMode?: string; fresh?: boolean } = {},
+    ) => {
       starts.push({
         id: agent.id,
         hostId: agent.hostId ?? null,
         cwd: agent.workingDirectory,
-        ...(mode ? { mode } : {}),
+        ...(options.permissionMode ? { mode: options.permissionMode } : {}),
+        ...(options.fresh ? { fresh: true } : {}),
       });
       const running = { ...agent, status: "running" as const };
       sessions.set(agent.id, running);
@@ -396,6 +401,48 @@ describe("moving a workspace", () => {
       "second\n",
     );
     expect(await exists(join(s.podRoot, "artifacts", "notes.md"))).toBe(false);
+  });
+
+  test("the archive for the pod carries no ._ file for extended attributes", async () => {
+    const s = await setup();
+    const brief = join(s.workspacePath, "BRIEF.md");
+    await runCommand("xattr", ["-w", "com.daedalus.test", "x", brief]);
+    const archive = join(root, "pack.tar");
+    await packMac(
+      new LocalMoveSide(),
+      s.workspacePath,
+      [{ path: "BRIEF.md", bytes: 10 }],
+      archive,
+    );
+    // macOS tar's own listing hides `._` entries; GNU tar in the pod
+    // extracts them as files. So the archive's bytes are what is checked.
+    const bytes = await readFile(archive, "latin1");
+    expect(bytes).toContain("BRIEF.md");
+    expect(bytes).not.toContain("._BRIEF.md");
+  });
+
+  test("a session that never had a turn comes home starting its conversation", async () => {
+    const s = await setup();
+    await rm(join(s.macProjects, claudeProjectKey(s.macFolder)), {
+      recursive: true,
+    });
+    expect(await s.moves.move({ workspace: "w1", to: "cloud" })).toMatchObject({
+      status: "moved",
+    });
+    expect(s.starts).toEqual([{ id: SESSION, hostId: HOST, cwd: FOLDER }]);
+    s.starts.length = 0;
+    expect(await s.moves.move({ workspace: "w1", to: "mac" })).toMatchObject({
+      status: "moved",
+    });
+    expect(s.starts).toEqual([
+      {
+        id: SESSION,
+        hostId: null,
+        cwd: s.macFolder,
+        mode: "default",
+        fresh: true,
+      },
+    ]);
   });
 
   test("Daedalus's own session instructions name each side's paths, unasked", async () => {

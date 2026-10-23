@@ -8,7 +8,11 @@ import {
   CLOUD_WORKING_DIRECTORY,
 } from "./cloud-launch";
 import { preparePodSession } from "./cloud-folder";
-import { isPodAccess } from "./move-side";
+import {
+  isPodAccess,
+  POD_CLAUDE_PROJECTS,
+  podWorkingDirectory,
+} from "./move-side";
 import { readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, posix, resolve } from "node:path";
 import {
@@ -425,6 +429,8 @@ const startupQuestionReason = (session: AgentSession): string =>
 /** Set by a session move; see `AgentService.resumeAfterMove`. */
 interface RelaunchOptions {
   permissionMode?: string;
+  /** The session has no conversation yet; see `ResumeInput.fresh`. */
+  fresh?: boolean;
 }
 
 /** What a cloud launch adds for its account. */
@@ -1135,6 +1141,22 @@ export class AgentService {
         "CONFLICT",
         "This session has no conversation to resume",
       );
+    // A session that never had a turn has no conversation in the pod, and
+    // `--resume` would end it at once, its tmux server with it.
+    const fresh =
+      options.fresh ||
+      (agent.kind === "agent" &&
+        isPodAccess(host) &&
+        (
+          await host.run({
+            cwd: ".",
+            executable: "test",
+            args: [
+              "-f",
+              `${POD_CLAUDE_PROJECTS}/${claudeProjectKey(podWorkingDirectory(agent.workingDirectory))}/${agent.providerSessionId}.jsonl`,
+            ],
+          })
+        ).exitCode !== 0);
     // The executable too: a session that moved here from this Mac recorded
     // this Mac's path to Claude, which the pod does not have.
     const launch =
@@ -1158,6 +1180,7 @@ export class AgentService {
               ...(options.permissionMode
                 ? { permissionMode: options.permissionMode }
                 : {}),
+              ...(fresh ? { fresh: true } : {}),
             },
           })
         : undefined;
@@ -2103,7 +2126,7 @@ export class AgentService {
    */
   async resumeAfterMove(
     agent: AgentSession,
-    permissionMode?: string,
+    options: RelaunchOptions = {},
   ): Promise<AgentSession> {
     const before = await this.get(agent.id);
     const place = (session: AgentSession) => ({
@@ -2114,10 +2137,7 @@ export class AgentService {
     // where it now runs; put back if it does not start.
     this.repositories.setAgentPlace(agent.id, place(agent));
     try {
-      return await this.relaunch(
-        { ...agent, archivedAt: null },
-        permissionMode ? { permissionMode } : {},
-      );
+      return await this.relaunch({ ...agent, archivedAt: null }, options);
     } catch (error) {
       this.repositories.setAgentPlace(agent.id, place(before));
       throw error;
@@ -2432,6 +2452,7 @@ export class AgentService {
           ...(options.permissionMode
             ? { permissionMode: options.permissionMode }
             : {}),
+          ...(options.fresh ? { fresh: true } : {}),
         },
       });
       executable = launch.executable;

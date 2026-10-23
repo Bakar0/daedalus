@@ -6,6 +6,9 @@
  * have.
  */
 
+import type { Workspace } from "../domain";
+import { DaedalusError } from "../errors";
+
 /** The cloud host of a workspace: its pod, as the relay names it. */
 export const cloudHostId = (workspaceId: string): string => `ws:${workspaceId}`;
 
@@ -16,6 +19,12 @@ export const cloudHostWorkspace = (hostId: string): string | undefined =>
 /** Why something that needs this Mac's folder is refused. */
 export const IN_CLOUD_MESSAGE =
   "This workspace runs in the cloud; move it home to this Mac first";
+
+/** Refuses anything that would write this Mac's folder of a cloud workspace. */
+export function requireOnMac(workspace: Pick<Workspace, "place">): void {
+  if (workspace.place === "cloud")
+    throw new DaedalusError("CONFLICT", IN_CLOUD_MESSAGE);
+}
 
 /** Why a session whose cloud workspace went to sleep is lost. */
 export const CLOUD_SLEEP_REASON = "The cloud workspace went to sleep";

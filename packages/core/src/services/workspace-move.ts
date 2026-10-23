@@ -34,6 +34,7 @@ import {
   isPodAccess,
   LocalMoveSide,
   must,
+  POD_CLAUDE_PROJECTS,
   PodMoveSide,
   podWorkingDirectory,
   type MoveSide,
@@ -151,7 +152,7 @@ export const MOVED_HOME_NOTICE =
   "Back on this Mac. Its Claude sessions ask before acting, since the cloud wrote part of their conversations; press Shift+Tab in a session to switch modes.";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const POD_PROJECTS = ".home/.claude/projects";
+const POD_PROJECTS = POD_CLAUDE_PROJECTS;
 const POD_SCRATCH = ".daedalus-move";
 /** A session the cloud wrote part of comes home asking before it acts. */
 const MOVED_HOME_PERMISSION_MODE: ClaudePermissionMode = "default";
@@ -544,9 +545,11 @@ export class WorkspaceMoves {
         const folder = folders.get(session.id);
         if (folder === undefined) continue;
         try {
+          const permissionMode =
+            session.kind === "agent" ? modes.get(session.id) : undefined;
           await agents.resumeAfterMove(
             { ...session, hostId, workingDirectory: folder },
-            session.kind === "agent" ? modes.get(session.id) : undefined,
+            permissionMode ? { permissionMode } : {},
           );
         } catch (error) {
           failed.push(`${session.name}: ${messageOf(error)}`);
@@ -788,6 +791,8 @@ export class WorkspaceMoves {
         key: string;
         files: TranscriptFiles;
       }[] = [];
+      // Sessions that never had a turn: nothing to resume on this Mac.
+      const fresh = new Set<string>();
       for (const session of sessions) {
         if (!isClaude(session)) continue;
         const macFolder = macPath(workspace, session.workingDirectory);
@@ -810,6 +815,7 @@ export class WorkspaceMoves {
               "CONFLICT",
               `${session.name}'s conversation is no longer in the cloud workspace`,
             );
+          fresh.add(session.id);
           continue;
         }
         const projects = agents.claudeProjectsDirectory(session);
@@ -888,7 +894,12 @@ export class WorkspaceMoves {
               hostId: null,
               workingDirectory: macPath(workspace, session.workingDirectory),
             },
-            session.kind === "agent" ? MOVED_HOME_PERMISSION_MODE : undefined,
+            session.kind === "agent"
+              ? {
+                  permissionMode: MOVED_HOME_PERMISSION_MODE,
+                  fresh: fresh.has(session.id),
+                }
+              : {},
           );
         } catch (error) {
           failed.push(`${session.name}: ${messageOf(error)}`);

@@ -72,6 +72,12 @@ export interface ResumeInput {
    * between hosts. Otherwise left out, as `permissionModeArgs` explains.
    */
   permissionMode?: string;
+  /**
+   * Claude only: no conversation was ever written under `nativeId` (the
+   * session never had a turn), so `--resume` would exit at once. Claude
+   * starts one under that id instead.
+   */
+  fresh?: boolean;
 }
 
 export interface ProviderLaunch {
@@ -943,7 +949,11 @@ class ConfiguredProvider implements AgentProvider {
     ];
     if (input.resume?.permissionMode)
       args.push("--permission-mode", input.resume.permissionMode);
-    if (input.resume) args.push("--resume", input.resume.nativeId!);
+    if (input.resume)
+      args.push(
+        input.resume.fresh ? "--session-id" : "--resume",
+        input.resume.nativeId!,
+      );
     else if (input.sessionId) {
       args.push("--session-id", input.sessionId);
       if (input.sessionName) args.push("--name", input.sessionName);
@@ -980,7 +990,7 @@ class ConfiguredProvider implements AgentProvider {
         ...(resume.permissionMode
           ? ["--permission-mode", resume.permissionMode]
           : []),
-        "--resume",
+        resume.fresh ? "--session-id" : "--resume",
         id,
       ];
     }
