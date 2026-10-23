@@ -2063,32 +2063,6 @@ export function WorkspaceApp({
       ),
     [cloudState.data],
   );
-  // Keyed by local workspace id; a create can take a minute. A failure is
-  // shown in that workspace's menu, where the action was chosen.
-  const cloudActions = useMutation({
-    onSettled: async () => {
-      await cloudState.refresh();
-      await refresh();
-    },
-  });
-  const [cloudErrors, setCloudErrors] = useState<Record<string, string>>({});
-  function runCloudAction(
-    workspaceId: string,
-    request: () => Promise<RpcResult<CloudStateDto>>,
-  ) {
-    setCloudErrors(({ [workspaceId]: _gone, ...rest }) => rest);
-    void cloudActions.run(
-      request().then((response) => {
-        if (!response.ok)
-          setCloudErrors((current) => ({
-            ...current,
-            [workspaceId]: response.error.message,
-          }));
-        return response;
-      }),
-      workspaceId,
-    );
-  }
   const [error, setError] = useState<string>();
   const [theme, setTheme] = useState<AppTheme>("dark");
   const [workspaceForm, setWorkspaceForm] = useState({
@@ -3097,6 +3071,7 @@ export function WorkspaceApp({
         ? [
             {
               id: "rebirth",
+              icon: <RebirthIcon />,
               label: "Rebirth",
               pinned: pins.session.has("rebirth"),
               onPin: (on: boolean) => pin("session", "rebirth", on),
@@ -3109,6 +3084,7 @@ export function WorkspaceApp({
         ? [
             {
               id: "cloud",
+              icon: <CloudActionIcon />,
               label: session.hostId ? "Move to this Mac" : "Move to cloud",
               pinned: pins.session.has("cloud"),
               onPin: (on: boolean) => pin("session", "cloud", on),
@@ -3119,6 +3095,7 @@ export function WorkspaceApp({
         : []),
       {
         id: "archive",
+        icon: <ArchiveIcon />,
         label: "Archive",
         pinned: pins.session.has("archive"),
         onPin: (on: boolean) => pin("session", "archive", on),
@@ -6611,10 +6588,25 @@ export function WorkspaceApp({
                             <ArchiveIcon />
                           </ConfirmButton>
                         )}
+                        {/* Settings and the + always show, so the pinned
+                          ones that come in on hover open to their left. */}
+                        <button
+                          aria-label={`Create session in ${item.name}`}
+                          className="session-card-action workspace-session-create"
+                          disabled={
+                            !item.available || !snapshot?.settings.tmuxAvailable
+                          }
+                          onClick={() => openSessionModal(undefined, item)}
+                          title="New session"
+                          type="button"
+                        >
+                          +
+                        </button>
                         <WorkspaceMenu
                           actions={[
                             {
                               id: "terminal",
+                              icon: <SessionLaunchIcon />,
                               label: "Open in terminal",
                               pinned: pins.workspace.has("terminal"),
                               onPin: (on) => pin("workspace", "terminal", on),
@@ -6623,6 +6615,7 @@ export function WorkspaceApp({
                             },
                             {
                               id: "secrets",
+                              icon: <KeyIcon />,
                               label: "Secrets",
                               pinned: pins.workspace.has("secrets"),
                               onPin: (on) => pin("workspace", "secrets", on),
@@ -6631,6 +6624,7 @@ export function WorkspaceApp({
                             },
                             {
                               id: "archive",
+                              icon: <ArchiveIcon />,
                               label: "Archive workspace",
                               pinned: pins.workspace.has("archive"),
                               onPin: (on) => pin("workspace", "archive", on),
@@ -6652,35 +6646,10 @@ export function WorkspaceApp({
                           cloud={
                             cloudState.data?.signedIn &&
                             cloudByWorkspace.get(item.id)
-                              ? {
-                                  workspace: cloudByWorkspace.get(item.id)!,
-                                  pending: cloudActions.pending(item.id),
-                                  error: cloudErrors[item.id],
-                                  onRemove: () =>
-                                    runCloudAction(item.id, () =>
-                                      client.request.cloudWorkspaceDelete({
-                                        workspace: item.id,
-                                        force: true,
-                                      }),
-                                    ),
-                                }
+                              ? { workspace: cloudByWorkspace.get(item.id)! }
                               : undefined
                           }
                         />
-                        {/* Last, so the ones that come in on hover open to its
-                          left and it never moves. */}
-                        <button
-                          aria-label={`Create session in ${item.name}`}
-                          className="session-card-action workspace-session-create"
-                          disabled={
-                            !item.available || !snapshot?.settings.tmuxAvailable
-                          }
-                          onClick={() => openSessionModal(undefined, item)}
-                          title="New session"
-                          type="button"
-                        >
-                          +
-                        </button>
                       </span>
                     </div>
                     {expanded && sessionList && (

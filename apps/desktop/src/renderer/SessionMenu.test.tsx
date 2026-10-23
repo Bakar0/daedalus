@@ -23,35 +23,30 @@ describe("WorkspaceCloudSection", () => {
     reason: null,
     createdAt: "2026-10-20T10:00:00.000Z",
   };
-  const cloud = { workspace, pending: false, onRemove() {} };
+  const cloud = { workspace };
 
-  test("says how the cloud copy stands and offers only Remove", () => {
+  test("says how the cloud copy stands, with nothing to do", () => {
     const markup = renderToStaticMarkup(
       <WorkspaceCloudSection cloud={cloud} />,
     );
     expect(markup).toContain('data-status="running"');
     expect(markup).toContain("Cloud copy made");
-    expect(markup).toContain('data-testid="cloud-delete"');
-    expect(markup).toContain("Remove cloud copy");
-    expect(markup).not.toContain('data-testid="cloud-sleep"');
-    expect(markup).not.toContain('data-testid="cloud-wake"');
+    expect(markup).not.toContain("<button");
+    expect(markup).not.toContain("Remove cloud copy");
   });
 
-  test("a failed copy says why, and a failed removal too", () => {
+  test("a failed copy says why", () => {
     const markup = renderToStaticMarkup(
       <WorkspaceCloudSection
         cloud={{
-          ...cloud,
           workspace: {
             ...workspace,
             status: "failed",
             reason: "The image could not be pulled",
           },
-          error: "You may have at most 5 workspaces",
         }}
       />,
     );
     expect(markup).toContain("The image could not be pulled");
-    expect(markup).toContain('data-testid="cloud-menu-error"');
   });
 });

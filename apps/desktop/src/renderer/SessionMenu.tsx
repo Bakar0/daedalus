@@ -12,7 +12,7 @@ import {
   type NamedSessionColorDto,
   type SessionColorDto,
 } from "@daedalus/protocol";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ConfirmButton } from "./ConfirmButton";
 import { Menu, MenuDots } from "./Menu";
 import { PercentInput } from "./PercentInput";
@@ -227,6 +227,8 @@ function RebirthChoices({
 export interface MenuAction {
   id: string;
   label: string;
+  /** The icon it has on the card, shown beside its label here too. */
+  icon?: ReactNode;
   /** Shown on the card as well as here. */
   pinned: boolean;
   onPin: (pinned: boolean) => void;
@@ -275,6 +277,11 @@ function MenuActions({ actions }: { actions: MenuAction[] }) {
               title={`${action.label}. Asks once more.`}
               type="button"
             >
+              {action.icon && (
+                <span aria-hidden="true" className="menu-item-icon">
+                  {action.icon}
+                </span>
+              )}
               <span className="menu-item-label">{action.label}</span>
             </ConfirmButton>
           ) : (
@@ -286,6 +293,11 @@ function MenuActions({ actions }: { actions: MenuAction[] }) {
               role="menuitem"
               type="button"
             >
+              {action.icon && (
+                <span aria-hidden="true" className="menu-item-icon">
+                  {action.icon}
+                </span>
+              )}
               <span className="menu-item-label">{action.label}</span>
             </button>
           )}
@@ -463,11 +475,6 @@ const CLOUD_STATUS_LABEL: Record<CloudWorkspaceDto["status"], string> = {
 /** What the workspace's settings show of its cloud copy. */
 export interface WorkspaceCloudControls {
   workspace: CloudWorkspaceDto;
-  /** A removal is on its way. */
-  pending: boolean;
-  /** Why the last removal failed, in the gateway's or Daedalus's words. */
-  error?: string;
-  onRemove: () => void;
 }
 
 export function WorkspaceMenu({
@@ -535,8 +542,8 @@ export function WorkspaceMenu({
 
 /**
  * The workspace settings' Cloud section, while the workspace has a cloud
- * copy: how it stands, since when, and Remove cloud copy. No Sleep or Wake:
- * the pod sleeps by itself, and opening a session wakes it.
+ * copy: how it stands and since when, nothing to do. The pod sleeps by
+ * itself, opening a session wakes it, and the copy goes with the workspace.
  */
 export function WorkspaceCloudSection({
   cloud,
@@ -554,7 +561,7 @@ export function WorkspaceCloudSection({
       >
         Cloud
         <span className="menu-heading-note">
-          {cloud.pending ? "removing…" : CLOUD_STATUS_LABEL[workspace.status]}
+          {CLOUD_STATUS_LABEL[workspace.status]}
         </span>
       </span>
       <p className="menu-cloud-reason" data-testid="cloud-made">
@@ -562,29 +569,6 @@ export function WorkspaceCloudSection({
           ? workspace.reason
           : `Cloud copy made ${new Date(workspace.createdAt).toLocaleDateString()}`}
       </p>
-      {/* Not a menuitem: choosing one closes the menu, and this needs its
-          second click. */}
-      <ConfirmButton
-        armedLabel="Remove"
-        armedTitle="Remove the cloud copy: its pod, its volume and its token. This workspace stays on this Mac."
-        className="quiet menu-item menu-item-danger"
-        data-testid="cloud-delete"
-        disabled={cloud.pending}
-        onConfirm={cloud.onRemove}
-        title="Remove the cloud copy. Asks once more."
-        type="button"
-      >
-        <span className="menu-item-label">Remove cloud copy…</span>
-      </ConfirmButton>
-      {cloud.error ? (
-        <p
-          className="menu-cloud-error"
-          data-testid="cloud-menu-error"
-          role="alert"
-        >
-          {cloud.error}
-        </p>
-      ) : null}
     </>
   );
 }

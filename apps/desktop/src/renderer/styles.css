@@ -8587,14 +8587,6 @@ dd {
   justify-content: center;
   margin-top: 6px;
 }
-.menu-cloud-error {
-  color: var(--danger);
-  font-size: 11px;
-  line-height: 1.4;
-  margin: 4px 10px 6px;
-  max-width: 260px;
-  white-space: normal;
-}
 .session-opening-steps {
   display: grid;
   gap: 4px;
@@ -8734,6 +8726,20 @@ dd {
 }
 .menu-pin-row > .menu-item {
   flex: 1;
+}
+/* The action's card icon, so a pinned one is easy to tell on the card. */
+.menu-item-icon {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex: none;
+  height: 14px;
+  justify-content: center;
+  width: 14px;
+}
+.menu-item-icon svg {
+  height: 14px;
+  width: 14px;
 }
 .menu-pin {
   align-items: center;

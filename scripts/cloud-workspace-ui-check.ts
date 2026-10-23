@@ -1,10 +1,11 @@
 /**
  * A workspace's Cloud section in its settings menu, in a real browser
  * against `cloud-test.tsx`: shown only while the workspace has a cloud copy,
- * with its status, when it was made, and Remove cloud copy (two clicks); no
- * Sleep or Wake anywhere, and no cloud icon on the workspace header. Nothing
- * while this Mac is signed out. The menu has to stay inside the window at
- * two heights.
+ * with its status and when it was made, and nothing to click: no Remove,
+ * Sleep or Wake. Nothing while this Mac is signed out. The header puts
+ * Settings rightmost with the + to its left, and every action in Settings
+ * shows its card icon. The menu has to stay inside the window at two
+ * heights.
  *
  *   bun run test:cloud-workspace-ui
  */
@@ -102,33 +103,31 @@ await withBrowser({ port: 41764, page: "cloud-test.html" }, async (browser) => {
   await browser.screenshot("cloud-workspace-settings");
   browser.scope = ".menu-popover:popover-open";
 
-  // Remove asks twice. The first click arms it and sends nothing.
-  const before = (await requestNames(browser)).length;
-  await browser.click("cloud-delete");
   expect(
-    (await requestNames(browser)).length === before &&
-      (await browser.attribute("cloud-delete", "data-armed")) === "true",
-    "one click on Remove already removed the cloud copy",
+    !(await browser.has("cloud-delete")) &&
+      (await browser.evaluate<number>(
+        "document.querySelectorAll('.menu-popover:popover-open .menu-cloud-reason ~ button').length",
+      )) === 0,
+    "the Cloud section still offers an action",
   );
-  // A second click inside the double-click window is ignored on purpose.
-  await Bun.sleep(700);
-  await browser.click("cloud-delete");
-  await browser.waitFor(
-    "window.requests.some((one) => 'cloudWorkspaceDelete' in one)",
-    "the remove call",
+  // Every action shows the icon it has when pinned.
+  const rows = await browser.evaluate<{ id: string; icon: boolean }[]>(
+    `[...document.querySelectorAll('.menu-popover:popover-open .menu-pin-row')].map((row) => ({ id: row.dataset.action, icon: Boolean(row.querySelector('.menu-item-icon svg')) }))`,
   );
   expect(
-    (await lastRequest(browser)) ===
-      '{"cloudWorkspaceDelete":{"workspace":"cloud-ws","force":true}}',
-    `Remove sent ${await lastRequest(browser)}`,
+    rows.length === 3 && rows.every((row) => row.icon),
+    `a Settings action has no icon: ${JSON.stringify(rows)}`,
   );
   await closeMenus(browser);
-  await openSettings(browser, "Cloud project");
-  await browser.waitFor(
-    "!document.querySelector('.menu-popover:popover-open [data-testid=\"cloud-status\"]')",
-    "the Cloud section to go after Remove",
+
+  // The header: pinned actions, then +, then Settings rightmost.
+  const order = await browser.evaluate<string[]>(
+    `[...document.querySelector('summary[aria-label="Settings of Cloud project"]').closest('.workspace-card-actions').children].map((one) => one.matches('.workspace-card-menu') ? 'settings' : one.matches('.workspace-session-create') ? 'new' : one.getAttribute('aria-label') ?? one.className)`,
   );
-  await closeMenus(browser);
+  expect(
+    order.at(-1) === "settings" && order.at(-2) === "new",
+    `the header is out of order: ${JSON.stringify(order)}`,
+  );
 
   // An asleep copy says so, and still offers no Wake.
   await openSettings(browser, "Sleepy project");
