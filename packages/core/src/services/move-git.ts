@@ -65,11 +65,23 @@ export async function snapshotRepository(
   // Fails while a merge has conflicts, which is the right answer: such a
   // state does not survive being carried.
   const indexTree = objectId(await git(side, dir, ["write-tree"]), "tree");
+  // Each snapshot is a commit of its own. git dates a commit to the second,
+  // so an unchanged tree snapshotted within a second of the last one would
+  // otherwise be that very commit, which the bundle then leaves out as
+  // already on the other side, ref and all.
+  const nonce = crypto.randomUUID();
   const index = objectId(
     await git(
       side,
       dir,
-      ["commit-tree", indexTree, "-p", head, "-m", "Daedalus move: staged"],
+      [
+        "commit-tree",
+        indexTree,
+        "-p",
+        head,
+        "-m",
+        `Daedalus move: staged ${nonce}`,
+      ],
       IDENTITY,
     ),
     "commit",
@@ -92,7 +104,14 @@ export async function snapshotRepository(
       await git(
         side,
         dir,
-        ["commit-tree", workTree, "-p", head, "-m", "Daedalus move: work"],
+        [
+          "commit-tree",
+          workTree,
+          "-p",
+          head,
+          "-m",
+          `Daedalus move: work ${nonce}`,
+        ],
         IDENTITY,
       ),
       "commit",

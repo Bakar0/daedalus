@@ -16,8 +16,8 @@ import type { AgentSession, SessionWorktree } from "../domain";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "./agents";
 import { cloudHostId } from "./cloud-launch";
-import { steersAgent } from "./move-git";
-import { claudeProjectKey, type PodAccess } from "./move-side";
+import { snapshotRepository, steersAgent } from "./move-git";
+import { claudeProjectKey, LocalMoveSide, type PodAccess } from "./move-side";
 import {
   lastPermissionMode,
   rewriteTranscript,
@@ -565,6 +565,27 @@ describe("moving a session", () => {
 });
 
 describe("move rules", () => {
+  test("two snapshots of an unchanged repository are two commits", async () => {
+    const repo = join(root, "repo");
+    await mkdir(repo);
+    await git(repo, "init", "-q");
+    await writeFile(join(repo, "a.txt"), "a\n");
+    await git(repo, "add", "-A");
+    await git(repo, "commit", "-q", "-m", "a");
+    const side = new LocalMoveSide();
+    const [first, second] = [
+      await snapshotRepository(side, repo),
+      await snapshotRepository(side, repo),
+    ];
+    // Within one second they would otherwise be the same commit, and a
+    // bundle against the first would leave the second out.
+    expect(second.work).not.toBe(first.work);
+    expect(second.index).not.toBe(first.index);
+    expect(await git(repo, "rev-parse", `${second.work}^{tree}`)).toBe(
+      await git(repo, "rev-parse", `${first.work}^{tree}`),
+    );
+  });
+
   test("names what steers an agent or runs on open", () => {
     for (const path of [
       ".claude/settings.json",
