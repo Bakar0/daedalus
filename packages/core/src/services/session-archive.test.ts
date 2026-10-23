@@ -73,6 +73,7 @@ function setup(move: () => Promise<SessionMoveResult>) {
       prepareForSession: async () => cloudHostId(CLOUD),
       sleep: async () => {},
       get: async () => ({}),
+      markDisposable: async () => {},
     },
     hosts: {} as SessionHosts,
   });
@@ -166,21 +167,24 @@ describe("archiving a workspace with a cloud copy", () => {
       await git(dir, "update-ref", `refs/daedalus/moves/${CLOUD}/last`, "HEAD");
   }
 
-  function setup(options: { gone?: boolean } = {}) {
+  function setup(options: { gone?: boolean; noSessions?: boolean } = {}) {
     const calls: string[] = [];
     let linked = true;
     let archivedAt: string | null = null;
     const archive = new SessionArchive({
       repositories: {
         cloudWorkspaceId: () => (linked ? CLOUD : undefined),
-        listAgents: () => [
-          {
-            id: "s9",
-            name: "Old\u0007\u0085\u202e one",
-            hostId: cloudHostId(CLOUD),
-            archivedAt: "earlier",
-          },
-        ],
+        listAgents: () =>
+          options.noSessions
+            ? []
+            : [
+                {
+                  id: "s9",
+                  name: "Old\u0007\u0085\u202e one",
+                  hostId: cloudHostId(CLOUD),
+                  archivedAt: "earlier",
+                },
+              ],
       } as unknown as SqliteRepositories,
       agents: {} as AgentService,
       workspaces: {
@@ -200,6 +204,9 @@ describe("archiving a workspace with a cloud copy", () => {
         prepareForSession: async () => cloudHostId(CLOUD),
         sleep: async () => {
           calls.push("sleep copy");
+        },
+        markDisposable: async () => {
+          calls.push("mark disposable");
         },
         get: async () => {
           if (options.gone)
@@ -270,5 +277,21 @@ describe("archiving a workspace with a cloud copy", () => {
       (await gone.archive.archiveWorkspace({ reference: "w1" })).status,
     ).toBe("archived");
     expect(gone.calls).toEqual(["delete copy", "archive workspace"]);
+  });
+
+  test("a copy with nothing left in it is marked disposable, silently", async () => {
+    await repository("app", true);
+    const clean = setup({ noSessions: true });
+    expect(await clean.archive.markIfDisposable("w1")).toBe(true);
+    expect(clean.calls).toEqual(["mark disposable"]);
+
+    await writeFile(join(pod, "notes.txt"), "loose\n");
+    const loose = setup({ noSessions: true });
+    expect(await loose.archive.markIfDisposable("w1")).toBe(false);
+    // A conversation only in the copy keeps it too.
+    await rm(join(pod, "notes.txt"));
+    const kept = setup();
+    expect(await kept.archive.markIfDisposable("w1")).toBe(false);
+    expect([...loose.calls, ...kept.calls]).toEqual([]);
   });
 });

@@ -916,6 +916,11 @@ export function createDesktopRequestHandlers(
           ...(approved ? { approved } : {}),
           ...(repositories ? { repositories } : {}),
         });
+        // Home, perhaps the last one: its copy may now be disposable.
+        if (moved.status === "moved" && to === "local")
+          void context.archive
+            .markIfDisposable(moved.session.workspaceId)
+            .catch(() => undefined);
         return moved.status === "moved"
           ? {
               status: "moved" as const,

@@ -24,6 +24,7 @@ import {
   SignInOffers,
 } from "./sign-in-pages";
 import {
+  CLOUD_COLLECTED_REASON,
   CLOUD_SLEEP_REASON,
   cloudHostId,
   cloudHostWorkspace,
@@ -283,6 +284,9 @@ export class CloudService {
         workspaces: [],
       };
     const base = { gatewayUrl: signIn.gatewayUrl, email: signIn.user.email };
+    // Read before the list: a link made while it is on its way is not one
+    // the gateway forgot.
+    const linked = this.options.repositories.cloudWorkspaceLinks();
     let listed: CloudWorkspace[];
     try {
       listed = await this.list();
@@ -294,6 +298,7 @@ export class CloudService {
         workspaces: [],
       };
     }
+    await this.#forgetCollected(linked, listed);
     const workspaces: LinkedCloudWorkspace[] = [];
     for (const item of listed) {
       const workspaceId = this.options.repositories.workspaceForCloud(
@@ -524,6 +529,56 @@ export class CloudService {
     const result = await (await this.#client()).sleepWorkspace(workspaceId);
     this.#endSessions(workspaceId, "lost", CLOUD_SLEEP_REASON);
     return result;
+  }
+
+  /**
+   * The gateway's word that a copy holds nothing this Mac needs: asleep a
+   * day, the gateway deletes it. Waking it clears the mark.
+   */
+  async markDisposable(workspaceReference: string): Promise<void> {
+    const workspaceId = await this.#workspaceId(workspaceReference);
+    await (await this.#client()).setDisposable(workspaceId, true);
+  }
+
+  /**
+   * Links whose copy the gateway no longer has, its collection having
+   * deleted it after a long sleep: forgotten, so the next cloud session
+   * makes a new copy. A session still in one stays lost and says why.
+   */
+  async #forgetCollected(
+    linked: string[],
+    listed: CloudWorkspace[],
+  ): Promise<void> {
+    const present = new Set(listed.map((item) => item.workspaceId));
+    for (const cloudId of linked) {
+      if (present.has(cloudId)) continue;
+      // Asked on its own, so a list that left one out cannot drop its link.
+      const gone = await this.#client()
+        .then((client) => client.getWorkspace(cloudId))
+        .then(
+          () => false,
+          (error: unknown) =>
+            error instanceof DaedalusError &&
+            error.details?.gatewayCode === "NOT_FOUND",
+        );
+      if (!gone) continue;
+      this.#endSessions(cloudId, "lost", CLOUD_COLLECTED_REASON);
+      for (const session of this.options.repositories.listAgents({
+        status: "lost",
+      }))
+        if (
+          session.hostId === cloudHostId(cloudId) &&
+          session.lostReason === CLOUD_SLEEP_REASON
+        )
+          this.options.repositories.updateAgent({
+            ...session,
+            lostReason: CLOUD_COLLECTED_REASON,
+          });
+      await this.account.unpin(cloudId).catch(() => undefined);
+      this.options.repositories.unlinkCloudWorkspace(cloudId);
+      this.options.hosts.unregister(cloudHostId(cloudId));
+      this.options.log?.("cloud_workspace_collected", { workspaceId: cloudId });
+    }
   }
 
   /** Deletes the pod, its volume and its token; the local workspace stays. */

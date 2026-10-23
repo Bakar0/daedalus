@@ -16,6 +16,10 @@ export const cloudHostWorkspace = (hostId: string): string | undefined =>
 /** Why a session whose cloud workspace went to sleep is lost. */
 export const CLOUD_SLEEP_REASON = "The cloud workspace went to sleep";
 
+/** Why a session is lost whose cloud copy the gateway deleted, unused. */
+export const CLOUD_COLLECTED_REASON =
+  "Its cloud workspace was deleted after a long sleep";
+
 /** Whether a session is lost only because its cloud workspace sleeps. */
 export const asleepInCloud = (session: {
   hostId: string | null;

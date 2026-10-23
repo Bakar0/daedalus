@@ -120,6 +120,14 @@ export class GatewayClient {
     );
   }
 
+  setDisposable(id: string, disposable: boolean): Promise<CloudWorkspace> {
+    return this.#request(
+      "POST",
+      `/v1/workspaces/${encodeURIComponent(id)}/disposable`,
+      { disposable },
+    );
+  }
+
   async deleteWorkspace(id: string): Promise<void> {
     await this.#request("DELETE", `/v1/workspaces/${encodeURIComponent(id)}`);
   }

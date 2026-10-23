@@ -1132,6 +1132,19 @@ export class SqliteRepositories {
     );
   }
 
+  /** The cloud ids this Mac links for the signed-in account. */
+  cloudWorkspaceLinks(): string[] {
+    const owner = this.cloudOwner();
+    if (!owner) return [];
+    return this.database
+      .query<{ cloud_id: string }, [string, string]>(
+        `SELECT cloud_id FROM cloud_workspace_links
+         WHERE gateway_url = ? AND user_id = ?`,
+      )
+      .all(owner.gatewayUrl, owner.userId)
+      .map((row) => row.cloud_id);
+  }
+
   /** Links a local workspace to a cloud id of the signed-in account. */
   linkCloudWorkspace(workspaceId: string, cloudId: string): void {
     const owner = this.cloudOwner();

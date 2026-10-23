@@ -18,6 +18,8 @@ export interface ArchiveCloud {
   sleep(workspaceReference: string): Promise<unknown>;
   /** The gateway's record of it. */
   get(workspaceReference: string): Promise<unknown>;
+  /** Tells the gateway it holds nothing needed, so it may go after a day asleep. */
+  markDisposable(workspaceReference: string): Promise<void>;
 }
 
 /** A repository a session born in the cloud could bring home. */
@@ -118,11 +120,36 @@ export class SessionArchive {
         reason: error instanceof Error ? error.message : String(error),
       };
     }
+    const archived = await agents.archive(moved.id, input.force);
+    void this.markIfDisposable(agent.workspaceId).catch(() => undefined);
     return {
       status: "archived",
-      session: await agents.archive(moved.id, input.force),
+      session: archived,
       ...(notice ? { notice } : {}),
     };
+  }
+
+  /**
+   * Marks a workspace's cloud copy disposable once nothing needs it: no
+   * cloud session left in it, and nothing only there (the check archiving
+   * a workspace makes). The gateway then deletes it after a day asleep.
+   * Whether it did is not the user's concern; nothing is shown or asked.
+   */
+  async markIfDisposable(workspaceReference: string): Promise<boolean> {
+    const { repositories, workspaces, cloud } = this.options;
+    const workspace = await workspaces.get(workspaceReference);
+    const cloudId = repositories.cloudWorkspaceId(workspace.id);
+    if (!cloudId) return false;
+    const hostId = cloudHostId(cloudId);
+    if (
+      repositories
+        .listAgents({ workspaceId: workspace.id })
+        .some((session) => session.hostId === hostId && !session.archivedAt)
+    )
+      return false;
+    if ((await this.#lostWithCopy(workspace)).length) return false;
+    await cloud.markDisposable(workspace.id);
+    return true;
   }
 
   /**

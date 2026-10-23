@@ -746,6 +746,38 @@ describe("cloud RPC", () => {
     });
   });
 
+  test("a copy the gateway collected is forgotten, and its session says why", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const workspace = await context.workspaces.create({ name: "Pods" });
+      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+      const host = new FakeCloudHost(cloudHostId(cloudId));
+      context.hosts.register(host);
+      const spawned = await rpc.agentSpawn({
+        workspace: workspace.id,
+        cloud: true,
+      });
+      if (!spawned.ok) throw new Error("spawn failed");
+      await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
+      // 30 days asleep: the gateway's collection deleted it.
+      gateway.workspaces.delete(cloudId);
+
+      const state = await rpc.cloudState({});
+      expect(state.ok && state.data.workspaces).toEqual([]);
+      expect(
+        context.repositories.cloudWorkspaceId(workspace.id),
+      ).toBeUndefined();
+      expect(await context.agents.get(spawned.data.id)).toMatchObject({
+        status: "lost",
+        lostReason: "Its cloud workspace was deleted after a long sleep",
+      });
+    });
+  });
+
   test("a session on this Mac is not woken as a cloud one", async () => {
     await withCloud(async (rpc, context) => {
       const workspace = await context.workspaces.create({ name: "Here" });

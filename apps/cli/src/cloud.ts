@@ -234,6 +234,10 @@ export async function cloudCommand(
     }
     const { session, notice } = result;
     context.moves.dismiss(session.id);
+    if (to === "local")
+      await context.archive
+        .markIfDisposable(session.workspaceId)
+        .catch(() => undefined);
     printResult(session, json, () => {
       console.log(
         `Moved ${session.id} to ${to === "cloud" ? "the cloud" : "this Mac"}`,
