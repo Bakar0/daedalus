@@ -102,8 +102,6 @@ spec:
               value: {{ .Values.workspace.idleMinutes | quote }}
             - name: DAEDALUS_WORKSPACE_ASLEEP_DAYS
               value: {{ .Values.workspace.retention.asleepDays | quote }}
-            - name: DAEDALUS_WORKSPACE_DISPOSABLE_HOURS
-              value: {{ .Values.workspace.retention.disposableHours | quote }}
             - name: DAEDALUS_GATEWAY_COLLECT_SECONDS
               value: {{ .Values.gateway.collectSeconds | quote }}
             - name: DAEDALUS_TENANT_DIR

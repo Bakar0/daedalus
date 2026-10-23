@@ -193,7 +193,6 @@ export function createGateway(deps: GatewayDeps) {
       runnerOnline,
       runnerKey: row.runnerKey,
       createdAt: row.createdAt,
-      disposable: row.disposable,
       sleptAt: row.sleptAt,
     };
   }
@@ -216,7 +215,6 @@ export function createGateway(deps: GatewayDeps) {
       runnerKey: null,
       sleeping: false,
       sleptAt: null,
-      disposable: false,
       createdAt: new Date().toISOString(),
     };
     if (store.workspaces(userId).length >= config.maxWorkspaces)
@@ -377,8 +375,7 @@ export function createGateway(deps: GatewayDeps) {
     if (path === "/v1/connect" && method === "GET")
       return connect(request, url, owner, server);
 
-    const match =
-      /^\/v1\/workspaces\/([^/]+)(?:\/(wake|sleep|disposable))?$/.exec(path);
+    const match = /^\/v1\/workspaces\/([^/]+)(?:\/(wake|sleep))?$/.exec(path);
 
     // A runner may only put its own workspace to sleep (when idle).
     if (owner.kind === "runner") {
@@ -411,15 +408,6 @@ export function createGateway(deps: GatewayDeps) {
       const row = own(userId, match[1]!);
       if (match[2] === "wake" && method === "POST") return wake(row);
       if (match[2] === "sleep" && method === "POST") return sleep(row);
-      if (match[2] === "disposable" && method === "POST") {
-        const body = await readJson(request);
-        if (typeof body.disposable !== "boolean")
-          throw new HttpError("VALIDATION", "disposable is true or false");
-        store.setDisposable(userId, row.workspaceId, body.disposable);
-        return Response.json(
-          await view({ ...row, disposable: body.disposable }),
-        );
-      }
       if (!match[2] && method === "GET") return Response.json(await view(row));
       if (!match[2] && method === "DELETE") return remove(row);
     }
@@ -453,20 +441,17 @@ export function createGateway(deps: GatewayDeps) {
    * goes too. One that fails is logged and tried again next pass.
    */
   async function collect(now = new Date()): Promise<CollectResult> {
-    const { asleepMs, disposableMs } = config.retention;
+    const { asleepMs } = config.retention;
     const result: CollectResult = { workspaces: [], namespaces: [] };
     for (const row of store.allWorkspaces()) {
       if (!row.sleeping || !row.sleptAt) continue;
       const asleep = now.getTime() - Date.parse(row.sleptAt);
-      const due =
-        (asleepMs > 0 && asleep >= asleepMs) ||
-        (row.disposable && disposableMs > 0 && asleep >= disposableMs);
-      if (!due) continue;
+      if (asleepMs <= 0 || asleep < asleepMs) continue;
       try {
         await remove(row);
         result.workspaces.push(row.workspaceId);
         log(
-          `Collected workspace ${row.workspaceId}, asleep since ${row.sleptAt}${row.disposable ? " and disposable" : ""}`,
+          `Collected workspace ${row.workspaceId}, asleep since ${row.sleptAt}`,
         );
       } catch (error) {
         log(`Collecting workspace ${row.workspaceId} failed: ${String(error)}`);

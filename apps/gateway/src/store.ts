@@ -29,8 +29,6 @@ export interface WorkspaceRow {
   sleeping: boolean;
   /** When it last went to sleep; null while awake. */
   sleptAt: string | null;
-  /** The Mac said nothing in it is needed; waking clears it. */
-  disposable: boolean;
   createdAt: string;
 }
 
@@ -73,7 +71,6 @@ interface WorkspaceRecord {
   runner_key: string | null;
   sleeping: number;
   slept_at: string | null;
-  disposable: number;
   created_at: string;
 }
 
@@ -88,7 +85,6 @@ const toWorkspace = (row: WorkspaceRecord): WorkspaceRow => ({
   runnerKey: row.runner_key,
   sleeping: row.sleeping === 1,
   sleptAt: row.slept_at,
-  disposable: row.disposable === 1,
   createdAt: row.created_at,
 });
 
@@ -135,10 +131,7 @@ export class Store {
           .query("UPDATE workspaces SET slept_at = ? WHERE sleeping = 1")
           .run(new Date().toISOString());
       }
-      if (!columns.has("disposable"))
-        this.#db.run(
-          "ALTER TABLE workspaces ADD COLUMN disposable INTEGER NOT NULL DEFAULT 0",
-        );
+      // `disposable` (a retired rule) stays in stores that have it, unused.
     })();
   }
 
@@ -199,10 +192,7 @@ export class Store {
    * one with this id already.
    */
   insertWorkspace(
-    workspace: Omit<
-      WorkspaceRow,
-      "runnerKey" | "sleeping" | "sleptAt" | "disposable"
-    >,
+    workspace: Omit<WorkspaceRow, "runnerKey" | "sleeping" | "sleptAt">,
     runnerToken: string,
   ): boolean {
     return this.#db.transaction(() => {
@@ -266,10 +256,7 @@ export class Store {
       .map(toWorkspace);
   }
 
-  /**
-   * Asleep from `at`, or awake. Waking also clears `disposable`: a copy
-   * someone woke is in use again.
-   */
+  /** Asleep from `at`, or awake. */
   setSleeping(
     userId: string,
     workspaceId: string,
@@ -280,21 +267,9 @@ export class Store {
       .query(
         sleeping
           ? "UPDATE workspaces SET sleeping = 1, slept_at = ? WHERE user_id = ? AND workspace_id = ?"
-          : "UPDATE workspaces SET sleeping = 0, slept_at = NULL, disposable = 0 WHERE ? IS NOT NULL AND user_id = ? AND workspace_id = ?",
+          : "UPDATE workspaces SET sleeping = 0, slept_at = NULL WHERE ? IS NOT NULL AND user_id = ? AND workspace_id = ?",
       )
       .run(at.toISOString(), userId, workspaceId);
-  }
-
-  setDisposable(
-    userId: string,
-    workspaceId: string,
-    disposable: boolean,
-  ): void {
-    this.#db
-      .query(
-        "UPDATE workspaces SET disposable = ? WHERE user_id = ? AND workspace_id = ?",
-      )
-      .run(disposable ? 1 : 0, userId, workspaceId);
   }
 
   /**

@@ -1069,7 +1069,14 @@ describe("collection", () => {
     await api(awake.token, "POST", "/v1/workspaces", createBody(WS_B));
     const listed = await api(token, "GET", `/v1/workspaces/${WS_A}`);
     expect(listed.json.sleptAt).toBeString();
-    expect(listed.json.disposable).toBe(false);
+    // The retired disposable mark is no route.
+    expect(
+      (
+        await api(token, "POST", `/v1/workspaces/${WS_A}/disposable`, {
+          disposable: true,
+        })
+      ).status,
+    ).toBe(404);
 
     expect(await collect(later(29 * DAY))).toEqual({
       workspaces: [],
@@ -1089,59 +1096,6 @@ describe("collection", () => {
     expect(
       (await api(awake.token, "GET", `/v1/workspaces/${WS_B}`)).status,
     ).toBe(200);
-  });
-
-  test("a disposable workspace asleep a day is deleted; waking clears the mark", async () => {
-    const { token } = await asleep("a@example.com");
-    const marked = await api(
-      token,
-      "POST",
-      `/v1/workspaces/${WS_A}/disposable`,
-      {
-        disposable: true,
-      },
-    );
-    expect(marked.json.disposable).toBe(true);
-    await api(token, "POST", `/v1/workspaces/${WS_A}/wake`);
-    expect(
-      (await api(token, "GET", `/v1/workspaces/${WS_A}`)).json.disposable,
-    ).toBe(false);
-    await api(token, "POST", `/v1/workspaces/${WS_A}/sleep`);
-    expect((await collect(later(2 * DAY))).workspaces).toEqual([]);
-
-    await api(token, "POST", `/v1/workspaces/${WS_A}/disposable`, {
-      disposable: true,
-    });
-    expect((await collect(later(DAY / 2))).workspaces).toEqual([]);
-    expect((await collect(later(DAY + 60_000))).workspaces).toEqual([WS_A]);
-  });
-
-  test("only the user may mark a workspace, and only their own", async () => {
-    const { token, userId } = await asleep("a@example.com");
-    const other = await login("b@example.com");
-    expect(
-      (
-        await api(other.token, "POST", `/v1/workspaces/${WS_A}/disposable`, {
-          disposable: true,
-        })
-      ).status,
-    ).toBe(404);
-    await api(token, "POST", `/v1/workspaces/${WS_A}/wake`);
-    const runner = runnerToken(userId, WS_A);
-    expect(
-      (
-        await api(runner, "POST", `/v1/workspaces/${WS_A}/disposable`, {
-          disposable: true,
-        })
-      ).status,
-    ).toBe(401);
-    expect(
-      (
-        await api(token, "POST", `/v1/workspaces/${WS_A}/disposable`, {
-          disposable: "yes",
-        })
-      ).status,
-    ).toBe(400);
   });
 
   test("an empty user namespace goes; one not named for its label stays", async () => {
@@ -1172,24 +1126,23 @@ describe("collection", () => {
   test("a rule set to 0 is off, and a failed delete is retried next pass", async () => {
     await stop();
     start({ DAEDALUS_WORKSPACE_ASLEEP_DAYS: "0" });
-    const { token } = await asleep("a@example.com");
+    await asleep("a@example.com");
     expect((await collect(later(365 * DAY))).workspaces).toEqual([]);
 
-    await api(token, "POST", `/v1/workspaces/${WS_A}/disposable`, {
-      disposable: true,
-    });
+    await stop();
+    start();
     const request = kube.request.bind(kube);
     let refuse = true;
     kube.request = async (method, path, body) =>
       refuse && method === "DELETE" && path.includes("/pods/")
         ? { status: 500, body: { message: "etcd is down" } }
         : request(method, path, body);
-    expect((await collect(later(2 * DAY))).workspaces).toEqual([]);
+    expect((await collect(later(31 * DAY))).workspaces).toEqual([]);
     expect(logs.some((line) => line.includes("Collecting workspace"))).toBe(
       true,
     );
     refuse = false;
-    expect((await collect(later(2 * DAY))).workspaces).toEqual([WS_A]);
+    expect((await collect(later(31 * DAY))).workspaces).toEqual([WS_A]);
   });
 });
 
@@ -1208,6 +1161,5 @@ INSERT INTO workspaces VALUES ('u1', '${WS_A}', 'A', '${MAC_A}', 'k', NULL, NULL
   const before = Date.now();
   start();
   const [row] = store.allWorkspaces();
-  expect(row!.disposable).toBe(false);
   expect(Date.parse(row!.sleptAt!)).toBeGreaterThanOrEqual(before - 1_000);
 });

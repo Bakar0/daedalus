@@ -45,11 +45,8 @@ export interface GatewayConfig {
   };
   /** Directory holding the chart's `daedalus-tenant` ConfigMap files. */
   tenantDir: string;
-  /**
-   * How long a workspace may stay asleep before it is deleted: any one,
-   * and one the Mac marked disposable. 0 turns a rule off.
-   */
-  retention: { asleepMs: number; disposableMs: number };
+  /** How long a workspace may stay asleep before it is deleted; 0 never. */
+  retention: { asleepMs: number };
   /** How often collection runs. */
   collectMs: number;
 }
@@ -119,11 +116,6 @@ export function loadConfig(env: Record<string, string | undefined>) {
     tenantDir: get("DAEDALUS_TENANT_DIR", "/etc/daedalus/tenant"),
     retention: {
       asleepMs: amount("DAEDALUS_WORKSPACE_ASLEEP_DAYS", "30", 86_400_000),
-      disposableMs: amount(
-        "DAEDALUS_WORKSPACE_DISPOSABLE_HOURS",
-        "24",
-        3_600_000,
-      ),
     },
     collectMs: Math.max(
       1_000,
