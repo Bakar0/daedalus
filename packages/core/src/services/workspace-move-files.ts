@@ -167,15 +167,15 @@ export async function packMac(
     ensureDir: true,
   });
   try {
-    await must(local, root, "tar", [
-      "-c",
-      "-f",
-      file,
-      "--no-recursion",
-      "--null",
-      "-T",
-      list,
-    ]);
+    // macOS tar otherwise adds a `._name` file beside every file with
+    // extended attributes, and the pod would keep them as workspace files.
+    await must(
+      local,
+      root,
+      "tar",
+      ["-c", "-f", file, "--no-recursion", "--null", "-T", list],
+      { COPYFILE_DISABLE: "1" },
+    );
   } finally {
     await rm(list, { force: true });
   }
