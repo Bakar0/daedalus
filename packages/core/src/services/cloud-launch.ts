@@ -13,6 +13,10 @@ export const cloudHostId = (workspaceId: string): string => `ws:${workspaceId}`;
 export const cloudHostWorkspace = (hostId: string): string | undefined =>
   hostId.startsWith("ws:") ? hostId.slice(3) : undefined;
 
+/** Why something that needs this Mac's folder is refused. */
+export const IN_CLOUD_MESSAGE =
+  "This workspace runs in the cloud; move it home to this Mac first";
+
 /** Why a session whose cloud workspace went to sleep is lost. */
 export const CLOUD_SLEEP_REASON = "The cloud workspace went to sleep";
 

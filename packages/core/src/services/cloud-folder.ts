@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 import type { Task, Workspace } from "../domain";
 import { DaedalusError } from "../errors";
+import { IN_CLOUD_MESSAGE } from "./cloud-launch";
 import { isPodAccess, type PodAccess } from "./move-side";
 import {
   sessionDirectoryName,
@@ -11,9 +12,7 @@ import {
 /** The pod's workspace folder, as sessions there see it. */
 export const POD_WORKSPACE = "/workspace";
 
-/** Why something that needs this Mac's folder is refused. */
-export const IN_CLOUD_MESSAGE =
-  "This workspace runs in the cloud; move it home to this Mac first";
+export { IN_CLOUD_MESSAGE } from "./cloud-launch";
 
 /** Refuses anything that would write this Mac's folder of a cloud workspace. */
 export function requireOnMac(workspace: Pick<Workspace, "place">): void {
