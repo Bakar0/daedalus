@@ -136,8 +136,10 @@ await withBrowser({ port: 41800, page: "cloud-test.html" }, async (browser) => {
   await close(browser);
 });
 
-// Nothing on a header or a card waits for hover: with the pointer away,
-// every action is there, and no name or count runs under them.
+// Pinned actions come in on hover and on keyboard focus within the card,
+// and are hidden otherwise; Settings, the +, a session's menu and a lit
+// cloud always show. No name runs under the actions on show, or loses its
+// room to hidden ones.
 await withBrowser({ port: 41802, page: "cloud-test.html" }, async (browser) => {
   await browser.waitFor(
     "document.querySelector('summary[aria-label=\"Settings of Plain local\"]')",
@@ -152,45 +154,84 @@ await withBrowser({ port: 41802, page: "cloud-test.html" }, async (browser) => {
     "the workspace list after the reload",
   );
   await Bun.sleep(600);
+  const card = (name: string) =>
+    `document.querySelector('summary[aria-label="Settings of ${name}"]').closest('.workspace-group')`;
+  /** What each card shows now, and any name under its actions on show. */
+  const look = (needsRoom = false) =>
+    browser.evaluate<{
+      shown: Record<string, string[]>;
+      under: string[];
+    }>(`(() => {
+      const shown = {};
+      const under = [];
+      for (const one of document.querySelectorAll('.workspace-group > .workspace-card, .workspace-sessions .session-card')) {
+        const actions = one.querySelector(':scope > .workspace-card-actions');
+        if (!actions) continue;
+        const name = one.querySelector('.workspace-card-name > span:first-child, .session-card-title > strong');
+        const visible = [...actions.children].filter((child) => child.getBoundingClientRect().width > 0);
+        shown[name.textContent] = visible.map((child) => child.getAttribute('aria-label') ?? (child.matches('.workspace-card-menu, .session-card-menu') ? 'menu' : child.className));
+        const left = Math.min(...visible.map((child) => child.getBoundingClientRect().left));
+        const box = name.getBoundingClientRect();
+        if (box.right > left + 1) under.push(name.textContent + ' runs under its actions');
+        if (${needsRoom} && box.width < 40) under.push(name.textContent + ' has no room');
+      }
+      return { shown, under };
+    })()`);
+
+  // Pointer away: only what always shows.
+  await browser.hover("");
+  // With the actions hidden, every name has its room.
+  let seen = await look(true);
+  expect(
+    JSON.stringify(seen.shown["Plain local"]) ===
+      JSON.stringify(["Create session in Plain local", "menu"]),
+    `with the pointer away Plain local shows ${JSON.stringify(seen.shown["Plain local"])}`,
+  );
+  expect(
+    JSON.stringify(seen.shown["Cloud project"]) ===
+      JSON.stringify([
+        "Move Cloud project to this Mac",
+        "Create session in Cloud project",
+        "menu",
+      ]),
+    `the lit cloud does not stay: ${JSON.stringify(seen.shown["Cloud project"])}`,
+  );
+  expect(
+    JSON.stringify(seen.shown["s-local"]) === JSON.stringify(["menu"]),
+    `with the pointer away s-local shows ${JSON.stringify(seen.shown["s-local"])}`,
+  );
+  expect(!seen.under.length, `pointer away: ${JSON.stringify(seen.under)}`);
+  await browser.screenshot("pins-pointer-away");
+
+  // Hover: that card's pinned actions, and no other card's.
+  await browser.hover('summary[aria-label="Settings of Plain local"]');
+  seen = await look();
+  expect(
+    seen.shown["Plain local"]!.length === 6 &&
+      seen.shown["Sleepy project"]!.length === 3,
+    `hover reveals ${JSON.stringify(seen.shown)}`,
+  );
+  expect(!seen.under.length, `on hover: ${JSON.stringify(seen.under)}`);
+  await browser.screenshot("pins-hover");
+  await browser.hover('.workspace-sessions [data-session-id="s-local"]');
+  seen = await look();
+  expect(
+    seen.shown["s-local"]!.length === 3 && seen.shown["s-cloud"]!.length === 1,
+    `hovering a session reveals ${JSON.stringify(seen.shown)}`,
+  );
+
+  // Keyboard focus within a card reveals them too, with no pointer.
+  await browser.hover("");
   await browser.evaluate(
-    "document.dispatchEvent(new MouseEvent('mousemove', { clientX: 900, clientY: 700 }))",
+    `${card("Sleepy project")}.querySelector('summary[aria-label="Settings of Sleepy project"]').focus()`,
   );
-  const seen = await browser.evaluate<{
-    hidden: string[];
-    under: string[];
-  }>(`(() => {
-    const hidden = [];
-    const under = [];
-    for (const card of document.querySelectorAll('.workspace-group > .workspace-card, .workspace-sessions .session-card')) {
-      const actions = card.querySelector(':scope > .workspace-card-actions');
-      if (!actions) continue;
-      for (const one of actions.children) {
-        const box = one.getBoundingClientRect();
-        if (getComputedStyle(one).display === 'none' || box.width === 0 || getComputedStyle(one).opacity === '0')
-          hidden.push(one.getAttribute('aria-label') ?? one.className);
-      }
-      const left = actions.getBoundingClientRect().left;
-      for (const text of card.querySelectorAll('.workspace-card-name > span:first-child, .session-card-title > strong, .workspace-insight-copy')) {
-        const box = text.getBoundingClientRect();
-        const top = actions.getBoundingClientRect();
-        if (box.width && box.right > left + 1 && box.top < top.bottom && box.bottom > top.top)
-          under.push(text.textContent);
-        // A name with no room is as bad as one under the actions.
-        if (!text.matches('.workspace-insight-copy') && box.width < 40)
-          under.push(\`\${text.textContent} (no room)\`);
-      }
-    }
-    return { hidden, under };
-  })()`);
+  seen = await look();
   expect(
-    !seen.hidden.length,
-    `actions wait for hover: ${JSON.stringify(seen.hidden)}`,
+    seen.shown["Sleepy project"]!.length === 6 &&
+      seen.shown["Plain local"]!.length === 2,
+    `focus reveals ${JSON.stringify(seen.shown)}`,
   );
-  expect(
-    !seen.under.length,
-    `text runs under the actions: ${JSON.stringify(seen.under)}`,
-  );
-  await browser.screenshot("pins-all-showing");
+  expect(!seen.under.length, `on focus: ${JSON.stringify(seen.under)}`);
 });
 
 // A narrow sidebar: each workspace's name has its line up to the actions,
@@ -211,6 +252,7 @@ await withBrowser(
       "the workspace list after the reload",
     );
     await Bun.sleep(600);
+    await browser.hover("");
     // Focus on another workspace, so Plain local's archive is out of focus.
     await browser.evaluate(
       `document.querySelector('summary[aria-label="Settings of Cloud project"]').closest('.workspace-card').querySelector('.workspace-item').click()`,

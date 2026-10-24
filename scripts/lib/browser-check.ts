@@ -28,6 +28,11 @@ export interface Browser {
   /** Types into an input the way a user does, so React sees the change. */
   type(testId: string, value: string): Promise<void>;
   resize(height: number): Promise<void>;
+  /**
+   * Moves the real mouse pointer over the first element the selector finds,
+   * so `:hover` applies; an empty selector moves it to the page's corner.
+   */
+  hover(selector: string): Promise<void>;
   screenshot(name: string): Promise<string>;
   /** Calls the page recorded through `window.requests`, oldest first. */
   requests(): Promise<Array<Record<string, unknown>>>;
@@ -235,6 +240,20 @@ export async function withBrowser(
           mobile: false,
         });
         await Bun.sleep(150);
+      },
+      async hover(selectorText) {
+        const point = selectorText
+          ? await evaluate<{ x: number; y: number }>(`(() => {
+              const box = document.querySelector(${JSON.stringify(selectorText)}).getBoundingClientRect();
+              return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+            })()`)
+          : { x: 1, y: 1 };
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: point.x,
+          y: point.y,
+        });
+        await Bun.sleep(120);
       },
       async screenshot(name) {
         const shot = await send<{ data: string }>("Page.captureScreenshot", {
