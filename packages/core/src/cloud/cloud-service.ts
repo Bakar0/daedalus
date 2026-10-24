@@ -192,11 +192,12 @@ export class CloudService {
   }
 
   /**
-   * Deletes this account's cloud copies that no workspace of this Mac lives
-   * in: its workspace archived, deleted, unknown here, or on this Mac. The
-   * gateway counts every copy against the account's limit. A copy whose
-   * workspace is in the cloud, or on its way there, is never touched.
-   * Returns the cloud ids deleted.
+   * Deletes the cloud copies this Mac links that no workspace lives in:
+   * its workspace archived, deleted, or on this Mac. The gateway counts
+   * every copy against the account's limit. A copy whose workspace is in
+   * the cloud, or on its way there, is never touched, nor one this Mac does
+   * not link: it may be another Mac's workspace, and is left to the
+   * gateway's collection. Returns the cloud ids deleted.
    */
   async cleanOrphans(): Promise<string[]> {
     if (!(await this.account.signIn())) return [];
@@ -204,7 +205,8 @@ export class CloudService {
     const deleted: string[] = [];
     for (const copy of await this.list()) {
       const local = repositories.workspaceForCloud(copy.workspaceId);
-      const workspace = local ? repositories.findWorkspace(local) : undefined;
+      if (!local) continue;
+      const workspace = repositories.findWorkspace(local);
       if (
         workspace &&
         !workspace.archivedAt &&

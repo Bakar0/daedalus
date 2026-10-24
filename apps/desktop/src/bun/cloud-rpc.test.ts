@@ -670,7 +670,7 @@ describe("cloud RPC", () => {
     });
   });
 
-  test("copies no workspace lives in go when a create hits the limit, and only those", async () => {
+  test("copies this Mac links that no workspace lives in go at the limit, and only those", async () => {
     await withCloud(async (rpc, context, gateway) => {
       await rpc.cloudSignIn({
         gatewayUrl: "http://localhost:8080",
@@ -691,7 +691,7 @@ describe("cloud RPC", () => {
       const home = await copyOf("Home");
       const archived = await copyOf("Archived");
       await context.workspaces.archive(archived.workspace.id);
-      // A copy this Mac knows nothing of, such as one a bug left.
+      // A copy this Mac does not link, as another Mac's would be: kept.
       const unknown = crypto.randomUUID();
       gateway.workspaces.set(unknown, {
         ...gateway.workspaces.get(home.cloudId)!,
@@ -702,7 +702,12 @@ describe("cloud RPC", () => {
       const next = await context.workspaces.create({ name: "Next" });
       const made = await context.cloud.create(next.id);
       expect([...gateway.workspaces.keys()].sort()).toEqual(
-        [inTheCloud.cloudId, onTheWay.cloudId, made.workspaceId].sort(),
+        [
+          inTheCloud.cloudId,
+          onTheWay.cloudId,
+          unknown,
+          made.workspaceId,
+        ].sort(),
       );
       expect(
         context.repositories.cloudWorkspaceId(home.workspace.id),
@@ -713,12 +718,12 @@ describe("cloud RPC", () => {
 
       // Still over the limit with nothing to clean: the gateway's answer.
       inCloud(context, next.id);
-      gateway.limit = 3;
+      gateway.limit = 4;
       const last = await context.workspaces.create({ name: "Last" });
       await expect(context.cloud.create(last.id)).rejects.toMatchObject({
         details: { gatewayCode: "QUOTA" },
       });
-      expect(gateway.workspaces.size).toBe(3);
+      expect(gateway.workspaces.size).toBe(4);
     });
   });
 
