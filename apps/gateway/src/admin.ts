@@ -121,16 +121,68 @@ export class BootstrapAuth implements AdminAuth {
   }
 }
 
-/** Failed sign-ins allowed per minute across the listener. */
+/** Failed sign-ins allowed per minute from one client address. */
 export const SIGN_IN_FAILURES_PER_MINUTE = 10;
+/** Failed sign-ins allowed per minute from everyone: only a safety net. */
+export const SIGN_IN_FAILURES_GLOBAL_PER_MINUTE = 500;
+/** Client addresses whose failures are remembered at once. */
+export const MAX_TRACKED_ADDRESSES = 1024;
+
+/**
+ * Failed sign-ins in the last minute, per client address, so one client
+ * cannot lock the others out. Past `maxAddresses` the addresses with no
+ * recent failure go first, then the longest unseen.
+ */
+export class FailureCounter {
+  readonly #byAddress = new Map<string, number[]>();
+  #all: number[] = [];
+
+  constructor(
+    private readonly limits = {
+      perAddress: SIGN_IN_FAILURES_PER_MINUTE,
+      global: SIGN_IN_FAILURES_GLOBAL_PER_MINUTE,
+      maxAddresses: MAX_TRACKED_ADDRESSES,
+    },
+  ) {}
+
+  /** Whether this address may try now. */
+  allowed(address: string, at: number): boolean {
+    this.#all = recent(this.#all, at);
+    if (this.#all.length >= this.limits.global) return false;
+    const mine = recent(this.#byAddress.get(address) ?? [], at);
+    return mine.length < this.limits.perAddress;
+  }
+
+  fail(address: string, at: number): void {
+    this.#all.push(at);
+    const mine = recent(this.#byAddress.get(address) ?? [], at);
+    mine.push(at);
+    // Re-inserted, so Map order is the order addresses were last seen.
+    this.#byAddress.delete(address);
+    this.#byAddress.set(address, mine);
+    if (this.#byAddress.size <= this.limits.maxAddresses) return;
+    for (const [other, times] of this.#byAddress)
+      if (!recent(times, at).length) this.#byAddress.delete(other);
+    for (const other of this.#byAddress.keys()) {
+      if (this.#byAddress.size <= this.limits.maxAddresses) break;
+      this.#byAddress.delete(other);
+    }
+  }
+
+  /** How many addresses are remembered, for tests. */
+  get tracked(): number {
+    return this.#byAddress.size;
+  }
+}
+
+const recent = (times: number[], at: number) =>
+  times.filter((time) => at - time < 60_000);
 const COOKIE = "daedalus_admin";
 const CSRF_HEADER = "X-Daedalus-CSRF";
-const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const USER_ID = /^[a-z0-9]{1,20}$/;
 const WORKSPACE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** The most a limit override may be. */
-export const MAX_LIMIT = 100;
 
 const SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy":
@@ -148,6 +200,8 @@ class AdminError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** Why, in a few words, for the audit of a refused request. */
+    readonly reason = "",
   ) {
     super(message);
   }
@@ -244,7 +298,26 @@ export interface AdminDeps {
   /** Where audit lines go; stdout by default. */
   print?: (line: string) => void;
   now?: () => number;
+  /** The client's socket address; Bun's by default, set by tests. */
+  clientAddress?: (request: Request, server: Server<unknown>) => string;
 }
+
+/** Where a request came from, as the socket says, not its headers. */
+interface Client {
+  address: string;
+  /** The socket is 127.0.0.1 or ::1: kubectl port-forward, or the pod. */
+  loopback: boolean;
+  /** https, or a trusted proxy said the browser used https. */
+  https: boolean;
+}
+
+/** An IPv4 address mapped into IPv6 is the IPv4 address. */
+const plainAddress = (address: string) =>
+  address.toLowerCase().startsWith("::ffff:") && address.includes(".")
+    ? address.slice(7)
+    : address;
+
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1"]);
 
 function cookieValue(request: Request, name: string): string | undefined {
   for (const part of (request.headers.get("Cookie") ?? "").split(";")) {
@@ -276,7 +349,7 @@ export function createAdmin(deps: AdminDeps) {
   const print = deps.print ?? ((line: string) => console.log(line));
   const now = deps.now ?? Date.now;
   const sessions = new Map<string, Session>();
-  let failures: number[] = [];
+  const failures = new FailureCounter();
   const clientScript = `(${adminClient.toString()})();\n`;
 
   function audit(
@@ -302,6 +375,53 @@ export function createAdmin(deps: AdminDeps) {
     print(JSON.stringify({ audit: "admin", ...entry }));
   }
 
+  /**
+   * Refusals of requests without a session are audited once per address,
+   * reason and minute, so a flood of them cannot push real entries out of
+   * the audit table. Stdout gets the same lines.
+   */
+  const refusalAudits = new Map<string, number>();
+  function auditRefusal(
+    actor: Actor,
+    action: string,
+    target: string,
+    reason: string,
+  ) {
+    const at = now();
+    if (!actor.session) {
+      const key = `${actor.address} ${action} ${reason}`;
+      if (at - (refusalAudits.get(key) ?? -Infinity) < 60_000) return;
+      if (refusalAudits.size >= MAX_TRACKED_ADDRESSES) {
+        // Quiet keys go first, then the oldest, as in FailureCounter.
+        for (const [other, time] of refusalAudits)
+          if (at - time >= 60_000) refusalAudits.delete(other);
+        for (const other of refusalAudits.keys()) {
+          if (refusalAudits.size < MAX_TRACKED_ADDRESSES) break;
+          refusalAudits.delete(other);
+        }
+      }
+      refusalAudits.delete(key);
+      refusalAudits.set(key, at);
+    }
+    audit(actor, action, target, "refused", reason);
+  }
+
+  /** Runs a check; a refusal it throws is audited before it goes on. */
+  function audited<T>(
+    actor: Actor,
+    action: string,
+    target: string,
+    run: () => T,
+  ): T {
+    try {
+      return run();
+    } catch (error) {
+      if (error instanceof AdminError && error.reason)
+        auditRefusal(actor, action, target, error.reason);
+      throw error;
+    }
+  }
+
   function respond(body: unknown, status = 200, headers: HeadersInit = {}) {
     return Response.json(body, {
       status,
@@ -317,16 +437,29 @@ export function createAdmin(deps: AdminDeps) {
   /** Whether the Host header names this listener: loopback, or configured. */
   function allowedHost(host: string): boolean {
     const name = hostname(host);
-    if (LOOPBACK.has(name)) return true;
+    if (LOOPBACK_HOSTS.has(name)) return true;
     return admin.hosts.includes(host) || admin.hosts.includes(name);
   }
 
-  const isLoopback = (host: string) => LOOPBACK.has(hostname(host));
-
-  /** Whether the browser reached us over https (or a TLS proxy said so). */
-  const isHttps = (request: Request, url: URL) =>
-    url.protocol === "https:" ||
-    request.headers.get("X-Forwarded-Proto")?.toLowerCase() === "https";
+  /**
+   * Loopback comes from the socket address, never from Host. A
+   * X-Forwarded-Proto header counts only from a configured proxy.
+   */
+  function client(request: Request, url: URL, server: Server<unknown>): Client {
+    const address = plainAddress(
+      deps.clientAddress?.(request, server) ??
+        server.requestIP(request)?.address ??
+        "",
+    );
+    const proxied =
+      admin.trustedProxies.includes(address) &&
+      request.headers.get("X-Forwarded-Proto")?.toLowerCase() === "https";
+    return {
+      address,
+      loopback: LOOPBACK_ADDRESSES.has(address),
+      https: url.protocol === "https:" || proxied,
+    };
+  }
 
   function session(request: Request): Session | null {
     const id = cookieValue(request, COOKIE);
@@ -350,43 +483,54 @@ export function createAdmin(deps: AdminDeps) {
   }
 
   /** The checks every write needs: same origin, JSON, the CSRF header. */
-  function checkWrite(request: Request, url: URL, found: Session | null) {
+  function checkWrite(request: Request, from: Client, found: Session | null) {
     const origin = request.headers.get("Origin");
-    const expected = `${isHttps(request, url) ? "https" : "http"}://${request.headers.get("Host")}`;
+    const expected = `${from.https ? "https" : "http"}://${request.headers.get("Host")}`;
     if (origin !== null && origin !== expected)
-      throw new AdminError(403, "FORBIDDEN", "Cross-origin request");
+      throw new AdminError(403, "FORBIDDEN", "Cross-origin request", "origin");
     const site = request.headers.get("Sec-Fetch-Site");
     if (site !== null && site !== "same-origin" && site !== "none")
-      throw new AdminError(403, "FORBIDDEN", "Cross-site request");
+      throw new AdminError(
+        403,
+        "FORBIDDEN",
+        "Cross-site request",
+        "sec-fetch-site",
+      );
     const type = request.headers.get("Content-Type") ?? "";
     if (!type.toLowerCase().startsWith("application/json"))
-      throw new AdminError(415, "VALIDATION", "Send JSON");
+      throw new AdminError(415, "VALIDATION", "Send JSON", "content-type");
     if (!found) return;
     const csrf = request.headers.get(CSRF_HEADER) ?? "";
     if (!sameText(csrf, found.csrf))
-      throw new AdminError(403, "FORBIDDEN", "Missing or wrong CSRF token");
+      throw new AdminError(
+        403,
+        "FORBIDDEN",
+        "Missing or wrong CSRF token",
+        "csrf",
+      );
   }
 
-  async function signIn(request: Request, url: URL, address: string) {
-    const host = request.headers.get("Host") ?? "";
-    if (!isLoopback(host) && !isHttps(request, url))
+  async function signIn(request: Request, from: Client) {
+    const { address } = from;
+    if (!from.loopback && !from.https)
       throw new AdminError(
         403,
         "FORBIDDEN",
         "Sign in over https, or through kubectl port-forward on localhost",
+        "plain http",
       );
     const at = now();
-    failures = failures.filter((time) => at - time < 60_000);
-    if (failures.length >= SIGN_IN_FAILURES_PER_MINUTE)
+    if (!failures.allowed(address, at))
       throw new AdminError(
         429,
         "RATE_LIMITED",
         "Too many failed sign-ins; try again in a minute",
+        "rate limited",
       );
     const body = await readJson(request);
     const principal = auth.signIn(body);
     if (!principal) {
-      failures.push(at);
+      failures.fail(address, at);
       audit(actorFor(null, address), "sign-in", "", "refused");
       throw new AdminError(401, "UNAUTHORIZED", "That token is not right");
     }
@@ -409,7 +553,7 @@ export function createAdmin(deps: AdminDeps) {
       "SameSite=Strict",
       "Path=/admin",
       `Max-Age=${Math.floor(admin.sessionMs / 1000)}`,
-      ...(isLoopback(host) ? [] : ["Secure"]),
+      ...(from.loopback ? [] : ["Secure"]),
     ].join("; ");
     return respond(sessionBody(created), 200, { "Set-Cookie": cookie });
   }
@@ -584,7 +728,8 @@ export function createAdmin(deps: AdminDeps) {
     const host = request.headers.get("Host") ?? "";
     if (!allowedHost(host))
       throw new AdminError(421, "MISDIRECTED", "Unknown host");
-    const address = server.requestIP(request)?.address ?? "";
+    const from = client(request, url, server);
+    const { address } = from;
 
     if (method === "GET") {
       if (path === "/favicon.ico")
@@ -601,14 +746,24 @@ export function createAdmin(deps: AdminDeps) {
       throw new AdminError(404, "NOT_FOUND", "No such route");
 
     if (path === "/admin/api/login" && method === "POST") {
-      checkWrite(request, url, null);
-      return signIn(request, url, address);
+      const anonymous = actorFor(null, address);
+      audited(anonymous, "sign-in", "", () => checkWrite(request, from, null));
+      try {
+        return await signIn(request, from);
+      } catch (error) {
+        if (error instanceof AdminError && error.reason)
+          auditRefusal(anonymous, "sign-in", "", error.reason);
+        throw error;
+      }
     }
 
     const found = session(request);
     if (!found) throw new AdminError(401, "UNAUTHORIZED", "Sign in");
     const actor = actorFor(found, address);
-    if (method !== "GET") checkWrite(request, url, found);
+    if (method !== "GET")
+      audited(actor, "write", path.slice(0, 200), () =>
+        checkWrite(request, from, found),
+      );
 
     if (path === "/admin/api/session" && method === "GET")
       return respond(sessionBody(found));
@@ -694,13 +849,13 @@ export function createAdmin(deps: AdminDeps) {
         typeof maxWorkspaces === "number" &&
         Number.isInteger(maxWorkspaces) &&
         maxWorkspaces >= 0 &&
-        maxWorkspaces <= MAX_LIMIT
+        maxWorkspaces <= config.maxWorkspaces
       )
     )
       throw new AdminError(
         400,
         "VALIDATION",
-        `maxWorkspaces must be a whole number from 0 to ${MAX_LIMIT}, or null`,
+        `maxWorkspaces must be a whole number from 0 to ${config.maxWorkspaces} (an override can only lower the limit), or null`,
       );
     const before = USER_ID.test(userId) ? store.maxWorkspaces(userId) : null;
     if (

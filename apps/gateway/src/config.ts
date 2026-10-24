@@ -59,6 +59,11 @@ export interface AdminConfig {
   host: string;
   /** Host header values accepted besides localhost, as `name` or `name:port`. */
   hosts: string[];
+  /**
+   * Addresses of TLS proxies whose X-Forwarded-Proto is believed; from
+   * anyone else the header is ignored.
+   */
+  trustedProxies: string[];
   /** The mounted Secret: `admin-token`, and `viewer-token` if any. */
   tokenDir: string;
   sessionMs: number;
@@ -156,6 +161,10 @@ export function loadConfig(env: Record<string, string | undefined>) {
       hosts: get("DAEDALUS_GATEWAY_ADMIN_HOSTS")
         .split(",")
         .map((host) => host.trim().toLowerCase())
+        .filter(Boolean),
+      trustedProxies: get("DAEDALUS_GATEWAY_ADMIN_TRUSTED_PROXIES")
+        .split(",")
+        .map((address) => address.trim().toLowerCase())
         .filter(Boolean),
       tokenDir: get("DAEDALUS_GATEWAY_ADMIN_TOKEN_DIR", "/etc/daedalus/admin"),
       sessionMs,

@@ -6,6 +6,7 @@ import { encodeRelayFrame } from "@daedalus/remote-protocol";
 import {
   BootstrapAuth,
   createAdmin,
+  FailureCounter,
   SIGN_IN_FAILURES_PER_MINUTE,
   type AdminOverview,
 } from "./admin";
@@ -38,6 +39,8 @@ let runnerBase: string;
 let adminBase: string;
 let printed: string[];
 let clock: number;
+/** The client address the admin listener sees; null for the real one. */
+let remote: string | null;
 const sockets: WebSocket[] = [];
 
 function start(env: Record<string, string> = {}) {
@@ -72,6 +75,8 @@ function start(env: Record<string, string> = {}) {
     log: () => {},
     print: (line) => printed.push(line),
     now: () => clock,
+    clientAddress: (request, server) =>
+      remote ?? server.requestIP(request)?.address ?? "",
   });
   servers = [
     Bun.serve({ ...gateway.public, port: 0 }),
@@ -88,6 +93,7 @@ beforeEach(() => {
   kube = new FakeKube();
   printed = [];
   clock = Date.now();
+  remote = null;
   start();
 });
 
@@ -296,26 +302,55 @@ describe("sign-in", () => {
   });
 
   test("off loopback the cookie is Secure, and plain http is refused", async () => {
-    const refused = await fetch(`${adminBase}/admin/api/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Host: "admin.example.com",
-      },
-      body: JSON.stringify({ token: ADMIN_TOKEN }),
-    });
-    expect(refused.status).toBe(403);
+    const login = (headers: Record<string, string>) =>
+      fetch(`${adminBase}/admin/api/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({ token: ADMIN_TOKEN }),
+      });
+    remote = "10.244.0.9";
+    expect((await login({ Host: "admin.example.com" })).status).toBe(403);
+    // A Host header that says localhost does not make the socket loopback.
+    expect((await login({ Host: "localhost" })).status).toBe(403);
+    // X-Forwarded-Proto from a client that is not a trusted proxy is ignored.
+    expect(
+      (await login({ Host: "admin.example.com", "X-Forwarded-Proto": "https" }))
+        .status,
+    ).toBe(403);
+    // Audited once a minute per address and reason, so a flood stays small.
+    const refusals = audits().filter((entry) => entry.detail === "plain http");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]!.address).toBe("10.244.0.9");
+    expect(refusals[0]!.result).toBe("refused");
+  });
+
+  test("a trusted proxy's X-Forwarded-Proto counts, and its cookie is Secure", async () => {
+    for (const server of servers) await server.stop(true);
+    store.close();
+    start({ DAEDALUS_GATEWAY_ADMIN_TRUSTED_PROXIES: "10.244.0.5, 10.244.0.6" });
+    // IPv4 mapped into IPv6, as a dual-stack socket reports it.
+    remote = "::ffff:10.244.0.5";
     const proxied = await fetch(`${adminBase}/admin/api/login`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Host: "admin.example.com",
         "X-Forwarded-Proto": "https",
+        Origin: "https://admin.example.com",
       },
       body: JSON.stringify({ token: ADMIN_TOKEN }),
     });
     expect(proxied.status).toBe(200);
     expect(proxied.headers.get("Set-Cookie")).toContain("Secure");
+    const plain = await fetch(`${adminBase}/admin/api/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Host: "admin.example.com",
+      },
+      body: JSON.stringify({ token: ADMIN_TOKEN }),
+    });
+    expect(plain.status).toBe(403);
   });
 
   test("wrong, short and user tokens are refused and audited without the token", async () => {
@@ -357,17 +392,52 @@ describe("sign-in", () => {
     expect(auth.signIn({ token: VIEWER_TOKEN })).toBeNull();
   });
 
-  test(`after ${SIGN_IN_FAILURES_PER_MINUTE} failures a minute, sign-in answers 429`, async () => {
+  test(`after ${SIGN_IN_FAILURES_PER_MINUTE} failures a minute from one address, that address gets 429`, async () => {
+    remote = "127.0.0.1";
     for (let i = 0; i < SIGN_IN_FAILURES_PER_MINUTE; i++) {
       const response = await call(null, "POST", "login", { token: "nope" });
       expect(response.status).toBe(401);
     }
     const blocked = await call(null, "POST", "login", { token: ADMIN_TOKEN });
     expect(blocked.status).toBe(429);
+    // Another client is not locked out by the first one's failures.
+    remote = "::1";
+    expect(
+      (await call(null, "POST", "login", { token: ADMIN_TOKEN })).status,
+    ).toBe(200);
+    remote = "127.0.0.1";
     clock += 61_000;
     expect(
       (await call(null, "POST", "login", { token: ADMIN_TOKEN })).status,
     ).toBe(200);
+  });
+
+  test("the failure counter keeps a global ceiling and a bounded set of addresses", () => {
+    const counter = new FailureCounter({
+      perAddress: 3,
+      global: 10,
+      maxAddresses: 4,
+    });
+    const at = 1_000_000;
+    for (let i = 0; i < 3; i++) counter.fail("a", at);
+    expect(counter.allowed("a", at)).toBe(false);
+    expect(counter.allowed("b", at)).toBe(true);
+    for (const address of ["b", "c", "d", "e", "f"]) counter.fail(address, at);
+    expect(counter.tracked).toBe(4);
+    // The oldest seen ("a") was dropped, so its failures no longer count.
+    expect(counter.allowed("a", at)).toBe(true);
+    // 3 + 5 = 8 failures; two more reach the global ceiling for everyone.
+    counter.fail("g", at);
+    counter.fail("h", at);
+    expect(counter.allowed("z", at)).toBe(false);
+    // A minute on, everyone may try again.
+    expect(counter.allowed("z", at + 60_000)).toBe(true);
+    expect(counter.allowed("f", at + 60_000)).toBe(true);
+    // Addresses with no recent failure go first when the set is full.
+    const later = at + 120_000;
+    for (const address of ["p", "q", "r", "s", "t"])
+      counter.fail(address, later);
+    expect(counter.tracked).toBe(4);
   });
 
   test("sessions expire, and sign-out ends one", async () => {
@@ -378,6 +448,92 @@ describe("sign-in", () => {
     const later = await signIn();
     clock += config.admin.sessionMs;
     expect((await call(later, "GET", "overview")).status).toBe(401);
+  });
+});
+
+describe("refusals are audited", () => {
+  test("CSRF, origin, site and content-type refusals of a session's writes", async () => {
+    const { user, token } = await devLogin("u@example.com");
+    expect(await createWorkspace(token)).toBe(201);
+    const session = await signIn();
+    const path = `users/${user.id}/workspaces/${WS_A}/sleep`;
+    await call(session, "POST", path, {}, { "X-Daedalus-CSRF": "" });
+    await call(session, "POST", path, {}, { "X-Daedalus-CSRF": "" });
+    await call(
+      session,
+      "POST",
+      path,
+      {},
+      { Origin: "https://evil.example.net" },
+    );
+    await call(session, "POST", path, {}, { "Sec-Fetch-Site": "cross-site" });
+    await fetch(`${adminBase}/admin/api/${path}`, {
+      method: "POST",
+      headers: {
+        Cookie: session.cookie,
+        "X-Daedalus-CSRF": session.csrf,
+        "Content-Type": "text/plain",
+      },
+      body: "{}",
+    });
+    const refused = audits().filter((entry) => entry.action === "write");
+    // With a session every refusal is audited: an admin's own browser.
+    expect(refused.map((entry) => entry.detail)).toEqual([
+      "csrf",
+      "csrf",
+      "origin",
+      "sec-fetch-site",
+      "content-type",
+    ]);
+    expect(refused[0]!.subject).toBe("bootstrap-admin");
+    expect(refused[0]!.target).toBe(`/admin/api/${path}`);
+    expect(refused[0]!.result).toBe("refused");
+  });
+
+  test("rate-limited and cross-site sign-ins, once a minute per address", async () => {
+    remote = "10.0.0.7";
+    for (let i = 0; i < SIGN_IN_FAILURES_PER_MINUTE + 3; i++)
+      await call(
+        null,
+        "POST",
+        "login",
+        { token: "nope" },
+        {
+          "X-Forwarded-Proto": "https",
+        },
+      );
+    remote = "127.0.0.1";
+    for (let i = 0; i < SIGN_IN_FAILURES_PER_MINUTE + 3; i++)
+      await call(null, "POST", "login", { token: "nope" });
+    const limited = audits().filter((entry) => entry.detail === "rate limited");
+    expect(limited).toHaveLength(1);
+    expect(limited[0]!.address).toBe("127.0.0.1");
+    for (let i = 0; i < 3; i++)
+      await call(
+        null,
+        "POST",
+        "login",
+        { token: ADMIN_TOKEN },
+        {
+          Origin: "https://evil.example.net",
+        },
+      );
+    expect(audits().filter((entry) => entry.detail === "origin")).toHaveLength(
+      1,
+    );
+    clock += 61_000;
+    await call(
+      null,
+      "POST",
+      "login",
+      { token: ADMIN_TOKEN },
+      {
+        Origin: "https://evil.example.net",
+      },
+    );
+    expect(audits().filter((entry) => entry.detail === "origin")).toHaveLength(
+      2,
+    );
   });
 });
 
@@ -708,7 +864,7 @@ describe("actions", () => {
     expect(view.users[0]!.limit).toBe(1);
     expect(view.users[0]!.limitOverride).toBe(1);
 
-    for (const maxWorkspaces of [-1, 1.5, 101, "3"]) {
+    for (const maxWorkspaces of [-1, 1.5, 6, 101, "3"]) {
       const bad = await call(session, "PUT", `users/${user.id}/limit`, {
         maxWorkspaces,
       });
@@ -729,6 +885,21 @@ describe("actions", () => {
     const changes = audits().filter((entry) => entry.action === "set-limit");
     expect(changes[0]!.detail).toBe("default -> 1");
     expect(changes.at(-1)!.detail).toBe("1 -> default");
+  });
+
+  test("an override above the default, stored before the cap, still counts as the default", async () => {
+    const { user, token } = await devLogin("u@example.com");
+    store.setMaxWorkspaces(user.id, 50);
+    const session = await signIn();
+    const view = await overview(session);
+    expect(view.users[0]!.limit).toBe(5);
+    for (let i = 0; i < 5; i++)
+      expect(
+        await createWorkspace(token, `aaaaaaaa-0000-4000-8000-00000000000${i}`),
+      ).toBe(201);
+    expect(
+      await createWorkspace(token, "aaaaaaaa-0000-4000-8000-000000000009"),
+    ).toBe(429);
   });
 
   test("the audit keeps the newest 1000 entries", () => {
