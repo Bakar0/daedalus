@@ -5,7 +5,7 @@ import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
   accountDirectory,
   autoRebirthPercent,
-  channelName,
+  buildChannel,
   DaedalusError,
   INSTALL_COMMANDS,
   normalizeError,
@@ -257,7 +257,7 @@ export async function desktopSnapshot(
     routineReports: view.routineReports.map((report) => ({ ...report })),
     settings: {
       version: packageJson.version,
-      channel: channelName(config.home),
+      channel: buildChannel(config.home),
       home: config.home,
       workspaceRoot: config.workspaceRoot,
       databasePath: config.databasePath,

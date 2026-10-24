@@ -25,6 +25,7 @@ import {
   readdir,
   readlink,
   readFile,
+  realpath,
   rm,
   symlink,
   unlink,
@@ -432,10 +433,17 @@ export function styleBody(contents: string): string {
  *
  * A real file or directory the user put at a discovery path is never replaced.
  * That rule is the whole reason this is safe to run on every app start.
+ *
+ * A link into another home that still exists belongs to another build, and is
+ * left alone unless `reclaim` says this name is ours whoever holds it. Only the
+ * stable app reclaims: its names carry no suffix, so a build that misread its
+ * own channel as stable can take them, and the stable app has to be able to
+ * take them back.
  */
 export async function ensureSkillLink(
   linkPath: string,
   target: string,
+  options: { reclaim?: boolean } = {},
 ): Promise<boolean> {
   await ensureDirectory(dirname(linkPath));
   try {
@@ -444,7 +452,16 @@ export async function ensureSkillLink(
     const existing = resolve(dirname(linkPath), await readlink(linkPath));
     if (existing === target) return true;
     // Ours, pointing somewhere stale: a renamed home, or an older layout.
-    if (basename(existing) === basename(target)) {
+    // Resolved, so a home reached through a symlink is still the same home.
+    const homeOf = (path: string) =>
+      realpath(dirname(dirname(path))).catch(() => dirname(dirname(path)));
+    const anotherHome =
+      (await homeOf(existing)) !== (await homeOf(target)) &&
+      (await pathExists(existing));
+    if (
+      basename(existing) === basename(target) &&
+      (!anotherHome || options.reclaim)
+    ) {
       await unlink(linkPath);
       await symlink(target, linkPath, "dir");
       return true;
@@ -918,8 +935,9 @@ export class SkillService {
         ensureDir: true,
       });
     if (!(await pathExists(target))) return;
+    const reclaim = channelName(this.config.home) === "stable";
     for (const { path } of skillLinkPaths(this.config, resolved.linkName))
-      await ensureSkillLink(path, target);
+      await ensureSkillLink(path, target, { reclaim });
     if (!resolved.style) return;
     const stylePath = managedStylePath(this.config, resolved.style.fileName);
     const styleLink = styleLinkPath(this.config, resolved.style.fileName);
@@ -927,7 +945,7 @@ export class SkillService {
       await writeFileAtomic(stylePath, resolved.style.contents, {
         ensureDir: true,
       });
-      await ensureSkillLink(styleLink, stylePath);
+      await ensureSkillLink(styleLink, stylePath, { reclaim });
       await this.writeInstructionsBlock(definition);
     } else {
       await removeSkillLink(styleLink, stylePath);
