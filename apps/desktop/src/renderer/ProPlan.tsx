@@ -17,6 +17,7 @@ import {
   type AdminLogEntryDto,
   formatInviteCode,
   inviteCodeComplete,
+  inviteLink,
   type RemoteStateDto,
   type RpcResult,
 } from "@daedalus/protocol";
@@ -289,7 +290,7 @@ export function AccountPanel({
           <h3 className="admin-title">
             Admin <span className="admin-only">only you see this</span>
           </h3>
-          <AdminGate busy={busy} client={client} />
+          <AdminGate busy={busy} client={client} relay={state.relay} />
         </>
       ) : undefined}
     </div>
@@ -361,7 +362,15 @@ function accountLine(account: AdminAccountDto): string {
  * browser, and locks again 15 minutes after the last change (an hour at
  * most), or on Lock. Until then the Mac's own sign-in is not enough.
  */
-function AdminGate({ busy, client }: { busy: boolean; client: DesktopClient }) {
+function AdminGate({
+  busy,
+  client,
+  relay,
+}: {
+  busy: boolean;
+  client: DesktopClient;
+  relay: string;
+}) {
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState<string>();
   const { data: status, refresh: check } = useRpcQuery(
@@ -430,7 +439,12 @@ function AdminGate({ busy, client }: { busy: boolean; client: DesktopClient }) {
           Lock
         </button>
       </p>
-      <AdminSection busy={busy} client={client} onChange={check} />
+      <AdminSection
+        busy={busy}
+        client={client}
+        onChange={check}
+        relay={relay}
+      />
     </>
   );
 }
@@ -439,16 +453,23 @@ function AdminGate({ busy, client }: { busy: boolean; client: DesktopClient }) {
  * For accounts on the relay's admin list: make and remove Pro keys (invite
  * codes), and grant, end or revoke an account's plan. Each row is one line
  * with its actions in a menu, so long lines never push them around.
+ *
+ * A key goes out as a code or as an invite link (`inviteLink`): the link
+ * opens the relay's page, which signs the person in with Google and gives
+ * the account Pro on the way, with nothing to type.
  */
 function AdminSection({
   busy,
   client,
   onChange,
+  relay,
 }: {
   busy: boolean;
   client: DesktopClient;
   /** A change moves the unlock's end on; the gate reads it again. */
   onChange: () => void;
+  /** The relay's address, which invite links point at. */
+  relay: string;
 }) {
   const keyQuery = useRpcQuery(() => client.request.remoteAdminKeys({}), {
     deps: [client],
@@ -517,9 +538,12 @@ function AdminSection({
       onChange();
     },
   });
-  const copy = async (code: string) => {
-    const result = await client.request.clipboardWrite({ text: code });
-    if (result.ok) setCopied(code);
+  /** Copies a key's code, or with `link` its invite link. */
+  const copy = async (code: string, link = false) => {
+    const result = await client.request.clipboardWrite({
+      text: link ? inviteLink(relay, code) : code,
+    });
+    if (result.ok) setCopied(link ? `link:${code}` : code);
   };
   const setPlan = (
     email: string,
@@ -630,6 +654,14 @@ function AdminSection({
           >
             {copied === made ? "Copied" : "Copy"}
           </button>
+          <button
+            className="quiet"
+            onClick={() => void copy(made, true)}
+            title="A link that signs the person in and gives them Pro"
+            type="button"
+          >
+            {copied === `link:${made}` ? "Link copied" : "Copy invite link"}
+          </button>
         </p>
       ) : undefined}
       {keys === undefined ? undefined : shownKeys.length === 0 ? (
@@ -711,6 +743,14 @@ function AdminSection({
                     type="button"
                   >
                     <span className="menu-item-label">Copy</span>
+                  </button>
+                  <button
+                    className="quiet menu-item"
+                    onClick={() => void copy(key.code, true)}
+                    role="menuitem"
+                    type="button"
+                  >
+                    <span className="menu-item-label">Copy invite link</span>
                   </button>
                   <button
                     className="quiet menu-item"
