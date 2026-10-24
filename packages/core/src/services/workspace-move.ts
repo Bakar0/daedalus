@@ -149,8 +149,10 @@ export const MAX_MOVE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
 
 /** Shown on the workspace after it comes home. */
-export const MOVED_HOME_NOTICE =
-  "Back on this Mac. Its Claude sessions ask before acting, since the cloud wrote part of their conversations; press Shift+Tab in a session to switch modes.";
+export const MOVED_HOME_NOTICE = "Back on this Mac.";
+/** Added when the move home restarted Claude sessions, in ask mode. */
+export const MOVED_HOME_ASK_NOTICE =
+  "Its Claude sessions ask before acting, since the cloud wrote part of their conversations; press Shift+Tab in a session to switch modes.";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const POD_PROJECTS = POD_CLAUDE_PROJECTS;
@@ -928,6 +930,9 @@ export class WorkspaceMoves {
         workspace: await this.options.workspaces.getActive(workspace.id),
         notice: [
           MOVED_HOME_NOTICE,
+          ...(stopped.some((session) => session.kind === "agent")
+            ? [MOVED_HOME_ASK_NOTICE]
+            : []),
           ...(failed.length
             ? [`Did not start on this Mac: ${failed.join("; ")}`]
             : []),
