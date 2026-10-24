@@ -1042,6 +1042,113 @@ export interface CloudMcpServersDto {
   leftOut: { name: string; reason: string }[];
 }
 
+/**
+ * A kubeconfig context as the install window sees it
+ * (artifacts/cloud-sessions/gateway-install-api.md). The host reads names
+ * and server URLs only, never credentials; the window gets the server's host.
+ */
+export interface KubeContextDto {
+  name: string;
+  /** The API server's host, without scheme or path. */
+  serverHost: string;
+}
+
+/** A command the install needs from the user's PATH. */
+export interface GatewayToolDto {
+  name: "kubectl" | "helm" | "kind" | "docker";
+  found: boolean;
+  /** docker only: whether the daemon answers. */
+  running?: boolean;
+  /** How to install it when it is missing, e.g. "brew install helm". */
+  hint?: string;
+}
+
+export interface GatewayToolsDto {
+  /** In kubeconfig order; none preselected. */
+  contexts: KubeContextDto[];
+  tools: GatewayToolDto[];
+}
+
+/**
+ * Where the gateway and runner images come from on a cluster other than
+ * the local kind one: `<registry>/daedalus-gateway:<tag>` and
+ * `<registry>/daedalus-runner:<tag>`.
+ */
+export interface GatewayImagesDto {
+  registry: string;
+  tag: string;
+}
+
+export interface GatewayInstallTargetInput {
+  context: string;
+  /** Default "daedalus". */
+  namespace?: string;
+  /** Needed when the cluster has no default StorageClass. */
+  storageClass?: string;
+  images?: GatewayImagesDto;
+}
+
+export interface GatewayCheckDto {
+  id:
+    | "version"
+    | "permissions"
+    | "storageClass"
+    | "gvisor"
+    | "networkPolicy"
+    | "release"
+    | "images";
+  status: "pass" | "warn" | "fail" | "unknown";
+  /** One line, e.g. "Kubernetes 1.33". */
+  label: string;
+  /** Further lines, e.g. the permissions missing. */
+  detail?: string;
+}
+
+export interface GatewayPreflightDto {
+  context: string;
+  namespace: string;
+  checks: GatewayCheckDto[];
+  /** False while any check is `fail`. */
+  ready: boolean;
+  /** A daedalus release already in the namespace: the install upgrades it. */
+  release: { namespace: string; revision: number; chartVersion: string } | null;
+}
+
+export interface GatewayDryRunDto {
+  context: string;
+  namespace: string;
+  /** What `gatewayInstallStart` must carry; valid 15 minutes in this run. */
+  dryRunId: string;
+  upgrade: boolean;
+  objects: { kind: string; name: string; namespace: string | null }[];
+  /** helm's notes and warnings, plain text. */
+  notes: string;
+}
+
+/** An install in progress or just ended, until dismissed. */
+export interface GatewayInstallDto {
+  target:
+    { kind: "cluster"; context: string; namespace: string } | { kind: "local" };
+  phase:
+    | "checking"
+    | "cluster"
+    | "gvisor"
+    | "images"
+    | "installing"
+    | "waiting"
+    | "signing-in"
+    | "done"
+    | "failed";
+  /** Plain-text progress, newest last, at most 200 lines. */
+  log: string[];
+  /** Why it failed. */
+  message?: string;
+  /** Set when done; the Cloud sign-in now uses it. */
+  gatewayUrl?: string;
+  /** True when only this Mac reaches it, through a port-forward the app keeps. */
+  portForward?: boolean;
+}
+
 /** A Pro key (an invite code), as an admin sees it. */
 export interface AdminKeyDto {
   code: string;
@@ -1159,6 +1266,8 @@ export interface DesktopSnapshotDto {
   cloudPreparing?: CloudPreparingDto[];
   /** Workspaces moving between this Mac and the cloud. */
   workspaceMoves?: WorkspaceMoveDto[];
+  /** The gateway install from Settings > Cloud, while one runs or ended. */
+  gatewayInstall?: GatewayInstallDto;
   settings: DesktopSettingsDto;
 }
 
@@ -1297,6 +1406,38 @@ export interface DesktopRpcSchema {
         { requestId?: string; sessionId?: string },
         null
       >;
+      /** Kube contexts and the commands an install needs; reads only. */
+      gatewayInstallContexts: Request<Record<string, never>, GatewayToolsDto>;
+      /** Read-only checks against one context. */
+      gatewayInstallPreflight: Request<
+        GatewayInstallTargetInput,
+        GatewayPreflightDto
+      >;
+      /** `helm upgrade --install --dry-run=server`; writes nothing. */
+      gatewayInstallDryRun: Request<
+        GatewayInstallTargetInput,
+        GatewayDryRunDto
+      >;
+      /**
+       * Installs on a context that passed a preflight and the dry run
+       * `dryRunId` names, with the same input. `confirm` is the context name
+       * as the user typed it. `acknowledgeDevLogin` is required with
+       * `publicUrl`. Returns at once; progress is in `gatewayInstall`.
+       */
+      gatewayInstallStart: Request<
+        GatewayInstallTargetInput & {
+          dryRunId: string;
+          confirm: string;
+          email: string;
+          publicUrl?: string;
+          acknowledgeDevLogin?: boolean;
+        },
+        GatewayInstallDto
+      >;
+      /** Try it locally: kind cluster daedalus-local through Docker. */
+      gatewayInstallLocal: Request<{ email: string }, GatewayInstallDto>;
+      /** Clears a done or failed install. */
+      gatewayInstallDismiss: Request<Record<string, never>, null>;
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
       remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;
