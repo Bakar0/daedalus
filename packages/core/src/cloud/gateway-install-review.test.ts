@@ -99,7 +99,12 @@ function fakeCluster() {
       if (line.startsWith("rollout status")) return ok("rolled out");
     }
     if (tool === "helm") {
+      if (line === "version --short") return ok("v3.19.0");
       if (line.startsWith("list")) return ok(state.releases);
+      // A release the app installed: dev login on. (Added by @install: a
+      // release whose values helm cannot read now fails the checks.)
+      if (line.startsWith("get values"))
+        return ok('{"gateway":{"devLogin":true}}');
       if (line.includes("--dry-run=server")) return ok(DRY_RUN);
       if (line.startsWith("upgrade --install")) return ok("STATUS: deployed");
     }
@@ -277,5 +282,44 @@ describe("G-4: the log says the token is in the Keychain when it is not", () => 
     expect(installer.current()?.log.join("\n")).not.toContain(
       "its admin token is in the Keychain",
     );
+  });
+});
+
+describe("G-8: dev login off loses its port-forward", () => {
+  // Rewritten by @install for the lead's decision (2026-10-25): dev login
+  // off without a public address is refused until company sign-in exists,
+  // and the forward of the last install stays until a sign-in has used it.
+  test("dev login off without a public address is refused", async () => {
+    const { target, dryRun } = await checkedAndPreviewed("daedalus");
+    await expect(
+      installer.start({
+        ...target,
+        dryRunId: dryRun.dryRunId,
+        confirm: CONTEXT,
+        email: "me@example.com",
+        devLogin: false,
+      }),
+    ).rejects.toThrow("With dev login off");
+  });
+
+  test("the forward of an install whose sign-in failed outlives the next check", async () => {
+    installer = makeInstaller({
+      signIn: async () => {
+        throw new Error("the gateway refused the sign-in");
+      },
+    });
+    const { target, dryRun } = await checkedAndPreviewed("daedalus");
+    await installer.start({
+      ...target,
+      dryRunId: dryRun.dryRunId,
+      confirm: CONTEXT,
+      email: "me@example.com",
+    });
+    await settle();
+    expect(installer.current()?.phase).toBe("failed");
+    expect(installer.forwarding()?.port).toBe(18123);
+    // What the 30-second watch and every sign-in or sign-out call.
+    await installer.checkForward();
+    expect(installer.forwarding()?.port).toBe(18123);
   });
 });

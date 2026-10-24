@@ -45,7 +45,7 @@ export function parseContextTargets(
   contexts: string,
   clusters: string,
   cas: string,
-  hash: (value: string) => string,
+  hash: (data: string, file: string) => string,
 ): KubeContextTarget[] {
   const servers = new Map<string, string>();
   for (const line of clusters.split("\n")) {
@@ -56,7 +56,7 @@ export function parseContextTargets(
   for (const line of cas.split("\n")) {
     const [name, data, file] = line.split("\t");
     if (name && (data || file))
-      fingerprints.set(name, hash(`${data ?? ""}\u0000${file ?? ""}`));
+      fingerprints.set(name, hash(data ?? "", file ?? ""));
   }
   const seen = new Set<string>();
   const result: KubeContextTarget[] = [];
@@ -255,6 +255,33 @@ export function imageRefs(images: GatewayImagesDto): {
     gateway: `${registry}/daedalus-gateway:${images.tag}`,
     runner: `${registry}/daedalus-runner:${images.tag}`,
   };
+}
+
+export const MIN_HELM = { major: 3, minor: 14 };
+
+/** `helm version --short`, such as "v3.19.0+g3d8990f". */
+export function helmCheck(short: string | null): GatewayCheckDto {
+  const match = /v(\d+)\.(\d+)/.exec(short ?? "");
+  if (!match)
+    return {
+      id: "helm",
+      status: "fail",
+      label: "Could not tell the helm version",
+      detail: `The install needs helm ${MIN_HELM.major}.${MIN_HELM.minor} or later (brew upgrade helm).`,
+    };
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const ok =
+    major > MIN_HELM.major ||
+    (major === MIN_HELM.major && minor >= MIN_HELM.minor);
+  return ok
+    ? { id: "helm", status: "pass", label: `helm ${major}.${minor}` }
+    : {
+        id: "helm",
+        status: "fail",
+        label: `helm ${major}.${minor} is too old`,
+        detail: `Upgrades keep the installed values with --reset-then-reuse-values, which needs helm ${MIN_HELM.major}.${MIN_HELM.minor} or later (brew upgrade helm).`,
+      };
 }
 
 /** `kubectl version -o json`'s server version, as major and minor. */

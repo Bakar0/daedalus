@@ -177,7 +177,7 @@ function fakeCluster() {
         const ns = args[2];
         const host = args[args.indexOf("-e") + 2];
         const open =
-          ns === "daedalus-egress-control" ||
+          ns?.startsWith("daedalus-egress-control-") ||
           !/^(169\.254|10\.)/.test(host ?? "");
         return ok(open ? "open\n" : "blocked\n");
       }
@@ -185,6 +185,7 @@ function fakeCluster() {
         return ok('deployment "daedalus-gateway" successfully rolled out');
     }
     if (tool === "helm") {
+      if (line === "version --short") return ok("v3.19.0+g3d8990f\n");
       if (line.startsWith("list")) return ok(state.releases);
       if (line.startsWith("get values")) return ok(state.values);
       if (line.includes("--dry-run=server")) return ok(MANIFEST);
@@ -300,7 +301,10 @@ const WRITES =
 function clusterCalls(tool: "kubectl" | "helm") {
   return cluster.calls.filter(
     (call) =>
-      call.tool === tool && !call.args.join(" ").startsWith("config view"),
+      call.tool === tool &&
+      !call.args.join(" ").startsWith("config view") &&
+      // helm's own version needs no cluster.
+      call.args.join(" ") !== "version --short",
   );
 }
 
@@ -368,6 +372,7 @@ describe("preflight", () => {
     expect(preflight.namespace).toBe("daedalus");
     expect(preflight.checks.map((check) => [check.id, check.status])).toEqual([
       ["version", "pass"],
+      ["helm", "pass"],
       ["permissions", "pass"],
       ["namespace", "pass"],
       ["storageClass", "pass"],
@@ -464,8 +469,16 @@ describe("dry run and start", () => {
       ["ServiceAccount", "daedalus-gateway", "daedalus"],
       ["ClusterRole", "daedalus-gateway", null],
       ["Deployment", "daedalus-gateway", "daedalus"],
-      ["Namespace", "daedalus-egress-check", null],
-      ["Namespace", "daedalus-egress-control", null],
+      [
+        "Namespace",
+        expect.stringMatching(/^daedalus-egress-check-[0-9a-f]{6}$/),
+        null,
+      ],
+      [
+        "Namespace",
+        expect.stringMatching(/^daedalus-egress-control-[0-9a-f]{6}$/),
+        null,
+      ],
     ]);
     expect(dryRun.objects[0]?.note).toBe(
       "new; label pod-security.kubernetes.io/enforce=restricted",
@@ -593,14 +606,22 @@ describe("dry run and start", () => {
       },
       { target: "1.1.1.1:443", want: "open", got: "open", result: "pass" },
     ]);
-    expect(
-      cluster.calls.filter(
-        (call) =>
-          call.args[0] === "delete" &&
-          call.args.includes("daedalus-egress-check") &&
-          call.args.includes("--wait=false"),
-      ).length,
-    ).toBe(1);
+    // Its namespaces were made with a run label, and only that label is deleted.
+    const made = cluster.calls.find((call) =>
+      call.stdin?.includes('"kind":"List"'),
+    )!;
+    const id = /daedalus-egress-check-([0-9a-f]{6})/.exec(made.stdin!)?.[1];
+    expect(made.stdin).toContain(`"daedalus.dev/egress-check":"${id}"`);
+    const deletes = cluster.calls.filter((call) => call.args[0] === "delete");
+    expect(deletes.map((call) => call.args.slice(0, 5))).toEqual([
+      [
+        "delete",
+        "namespace",
+        "-l",
+        `daedalus.dev/egress-check=${id}`,
+        "--wait=false",
+      ],
+    ]);
 
     const install = cluster.calls.find(
       (call) =>
@@ -635,6 +656,7 @@ describe("dry run and start", () => {
       namespace: "daedalus",
       port: 18123,
       gatewayUrl: "http://127.0.0.1:18123",
+      signedIn: true,
     });
     // A dry run is good for one install.
     await expect(
@@ -1074,6 +1096,116 @@ describe("review fixes (cloud-ui-review.md, Gateway install)", () => {
         : undefined;
     const done = await install();
     expect(done.egress?.[0]?.result).toBe("unproven");
+  });
+});
+
+describe("re-check fixes (G-8, G-9)", () => {
+  const input = {
+    context: CONTEXT,
+    images: { registry: "r.example.com/daedalus", tag: "0.32.0" },
+  };
+  const install = async (extra: object = {}) => {
+    await installer.preflight(input);
+    const { dryRunId } = await installer.dryRun(input);
+    await installer.start({
+      ...input,
+      dryRunId,
+      confirm: CONTEXT,
+      email: "a@b.c",
+      ...extra,
+    });
+    await settle();
+    return installer.current()!;
+  };
+
+  test("G-9: no internet from the cluster is a warning, not a failure", async () => {
+    cluster.override = (call) =>
+      call.args[0] === "exec" &&
+      call.args.includes("1.1.1.1") &&
+      !call.args[2]?.startsWith("daedalus-egress-control-")
+        ? ok("blocked\n")
+        : undefined;
+    const done = await install();
+    expect(done.egress?.find((e) => e.target === "1.1.1.1:443")?.result).toBe(
+      "warn",
+    );
+    expect(done.log.join("\n")).toContain("cannot reach the internet");
+    expect(done.log.join("\n")).not.toContain("should block");
+  });
+
+  test("G-9: helm older than 3.14 fails the checks", async () => {
+    cluster.override = (call) =>
+      call.tool === "helm" && call.args[0] === "version"
+        ? ok("v3.12.3+g3a31588\n")
+        : undefined;
+    const preflight = await installer.preflight(input);
+    expect(preflight.ready).toBe(false);
+    expect(preflight.checks.find((check) => check.id === "helm")).toEqual(
+      expect.objectContaining({
+        status: "fail",
+        label: "helm 3.12 is too old",
+      }),
+    );
+  });
+
+  test("G-9: a CA file is bound by its bytes, not its path", async () => {
+    const ca = join(home, "prod-ca.pem");
+    await Bun.write(ca, "first CA");
+    cluster.override = (call) => {
+      const line = call.args.join(" ");
+      if (line.startsWith("config view") && line.includes(".contexts"))
+        return ok(`${CONTEXT}\teks-test\n`);
+      if (line.includes("certificate-authority"))
+        return ok(`eks-test\t\t${ca}\n`);
+      return undefined;
+    };
+    await installer.preflight(input);
+    const { dryRunId } = await installer.dryRun(input);
+    await Bun.write(ca, "another CA");
+    await expect(
+      installer.start({ ...input, dryRunId, confirm: CONTEXT, email: "a@b.c" }),
+    ).rejects.toThrow("Run the checks and the dry run again");
+  });
+
+  test("G-8: a forward whose sign-in was used goes on sign-out, not before", async () => {
+    let gateway: string | null = null;
+    installer = makeInstaller({
+      signedInGateway: async () => gateway,
+      signIn: async () => {
+        throw new Error("refused");
+      },
+    });
+    await install();
+    expect(installer.current()?.phase).toBe("failed");
+    await installer.checkForward();
+    expect(installer.forwarding()?.signedIn).toBeUndefined();
+    expect(installer.forwarding()?.port).toBe(18123);
+    // Signing in to another gateway ends it even so.
+    gateway = "https://other.example.com";
+    await installer.checkForward();
+    expect(installer.forwarding()).toBeUndefined();
+  });
+
+  test("an installed release whose values helm cannot read fails the checks", async () => {
+    cluster.state.namespace = true;
+    cluster.state.releases = JSON.stringify([
+      {
+        name: "daedalus",
+        namespace: "daedalus",
+        revision: "2",
+        chart: "daedalus-0.1.0",
+        status: "deployed",
+      },
+    ]);
+    cluster.override = (call) =>
+      call.tool === "helm" && call.args[0] === "get"
+        ? no("Error: forbidden")
+        : undefined;
+    const preflight = await installer.preflight(input);
+    expect(preflight.ready).toBe(false);
+    expect(
+      preflight.checks.find((check) => check.id === "release")?.label,
+    ).toBe("Could not read the installed gateway's settings");
   });
 });
 
