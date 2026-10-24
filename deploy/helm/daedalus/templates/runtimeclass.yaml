@@ -34,5 +34,9 @@ metadata:
   labels:
     {{- include "daedalus.labels" . | nindent 4 }}
 handler: {{ $handler }}
+{{- with .Values.workspace.runtimeClassScheduling }}
+scheduling:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 {{- end }}
 {{- end }}

@@ -98,8 +98,10 @@ as GKE Sandbox's, when its handler matches. The install fails with a message
 when the nodes report their runtime handlers (`status.runtimeHandlers`, 1.30
 or later with a recent containerd) and none offers the handler. Nodes that
 report none cannot be checked, and NOTES says so. On a cluster with nodes both
-with and without gVisor, add a `nodeSelector` that keeps workspaces on gVisor
-nodes (not in the chart yet).
+with and without gVisor, set `workspace.runtimeClassScheduling` (a
+`nodeSelector` and `tolerations`): the chart writes it into the RuntimeClass,
+and Kubernetes adds it to every workspace pod. `deploy/eks/values.yaml` does
+this for the EKS guide.
 
 `--set workspace.runtimeClassName=""` runs workspaces on the node's default
 runtime. Then workspace code shares the host kernel with every other pod on the
@@ -127,6 +129,12 @@ connect". The pod admission policy allows no other `dev.gvisor.*` annotation.
 
 gVisor is slower for file-system-heavy work: in the stage 0 benchmark on kind,
 a git clone was 4 to 6 times slower and a warm `bun install` about 10 times.
+
+## EKS
+
+`deploy/eks/README.md` sets up a private test cluster on EKS with eksctl:
+node groups with gVisor, network policy, gp3 storage, an ALB with TLS, images
+in ECR, verification, costs and teardown.
 
 ## EKS checklist (before 1b)
 
