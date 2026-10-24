@@ -174,12 +174,20 @@ describe("cloudLimitMessage", () => {
     );
   });
 
-  test("leaves other messages, and a limit with none known, as they are", () => {
-    expect(cloudLimitMessage("The pod did not answer.", ["app"])).toBe(
-      "The pod did not answer.",
+  test("counts the ones this Mac does not know", () => {
+    expect(
+      cloudLimitMessage("You may have at most 5 workspaces", ["app"]),
+    ).toBe(
+      "5 workspaces are already in the cloud: app and 4 more from another Mac or an earlier install. Move one home first.",
     );
     expect(cloudLimitMessage("You may have at most 5 workspaces", [])).toBe(
-      "You may have at most 5 workspaces",
+      "5 workspaces are already in the cloud, all from another Mac or an earlier install. The gateway deletes them after 30 days asleep.",
+    );
+  });
+
+  test("leaves other messages as they are", () => {
+    expect(cloudLimitMessage("The pod did not answer.", ["app"])).toBe(
+      "The pod did not answer.",
     );
   });
 });
