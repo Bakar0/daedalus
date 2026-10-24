@@ -118,8 +118,18 @@ const context = await createApplicationContext({
 //
 // Each agent comes back idle at its prompt with its conversation loaded.
 // Nothing is sent to it, so no work resumes on its own.
+// A workspace in the cloud whose copy this account does not link comes back
+// to its backup first, so its sessions are this Mac's. No network: a link
+// that fails must not keep it stranded.
+await context.cloud.fallBackUnlinked().catch((error: unknown) =>
+  context.logger.write("error", "cloud_fallback_failed", {
+    message: error instanceof Error ? error.message : String(error),
+  }),
+);
+// This Mac's sessions only: a cloud one needs the link, which is not held
+// yet, and the start must not wait on a gateway. They come back below.
 const revivedSessions = await context.agents
-  .reviveLostSessions({ automatic: true })
+  .reviveLostSessions({ automatic: true, where: "mac" })
   .catch((error: unknown) => {
     void context.logger.write("error", "session_revive_sweep_failed", {
       message: error instanceof Error ? error.message : String(error),
@@ -448,10 +458,21 @@ context.workspaceMoves.onChange(() => announce("external"));
 context.cloud.onPreparingChange(() => announce("external"));
 void remoteStarted
   .then(() => context.cloud.hold())
-  // Copies no workspace lives in count against the account's limit.
-  .then(() => context.cloud.cleanOrphans())
-  // A workspace in the cloud whose copy is gone comes back to its backup.
-  .then(() => context.cloud.fallBackUnlinked())
+  .then(async () => {
+    // Cloud sessions lost while the app was away, now that it holds the
+    // link: a runner that is not linked is skipped at once.
+    const revived = await context.agents.reviveLostSessions({
+      automatic: true,
+      where: "cloud",
+    });
+    if (revived.revived.length || revived.skipped.length)
+      await context.logger.write("info", "cloud_session_revive_sweep", {
+        revived: revived.revived.length,
+        skipped: revived.skipped,
+      });
+    // Copies no workspace lives in count against the account's limit.
+    await context.cloud.cleanOrphans();
+  })
   .catch((error) =>
     context.logger.write("error", "cloud_link_failed", {
       message: error instanceof Error ? error.message : String(error),

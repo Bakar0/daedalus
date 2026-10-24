@@ -2568,6 +2568,12 @@ export class AgentService {
        * `daedal agent revive` is the user asking, and does not.
        */
       automatic?: boolean;
+      /**
+       * Only this Mac's sessions, or only cloud ones. The app's start sweeps
+       * this Mac's before anything else runs, and the cloud's once it holds
+       * the link, where a runner that is not linked costs nothing.
+       */
+      where?: "mac" | "cloud";
     } = {},
   ): Promise<ReviveSweepResult> {
     const result: ReviveSweepResult = { revived: [], skipped: [] };
@@ -2589,6 +2595,8 @@ export class AgentService {
           (agent) =>
             agent.status === "lost" &&
             !agent.archivedAt &&
+            (options.where === undefined ||
+              (options.where === "cloud") === Boolean(agent.hostId)) &&
             // A cloud session comes back once this process holds its host.
             this.hosts.find(agent.hostId) !== undefined,
         );
