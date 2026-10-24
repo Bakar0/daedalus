@@ -1886,3 +1886,18 @@ export function formatInviteCode(text: string): string {
 /** Whether a formatted invite code has all its characters. */
 export const inviteCodeComplete = (code: string): boolean =>
   /^[A-Z0-9]{5}-[A-Z0-9]{5}$/.test(code);
+
+/**
+ * A link that gives Pro with an invite code: the phone page on the relay,
+ * which keeps the code through the Google sign-in and the relay redeems it
+ * on the way. `relay` is the relay's address as the Mac has it (wss: or
+ * https:).
+ */
+export function inviteLink(relay: string, code: string): string {
+  const url = new URL(relay);
+  if (url.protocol === "wss:") url.protocol = "https:";
+  else if (url.protocol === "ws:") url.protocol = "http:";
+  const link = new URL("/", url.origin);
+  link.searchParams.set("invite", code);
+  return link.toString();
+}

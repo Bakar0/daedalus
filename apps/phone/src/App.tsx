@@ -21,9 +21,11 @@ import {
   isLocked,
   relock,
   pairedMacs,
+  pendingInvite,
   pendingPair,
   phoneIdentity,
   removeMac,
+  setPendingInvite,
   setPendingPair,
   setToken,
   signInNonce,
@@ -49,8 +51,9 @@ function phoneName(): string {
 
 /**
  * Reads what the address brought: a session token or error from a sign-in
- * (in the fragment, which no server sees), or a pairing code from a scanned
- * QR code (`/pair#…`). Both are taken out of the address at once.
+ * (in the fragment, which no server sees), a pairing code from a scanned
+ * QR code (`/pair#…`), or an invite code from an invite link
+ * (`/?invite=…`). Each is taken out of the address at once.
  *
  * A token is taken only from a sign-in this tab started: the return address
  * carries a nonce this tab keeps. A link someone sent with their own token
@@ -61,6 +64,13 @@ function takeFromAddress(): { error?: string } {
   if (location.pathname === "/pair" && fragment) {
     setPendingPair(fragment);
     history.replaceState(null, "", "/");
+    return {};
+  }
+  const invite = new URLSearchParams(location.search).get("invite");
+  if (invite !== null) {
+    const code = formatInviteCode(invite);
+    if (inviteCodeComplete(code)) setPendingInvite(code);
+    history.replaceState(null, "", location.pathname);
     return {};
   }
   const params = new URLSearchParams(fragment);
@@ -168,6 +178,8 @@ export function App() {
   const me = useMe(locked ? undefined : token, signOut);
   useEffect(() => {
     if (me.state === "ready") setPro(Boolean(me.plan));
+    // A plan, from the invite at sign-in or before it: the link is spent.
+    if (me.state === "ready" && me.plan) setPendingInvite(undefined);
     if (!token) setPro(false);
   }, [me, token]);
 
@@ -275,6 +287,9 @@ function startGoogleSignIn(): void {
     "return",
     `${location.origin}/?signin=${startSignIn()}`,
   );
+  // The relay redeems an invite link's code once the account is known.
+  const invite = pendingInvite();
+  if (invite) start.searchParams.set("invite", invite);
   location.assign(start.toString());
 }
 
@@ -289,6 +304,11 @@ function SignIn({ error }: { error?: string }) {
       </p>
       {pendingPair() ? (
         <p className="note">Sign in to finish pairing with your Mac.</p>
+      ) : pendingInvite() ? (
+        <p className="note">
+          You have an invite to Daedalus Pro. Sign in with the Google account
+          you use in Daedalus on your Mac, and the plan goes to that account.
+        </p>
       ) : undefined}
       {error ? (
         <p className="error" role="alert">
@@ -391,7 +411,9 @@ function ProScreen({
   who: ReactNode;
   onRedeemed: () => void;
 }) {
-  const [code, setCode] = useState("");
+  // An invite link's code that the sign-in did not use (the account had a
+  // revoked plan, or the code ran out): shown so the error can say why.
+  const [code, setCode] = useState(() => pendingInvite() ?? "");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   return (
