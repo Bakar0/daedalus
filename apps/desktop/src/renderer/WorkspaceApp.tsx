@@ -2960,13 +2960,19 @@ export function WorkspaceApp({
     );
   };
 
-  /** How many actions a workspace header shows, all of them always. */
+  /** How many actions a workspace header shows on hover or focus. */
   const headerActionCount = (item: WorkspaceDto) =>
     2 +
     (["terminal", "secrets", "archive"] as const).filter((id) =>
       pins.workspace.has(id),
     ).length +
     (workspaceCloudAction(item) ? 1 : 0);
+  /**
+   * How many it shows with the pointer away: Settings, the + and the cloud
+   * while it is lit.
+   */
+  const headerShownCount = (item: WorkspaceDto) =>
+    2 + (item.place === "cloud" || workspaceMoving(item) ? 1 : 0);
 
   /**
    * The workspace header's cloud action: a cloud that moves the workspace
@@ -5170,7 +5176,18 @@ export function WorkspaceApp({
         style={
           {
             ...sessionColorStyle(session.color),
-            // Every action on the card shows; the title keeps clear of them.
+            // The title keeps clear of the actions on show: the menu, a
+            // revive and a requested rebirth always, the rest on hover.
+            "--card-actions-shown":
+              1 +
+              Number(
+                session.status === "lost" &&
+                  cloudSleep(session) !== "unavailable",
+              ) +
+              Number(
+                pins.session.has("rebirth") &&
+                  Boolean(session.rebirthRequestedAt),
+              ),
             "--card-actions":
               1 +
               Number(
@@ -5367,7 +5384,7 @@ export function WorkspaceApp({
           {team?.role === "lead" && session.status === "running" && (
             <button
               aria-label={`Add a member to ${team.team.name}`}
-              className="session-card-action"
+              className="session-card-action session-card-hover-action"
               onClick={() => openAddMember(session)}
               title="Add a member to this session's team"
               type="button"
@@ -5380,7 +5397,7 @@ export function WorkspaceApp({
             (session.provider === "claude" || session.provider === "codex") && (
               <button
                 aria-label={`Rebirth ${sessionName(session)}`}
-                className="session-card-action session-rebirth-action"
+                className="session-card-action session-card-hover-action session-rebirth-action"
                 data-rebirth-requested={
                   session.rebirthRequestedAt ? "true" : undefined
                 }
@@ -5406,7 +5423,7 @@ export function WorkspaceApp({
                   ? "Running work stops and its routines pause. Restoring the session resumes both."
                   : "Running work stops. Its conversation can be restored and resumed later."
               }
-              className="session-card-action"
+              className="session-card-action session-card-hover-action"
               onConfirm={() => void archiveSession(session)}
               title={
                 holdsRoutines
@@ -6428,17 +6445,12 @@ export function WorkspaceApp({
                   >
                     <div
                       className={`workspace-card ${item.id === workspaceId ? "selected" : ""}`}
-                      // Past four, the actions take a row of their own
-                      // under the name, which keeps the whole width.
-                      data-actions-row={
-                        headerActionCount(item) > 4 ? "true" : undefined
-                      }
+                      // The name keeps clear of the actions on show: the
+                      // few always there, all of them on hover or focus.
                       style={
                         {
-                          "--header-actions":
-                            headerActionCount(item) > 4
-                              ? 0
-                              : headerActionCount(item),
+                          "--header-actions": headerActionCount(item),
+                          "--header-actions-shown": headerShownCount(item),
                         } as React.CSSProperties
                       }
                       data-dragging={

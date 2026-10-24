@@ -147,14 +147,20 @@ await withBrowser(
       `${action("Plain local")}`,
       "the pinned cloud action",
     );
+    // Pinned and unlit, it comes in on hover like the others; lit, it stays.
+    await browser.hover("");
+    await browser.evaluate<boolean>("(document.activeElement?.blur(), true)");
+    const away = await browser.evaluate<boolean>(
+      `${action("Plain local")}.offsetParent === null && ${action("Cloud project")}.offsetParent !== null`,
+    );
+    await browser.hover('summary[aria-label="Settings of Plain local"]');
+    const hovered = await browser.evaluate<boolean>(
+      `${action("Plain local")}.offsetParent !== null`,
+    );
+    await browser.hover("");
     expect(
-      (await browser.evaluate<boolean>(
-        `${action("Plain local")}.offsetParent !== null`,
-      )) &&
-        (await browser.evaluate<boolean>(
-          `${action("Cloud project")}.offsetParent !== null`,
-        )),
-      "a pinned cloud action, or the lit one, hides until hover",
+      away && hovered,
+      "a pinned cloud action does not wait for hover, or the lit one hides",
     );
 
     await startMove(browser, "Plain local");

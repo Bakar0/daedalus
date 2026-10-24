@@ -765,9 +765,37 @@ button:not(
   align-items: center;
   display: flex;
   min-width: 0;
-  /* Room for every action the header shows, all of them always there:
-     --header-actions is their count, set on the card. */
+  /* Room for the actions on show (counts set on the card): the few always
+     there, and every pinned one on hover or focus. */
+  padding-right: calc(var(--header-actions-shown, 2) * 23px + 4px);
+}
+.workspace-group
+  > .workspace-card:is(:hover, :focus-within)
+  .workspace-card-name {
   padding-right: calc(var(--header-actions, 2) * 23px + 4px);
+}
+/* Pinned terminal, secrets, archive and an unlit cloud come in on hover or
+   focus, to the left of Settings and the +, which always show; so does a
+   cloud lit while the workspace is in the cloud or moving. */
+.workspace-group .workspace-terminal-action,
+.workspace-group .workspace-secrets-action,
+.workspace-group .workspace-card-archive,
+.workspace-group .workspace-cloud-action:not([data-cloud-lit], [data-moving]) {
+  display: none !important;
+}
+.workspace-group
+  > .workspace-card:is(:hover, :focus-within)
+  :is(
+    .workspace-terminal-action,
+    .workspace-secrets-action,
+    .workspace-card-archive,
+    .workspace-cloud-action
+  ) {
+  display: flex !important;
+}
+/* An open menu stays put while the pointer is over its popover. */
+.workspace-group .workspace-card-menu[open] {
+  display: flex !important;
 }
 /* A long name is cut short with an ellipsis. */
 .workspace-group .workspace-card-name > span:first-child {
@@ -783,16 +811,6 @@ button:not(
   border-radius: 6px;
   box-shadow: 0 0 0 1px var(--line);
 }
-/* Many actions: a row of their own under the name, right-aligned. */
-.workspace-group > .workspace-card[data-actions-row] {
-  flex-wrap: wrap;
-}
-.workspace-group > .workspace-card[data-actions-row] > .workspace-card-actions {
-  flex-basis: 100%;
-  justify-content: flex-end;
-  padding: 0 4px 4px;
-  position: static;
-}
 .workspace-group .workspace-session-insights {
   margin-top: 1px;
 }
@@ -800,11 +818,27 @@ button:not(
   gap: 7px;
   padding: 6px 8px !important;
 }
-/* The whole title row keeps clear of the card's actions, all always
-   showing, so a badge after the name cannot run under them.
-   --card-actions is their count, set on the card. */
+/* The whole title row keeps clear of the card's actions on show, so a
+   badge after the name cannot run under them (counts set on the card). */
 .workspace-sessions .session-card-main .session-card-title {
+  padding-right: calc(var(--card-actions-shown, 1) * 23px + 3px);
+}
+.workspace-sessions
+  .session-card:is(:hover, :focus-within)
+  .session-card-main
+  .session-card-title {
   padding-right: calc(var(--card-actions, 1) * 23px + 3px);
+}
+/* Rebirth, archive and a lead's + come in on hover or focus. A requested
+   rebirth stays visible until the successor takes over. */
+.workspace-sessions .session-card-hover-action {
+  display: none !important;
+}
+.workspace-sessions
+  .session-card:is(:hover, :focus-within)
+  .session-card-hover-action,
+.workspace-sessions .session-rebirth-action[data-rebirth-requested] {
+  display: flex !important;
 }
 .workspace-sessions .session-card-main .session-card-title > strong {
   padding-right: 0;
