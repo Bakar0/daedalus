@@ -460,7 +460,8 @@ export function adminClient(): void {
   function collection(workspace: Workspace) {
     if (workspace.status !== "sleeping") return "–";
     if (workspace.daysUntilCollection === null) return "never";
-    if (workspace.daysUntilCollection === 0) return "today";
+    if (workspace.daysUntilCollection === 0) return "within a day";
+    if (workspace.daysUntilCollection === 1) return "1 day";
     return `${workspace.daysUntilCollection} days`;
   }
 
@@ -719,7 +720,11 @@ export function adminClient(): void {
         kept ?? el("p", { class: "message", id: "message", hidden: "" }),
         summary(overview),
         ...(overview.users.length
-          ? overview.users.map(userSection)
+          ? [
+              // Users with workspaces first; the order is otherwise by email.
+              ...overview.users.filter((user) => user.workspaces.length),
+              ...overview.users.filter((user) => !user.workspaces.length),
+            ].map(userSection)
           : [el("p", { class: "hint" }, "No users have signed in yet.")]),
         audits,
         el(

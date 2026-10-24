@@ -118,9 +118,9 @@ spec:
             - name: DAEDALUS_GATEWAY_ADMIN_PORT
               value: {{ $admin.port | quote }}
             - name: DAEDALUS_GATEWAY_ADMIN_HOST
-              value: {{ ternary "0.0.0.0" "127.0.0.1" $admin.expose | quote }}
+              value: {{ if $admin.expose }}"0.0.0.0"{{ else }}"127.0.0.1"{{ end }}
             - name: DAEDALUS_GATEWAY_ADMIN_HOSTS
-              value: {{ join "," $admin.hosts | quote }}
+              value: {{ join "," ($admin.hosts | default list) | quote }}
             - name: DAEDALUS_GATEWAY_ADMIN_TOKEN_DIR
               value: /etc/daedalus/admin
             - name: DAEDALUS_GATEWAY_ADMIN_SESSION_HOURS

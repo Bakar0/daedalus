@@ -455,7 +455,9 @@ export function createAdmin(deps: AdminDeps) {
     if (found.sleeping && found.sleptAt && asleepMs > 0) {
       const at = Date.parse(found.sleptAt) + asleepMs;
       collectAt = new Date(at).toISOString();
-      daysUntilCollection = Math.max(0, Math.floor((at - now()) / DAY_MS));
+      // Whole days left, rounded up; 0 once less than a day is left.
+      const left = at - now();
+      daysUntilCollection = left < DAY_MS ? 0 : Math.ceil(left / DAY_MS);
     }
     const disk = usage?.disk ?? [];
     return {

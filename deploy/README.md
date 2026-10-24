@@ -66,7 +66,7 @@ access), each at least 32 characters:
 ```
 kubectl -n daedalus create secret generic daedalus-admin \
   --from-literal=admin-token="$(openssl rand -base64 32)"
-helm upgrade daedalus deploy/helm/daedalus --reuse-values \
+helm upgrade daedalus deploy/helm/daedalus --reset-then-reuse-values \
   --set admin.enabled=true --set admin.bootstrap.existingSecret=daedalus-admin
 kubectl -n daedalus port-forward deploy/daedalus-gateway 8082
 open http://localhost:8082/admin/

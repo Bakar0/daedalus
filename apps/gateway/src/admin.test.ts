@@ -477,7 +477,7 @@ describe("overview", () => {
     // The runner pins its key, which the page must never show.
     store.pinRunnerKey(a.user.id, WS_A, runnerKey);
 
-    // An hour on: 29 whole days are left before collection.
+    // An hour on: 29 days and 23 hours are left, shown rounded up.
     clock += 3_600_000;
     const result = await call(session, "GET", "overview");
     expect(result.status).toBe(200);
@@ -516,7 +516,7 @@ describe("overview", () => {
       .workspaces[0]!;
     expect(asleep.status).toBe("sleeping");
     expect(asleep.sleptAt).toBeString();
-    expect(asleep.daysUntilCollection).toBe(29);
+    expect(asleep.daysUntilCollection).toBe(30);
     expect(asleep.resources).toBeNull();
     expect(
       view.users.find((user) => user.email === "nobody@example.com")!
