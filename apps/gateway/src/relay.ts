@@ -70,6 +70,17 @@ export class Relay {
     return count;
   }
 
+  /** Connected Macs and runners across every user, for the admin page. */
+  counts(): { macs: number; runners: number } {
+    let macs = 0;
+    let runners = 0;
+    for (const room of this.#rooms.values())
+      for (const socket of room.values())
+        if (socket.data.role === "mac") macs += 1;
+        else runners += 1;
+    return { macs, runners };
+  }
+
   /** Closes a device's socket, as when its workspace is deleted. */
   kick(userId: string, deviceId: string, reason: string): void {
     const socket = this.#rooms.get(userId)?.get(deviceId);

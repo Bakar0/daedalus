@@ -36,6 +36,14 @@ export interface CollectResult {
   namespaces: string[];
 }
 
+/** The last collection pass, for the admin page. */
+export interface CollectionRecord {
+  at: string;
+  workspaces: number;
+  namespaces: number;
+  failures: number;
+}
+
 /** How often relay traffic may update a workspace's last active time. */
 export const ACTIVITY_WRITE_MS = 60_000;
 
@@ -466,7 +474,23 @@ export function createGateway(deps: GatewayDeps) {
    * as DELETE does, and the namespace of a user with no workspace left
    * goes too. One that fails is logged and tried again next pass.
    */
+  let lastCollection: CollectionRecord | null = null;
   async function collect(now = new Date()): Promise<CollectResult> {
+    let failures = 0;
+    const result = await collectPass(now, () => (failures += 1));
+    lastCollection = {
+      at: new Date().toISOString(),
+      workspaces: result.workspaces.length,
+      namespaces: result.namespaces.length,
+      failures,
+    };
+    return result;
+  }
+
+  async function collectPass(
+    now: Date,
+    failed: () => void,
+  ): Promise<CollectResult> {
     const { asleepMs } = config.retention;
     const result: CollectResult = { workspaces: [], namespaces: [] };
     for (const row of store.allWorkspaces()) {
@@ -480,6 +504,7 @@ export function createGateway(deps: GatewayDeps) {
           `Collected workspace ${row.workspaceId}, asleep since ${row.sleptAt}`,
         );
       } catch (error) {
+        failed();
         log(`Collecting workspace ${row.workspaceId} failed: ${String(error)}`);
       }
     }
@@ -487,6 +512,7 @@ export function createGateway(deps: GatewayDeps) {
     try {
       tenants = await controller.tenants();
     } catch (error) {
+      failed();
       log(`Listing namespaces to collect failed: ${String(error)}`);
       return result;
     }
@@ -499,6 +525,7 @@ export function createGateway(deps: GatewayDeps) {
         result.namespaces.push(namespaceFor(userId));
         log(`Collected namespace ${namespaceFor(userId)}, with no workspace`);
       } catch (error) {
+        failed();
         log(`Collecting ${namespaceFor(userId)} failed: ${String(error)}`);
       }
     }
@@ -509,6 +536,8 @@ export function createGateway(deps: GatewayDeps) {
     public: listen("public"),
     runner: listen("runner"),
     collect,
+    /** When collection last ran and what it did; null before the first. */
+    lastCollection: () => lastCollection,
     /** What the admin page acts with: the same paths the user's routes use. */
     workspaces: { view, wake, sleep, remove, limitFor, kubeFailure },
   };

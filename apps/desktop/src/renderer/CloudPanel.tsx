@@ -9,9 +9,11 @@ import React, { useState } from "react";
 import type {
   CloudMcpServersDto,
   CloudStateDto,
+  GatewayInstallDto,
   RpcResult,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
+import { GatewayInstall } from "./GatewayInstall";
 import { useRpcQuery, type RpcQueryResult } from "./use-rpc";
 
 /**
@@ -64,10 +66,13 @@ export function CloudPanel({
   busy,
   client,
   perform,
+  install,
 }: {
   busy: boolean;
   client: DesktopClient;
   perform: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
+  /** A gateway install in progress, from the snapshot. */
+  install?: GatewayInstallDto;
 }) {
   const { data: state, error, refresh } = useCloudState(client, 5_000);
   const [gatewayUrl, setGatewayUrl] = useState(rememberedGateway);
@@ -195,6 +200,11 @@ export function CloudPanel({
           {shownError}
         </p>
       ) : undefined}
+      <GatewayInstall
+        client={client}
+        install={install}
+        onSignedIn={() => void refresh()}
+      />
     </div>
   );
 }

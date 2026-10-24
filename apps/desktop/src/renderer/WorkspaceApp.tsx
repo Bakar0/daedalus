@@ -8063,6 +8063,7 @@ export function WorkspaceApp({
                 setTheme(value);
                 window.localStorage.setItem("daedalus.theme", value);
               }}
+              gatewayInstall={snapshot.gatewayInstall}
               perform={perform}
               section={settingsSection}
               settings={snapshot.settings}

@@ -6,6 +6,8 @@ import type { AdminConfig, GatewayConfig } from "./config";
 import {
   workspaceStatus,
   type Controller,
+  type PodMetrics,
+  type QuotaHealth,
   type WorkspaceUsage,
 } from "./controller";
 import { parseQuantity } from "./quantity";
@@ -18,7 +20,9 @@ import {
   type Store,
   type WorkspaceRow,
 } from "./store";
-import { adminClient } from "./admin/client";
+import { adminClient, filterTools } from "./admin/client";
+import { buildHealth, type AdminHealth, type HealthUser } from "./admin-health";
+import type { Logbook } from "./logbook";
 import pageCss from "./admin/admin.css" with { type: "text" };
 
 /**
@@ -249,6 +253,8 @@ export interface AdminWorkspace {
   daysUntilCollection: number | null;
   disk: { name: string; size: string }[];
   diskBytes: number;
+  /** Live CPU (cores) and memory (bytes) from metrics-server, if it answers. */
+  live: { cpu: number; memory: number } | null;
   /** The session container's CPU and memory; null while asleep. */
   resources: {
     cpu: { request: string; limit: string };
@@ -285,6 +291,7 @@ export interface AdminOverview {
     memoryRequestedBytes: number;
   };
   users: AdminUser[];
+  health: AdminHealth;
 }
 
 export interface AdminDeps {
@@ -293,6 +300,10 @@ export interface AdminDeps {
   controller: Controller;
   relay: Relay;
   workspaces: ReturnType<typeof createGateway>["workspaces"];
+  /** The gateway's last collection pass. */
+  lastCollection?: ReturnType<typeof createGateway>["lastCollection"];
+  /** Recent log lines for the health section; none when absent. */
+  logbook?: Logbook;
   auth: AdminAuth;
   log?: (message: string) => void;
   /** Where audit lines go; stdout by default. */
@@ -349,8 +360,9 @@ export function createAdmin(deps: AdminDeps) {
   const print = deps.print ?? ((line: string) => console.log(line));
   const now = deps.now ?? Date.now;
   const sessions = new Map<string, Session>();
+  const startedAt = now();
   const failures = new FailureCounter();
-  const clientScript = `(${adminClient.toString()})();\n`;
+  const clientScript = `(${adminClient.toString()})((${filterTools.toString()})());\n`;
 
   function audit(
     actor: Actor,
@@ -577,6 +589,7 @@ export function createAdmin(deps: AdminDeps) {
     found: WorkspaceRow,
     usage: WorkspaceUsage | undefined,
     readFailed: boolean,
+    metrics: PodMetrics | null,
   ): AdminWorkspace {
     const runnerOnline = relay.isOnline(
       found.userId,
@@ -620,6 +633,10 @@ export function createAdmin(deps: AdminDeps) {
         (sum, volume) => sum + (parseQuantity(volume.size) ?? 0),
         0,
       ),
+      live:
+        metrics?.available && usage?.podHealth
+          ? (metrics.pods.get(usage.podHealth.name) ?? null)
+          : null,
       resources: found.sleeping ? null : controller.resources(found),
     };
   }
@@ -635,12 +652,29 @@ export function createAdmin(deps: AdminDeps) {
     let diskBytes = 0;
     let cpuRequested = 0;
     let memoryRequestedBytes = 0;
+    const nodes = controller.nodes().then(
+      (list) => ({ list, error: null }),
+      (failure: unknown) => {
+        log(`Listing the nodes failed: ${String(failure)}`);
+        return {
+          list: null,
+          error: failure instanceof Error ? failure.message : "The API refused",
+        };
+      },
+    );
+    const served = await controller.metricsServed().catch(() => false);
+    const metricsState: { available: boolean; reason: string | null } = served
+      ? { available: true, reason: null }
+      : { available: false, reason: "metrics-server is not installed" };
+    const healthUsers: HealthUser[] = [];
     const users = await Promise.all(
       store.allUsers().map(async (user): Promise<AdminUser> => {
         const rows = store.workspaces(user.id);
         let usage = new Map<string, WorkspaceUsage>();
+        let quotas: QuotaHealth[] | null = null;
+        let metrics: PodMetrics | null = null;
         let error: string | null = null;
-        if (rows.length)
+        if (rows.length) {
           try {
             usage = await controller.usage(user.id);
           } catch (failure) {
@@ -649,6 +683,22 @@ export function createAdmin(deps: AdminDeps) {
             );
             error = "The cluster could not be read for this user";
           }
+          quotas = await controller.quotas(user.id).catch(() => null);
+          if (served) {
+            metrics = await controller.podMetrics(user.id);
+            if (!metrics.available && metricsState.available) {
+              metricsState.available = false;
+              metricsState.reason = metrics.reason;
+            }
+          }
+        }
+        healthUsers.push({
+          id: user.id,
+          email: user.email,
+          rows,
+          usage: error === null ? usage : null,
+          quotas,
+        });
         return {
           id: user.id,
           email: user.email,
@@ -657,11 +707,31 @@ export function createAdmin(deps: AdminDeps) {
           limitOverride: user.maxWorkspaces,
           error,
           workspaces: rows.map((found) =>
-            adminWorkspace(found, usage.get(found.workspaceId), error !== null),
+            adminWorkspace(
+              found,
+              usage.get(found.workspaceId),
+              error !== null,
+              metrics,
+            ),
           ),
         };
       }),
     );
+    const nodeList = await nodes;
+    const health = buildHealth({
+      now: now(),
+      nodes: nodeList.list,
+      nodesError: nodeList.error,
+      users: healthUsers,
+      runtimeClass: config.workspace.runtimeClass,
+      runtimeHandler: config.workspace.runtimeHandler,
+      metrics: metricsState,
+      startedAt,
+      relay: relay.counts(),
+      collectMs: config.collectMs,
+      lastCollection: deps.lastCollection?.() ?? null,
+      log: deps.logbook?.lines() ?? [],
+    });
     for (const user of users)
       for (const workspace of user.workspaces) {
         byStatus[workspace.status] += 1;
@@ -693,6 +763,7 @@ export function createAdmin(deps: AdminDeps) {
         memoryRequestedBytes,
       },
       users,
+      health,
     };
   }
 

@@ -20,6 +20,7 @@ import {
   DEFAULT_AUTO_REBIRTH_PERCENT,
   type AppUpdateDto,
   type DesktopSettingsDto,
+  type GatewayInstallDto,
   type IntegratedTerminalDto,
   type RpcResult,
 } from "@daedalus/protocol";
@@ -161,6 +162,7 @@ export function SettingsModal({
   renderTerminal,
   perform,
   updates,
+  gatewayInstall,
 }: {
   busy: boolean;
   client: DesktopClient;
@@ -175,6 +177,8 @@ export function SettingsModal({
   settings: DesktopSettingsDto;
   theme: AppTheme;
   updates?: SettingsUpdateControls;
+  /** A gateway install in progress, for Settings › Cloud. */
+  gatewayInstall?: GatewayInstallDto;
 }) {
   const updateAvailable = updates?.update?.state === "available";
   // Remote is phone access, a Pro feature: hidden unless the account has Pro
@@ -348,7 +352,12 @@ export function SettingsModal({
 
         {section === "cloud" ? (
           <section className="settings-section">
-            <CloudPanel busy={busy} client={client} perform={perform} />
+            <CloudPanel
+              busy={busy}
+              client={client}
+              install={gatewayInstall}
+              perform={perform}
+            />
           </section>
         ) : undefined}
 

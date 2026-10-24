@@ -54,6 +54,17 @@ default blocks all RFC 1918 ranges and link-local, which covers pod and service
 CIDRs and the cloud metadata address. Adjust it if your cluster uses public
 ranges for pods.
 
+Each workspace pod is owned by its workspace PVC (an ownerReference, neither
+controller nor blockOwnerDeletion), because AWS's VPC CNI may not enforce
+policy reliably on pods without one. The admission policy requires it.
+
+`deploy/kind/egress-check.sh <namespace>` checks the policy from a workspace
+pod on kind: the metadata address and the gateway's public port (10/8) are
+blocked, the gateway's runner port and the internet are not. For the metadata
+address it starts a listener off the node and routes 169.254.169.254 to it,
+and a control pod outside the tenant namespace must reach each blocked target,
+so a block is the policy's and not a dead address.
+
 ## Admin page (optional)
 
 The gateway can serve an admin page on a port of its own: users, their
@@ -98,8 +109,10 @@ as GKE Sandbox's, when its handler matches. The install fails with a message
 when the nodes report their runtime handlers (`status.runtimeHandlers`, 1.30
 or later with a recent containerd) and none offers the handler. Nodes that
 report none cannot be checked, and NOTES says so. On a cluster with nodes both
-with and without gVisor, add a `nodeSelector` that keeps workspaces on gVisor
-nodes (not in the chart yet).
+with and without gVisor, set `workspace.runtimeClassScheduling` (a
+`nodeSelector` and `tolerations`): the chart writes it into the RuntimeClass,
+and Kubernetes adds it to every workspace pod. `deploy/eks/values.yaml` does
+this for the EKS guide.
 
 `--set workspace.runtimeClassName=""` runs workspaces on the node's default
 runtime. Then workspace code shares the host kernel with every other pod on the
@@ -127,6 +140,12 @@ connect". The pod admission policy allows no other `dev.gvisor.*` annotation.
 
 gVisor is slower for file-system-heavy work: in the stage 0 benchmark on kind,
 a git clone was 4 to 6 times slower and a warm `bun install` about 10 times.
+
+## EKS
+
+`deploy/eks/README.md` sets up a private test cluster on EKS with eksctl:
+node groups with gVisor, network policy, gp3 storage, an ALB with TLS, images
+in ECR, verification, costs and teardown.
 
 ## EKS checklist (before 1b)
 

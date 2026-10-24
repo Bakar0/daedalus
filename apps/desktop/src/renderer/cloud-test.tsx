@@ -10,7 +10,9 @@
  * `moveAsk=busy|stopped|big|fail|limit` for a move that asks, is refused
  * or fails, `holdMove=1` to hold a move until `releaseMove()`, and
  * `notice=1` for Sleepy project back from its backup, `archived=1` for an
- * archived session under Plain local.
+ * archived session under Plain local; for the gateway install,
+ * `contexts=none`, `tools=missing`, `preflight=fail`, and `holdInstall=1` to
+ * hold an install until `releaseInstall()`.
  *
  * Every call a click should make is recorded in `window.requests`. The
  * replies carry a token and a runner key the real host never sends, so the
@@ -43,6 +45,7 @@ declare global {
       releaseSignIn: () => void;
       releaseWake: () => void;
       releaseMove: () => void;
+      releaseInstall: () => void;
       setCloudStatus: (
         workspaceId: string,
         status: CloudWorkspaceDto["status"],
@@ -322,10 +325,12 @@ const gate = () => {
 const signInGate = gate();
 const wakeGate = gate();
 const moveGate = gate();
+const installGate = gate();
 window.cloudFixture = {
   releaseSignIn: signInGate.release,
   releaseWake: wakeGate.release,
   releaseMove: moveGate.release,
+  releaseInstall: installGate.release,
   setCloudStatus: (workspaceId, status) => {
     const found = cloud.workspaces.find(
       (item) => item.workspaceId === workspaceId,
@@ -611,6 +616,134 @@ const client = {
       withCloud(workspace)?.status === "sleeping"
         ? fail("The cloud workspace is asleep; open a session to wake it")
         : ok([]),
+    // A gateway install. Context names and hosts only; no credential, and a
+    // kubeconfig path or token never comes over.
+    gatewayInstallContexts: async () => {
+      record("gatewayInstallContexts", {});
+      return ok({
+        contexts:
+          query.get("contexts") === "none"
+            ? []
+            : [
+                {
+                  name: "arn:aws:eks:eu-west-1:123456789012:cluster/team",
+                  serverHost: "ABCD1234.gr7.eu-west-1.eks.amazonaws.com",
+                },
+                { name: "kind-daedalus", serverHost: "127.0.0.1:52011" },
+              ],
+        tools: [
+          { name: "kubectl", found: true },
+          {
+            name: "helm",
+            found: query.get("tools") !== "missing",
+            hint: "brew install helm",
+          },
+          { name: "kind", found: true },
+          {
+            name: "docker",
+            found: true,
+            running: query.get("tools") !== "missing",
+          },
+        ],
+      });
+    },
+    gatewayInstallPreflight: async (params: Record<string, unknown>) => {
+      record("gatewayInstallPreflight", params);
+      const failing = query.get("preflight") === "fail";
+      return ok({
+        context: params.context,
+        namespace: params.namespace ?? "daedalus",
+        checks: [
+          { id: "version", status: "pass", label: "Kubernetes 1.33" },
+          {
+            id: "permissions",
+            status: failing ? "fail" : "pass",
+            label: failing
+              ? "Missing permissions"
+              : "You can create everything the install needs",
+            ...(failing
+              ? { detail: "create clusterroles\ncreate namespaces\u001b[2J" }
+              : {}),
+          },
+          { id: "gvisor", status: "warn", label: "No node offers gVisor" },
+          {
+            id: "images",
+            status: "unknown",
+            label: "The cluster must be able to pull the images",
+          },
+        ],
+        ready: !failing,
+        release: null,
+      });
+    },
+    gatewayInstallDryRun: async (params: Record<string, unknown>) => {
+      record("gatewayInstallDryRun", params);
+      return ok({
+        context: params.context,
+        namespace: params.namespace ?? "daedalus",
+        dryRunId: "dry-1",
+        upgrade: false,
+        objects: [
+          { kind: "Namespace", name: "daedalus", namespace: null },
+          {
+            kind: "Deployment",
+            name: "daedalus-gateway",
+            namespace: "daedalus",
+          },
+          { kind: "Service", name: "daedalus-gateway", namespace: "daedalus" },
+          { kind: "ClusterRole", name: "daedalus-tenant", namespace: null },
+        ],
+        notes: "Gateway installed.\nThis line has a control \u0007 char.",
+      });
+    },
+    gatewayInstallStart: async (params: Record<string, unknown>) => {
+      record("gatewayInstallStart", params);
+      const target = {
+        kind: "cluster" as const,
+        context: String(params.context),
+        namespace: String(params.namespace ?? "daedalus"),
+      };
+      snapshot.gatewayInstall = {
+        target,
+        phase: "installing",
+        log: ["helm upgrade --install daedalus", "namespace/daedalus created"],
+      };
+      announce();
+      void (async () => {
+        if (query.get("holdInstall") === "1") await installGate.promise;
+        snapshot.gatewayInstall = {
+          target,
+          phase: "done",
+          log: [...snapshot.gatewayInstall!.log, "gateway ready"],
+          gatewayUrl: "http://127.0.0.1:58080",
+          portForward: !params.publicUrl,
+        };
+        cloud.signedIn = true;
+        cloud.gatewayUrl = "http://127.0.0.1:58080";
+        announce();
+      })();
+      return ok(structuredClone(snapshot.gatewayInstall));
+    },
+    gatewayInstallLocal: async (params: { email: string }) => {
+      record("gatewayInstallLocal", params);
+      snapshot.gatewayInstall = {
+        target: { kind: "local" },
+        phase: "cluster",
+        log: ["Creating cluster daedalus-local"],
+      };
+      announce();
+      return ok(structuredClone(snapshot.gatewayInstall));
+    },
+    gatewayInstallDismiss: async () => {
+      record("gatewayInstallDismiss", {});
+      delete snapshot.gatewayInstall;
+      announce();
+      return ok(null);
+    },
+    gatewayInstallGuideOpen: async () => {
+      record("gatewayInstallGuideOpen", {});
+      return ok({ opened: true });
+    },
     terminalCreate: async (params: Record<string, unknown>) => {
       record("terminalCreate", params);
       return ok({

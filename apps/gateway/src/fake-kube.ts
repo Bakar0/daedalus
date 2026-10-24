@@ -10,6 +10,8 @@ import type { KubeApi, KubeObject, KubeResponse } from "./kube";
  *   RoleBinding rights, every namespaced call needs the `daedalus-gateway`
  *   RoleBinding in that namespace first, as the chart's RBAC does.
  * - A pod quota per namespace, refused with the API's "exceeded quota".
+ * - Every created object gets a uid, and the garbage collector deletes an
+ *   object whose owner (by uid, in its namespace) is gone, at once.
  */
 export class FakeKube implements KubeApi {
   readonly objects = new Map<string, KubeObject>();
@@ -22,6 +24,17 @@ export class FakeKube implements KubeApi {
    * authorizer has seen the binding.
    */
   bindingLag = 0;
+  /** What GET /api/v1/nodes lists. */
+  nodes: KubeObject[] = [
+    {
+      metadata: { name: "node-1" },
+      status: {
+        conditions: [{ type: "Ready", status: "True" }],
+        allocatable: { cpu: "8", memory: "16Gi", "ephemeral-storage": "100Gi" },
+        runtimeHandlers: [{ name: "runc" }, { name: "runsc" }],
+      },
+    },
+  ];
   /** When set, a deleted pod stays, terminating, until `finishDeletes`. */
   slowPodDeletes = false;
   #terminating = new Set<string>();
@@ -68,8 +81,10 @@ export class FakeKube implements KubeApi {
           );
       }
       const stored = structuredClone(body!);
+      (stored.metadata as Record<string, unknown>).uid = crypto.randomUUID();
       if (path.endsWith("/pods")) stored.status = { phase: "Running" };
       this.objects.set(key, stored);
+      this.#collectGarbage();
       return { status: 201, body: stored };
     }
 
@@ -87,6 +102,22 @@ export class FakeKube implements KubeApi {
         )
         .map(([, object]) => object);
       return { status: 200, body: { kind: "NamespaceList", items } };
+    }
+
+    if (path === "/api/v1/nodes" && method === "GET")
+      return { status: 200, body: { kind: "NodeList", items: this.nodes } };
+
+    // A whole collection in a namespace, as resourcequotas are read.
+    const collection = /^\/api\/v1\/namespaces\/[^/]+\/[a-z]+$/.exec(path);
+    if (collection && method === "GET" && !this.objects.has(path)) {
+      const items = [...this.objects.entries()]
+        .filter(
+          ([key]) =>
+            key.startsWith(`${path}/`) &&
+            !key.slice(path.length + 1).includes("/"),
+        )
+        .map(([, object]) => object);
+      return { status: 200, body: { kind: "List", items } };
     }
 
     // A label-selected list of one kind in a namespace.
@@ -124,7 +155,27 @@ export class FakeKube implements KubeApi {
       for (const key of [...this.objects.keys()])
         if (key.includes(`/namespaces/${namespace}/`)) this.objects.delete(key);
     }
+    this.#collectGarbage();
     return { status: 200, body: object };
+  }
+
+  /** Deletes objects whose owner no longer exists in their namespace. */
+  #collectGarbage(): void {
+    for (const [key, object] of this.objects) {
+      const owners = (object.metadata as Record<string, unknown>)
+        .ownerReferences as { uid: string }[] | undefined;
+      if (!owners?.length) continue;
+      const namespace = /\/namespaces\/([^/]+)\//.exec(key)?.[1];
+      const alive = [...this.objects.entries()].some(
+        ([other, candidate]) =>
+          other.includes(`/namespaces/${namespace}/`) &&
+          owners.some(
+            (owner) =>
+              owner.uid === (candidate.metadata as Record<string, unknown>).uid,
+          ),
+      );
+      if (!alive) this.objects.delete(key);
+    }
   }
 
   /** Finishes pod deletions held by `slowPodDeletes`. */

@@ -8892,3 +8892,178 @@ dd {
   margin: 10px 12px;
   white-space: normal;
 }
+
+/* Settings › Cloud › Your own gateway. */
+.gateway-install {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+.gateway-install > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.gateway-install > summary::-webkit-details-marker {
+  display: none;
+}
+.gateway-install > summary h3 {
+  display: inline;
+  margin: 0;
+}
+.gateway-install > summary::after {
+  color: var(--muted);
+  content: " ›";
+}
+.gateway-install[open] > summary::after {
+  content: " ⌄";
+}
+.gateway-install-form,
+.gateway-install-target,
+.gateway-install-preflight,
+.gateway-install-dry-run,
+.gateway-install-progress {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.gateway-install-form input:not([type="radio"], [type="checkbox"]) {
+  font-size: 12px;
+  min-height: 28px;
+  padding: 4px 8px;
+  width: 260px;
+}
+.gateway-install-form .settings-choice > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.gateway-install-form .settings-choice small {
+  color: var(--muted);
+  font-size: 11px;
+}
+/* The images take the line under their label: a registry is long. */
+.gateway-install-form .settings-choice:has(.gateway-install-images) {
+  align-items: stretch;
+  display: grid;
+  gap: 6px;
+}
+.gateway-install-images input:not([type="radio"], [type="checkbox"]) {
+  width: auto;
+}
+.gateway-install-contexts {
+  border: 0;
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+}
+.gateway-install-contexts legend {
+  color: var(--secondary);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.gateway-install-images {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 96px;
+}
+.gateway-install-tools,
+.gateway-install-checks,
+.gateway-install-objects {
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.gateway-install-tools code,
+.gateway-install-objects code {
+  color: var(--muted);
+  font-size: 11px;
+}
+.gateway-install-objects {
+  max-height: 180px;
+  overflow-y: auto;
+}
+.gateway-install-checks li {
+  align-items: start;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 14px minmax(0, 1fr);
+}
+.gateway-install-checks li > span:last-child {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.gateway-install-checks small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.gateway-install-mark {
+  font-weight: 700;
+  text-align: center;
+}
+.gateway-install-checks [data-status="pass"] .gateway-install-mark {
+  color: var(--success);
+}
+.gateway-install-checks [data-status="warn"] .gateway-install-mark,
+.gateway-install-checks [data-status="unknown"] .gateway-install-mark {
+  color: var(--secondary);
+}
+.gateway-install-checks [data-status="fail"] .gateway-install-mark {
+  color: var(--danger);
+}
+.gateway-install-notes pre,
+.gateway-install-log {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 11px;
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gateway-install-phase {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 8px;
+  margin: 0;
+}
+.gateway-install-phase span {
+  color: var(--muted);
+}
+.gateway-install-progress:not([data-phase="done"], [data-phase="failed"])
+  .gateway-install-phase
+  strong::after {
+  animation: workspace-moving 1.4s ease-in-out infinite;
+  content: " …";
+}
+@media (prefers-reduced-motion: reduce) {
+  .gateway-install-progress .gateway-install-phase strong::after {
+    animation: none;
+  }
+}
+.gateway-install-acknowledge span {
+  font-size: 12px;
+}
+.gateway-install-local {
+  border-top: 1px dashed var(--line);
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+.gateway-install-notes > summary {
+  color: var(--secondary);
+  cursor: pointer;
+  font-size: 12px;
+}

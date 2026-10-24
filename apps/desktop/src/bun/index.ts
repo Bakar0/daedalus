@@ -499,6 +499,10 @@ const createRpc = (role: DesktopWindowRole = "main") =>
         openExternal: Utils.openExternal,
         openPath: Utils.openPath,
         revealPath: Utils.showItemInFolder,
+        awsGuidePath: resolve(
+          PATHS.RESOURCES_FOLDER,
+          "app/deploy/eks/README.md",
+        ),
         terminalEndpoint,
         quit: {
           dialogShown: () => quitController.dialogShown(),

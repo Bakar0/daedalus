@@ -20,6 +20,17 @@ rb() { printf 'apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmeta
 echo "group system:authenticated:"; rb '[{kind: Group, name: "system:authenticated", apiGroup: rbac.authorization.k8s.io}]' --dry-run=server
 echo "gateway SA plus another SA:"; rb '[{kind: ServiceAccount, name: daedalus-gateway, namespace: daedalus},{kind: ServiceAccount, name: x, namespace: daedalus}]' --dry-run=server
 echo "gateway SA only:"; rb '[{kind: ServiceAccount, name: daedalus-gateway, namespace: daedalus}]'
+echo "--- metrics (read-only, tenant namespaces only)"
+# A SubjectAccessReview, not kubectl auth can-i: can-i says no for any group
+# the cluster does not serve, and kind has no metrics-server.
+sar() { printf 'apiVersion: authorization.k8s.io/v1\nkind: SubjectAccessReview\nspec:\n  user: %s\n  groups: [system:serviceaccounts, system:serviceaccounts:daedalus, system:authenticated]\n  resourceAttributes: {group: metrics.k8s.io, resource: %s, verb: %s, namespace: "%s"}\n' "$G" "$1" "$2" "$3" | kubectl $C create -f - -o jsonpath='{.status.allowed}'; }
+for c in "pods list u-t yes" "pods get u-t yes" "pods create u-t no" "pods delete u-t no" \
+         "pods list kube-system no" "pods list daedalus no" "pods list _ no" "nodes list _ no"; do
+  set -- $c; ns="$3"; [ "$ns" = _ ] && ns=""
+  got="$(sar "$1" "$2" "$ns")"; [ "$got" = true ] && got=yes || got=no
+  [ "$got" = "$4" ] && r=ok || r="UNEXPECTED (want $4)"
+  echo "$2 $1.metrics.k8s.io in ${ns:-all namespaces}: $got $r"
+done
 echo "--- pods"
 echo "valid pod:"; gw create --dry-run=server -f $T/pod.yaml 2>&1 | res
 for n in $T/neg-*.yaml; do echo "$(basename $n .yaml):"; gw create --dry-run=server -f $n 2>&1 | res; done
