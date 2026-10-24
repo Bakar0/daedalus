@@ -136,7 +136,10 @@ type ApiBody = Partial<CloudWorkspace> & {
 
 /** The parts of a pod the assertions read. */
 interface TestPod {
-  metadata: { labels: Record<string, string> };
+  metadata: {
+    labels: Record<string, string>;
+    annotations: Record<string, string>;
+  };
   spec: {
     runtimeClassName?: string;
     serviceAccountName: string;
@@ -414,6 +417,13 @@ describe("controller", () => {
       "daedalus.dev/workspace": WS_A,
     });
     expect(pod.spec.runtimeClassName).toBe("gvisor");
+    // The runner reaches the session's socket through "shared" in gVisor.
+    expect(pod.metadata.annotations).toEqual({
+      "kubectl.kubernetes.io/default-container": "session",
+      "dev.gvisor.spec.mount.shared.share": "pod",
+      "dev.gvisor.spec.mount.shared.type": "tmpfs",
+      "dev.gvisor.spec.mount.shared.options": "rw,rprivate",
+    });
     expect(pod.spec.serviceAccountName).toBe("runner");
     expect(pod.spec.automountServiceAccountToken).toBe(false);
     expect(pod.spec.shareProcessNamespace).toBe(false);
@@ -541,6 +551,9 @@ describe("controller", () => {
     await api(token, "POST", "/v1/workspaces", createBody());
     const pod = testPod(user.id, WS_A);
     expect(pod.spec.runtimeClassName).toBeUndefined();
+    expect(Object.keys(pod.metadata.annotations)).toEqual([
+      "kubectl.kubernetes.io/default-container",
+    ]);
     expect(pod.spec.containers[1]!.resources).toEqual({
       requests: { cpu: "1", memory: "2Gi", "ephemeral-storage": "1Gi" },
       limits: { cpu: "2", memory: "4Gi", "ephemeral-storage": "4Gi" },

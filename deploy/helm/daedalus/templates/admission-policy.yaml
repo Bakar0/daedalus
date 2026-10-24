@@ -83,6 +83,11 @@ spec:
       expression: object.metadata.name
     - name: spec
       expression: object.spec
+    - name: gvisor
+      expression: >-
+        {'dev.gvisor.spec.mount.shared.share': 'pod',
+         'dev.gvisor.spec.mount.shared.type': 'tmpfs',
+         'dev.gvisor.spec.mount.shared.options': 'rw,rprivate'}
   validations:
     - message: pod must be named ws-<id> in a namespace u-*
       expression: variables.name.startsWith('ws-') && request.namespace.startsWith('u-')
@@ -107,6 +112,15 @@ spec:
         (!has(variables.spec.shareProcessNamespace) || variables.spec.shareProcessNamespace == false) &&
         has(variables.spec.serviceAccountName) && variables.spec.serviceAccountName == 'runner' &&
         has(variables.spec.automountServiceAccountToken) && variables.spec.automountServiceAccountToken == false
+    {{- with .Values.workspace.runtimeClassName }}
+    - message: pod must run under RuntimeClass {{ . }}
+      expression: has(variables.spec.runtimeClassName) && variables.spec.runtimeClassName == {{ . | quote }}
+    {{- end }}
+    - message: the only gVisor annotations allowed are the gateway's mount hints for the shared volume
+      expression: >-
+        !has(object.metadata.annotations) || object.metadata.annotations.all(k,
+          !k.startsWith('dev.gvisor.') ||
+          (k in variables.gvisor && object.metadata.annotations[k] == variables.gvisor[k]))
     - message: volumes must be exactly the workspace and state PVCs of this pod, its runner Secret, and emptyDirs
       expression: >-
         has(variables.spec.volumes) && variables.spec.volumes.all(v,
