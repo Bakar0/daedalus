@@ -177,6 +177,16 @@ const snapshot = {
     session("s-cloud", "cloud-ws", { hostId: "ws:c-run" }),
     session("s-sleepy", "sleepy-ws", { hostId: "ws:c-sleep", status: "lost" }),
     session("s-other", "other-ws", { hostId: "ws:c-other", status: "lost" }),
+    // `moveAsk=stopped`: an idle Codex session the cloud cannot run.
+    ...(query.get("moveAsk") === "stopped"
+      ? [
+          session("s-codex", "local-ws", {
+            name: "codex helper",
+            provider: "codex",
+            command: "codex",
+          }),
+        ]
+      : []),
     // `archived=1`: an archived session under Plain local.
     ...(query.get("archived") === "1"
       ? [
@@ -517,6 +527,13 @@ const client = {
         workspace: structuredClone(found),
       });
     },
+    agentStop: async (params: { id: string; force: boolean }) => {
+      record("agentStop", params);
+      const found = snapshot.agents.find((one) => one.id === params.id)!;
+      found.status = "exited";
+      announce();
+      return ok(found);
+    },
     workspaceMove: async (params: {
       reference: string;
       to: "cloud" | "mac";
@@ -532,10 +549,11 @@ const client = {
           status: "busy" as const,
           sessions: [{ id: "s-local", name: "s-local" }],
         });
-      if (asks === "stopped")
+      const codex = snapshot.agents.find((one) => one.id === "s-codex");
+      if (asks === "stopped" && codex?.status === "running")
         return ok({
           status: "needsStopped" as const,
-          sessions: [{ id: "s-local", name: "codex helper" }],
+          sessions: [{ id: "s-codex", name: "codex helper" }],
         });
       if (asks === "big")
         return ok({

@@ -325,9 +325,57 @@ await withBrowser(
   },
 );
 
-// Refusals are shown once and nothing is sent again.
+// A Codex session the cloud cannot run: named for what it is, and
+// 'Stop them and move' stops it and moves.
+await withBrowser(
+  { port: 41828, page: "cloud-test.html", query: "moveAsk=stopped" },
+  async (browser) => {
+    await ready(browser);
+    await startMove(browser, "Plain local");
+    await browser.screenshot("cloud-move-stopped");
+    const text = await answer(browser, "Stop them and move");
+    expect(
+      text.includes("Codex sessions can't run in the cloud yet") &&
+        text.includes("codex helper") &&
+        !text.includes("Stop these sessions first"),
+      `the question reads "${text}"`,
+    );
+    await browser.waitFor(
+      "window.requests.filter((one) => 'workspaceMove' in one).length === 2",
+      "the move after stopping",
+    );
+    const sent = (await browser.requests()).map((one) => JSON.stringify(one));
+    const stop = sent.indexOf('{"agentStop":{"id":"s-codex","force":false}}');
+    expect(
+      stop > 0 &&
+        stop <
+          sent.lastIndexOf(
+            '{"workspaceMove":{"reference":"local-ws","to":"cloud"}}',
+          ),
+      `the calls were ${sent.join(" ")}`,
+    );
+  },
+);
+
+// Cancel stops nothing and moves nothing.
+await withBrowser(
+  { port: 41850, page: "cloud-test.html", query: "moveAsk=stopped" },
+  async (browser) => {
+    await ready(browser);
+    await startMove(browser, "Plain local");
+    await answer(browser, "Cancel");
+    await Bun.sleep(300);
+    const names = (await browser.requests()).map((one) => Object.keys(one)[0]);
+    expect(
+      !names.includes("agentStop") &&
+        names.filter((one) => one === "workspaceMove").length === 1,
+      `cancel sent ${names.join(" ")}`,
+    );
+  },
+);
+
+// A refusal is shown once and nothing is sent again.
 for (const [port, ask, says] of [
-  [41828, "stopped", "codex helper"],
   [41830, "big", "repos/app: 1.5 GB, at most 1 GB"],
 ] as const)
   await withBrowser(

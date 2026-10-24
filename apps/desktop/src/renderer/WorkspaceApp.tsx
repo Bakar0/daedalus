@@ -4290,21 +4290,43 @@ export function WorkspaceApp({
         stopWorking = true;
         continue;
       }
+      if (answer.status === "needsStopped") {
+        // Named for what they are, so an idle Codex session the user does
+        // not think of as running still makes sense here.
+        const allCodex = answer.sessions.every(
+          (one) =>
+            agents.find((session) => session.id === one.id)?.provider ===
+            "codex",
+        );
+        const stop = await askChoice({
+          title: allCodex
+            ? "Codex sessions can't run in the cloud yet"
+            : "Codex and custom sessions can't run in the cloud yet",
+          message: `Stop them and move ${item.name}? They stay on this Mac and can be resumed after it moves home.`,
+          lines: sessionLines(answer.sessions),
+          choices: [{ id: "stop", label: "Stop them and move", danger: true }],
+        });
+        if (stop !== "stop") return;
+        for (const one of answer.sessions) {
+          const stopped = await workspaceMoveActions.run(
+            client.request
+              .agentStop({ id: one.id, force: false })
+              .then((response) => {
+                if (!response.ok)
+                  noteMoveError(item.id, response.error.message);
+                return response;
+              }),
+            item.id,
+          );
+          if (!stopped) return;
+        }
+        continue;
+      }
       await askChoice({
         title:
-          answer.status === "needsStopped"
-            ? "Stop these sessions first"
-            : to === "cloud"
-              ? "Too big for the cloud"
-              : "Too big to come home",
-        message:
-          answer.status === "needsStopped"
-            ? `Codex and custom sessions cannot run in the cloud. Stop them, then move ${item.name}.`
-            : `${item.name} did not move. This is over its cap:`,
-        lines:
-          answer.status === "needsStopped"
-            ? sessionLines(answer.sessions)
-            : tooBigLines(answer.items),
+          to === "cloud" ? "Too big for the cloud" : "Too big to come home",
+        message: `${item.name} did not move. This is over its cap:`,
+        lines: tooBigLines(answer.items),
         choices: [],
         cancelLabel: "OK",
       });
