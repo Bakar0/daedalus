@@ -325,7 +325,7 @@ await withBrowser(
   },
 );
 
-// A Codex session the cloud cannot run: named for what it is, and
+// A custom session the cloud cannot run: named for what it is, and
 // 'Stop them and move' stops it and moves.
 await withBrowser(
   { port: 41828, page: "cloud-test.html", query: "moveAsk=stopped" },
@@ -335,8 +335,8 @@ await withBrowser(
     await browser.screenshot("cloud-move-stopped");
     const text = await answer(browser, "Stop them and move");
     expect(
-      text.includes("Codex sessions can't run in the cloud yet") &&
-        text.includes("codex helper") &&
+      text.includes("Custom sessions can't run in the cloud") &&
+        text.includes("my agent") &&
         !text.includes("Stop these sessions first"),
       `the question reads "${text}"`,
     );
@@ -345,7 +345,7 @@ await withBrowser(
       "the move after stopping",
     );
     const sent = (await browser.requests()).map((one) => JSON.stringify(one));
-    const stop = sent.indexOf('{"agentStop":{"id":"s-codex","force":false}}');
+    const stop = sent.indexOf('{"agentStop":{"id":"s-custom","force":false}}');
     expect(
       stop > 0 &&
         stop <

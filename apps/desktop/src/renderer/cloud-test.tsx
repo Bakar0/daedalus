@@ -177,13 +177,13 @@ const snapshot = {
     session("s-cloud", "cloud-ws", { hostId: "ws:c-run" }),
     session("s-sleepy", "sleepy-ws", { hostId: "ws:c-sleep", status: "lost" }),
     session("s-other", "other-ws", { hostId: "ws:c-other", status: "lost" }),
-    // `moveAsk=stopped`: an idle Codex session the cloud cannot run.
+    // `moveAsk=stopped`: an idle custom session the cloud cannot run.
     ...(query.get("moveAsk") === "stopped"
       ? [
-          session("s-codex", "local-ws", {
-            name: "codex helper",
-            provider: "codex",
-            command: "codex",
+          session("s-custom", "local-ws", {
+            name: "my agent",
+            provider: "custom",
+            command: "my-agent",
           }),
         ]
       : []),
@@ -549,11 +549,11 @@ const client = {
           status: "busy" as const,
           sessions: [{ id: "s-local", name: "s-local" }],
         });
-      const codex = snapshot.agents.find((one) => one.id === "s-codex");
-      if (asks === "stopped" && codex?.status === "running")
+      const custom = snapshot.agents.find((one) => one.id === "s-custom");
+      if (asks === "stopped" && custom?.status === "running")
         return ok({
           status: "needsStopped" as const,
-          sessions: [{ id: "s-codex", name: "codex helper" }],
+          sessions: [{ id: "s-custom", name: "my agent" }],
         });
       if (asks === "big")
         return ok({

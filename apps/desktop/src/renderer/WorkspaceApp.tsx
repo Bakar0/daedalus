@@ -4291,17 +4291,10 @@ export function WorkspaceApp({
         continue;
       }
       if (answer.status === "needsStopped") {
-        // Named for what they are, so an idle Codex session the user does
-        // not think of as running still makes sense here.
-        const allCodex = answer.sessions.every(
-          (one) =>
-            agents.find((session) => session.id === one.id)?.provider ===
-            "codex",
-        );
+        // Named for what they are, so an idle session the user does not
+        // think of as running still makes sense here.
         const stop = await askChoice({
-          title: allCodex
-            ? "Codex sessions can't run in the cloud yet"
-            : "Codex and custom sessions can't run in the cloud yet",
+          title: "Custom sessions can't run in the cloud",
           message: `Stop them and move ${item.name}? They stay on this Mac and can be resumed after it moves home.`,
           lines: sessionLines(answer.sessions),
           choices: [{ id: "stop", label: "Stop them and move", danger: true }],
