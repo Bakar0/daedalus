@@ -448,6 +448,8 @@ context.workspaceMoves.onChange(() => announce("external"));
 context.cloud.onPreparingChange(() => announce("external"));
 void remoteStarted
   .then(() => context.cloud.hold())
+  // Copies no workspace lives in count against the account's limit.
+  .then(() => context.cloud.cleanOrphans())
   .catch((error) =>
     context.logger.write("error", "cloud_link_failed", {
       message: error instanceof Error ? error.message : String(error),

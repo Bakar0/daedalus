@@ -161,6 +161,9 @@ export interface CloudServiceOptions {
  */
 export const COLLECTED_CONFIRM_MS = 60 * 60 * 1000;
 
+/** How long a create waits for deleted orphans' pods to go. */
+const CREATE_AFTER_CLEANUP_MS = 60_000;
+
 /**
  * Cloud workspaces on this Mac: the gateway sign-in, the workspaces made
  * from local ones, and the hosts their sessions run on.
@@ -177,6 +180,54 @@ export class CloudService {
   readonly #preparing = new Map<string, CloudPreparing>();
   readonly #preparingListeners = new Set<() => void>();
   readonly #preparations = new Map<string, Promise<string>>();
+  /** Workspaces whose copy is in use though they are not in the cloud yet. */
+  #inUse: (workspaceId: string) => boolean = () => false;
+
+  /**
+   * Set by the context: a workspace on its way to the cloud has a copy
+   * before its place says cloud, and the orphan cleanup must leave it.
+   */
+  keepWhile(inUse: (workspaceId: string) => boolean): void {
+    this.#inUse = inUse;
+  }
+
+  /**
+   * Deletes this account's cloud copies that no workspace of this Mac lives
+   * in: its workspace archived, deleted, unknown here, or on this Mac. The
+   * gateway counts every copy against the account's limit. A copy whose
+   * workspace is in the cloud, or on its way there, is never touched.
+   * Returns the cloud ids deleted.
+   */
+  async cleanOrphans(): Promise<string[]> {
+    if (!(await this.account.signIn())) return [];
+    const { repositories } = this.options;
+    const deleted: string[] = [];
+    for (const copy of await this.list()) {
+      const local = repositories.workspaceForCloud(copy.workspaceId);
+      const workspace = local ? repositories.findWorkspace(local) : undefined;
+      if (
+        workspace &&
+        !workspace.archivedAt &&
+        (repositories.workspacePlace(workspace.id).place === "cloud" ||
+          this.#inUse(workspace.id) ||
+          this.#preparations.has(workspace.id))
+      )
+        continue;
+      try {
+        await this.delete(copy.workspaceId);
+        deleted.push(copy.workspaceId);
+      } catch (error) {
+        // One the gateway will not delete now is tried at the next cleanup.
+        this.options.log?.("cloud_orphan_delete_failed", {
+          workspaceId: copy.workspaceId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (deleted.length)
+      this.options.log?.("cloud_orphans_deleted", { workspaceIds: deleted });
+    return deleted;
+  }
   readonly #seeders: CloudLaunchSeeder[] = [];
   #link: CloudLink | undefined;
   #transport: Promise<RunnerTransport> | undefined;
@@ -499,15 +550,36 @@ export class CloudService {
     const { repositories } = this.options;
     const cloudId =
       repositories.cloudWorkspaceId(workspace.id) ?? crypto.randomUUID();
-    const created = await (
-      await this.#client()
-    ).createWorkspace({
-      workspaceId: cloudId,
-      name: workspace.name,
-      macId: identity.id,
-      macKey: identity.publicKey,
-      ...(resources ? { resources } : {}),
-    });
+    const client = await this.#client();
+    const make = () =>
+      client.createWorkspace({
+        workspaceId: cloudId,
+        name: workspace.name,
+        macId: identity.id,
+        macKey: identity.publicKey,
+        ...(resources ? { resources } : {}),
+      });
+    const code = (error: unknown) =>
+      error instanceof DaedalusError ? error.details?.gatewayCode : undefined;
+    let created: CloudWorkspace;
+    try {
+      created = await make();
+    } catch (error) {
+      // Over the account's limit: copies no workspace lives in go, then the
+      // create is tried once more. Their pods take a moment to go, which
+      // the gateway answers with CONFLICT.
+      if (code(error) !== "QUOTA" || !(await this.cleanOrphans()).length)
+        throw error;
+      const deadline = Date.now() + CREATE_AFTER_CLEANUP_MS;
+      for (;;)
+        try {
+          created = await make();
+          break;
+        } catch (retry) {
+          if (code(retry) !== "CONFLICT" || Date.now() > deadline) throw retry;
+          await Bun.sleep(2_000);
+        }
+    }
     if (!repositories.cloudWorkspaceId(workspace.id))
       repositories.linkCloudWorkspace(workspace.id, cloudId);
     return created;
