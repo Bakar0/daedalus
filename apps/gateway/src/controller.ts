@@ -529,11 +529,24 @@ export class Controller {
     );
   }
 
-  /** Creates the pod. A 409 means the last one is still going away. */
+  /**
+   * Creates the pod, owned by the workspace volume. A 409 means the last one
+   * is still going away.
+   */
   async startPod(row: WorkspaceRow): Promise<void> {
+    const namespace = namespaceFor(row.userId);
+    const volume = await this.kube.request(
+      "GET",
+      `${core(namespace, "persistentvolumeclaims")}/${pvcName(row.workspaceId)}`,
+    );
+    if (volume.status >= 300)
+      throw KubeError.from(volume, "Reading the workspace volume");
+    const uid = (volume.body.metadata as { uid?: unknown } | undefined)?.uid;
+    if (typeof uid !== "string" || !uid)
+      throw new KubeError(500, "Reading the workspace volume: it has no uid");
     await this.#create(
-      core(namespaceFor(row.userId), "pods"),
-      this.podSpec(row),
+      core(namespace, "pods"),
+      this.podSpec(row, uid),
       "Starting the workspace pod",
       "error",
     );
@@ -722,7 +735,15 @@ export class Controller {
     return { [USER_LABEL]: row.userId, [WORKSPACE_LABEL]: row.workspaceId };
   }
 
-  podSpec(row: WorkspaceRow): KubeObject {
+  /**
+   * The pod, owned by the workspace PVC (`volumeUid`). AWS's VPC CNI may not
+   * enforce NetworkPolicy reliably on pods with no owner, which would leave
+   * the egress block open. The PVC lives exactly as long as the workspace,
+   * through sleep, unlike the token Secret, which is replaced on every wake
+   * and would have the garbage collector delete the pod. Not a controller
+   * and not blockOwnerDeletion, so it needs no rights on the PVC beyond get.
+   */
+  podSpec(row: WorkspaceRow, volumeUid: string): KubeObject {
     const { workspace, runner } = this.config;
     const { cpu, memory } = this.resources(row);
     const value = (name: string, value: string) => ({ name, value });
@@ -762,6 +783,14 @@ export class Controller {
         name: podName(row.workspaceId),
         namespace: namespaceFor(row.userId),
         labels: this.#labels(row),
+        ownerReferences: [
+          {
+            apiVersion: "v1",
+            kind: "PersistentVolumeClaim",
+            name: pvcName(row.workspaceId),
+            uid: volumeUid,
+          },
+        ],
         annotations: {
           "kubectl.kubernetes.io/default-container": "session",
           ...(workspace.runtimeClass ? GVISOR_SHARED_MOUNT : {}),

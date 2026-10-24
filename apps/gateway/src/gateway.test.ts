@@ -139,6 +139,7 @@ interface TestPod {
   metadata: {
     labels: Record<string, string>;
     annotations: Record<string, string>;
+    ownerReferences?: Record<string, unknown>[];
   };
   spec: {
     runtimeClassName?: string;
@@ -344,6 +345,7 @@ describe("controller", () => {
       `POST /api/v1/namespaces/${ns}/persistentvolumeclaims`,
       `DELETE /api/v1/namespaces/${ns}/secrets/ws-${WS_A}-runner`,
       `POST /api/v1/namespaces/${ns}/secrets`,
+      `GET /api/v1/namespaces/${ns}/persistentvolumeclaims/ws-${WS_A}`,
       `POST /api/v1/namespaces/${ns}/pods`,
       `GET /api/v1/namespaces/${ns}/pods/ws-${WS_A}`,
     ]);
@@ -697,6 +699,48 @@ describe("controller", () => {
       userId: user.id,
       workspaceId: WS_A,
     });
+  });
+
+  test("the pod is owned by its workspace volume, through sleep and wake, and goes with it", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const ns = `u-${user.id}`;
+    const volume = `/api/v1/namespaces/${ns}/persistentvolumeclaims/ws-${WS_A}`;
+    const uid = (kube.objects.get(volume)!.metadata as { uid: string }).uid;
+    const owners = [
+      {
+        apiVersion: "v1",
+        kind: "PersistentVolumeClaim",
+        name: `ws-${WS_A}`,
+        uid,
+      },
+    ];
+    // Not a controller and not blockOwnerDeletion: no rights on the PVC.
+    expect(testPod(user.id, WS_A).metadata.ownerReferences).toEqual(owners);
+
+    // The token Secret is replaced on wake; the pod must not go with it.
+    await api(token, "POST", `/v1/workspaces/${WS_A}/sleep`);
+    await api(token, "POST", `/v1/workspaces/${WS_A}/wake`);
+    expect(testPod(user.id, WS_A).metadata.ownerReferences).toEqual(owners);
+    await api(token, "POST", `/v1/workspaces/${WS_A}/wake`);
+    expect(testPod(user.id, WS_A)).toBeDefined();
+
+    await kube.request("DELETE", volume);
+    expect(kube.pod(ns, `ws-${WS_A}`)).toBeUndefined();
+  });
+
+  test("a wake with the workspace volume gone fails and starts no pod", async () => {
+    const { user, token } = await login("a@example.com");
+    await api(token, "POST", "/v1/workspaces", createBody());
+    const ns = `u-${user.id}`;
+    await api(token, "POST", `/v1/workspaces/${WS_A}/sleep`);
+    await kube.request(
+      "DELETE",
+      `/api/v1/namespaces/${ns}/persistentvolumeclaims/ws-${WS_A}`,
+    );
+    const woke = await api(token, "POST", `/v1/workspaces/${WS_A}/wake`);
+    expect(woke.status).toBe(500);
+    expect(kube.pod(ns, `ws-${WS_A}`)).toBeUndefined();
   });
 
   test("replacing a failed pod also replaces the token and drops the old runner", async () => {

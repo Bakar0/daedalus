@@ -54,6 +54,17 @@ default blocks all RFC 1918 ranges and link-local, which covers pod and service
 CIDRs and the cloud metadata address. Adjust it if your cluster uses public
 ranges for pods.
 
+Each workspace pod is owned by its workspace PVC (an ownerReference, neither
+controller nor blockOwnerDeletion), because AWS's VPC CNI may not enforce
+policy reliably on pods without one. The admission policy requires it.
+
+`deploy/kind/egress-check.sh <namespace>` checks the policy from a workspace
+pod on kind: the metadata address and the gateway's public port (10/8) are
+blocked, the gateway's runner port and the internet are not. For the metadata
+address it starts a listener off the node and routes 169.254.169.254 to it,
+and a control pod outside the tenant namespace must reach each blocked target,
+so a block is the policy's and not a dead address.
+
 ## Admin page (optional)
 
 The gateway can serve an admin page on a port of its own: users, their

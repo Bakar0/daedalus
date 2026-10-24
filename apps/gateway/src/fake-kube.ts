@@ -10,6 +10,8 @@ import type { KubeApi, KubeObject, KubeResponse } from "./kube";
  *   RoleBinding rights, every namespaced call needs the `daedalus-gateway`
  *   RoleBinding in that namespace first, as the chart's RBAC does.
  * - A pod quota per namespace, refused with the API's "exceeded quota".
+ * - Every created object gets a uid, and the garbage collector deletes an
+ *   object whose owner (by uid, in its namespace) is gone, at once.
  */
 export class FakeKube implements KubeApi {
   readonly objects = new Map<string, KubeObject>();
@@ -79,8 +81,10 @@ export class FakeKube implements KubeApi {
           );
       }
       const stored = structuredClone(body!);
+      (stored.metadata as Record<string, unknown>).uid = crypto.randomUUID();
       if (path.endsWith("/pods")) stored.status = { phase: "Running" };
       this.objects.set(key, stored);
+      this.#collectGarbage();
       return { status: 201, body: stored };
     }
 
@@ -151,7 +155,27 @@ export class FakeKube implements KubeApi {
       for (const key of [...this.objects.keys()])
         if (key.includes(`/namespaces/${namespace}/`)) this.objects.delete(key);
     }
+    this.#collectGarbage();
     return { status: 200, body: object };
+  }
+
+  /** Deletes objects whose owner no longer exists in their namespace. */
+  #collectGarbage(): void {
+    for (const [key, object] of this.objects) {
+      const owners = (object.metadata as Record<string, unknown>)
+        .ownerReferences as { uid: string }[] | undefined;
+      if (!owners?.length) continue;
+      const namespace = /\/namespaces\/([^/]+)\//.exec(key)?.[1];
+      const alive = [...this.objects.entries()].some(
+        ([other, candidate]) =>
+          other.includes(`/namespaces/${namespace}/`) &&
+          owners.some(
+            (owner) =>
+              owner.uid === (candidate.metadata as Record<string, unknown>).uid,
+          ),
+      );
+      if (!alive) this.objects.delete(key);
+    }
   }
 
   /** Finishes pod deletions held by `slowPodDeletes`. */
