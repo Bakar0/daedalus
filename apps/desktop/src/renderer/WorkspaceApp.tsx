@@ -6250,7 +6250,16 @@ export function WorkspaceApp({
         >
           New session
         </button>
-        <button onClick={() => openRepositoryModal()} type="button">
+        {/* The Repositories tab comes to the front, so what is added shows
+          at once instead of behind the Files explorer. */}
+        <button
+          onClick={() => {
+            if (workspacePanelCollapsed) toggleBoardDetailPanel();
+            setPanelTab("git");
+            openRepositoryModal();
+          }}
+          type="button"
+        >
           Add repository
         </button>
       </span>
