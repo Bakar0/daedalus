@@ -48,6 +48,19 @@ export const tooBigLines = (
     ),
   );
 
+/**
+ * The gateway's own workspace limit, said with the workspaces this Mac
+ * knows are in the cloud: "5 workspaces are already in the cloud: A, B, C,
+ * D, E. Move one home first." The names are the Mac's records, never the
+ * gateway's. Any other message, or none named, is left as it came.
+ */
+export function cloudLimitMessage(message: string, inCloud: string[]): string {
+  if (!/at most \d+ workspaces/i.test(message) || inCloud.length === 0)
+    return message;
+  const names = inCloud.map((name) => plainLine(name, 60));
+  return `${names.length} ${names.length === 1 ? "workspace is" : "workspaces are"} already in the cloud: ${names.join(", ")}. Move one home first.`;
+}
+
 /** The steps a move goes through, in order, as the workspace shows them. */
 export const MOVE_STEPS: readonly {
   phase: WorkspaceMoveDto["phase"];

@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import {
   byteSize,
+  cloudLimitMessage,
   moveLabel,
   moveStepLabel,
   pathLines,
@@ -161,5 +162,24 @@ describe("the move's picture", () => {
     );
     expect(moved).toContain('data-settled="true"');
     expect(moved).toContain("In the cloud");
+  });
+});
+
+describe("cloudLimitMessage", () => {
+  test("names the workspaces in the cloud from this Mac's records", () => {
+    expect(
+      cloudLimitMessage("You may have at most 2 workspaces", ["app", "site"]),
+    ).toBe(
+      "2 workspaces are already in the cloud: app, site. Move one home first.",
+    );
+  });
+
+  test("leaves other messages, and a limit with none known, as they are", () => {
+    expect(cloudLimitMessage("The pod did not answer.", ["app"])).toBe(
+      "The pod did not answer.",
+    );
+    expect(cloudLimitMessage("You may have at most 5 workspaces", [])).toBe(
+      "You may have at most 5 workspaces",
+    );
   });
 });

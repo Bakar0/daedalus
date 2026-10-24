@@ -373,6 +373,27 @@ await withBrowser(
   },
 );
 
+// The gateway's limit names the workspaces in the cloud, from this Mac.
+await withBrowser(
+  { port: 41846, page: "cloud-test.html", query: "moveAsk=limit" },
+  async (browser) => {
+    await ready(browser);
+    await startMove(browser, "Plain local");
+    await browser.waitFor(
+      `${group("Plain local")}.querySelector('[data-testid="workspace-move"][data-phase="failed"]')`,
+      "the limit under the workspace",
+    );
+    const text = await browser.text("workspace-move-detail");
+    expect(
+      text.startsWith(
+        "3 workspaces are already in the cloud: Cloud project, Sleepy project, Other account. Move one home first.",
+      ),
+      `the limit reads "${text}"`,
+    );
+    await browser.screenshot("cloud-move-limit");
+  },
+);
+
 // Waiting for turns: Cancel stops it.
 await withBrowser(
   { port: 41834, page: "cloud-test.html", query: "wsmove=waiting" },

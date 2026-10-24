@@ -94,6 +94,7 @@ import {
   plainLine,
 } from "./dialogs";
 import {
+  cloudLimitMessage,
   pathLines,
   sessionLines,
   tooBigLines,
@@ -6691,8 +6692,24 @@ export function WorkspaceApp({
                       </span>
                     </div>
                     {(() => {
-                      const move = moveByWorkspace.get(item.id);
-                      const moveError = moveErrors[item.id];
+                      // The gateway's limit, said with this Mac's own names
+                      // of the workspaces that are in the cloud.
+                      const inCloud = activeWorkspaces
+                        .filter(
+                          (other) =>
+                            other.place === "cloud" && other.id !== item.id,
+                        )
+                        .map((other) => other.name);
+                      const entry = moveByWorkspace.get(item.id);
+                      const move = entry?.message
+                        ? {
+                            ...entry,
+                            message: cloudLimitMessage(entry.message, inCloud),
+                          }
+                        : entry;
+                      const moveError =
+                        moveErrors[item.id] &&
+                        cloudLimitMessage(moveErrors[item.id]!, inCloud);
                       return (
                         <>
                           {move ? (

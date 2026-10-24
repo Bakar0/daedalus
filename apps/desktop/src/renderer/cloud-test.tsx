@@ -8,7 +8,7 @@
  * `holdWake=1`, `session=<id>` to open a session's view,
  * `archive=approval|big` for a cloud workspace's archive that asks or is
  * refused, `wsmove=<phase>` for Cloud project moving home in that phase,
- * `moveAsk=approval|busy|stopped|big|fail` for a move that asks, is refused
+ * `moveAsk=approval|busy|stopped|big|fail|limit` for a move that asks, is refused
  * or fails, `holdMove=1` to hold a move until `releaseMove()`, and
  * `notice=1` for Sleepy project back from its backup.
  *
@@ -546,6 +546,7 @@ const client = {
           ],
         });
       if (asks === "fail") return fail("The gateway refused the move.");
+      if (asks === "limit") return fail("You may have at most 3 workspaces");
       snapshot.workspaceMoves = [
         {
           workspaceId: found.id,
