@@ -145,7 +145,7 @@ const snapshot = {
           ...(query.get("wsmove") === "moved"
             ? {
                 notice:
-                  "Moved back to this Mac. Its sessions resume in ask mode; switch the permission mode back when you are ready.",
+                  "Back on this Mac. 2 files over the size cap stayed in the cloud copy.",
               }
             : {}),
         },
@@ -569,10 +569,8 @@ const client = {
             createdAt: new Date().toISOString(),
           });
       } else delete found.place;
-      const notice =
-        params.to === "mac"
-          ? "Moved back to this Mac. Its sessions resume in ask mode."
-          : undefined;
+      // A move ends with no notice; the card's picture says where it is.
+      const notice: string | undefined = undefined;
       snapshot.workspaces = snapshot.workspaces.map((item) =>
         item.id === found.id ? { ...found } : item,
       );

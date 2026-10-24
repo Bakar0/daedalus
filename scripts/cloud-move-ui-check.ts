@@ -246,37 +246,58 @@ await withBrowser(
   },
 );
 
-// Home, with the notice it leaves.
+// Home: it settles on this Mac, unlit, and leaves no notice. Sessions
+// resume as they were; there is no ask mode to announce.
 await withBrowser({ port: 41822, page: "cloud-test.html" }, async (browser) => {
   await ready(browser);
   await startMove(browser, "Cloud project");
   await browser.waitFor(
-    "document.querySelector('[data-testid=\"workspace-move-notice\"]')",
-    "the moved notice",
+    `${group("Cloud project")}.querySelector('[data-testid="workspace-move-scene"][data-settled][data-to="mac"]')`,
+    "the settled picture on this Mac",
   );
   expect(
-    (await browser.text("workspace-move-notice")).includes("ask mode") &&
+    (await browser.text("workspace-move-step")) === "On this Mac" &&
       !(await browser.evaluate<boolean>(
         `${action("Cloud project")}?.dataset.cloudLit === 'true'`,
       )),
-    "the notice does not say it resumes in ask mode, or the action stays lit",
+    "home does not settle on this Mac, or the action stays lit",
   );
-  await fits(browser, "workspace-move-notice");
-  await browser.screenshot("cloud-move-notice");
-  await browser.click("workspace-move-notice-dismiss");
-  await browser.waitFor(
-    "!document.querySelector('[data-testid=\"workspace-move-notice\"]')",
-    "the notice to go after Got it",
-  );
+  await Bun.sleep(300);
   expect(
-    (await browser.requests()).some(
-      (one) =>
-        JSON.stringify(one) ===
-        '{"workspaceMoveDismiss":{"reference":"cloud-ws"}}',
-    ),
-    "Got it did not call workspaceMoveDismiss",
+    !(await browser.has("workspace-move-notice")) &&
+      !(await browser.evaluate<boolean>(
+        "document.body.innerText.includes('ask mode')",
+      )),
+    "moving home left a notice or mentions ask mode",
   );
 });
+
+// A notice the host sends stays until Got it.
+await withBrowser(
+  { port: 41848, page: "cloud-test.html", query: "wsmove=moved" },
+  async (browser) => {
+    await ready(browser);
+    expect(
+      (await browser.text("workspace-move-notice")).includes("size cap"),
+      "the host's notice is missing",
+    );
+    await fits(browser, "workspace-move-notice");
+    await browser.screenshot("cloud-move-notice");
+    await browser.click("workspace-move-notice-dismiss");
+    await browser.waitFor(
+      "!document.querySelector('[data-testid=\"workspace-move-notice\"]')",
+      "the notice to go after Got it",
+    );
+    expect(
+      (await browser.requests()).some(
+        (one) =>
+          JSON.stringify(one) ===
+          '{"workspaceMoveDismiss":{"reference":"cloud-ws"}}',
+      ),
+      "Got it did not call workspaceMoveDismiss",
+    );
+  },
+);
 
 // Files that steer agents: listed as plain lines, then sent back approved.
 await withBrowser(
