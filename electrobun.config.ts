@@ -80,6 +80,8 @@ export default {
       // the kind scripts for Try it locally.
       "deploy/helm/daedalus": "deploy/helm/daedalus",
       "deploy/kind": "deploy/kind",
+      // The AWS guide Settings > Cloud opens, until it is on GitHub.
+      "deploy/eks": "deploy/eks",
     },
     watchIgnore: ["apps/desktop/dist/**"],
     mac: {

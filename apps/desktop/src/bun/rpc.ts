@@ -516,6 +516,8 @@ export interface DesktopHost {
   windows: DesktopWindowHost;
   clipboardWrite(text: string): boolean;
   remote: DesktopRemoteHost;
+  /** The AWS setup guide in the app bundle, for Settings > Cloud. */
+  awsGuidePath?: string;
 }
 
 /** Files macOS runs, rather than shows, when they are opened. */
@@ -952,6 +954,16 @@ export function createDesktopRequestHandlers(
         return null;
       }),
     gatewayInstallContexts: () => result(() => context.gatewayInstall.tools()),
+    gatewayInstallGuideOpen: () =>
+      result(async () => {
+        const guide = host.awsGuidePath;
+        if (!guide || !(await stat(guide).catch(() => undefined))?.isFile())
+          throw new DaedalusError(
+            "NOT_FOUND",
+            "This build does not carry the AWS guide",
+          );
+        return { opened: openPath(guide) };
+      }),
     gatewayInstallPreflight: (params) =>
       result(() => context.gatewayInstall.preflight(params)),
     gatewayInstallDryRun: (params) =>

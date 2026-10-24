@@ -263,14 +263,13 @@ await withBrowser(
     await browser.type("gateway-install-email", "me@example.com");
     await browser.screenshot("cloud-gateway-empty");
     await browser.click("gateway-install-aws-guide");
+    await browser.waitFor(
+      "window.requests.some((one) => 'gatewayInstallGuideOpen' in one)",
+      "the guide call",
+    );
     expect(
-      JSON.stringify(await calls(browser, "openExternal")) ===
-        JSON.stringify([
-          {
-            url: "https://github.com/Bakar0/daedalus/blob/main/deploy/eks/README.md",
-          },
-        ]),
-      "the AWS guide opened the wrong address",
+      !(await calls(browser, "openExternal")).length,
+      "the AWS guide went to the web, where it is not published yet",
     );
     await browser.click("gateway-install-try-local");
     await browser.waitFor(

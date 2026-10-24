@@ -1438,6 +1438,11 @@ export interface DesktopRpcSchema {
       gatewayInstallLocal: Request<{ email: string }, GatewayInstallDto>;
       /** Clears a done or failed install. */
       gatewayInstallDismiss: Request<Record<string, never>, null>;
+      /** Opens the AWS setup guide the app carries (deploy/eks/README.md). */
+      gatewayInstallGuideOpen: Request<
+        Record<string, never>,
+        { opened: boolean }
+      >;
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
       remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;

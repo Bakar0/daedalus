@@ -22,9 +22,6 @@ import type { DesktopClient } from "./client-types";
 import { plainLine } from "./dialogs";
 import { useRpcQuery } from "./use-rpc";
 
-export const AWS_GUIDE_URL =
-  "https://github.com/Bakar0/daedalus/blob/main/deploy/eks/README.md";
-
 /** The steps an install goes through, as the window names them. */
 const PHASE_LABEL: Record<GatewayInstallDto["phase"], string> = {
   checking: "Checking the cluster",
@@ -597,8 +594,11 @@ function GatewayInstallForm({ client }: { client: DesktopClient }) {
           <button
             className="quiet link"
             data-testid="gateway-install-aws-guide"
+            // The copy the app carries: the repository's is not public yet.
             onClick={() =>
-              void client.request.openExternal({ url: AWS_GUIDE_URL })
+              void run("guide", () =>
+                client.request.gatewayInstallGuideOpen({}),
+              )
             }
             type="button"
           >

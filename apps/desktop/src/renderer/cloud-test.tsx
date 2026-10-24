@@ -740,8 +740,8 @@ const client = {
       announce();
       return ok(null);
     },
-    openExternal: async (params: { url: string }) => {
-      record("openExternal", params);
+    gatewayInstallGuideOpen: async () => {
+      record("gatewayInstallGuideOpen", {});
       return ok({ opened: true });
     },
     terminalCreate: async (params: Record<string, unknown>) => {
