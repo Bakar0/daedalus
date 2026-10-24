@@ -20,6 +20,7 @@ import {
 import type { TmuxClient } from "@daedalus/platform";
 import type { CloudWorkspace } from "@daedalus/remote-protocol";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
+import { CloudLink } from "../../../../packages/core/src/cloud/link";
 import { claudeStatePath } from "../../../../packages/core/src/services/folder-trust";
 import { createDesktopRequestHandlers } from "./rpc";
 
@@ -1315,13 +1316,22 @@ describe("cloud RPC", () => {
       gateway.workspaces.get(cloudId)!.runnerOnline = false;
       await context.cloud.hold();
       const host = context.hosts.find(cloudHostId(cloudId))!;
-      let started = Date.now();
-      await expect(host.listLive()).rejects.toThrow("not connected");
-      expect(Date.now() - started).toBeLessThan(2_000);
-      started = Date.now();
-      const snapshot = await rpc.snapshot({});
-      expect(snapshot.ok).toBe(true);
-      expect(Date.now() - started).toBeLessThan(2_000);
+      // No wait for the runner, counted rather than timed, so a busy
+      // machine cannot fail it.
+      const waits: string[] = [];
+      const wait = CloudLink.prototype.waitForRunner;
+      CloudLink.prototype.waitForRunner = function (workspaceId, timeoutMs) {
+        waits.push(workspaceId);
+        return wait.call(this, workspaceId, timeoutMs);
+      };
+      try {
+        await expect(host.listLive()).rejects.toThrow("not connected");
+        const snapshot = await rpc.snapshot({});
+        expect(snapshot.ok).toBe(true);
+      } finally {
+        CloudLink.prototype.waitForRunner = wait;
+      }
+      expect(waits).toEqual([]);
     });
   });
 });
