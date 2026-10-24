@@ -25,11 +25,7 @@ import { claudeProjectKey, LocalMoveSide, type PodAccess } from "./move-side";
 import { podSessionInstructions } from "./cloud-folder";
 import { sessionInstructionsTemplate } from "./workspace-content";
 import { packMac, unpackFromPod } from "./workspace-move-files";
-import {
-  MOVED_HOME_ASK_NOTICE,
-  MOVED_HOME_NOTICE,
-  WorkspaceMoves,
-} from "./workspace-move";
+import { WorkspaceMoves } from "./workspace-move";
 import type { SessionHosts } from "./session-hosts";
 import type { WorkspaceService } from "./workspaces";
 
@@ -353,22 +349,25 @@ describe("moving a workspace", () => {
       ),
       podTranscript +
         JSON.stringify({ type: "user", cwd: podFolder, message: "later" }) +
+        "\n" +
+        // The pod widened its mode; at home it resumes as it was here.
+        JSON.stringify({
+          type: "permission-mode",
+          permissionMode: "bypassPermissions",
+        }) +
         "\n",
     );
     s.starts.length = 0;
 
     const home = await s.moves.move({ workspace: "w1", to: "mac" });
-    expect(home).toMatchObject({
-      status: "moved",
-      notice: `${MOVED_HOME_NOTICE} ${MOVED_HOME_ASK_NOTICE}`,
-    });
+    expect(home).toEqual({ status: "moved", workspace: expect.anything() });
     expect(s.place().place).toBe("mac");
     expect(s.sessions.get(SESSION)).toMatchObject({
       hostId: null,
       workingDirectory: s.macFolder,
     });
     expect(s.starts).toEqual([
-      { id: SESSION, hostId: null, cwd: s.macFolder, mode: "default" },
+      { id: SESSION, hostId: null, cwd: s.macFolder, mode: "plan" },
     ]);
     // The cloud copy goes once the workspace is home.
     expect(s.deleted).toEqual(["w1"]);
@@ -400,6 +399,8 @@ describe("moving a workspace", () => {
     expect(macTranscript).toContain(`"cwd":"${s.macFolder}"`);
     expect(macTranscript).toContain('"message":"later"');
     expect(macTranscript).not.toContain('"cwd":"/workspace/');
+    expect(macTranscript).not.toContain("bypassPermissions");
+    expect(macTranscript.trim().split("\n").at(-1)).toContain('"plan"');
 
     // And again: the second trip sends what is new.
     s.starts.length = 0;
@@ -431,17 +432,16 @@ describe("moving a workspace", () => {
     expect(bytes).not.toContain("._BRIEF.md");
   });
 
-  test("with no session to restart, the move home only says it is back", async () => {
+  test("with no session to restart, the move home says nothing", async () => {
     const s = await setup();
     await s.moves.move({ workspace: "w1", to: "cloud" });
     s.sessions.set(SESSION, {
       ...s.sessions.get(SESSION)!,
       status: "exited",
     });
-    expect(await s.moves.move({ workspace: "w1", to: "mac" })).toMatchObject({
-      status: "moved",
-      notice: MOVED_HOME_NOTICE,
-    });
+    expect(
+      await s.moves.move({ workspace: "w1", to: "mac" }),
+    ).not.toHaveProperty("notice");
   });
 
   test("a session that never had a turn comes home starting its conversation", async () => {
@@ -462,7 +462,8 @@ describe("moving a workspace", () => {
         id: SESSION,
         hostId: null,
         cwd: s.macFolder,
-        mode: "default",
+        // No mode of its own here: the one this Mac starts sessions in.
+        mode: "auto",
         fresh: true,
       },
     ]);
