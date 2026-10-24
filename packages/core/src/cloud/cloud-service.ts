@@ -152,6 +152,8 @@ export interface CloudServiceOptions {
   log?: (event: string, fields?: Record<string, unknown>) => void;
   /** The clock, so a test can let `COLLECTED_CONFIRM_MS` pass. */
   now?: () => number;
+  /** How long a link this process opened waits for a runner to answer. */
+  runnerWaitMs?: number;
 }
 
 /**
@@ -1326,6 +1328,15 @@ export class CloudService {
     return this.#link !== undefined;
   }
 
+  /** Whether the gateway says a workspace's runner is online; unknown: yes. */
+  async #runnerOnline(cloudId: string): Promise<boolean> {
+    try {
+      return (await (await this.#client()).getWorkspace(cloudId)).runnerOnline;
+    } catch {
+      return true;
+    }
+  }
+
   #lazyTransport(): RunnerTransport {
     const transport = async (): Promise<RunnerTransport> => {
       // In the app, the link is the one hold opens: wait for that rather
@@ -1355,8 +1366,19 @@ export class CloudService {
       // would hold up every snapshot (each reconciles every cloud host).
       // Steps that need a runner wait for it themselves (prepareForSession,
       // wakeForSessions).
-      if (chosen instanceof CloudLink && !this.#holder)
-        await chosen.waitForRunner(workspaceId, RUNNER_WAIT_MS);
+      // Only for a runner the gateway says is online: one asleep never
+      // answers, and the app's start-up sweep met each lost session's in
+      // turn, holding the app up for the whole wait every time.
+      if (
+        chosen instanceof CloudLink &&
+        !this.#holder &&
+        !chosen.linked(workspaceId) &&
+        (await this.#runnerOnline(workspaceId))
+      )
+        await chosen.waitForRunner(
+          workspaceId,
+          this.options.runnerWaitMs ?? RUNNER_WAIT_MS,
+        );
       return chosen;
     };
     return {
