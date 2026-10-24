@@ -38,6 +38,28 @@ const steady = async (browser: Browser, testId: string) => {
   expect(seen >= 5, `${testId} never held still`);
 };
 
+/**
+ * Clicks an element once the first-open remount is over: finds and clicks
+ * it in one step, again if it was between its two drawings, so a handle
+ * from before the remount is never clicked.
+ */
+const clickSteady = async (browser: Browser, testId: string) => {
+  await steady(browser, testId);
+  for (let tries = 0; tries < 50; tries++) {
+    if (
+      await browser.evaluate<boolean>(`(() => {
+        const element = document.querySelector('[data-testid="${testId}"]');
+        if (!element) return false;
+        element.click();
+        return true;
+      })()`)
+    )
+      return;
+    await Bun.sleep(100);
+  }
+  expect(false, `${testId} never stayed to be clicked`);
+};
+
 const fits = async (browser: Browser, testId: string) => {
   for (const height of [820, 560]) {
     await browser.resize(height);
@@ -149,7 +171,7 @@ await withBrowser(
     await fits(browser, "cloud-signin-bar");
     await browser.screenshot("cloud-signin-bar");
 
-    await browser.click("cloud-signin-open");
+    await clickSteady(browser, "cloud-signin-open");
     await browser.waitFor(
       "window.requests.some((one) => 'cloudSignInOpen' in one)",
       "the open call",
@@ -189,7 +211,7 @@ await withBrowser(
     );
     await fits(browser, "cloud-signin-bar");
     await browser.screenshot("cloud-signin-aws");
-    await browser.click("cloud-signin-dismiss");
+    await clickSteady(browser, "cloud-signin-dismiss");
     await browser.waitFor(
       "!document.querySelector('[data-testid=\"cloud-signin-bar\"]')",
       "the bar to go after Dismiss",
@@ -212,7 +234,7 @@ await withBrowser(
   { port: 41786, page: "cloud-test.html", query: "signin=claude&paste=1" },
   async (browser) => {
     await openSession(browser, "s-cloud");
-    await browser.click("cloud-signin-open");
+    await clickSteady(browser, "cloud-signin-open");
     await browser.waitFor(
       "document.querySelector('[data-testid=\"cloud-signin-paste\"]')",
       "the paste-code bar",
