@@ -171,6 +171,8 @@ class FakeGateway {
   refuse: number | undefined;
   /** Refuse a create with this QUOTA message, as the gateway does. */
   quota: string | undefined;
+  /** At most this many workspaces, as the gateway's own limit. */
+  limit = Number.POSITIVE_INFINITY;
   readonly calls: string[] = [];
 
   readonly fetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
@@ -200,6 +202,17 @@ class FakeGateway {
       return json(200, { workspaces: [...this.workspaces.values()] });
     if (url.pathname === "/v1/workspaces" && method === "POST" && this.quota)
       return json(429, { error: { code: "QUOTA", message: this.quota } });
+    if (
+      url.pathname === "/v1/workspaces" &&
+      method === "POST" &&
+      this.workspaces.size >= this.limit
+    )
+      return json(429, {
+        error: {
+          code: "QUOTA",
+          message: `You may have at most ${this.limit} workspaces`,
+        },
+      });
     if (url.pathname === "/v1/workspaces" && method === "POST") {
       const request = JSON.parse(String(init?.body)) as {
         workspaceId: string;
@@ -635,7 +648,8 @@ describe("cloud RPC", () => {
         (await context.workspaces.get(workspace.id)).archivedAt,
       ).toBeNull();
 
-      // Home again, its copy kept asleep: archiving deletes the copy.
+      // Home again with a copy left over (its delete failed): archiving
+      // deletes it.
       context.repositories.setWorkspacePlace(workspace.id, {
         place: "mac",
         notice: null,
@@ -653,6 +667,58 @@ describe("cloud RPC", () => {
       ).toBeUndefined();
       const made = await context.cloud.create(workspace.id);
       expect(made.workspaceId).not.toBe(cloudId);
+    });
+  });
+
+  test("copies no workspace lives in go when a create hits the limit, and only those", async () => {
+    await withCloud(async (rpc, context, gateway) => {
+      await rpc.cloudSignIn({
+        gatewayUrl: "http://localhost:8080",
+        email: "dev@example.com",
+      });
+      const copyOf = async (name: string) => {
+        const workspace = await context.workspaces.create({ name });
+        await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+        return {
+          workspace,
+          cloudId: context.repositories.cloudWorkspaceId(workspace.id)!,
+        };
+      };
+      const inTheCloud = await copyOf("In the cloud");
+      inCloud(context, inTheCloud.workspace.id);
+      const onTheWay = await copyOf("On its way");
+      context.cloud.keepWhile((id) => id === onTheWay.workspace.id);
+      const home = await copyOf("Home");
+      const archived = await copyOf("Archived");
+      await context.workspaces.archive(archived.workspace.id);
+      // A copy this Mac knows nothing of, such as one a bug left.
+      const unknown = crypto.randomUUID();
+      gateway.workspaces.set(unknown, {
+        ...gateway.workspaces.get(home.cloudId)!,
+        workspaceId: unknown,
+      });
+      gateway.limit = 5;
+
+      const next = await context.workspaces.create({ name: "Next" });
+      const made = await context.cloud.create(next.id);
+      expect([...gateway.workspaces.keys()].sort()).toEqual(
+        [inTheCloud.cloudId, onTheWay.cloudId, made.workspaceId].sort(),
+      );
+      expect(
+        context.repositories.cloudWorkspaceId(home.workspace.id),
+      ).toBeUndefined();
+      expect(
+        context.repositories.cloudWorkspaceId(inTheCloud.workspace.id),
+      ).toBe(inTheCloud.cloudId);
+
+      // Still over the limit with nothing to clean: the gateway's answer.
+      inCloud(context, next.id);
+      gateway.limit = 3;
+      const last = await context.workspaces.create({ name: "Last" });
+      await expect(context.cloud.create(last.id)).rejects.toMatchObject({
+        details: { gatewayCode: "QUOTA" },
+      });
+      expect(gateway.workspaces.size).toBe(3);
     });
   });
 

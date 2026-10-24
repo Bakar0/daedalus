@@ -5,6 +5,7 @@
  *
  *   bun run scripts/cloud-workspace-move-try.ts run        # to the cloud, work there, home, back, archive
  *   bun run scripts/cloud-workspace-move-try.ts fallback   # the copy is collected; the Mac takes its backup
+ *   bun run scripts/cloud-workspace-move-try.ts orphans    # copies no workspace lives in go when the limit is hit
  *   bun run scripts/cloud-workspace-move-try.ts cleanup    # deletes what a run left
  *
  * It runs from a home of its own (~/.daedalus-lifecycle-try-dev, file vault),
@@ -34,8 +35,15 @@ const GATEWAY = process.env.GATEWAY_URL ?? "http://localhost:8080";
 const EMAIL = "lifecycle-try@test.com";
 
 const mode = process.argv[2];
-if (mode !== "run" && mode !== "fallback" && mode !== "cleanup") {
-  console.error("Usage: cloud-workspace-move-try.ts run|fallback|cleanup");
+if (
+  mode !== "run" &&
+  mode !== "fallback" &&
+  mode !== "orphans" &&
+  mode !== "cleanup"
+) {
+  console.error(
+    "Usage: cloud-workspace-move-try.ts run|fallback|orphans|cleanup",
+  );
   process.exit(2);
 }
 
@@ -154,6 +162,52 @@ try {
     name: `move-${mode}-${Date.now().toString(36)}`,
   });
   const word = `OSPREY${Math.floor(Math.random() * 9000 + 1000)}`;
+
+  if (mode === "orphans") {
+    // One workspace in the cloud, then copies of workspaces on this Mac and
+    // an archived one up to the gateway's limit of 5, as old versions left.
+    await move(workspace.id, "cloud");
+    const kept = repositories.cloudWorkspaceId(workspace.id)!;
+    const leftovers: string[] = [];
+    for (let index = 0; index < 4; index++) {
+      const left = await context.workspaces.create({
+        name: `move-orphan-${index}-${Date.now().toString(36)}`,
+      });
+      leftovers.push((await cloud.create(left.id)).workspaceId);
+      if (index === 0) await context.workspaces.archive(left.id);
+    }
+    check((await cloud.list()).length === 5, "the account is at its limit");
+    const next = await context.workspaces.create({
+      name: `move-orphans-next-${Date.now().toString(36)}`,
+    });
+    await mkdir(join(next.path, "notes"), { recursive: true });
+    await writeFile(join(next.path, "notes", "n.md"), "next\n");
+    await move(next.id, "cloud");
+    const listed = (await cloud.list()).map((item) => item.workspaceId);
+    check(
+      leftovers.every((id) => !listed.includes(id)),
+      "the move deleted every copy no workspace lives in",
+    );
+    check(
+      listed.includes(kept) &&
+        (await context.workspaces.get(workspace.id)).place === "cloud",
+      "and kept the one whose workspace is in the cloud",
+    );
+    check(
+      (await context.workspaces.get(next.id)).place === "cloud",
+      "the new workspace moved to the cloud",
+    );
+    await move(next.id, "mac");
+    check(
+      !(await cloud.list()).some(
+        (item) =>
+          item.workspaceId !== kept && !leftovers.includes(item.workspaceId),
+      ),
+      "moving it home deleted its copy",
+    );
+    say("PASS: orphan copies went at the limit, the cloud workspace's stayed");
+    process.exit(0);
+  }
 
   if (mode === "fallback") {
     await mkdir(join(workspace.path, "notes"), { recursive: true });
@@ -399,13 +453,23 @@ try {
     !transcript.includes('"cwd":"/workspace'),
     "its folders are this Mac's",
   );
+  check(
+    repositories.cloudWorkspaceId(workspace.id) === undefined &&
+      !(await cloud.list()).some((item) => item.workspaceId === cloudId),
+    "moving home deleted the cloud copy",
+  );
 
   // Back to the cloud, then archived from there.
   await writeFile(join(workspace.path, "notes", "again.md"), "second trip\n");
   await move(workspace.id, "cloud");
+  // A new copy, everything sent again.
+  const againId = repositories.cloudWorkspaceId(workspace.id)!;
+  const again = context.hosts.get(cloudHostId(againId)) as RemoteSessionHost;
+  check(againId !== cloudId, "the second move made a new cloud copy");
   check(
-    (await host.readText("notes/again.md")) === "second trip\n",
-    "the second move carried what changed",
+    (await again.readText("notes/again.md")) === "second trip\n" &&
+      (await again.readText("notes/pod.md"))?.includes(word) === true,
+    "and sent everything, the changes and what came home before",
   );
   const archived = await rpc.workspaceArchive({ reference: workspace.id });
   if (!archived.ok) fail(`archive: ${archived.error.message}`);
@@ -415,7 +479,7 @@ try {
   );
   check(
     repositories.cloudWorkspaceId(workspace.id) === undefined &&
-      !(await cloud.list()).some((item) => item.workspaceId === cloudId),
+      !(await cloud.list()).some((item) => item.workspaceId === againId),
     "the cloud copy is deleted",
   );
   check(

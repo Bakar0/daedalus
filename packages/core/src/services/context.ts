@@ -397,6 +397,7 @@ export async function createApplicationContext(
       (await activity.binding(sessionId))?.activity ??
       activity.get(sessionId)?.activity,
   });
+  cloud.keepWhile((workspaceId) => workspaceMoves.moving(workspaceId));
 
   return {
     config,

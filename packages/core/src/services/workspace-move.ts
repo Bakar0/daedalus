@@ -115,8 +115,8 @@ export type WorkspaceMoveResult =
 export interface WorkspaceMoveCloud {
   /** Makes or wakes the workspace's cloud copy; its host id. */
   prepareForSession(workspaceReference: string): Promise<string>;
-  /** Puts the copy to sleep, its volumes kept. */
-  sleep(workspaceReference: string): Promise<unknown>;
+  /** Deletes the copy, its pod and volumes, and the link to it. */
+  delete(workspaceReference: string): Promise<unknown>;
 }
 
 export interface WorkspaceMovesOptions {
@@ -919,8 +919,10 @@ export class WorkspaceMoves {
         } catch (error) {
           failed.push(`${session.name}: ${messageOf(error)}`);
         }
-      // Kept, asleep, so the next move sends only what is new.
-      void cloud.sleep(workspace.id).catch(() => undefined);
+      // A cloud copy exists only while its workspace is in the cloud: the
+      // gateway counts every copy against the account's limit. One the
+      // gateway would not delete now goes in the next orphan cleanup.
+      await cloud.delete(workspace.id).catch(() => undefined);
       return {
         status: "moved",
         workspace: await this.options.workspaces.getActive(workspace.id),
