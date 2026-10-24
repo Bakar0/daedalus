@@ -1,5 +1,6 @@
 import { BootstrapAuth, createAdmin } from "./admin";
 import { loadConfig } from "./config";
+import { Logbook } from "./logbook";
 import { Controller, loadTenantObjects } from "./controller";
 import { inClusterKube } from "./kube";
 import { Relay } from "./relay";
@@ -14,7 +15,15 @@ const controller = new Controller(
   loadTenantObjects(config.tenantDir),
 );
 const relay = new Relay();
-const gateway = createGateway({ config, store, controller, relay });
+// Every log line also goes to the admin page's health section, redacted.
+const logbook = new Logbook();
+const gateway = createGateway({
+  config,
+  store,
+  controller,
+  relay,
+  log: logbook.log,
+});
 const servers = [
   Bun.serve({ ...gateway.public, hostname: "0.0.0.0", port: config.port }),
   // Only the in-cluster Service exposes this one; runner tokens work here only.
@@ -35,7 +44,10 @@ if (config.admin) {
         controller,
         relay,
         workspaces: gateway.workspaces,
+        lastCollection: gateway.lastCollection,
         auth: BootstrapAuth.fromDir(admin.tokenDir),
+        log: logbook.log,
+        logbook,
       }),
       hostname: admin.host,
       port: admin.port,
@@ -50,7 +62,7 @@ const collect = () => {
   void gateway
     .collect()
     .catch((error: unknown) =>
-      console.log(`Collection failed: ${String(error)}`),
+      logbook.log(`Collection failed: ${String(error)}`),
     )
     .finally(() => {
       collecting = false;

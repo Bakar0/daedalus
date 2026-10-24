@@ -25,6 +25,11 @@ rules:
     resources: [clusterroles]
     verbs: [bind]
     resourceNames: [daedalus-tenant-admin]
+  # Read-only, for the admin page's health section: readiness, allocatable
+  # capacity and the runtime handlers each node offers.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

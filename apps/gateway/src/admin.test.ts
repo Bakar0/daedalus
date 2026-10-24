@@ -14,6 +14,7 @@ import { adminClient } from "./admin/client";
 import { loadConfig, type AdminConfig, type GatewayConfig } from "./config";
 import { Controller } from "./controller";
 import { FakeKube } from "./fake-kube";
+import { Logbook } from "./logbook";
 import { Relay } from "./relay";
 import { ACTIVITY_WRITE_MS, createGateway } from "./server";
 import { sha256, Store } from "./store";
@@ -39,6 +40,8 @@ let runnerBase: string;
 let adminBase: string;
 let printed: string[];
 let clock: number;
+let logbook: Logbook;
+let collect: ReturnType<typeof createGateway>["collect"];
 /** The client address the admin listener sees; null for the real one. */
 let remote: string | null;
 const sockets: WebSocket[] = [];
@@ -58,21 +61,28 @@ function start(env: Record<string, string> = {}) {
   store = new Store(config.dbPath);
   relay = new Relay();
   const controller = new Controller(kube, config, TENANT, async () => {});
+  logbook = new Logbook(
+    () => {},
+    () => clock,
+  );
   const gateway = createGateway({
     config,
     store,
     controller,
     relay,
-    log: () => {},
+    log: logbook.log,
   });
+  collect = gateway.collect;
   const admin = createAdmin({
     config,
     store,
     controller,
     relay,
     workspaces: gateway.workspaces,
+    lastCollection: gateway.lastCollection,
+    logbook,
     auth: new BootstrapAuth({ admin: ADMIN_TOKEN, viewer: VIEWER_TOKEN }),
-    log: () => {},
+    log: logbook.log,
     print: (line) => printed.push(line),
     now: () => clock,
     clientAddress: (request, server) =>
@@ -734,6 +744,70 @@ describe("overview", () => {
     expect(view.users[0]!.id).toBe(user.id);
     expect(view.users[0]!.error).toContain("could not be read");
     expect(view.users[0]!.workspaces[0]!.status).toBe("unknown");
+  });
+
+  test("carries the health section: nodes, gateway state, redacted log lines", async () => {
+    const { user, token } = await devLogin("u@example.com");
+    expect(await createWorkspace(token)).toBe(201);
+    // The scheduler placed it.
+    (
+      kube.pod(`u-${user.id}`, `ws-${WS_A}`)!.spec as Record<string, unknown>
+    ).nodeName = "node-1";
+    await collect();
+    logbook.log(`Request failed: token ${token} was refused`);
+    const session = await signIn();
+    const result = await call(session, "GET", "overview");
+    const view = result.json as unknown as AdminOverview;
+    const { health } = view;
+    expect(health.nodes!.map((node) => node.name)).toEqual(["node-1"]);
+    expect(health.nodes![0]!.runtime).toBeNull();
+    expect(health.nodes![0]!.workspacePods).toBe(1);
+    expect(health.gateway.lastCollection).toMatchObject({ failures: 0 });
+    expect(health.metrics).toEqual({
+      available: false,
+      reason: "metrics-server is not installed",
+    });
+    expect(health.recentLog[0]!.message).toBe(
+      "Request failed: token [redacted] was refused",
+    );
+    expect(result.text).not.toContain(token);
+    // The fresh error line is the one problem.
+    expect(health.problems.map((item) => item.message)).toEqual([
+      "1 gateway error in the last 15 minutes",
+    ]);
+    expect(view.users[0]!.workspaces[0]!.live).toBeNull();
+  });
+
+  test("live usage comes from metrics-server when it answers", async () => {
+    const { user, token } = await devLogin("u@example.com");
+    expect(await createWorkspace(token)).toBe(201);
+    const original = kube.request.bind(kube);
+    kube.request = async (method, path, body) => {
+      if (path === "/apis/metrics.k8s.io/v1beta1")
+        return { status: 200, body: { kind: "APIResourceList" } };
+      if (path === `/apis/metrics.k8s.io/v1beta1/namespaces/u-${user.id}/pods`)
+        return {
+          status: 200,
+          body: {
+            items: [
+              {
+                metadata: { name: `ws-${WS_A}` },
+                containers: [
+                  { usage: { cpu: "250000000n", memory: "300Mi" } },
+                  { usage: { cpu: "5m", memory: "20Mi" } },
+                ],
+              },
+            ],
+          },
+        };
+      return original(method, path, body);
+    };
+    const view = await overview(await signIn());
+    expect(view.health.metrics.available).toBe(true);
+    expect(view.users[0]!.workspaces[0]!.live).toEqual({
+      cpu: 0.255,
+      memory: 320 * 2 ** 20,
+    });
   });
 
   test("a viewer reads everything", async () => {
