@@ -1096,6 +1096,7 @@ export interface GatewayCheckDto {
     | "gvisor"
     | "networkPolicy"
     | "namespace"
+    | "helm"
     | "release"
     | "images";
   status: "pass" | "warn" | "fail" | "unknown";
@@ -1186,13 +1187,14 @@ export interface GatewayInstallDto {
   /**
    * The egress check after the install, from a temporary namespace that has
    * the workspaces' NetworkPolicy (deploy/kind/egress-check.sh). `unproven`:
-   * the target was not reachable from outside the policy either.
+   * the target was not reachable from outside the policy either. `warn`:
+   * the internet was not reachable, as on a cluster without egress.
    */
   egress?: {
     target: string;
     want: "open" | "blocked";
     got: "open" | "blocked";
-    result: "pass" | "fail" | "unproven";
+    result: "pass" | "fail" | "unproven" | "warn";
   }[];
 }
 

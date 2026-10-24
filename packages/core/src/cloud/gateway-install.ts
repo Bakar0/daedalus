@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -30,6 +30,7 @@ import {
   failureText,
   GATEWAY_SERVICE,
   gvisorCheck,
+  helmCheck,
   imageRefs,
   imagesCheck,
   installPermissions,
@@ -127,25 +128,36 @@ type StartInput = GatewayInstallTargetInput & {
   acknowledgeNetworkPolicy?: boolean;
 };
 
-const EGRESS_PROBE_NAMESPACE = "daedalus-egress-check";
-const EGRESS_CONTROL_NAMESPACE = "daedalus-egress-control";
+/** The label the egress check puts on its namespaces; it deletes only those. */
+const EGRESS_LABEL = "daedalus.dev/egress-check";
 const FORWARD_CHECK_MS = 30_000;
 
+/** One egress check's two namespaces, named for its run. */
+function egressNamespaces(id: string): { probe: string; control: string } {
+  return {
+    probe: `daedalus-egress-check-${id}`,
+    control: `daedalus-egress-control-${id}`,
+  };
+}
+
 /** Shown in the dry run: the egress check's namespaces, made and removed after the install. */
-const EGRESS_OBJECTS: GatewayDryRunDto["objects"] = [
-  {
-    kind: "Namespace",
-    name: EGRESS_PROBE_NAMESPACE,
-    namespace: null,
-    note: "temporary: the egress check after the install, with the workspaces' NetworkPolicy and one pod; deleted after",
-  },
-  {
-    kind: "Namespace",
-    name: EGRESS_CONTROL_NAMESPACE,
-    namespace: null,
-    note: "temporary: the egress check's control pod; deleted after",
-  },
-];
+function egressObjects(id: string): GatewayDryRunDto["objects"] {
+  const names = egressNamespaces(id);
+  return [
+    {
+      kind: "Namespace",
+      name: names.probe,
+      namespace: null,
+      note: `temporary: the egress check after the install, with the workspaces' NetworkPolicy and one pod; label ${EGRESS_LABEL}=${id}; deleted after`,
+    },
+    {
+      kind: "Namespace",
+      name: names.control,
+      namespace: null,
+      note: `temporary: the egress check's control pod; label ${EGRESS_LABEL}=${id}; deleted after`,
+    },
+  ];
+}
 
 /** Prints "open" or "blocked" for host and port (from egress-check.sh). */
 const PROBE_SCRIPT = `const [host, port] = [process.argv[1], Number(process.argv[2])];
@@ -191,6 +203,12 @@ export interface PortForwardRecord {
   namespace: string;
   port: number;
   gatewayUrl: string;
+  /**
+   * Whether the Cloud sign-in has used this gateway. Until then the forward
+   * stays: a sign-in that failed at the end of an install leaves the gateway
+   * reachable for the next try. After it, signing out or in elsewhere ends it.
+   */
+  signedIn?: boolean;
 }
 
 export interface ForwardProcess {
@@ -254,7 +272,7 @@ export class GatewayInstaller {
   readonly #preflights = new Map<string, PreflightRecord>();
   readonly #dryRuns = new Map<
     string,
-    { key: string; at: number; preflight: PreflightRecord }
+    { key: string; at: number; preflight: PreflightRecord; egressId: string }
   >();
   #adminToken: { token: string; secret: string; namespace: string } | undefined;
   #forward: { record: PortForwardRecord; stop(): void } | undefined;
@@ -413,7 +431,16 @@ export class GatewayInstaller {
       await this.#configView(CONTEXTS_JSONPATH),
       await this.#configView(CLUSTERS_JSONPATH),
       await this.#configView(CLUSTER_CAS_JSONPATH, true),
-      (value) => createHash("sha256").update(value).digest("hex"),
+      // The CA's bytes: the data itself, or the file a path names.
+      (data, file) => {
+        const sha = createHash("sha256");
+        if (data) return sha.update(Buffer.from(data, "base64")).digest("hex");
+        try {
+          return sha.update(readFileSync(file)).digest("hex");
+        } catch {
+          return sha.update(`unreadable:${file}`).digest("hex");
+        }
+      },
     );
   }
 
@@ -496,6 +523,7 @@ export class GatewayInstaller {
         `The cluster did not answer: ${failureText(version.stderr)}`,
       );
 
+    const helmVersion = await this.#helmVersion();
     const podSecurity = await this.#namespaceLabel(target, namespace);
     const namespaceExists = podSecurity !== undefined;
 
@@ -589,8 +617,19 @@ export class GatewayInstaller {
       : null;
 
     const network = networkPolicyCheck(daemonsets, vpcCni);
+    const releaseRead: GatewayCheckDto | null =
+      holdsRelease && !installed
+        ? {
+            id: "release",
+            status: "fail",
+            label: "Could not read the installed gateway's settings",
+            detail:
+              "helm get values failed, so an upgrade could not keep them.",
+          }
+        : null;
     const checks: GatewayCheckDto[] = [
       versionCheck(version.stdout),
+      helmCheck(helmVersion),
       permissionsCheck(permissions),
       namespaceCheck(namespace, state),
       storage === null
@@ -604,14 +643,15 @@ export class GatewayInstaller {
         ? { id: "gvisor", status: "unknown", label: "Could not list nodes" }
         : gvisorCheck(nodes),
       network,
-      listed
-        ? release
-        : {
-            id: "release",
-            status: "unknown",
-            label: "Could not list helm releases",
-            detail: failureText(releases.stderr),
-          },
+      releaseRead ??
+        (listed
+          ? release
+          : {
+              id: "release",
+              status: "unknown",
+              label: "Could not list helm releases",
+              detail: failureText(releases.stderr),
+            }),
       imagesCheck(
         resolved.context,
         resolved.images ?? installed?.images ?? undefined,
@@ -645,6 +685,13 @@ export class GatewayInstaller {
     };
   }
 
+  async #helmVersion(): Promise<string | null> {
+    const result = await this.#exec("helm", ["version", "--short"], {
+      timeoutMs: 10_000,
+    }).catch(() => null);
+    return result?.exitCode === 0 ? result.stdout.trim() : null;
+  }
+
   /**
    * The namespace's Pod Security enforce label: undefined when there is no
    * such namespace, null when it has none.
@@ -674,11 +721,15 @@ export class GatewayInstaller {
     }
   }
 
-  /** Named values of the installed release; the raw output stays here. */
+  /**
+   * Named values of the installed release; the raw output stays here. Null
+   * when helm cannot read them: guessing the chart's defaults would turn dev
+   * login or a public address off behind the user's back.
+   */
   async #installedValues(
     target: Target,
     namespace: string,
-  ): Promise<InstalledValues> {
+  ): Promise<InstalledValues | null> {
     const result = await this.#helm(target, [
       "get",
       "values",
@@ -689,7 +740,7 @@ export class GatewayInstaller {
       "json",
     ]);
     // Never logged or shown: it can hold whatever an operator passed.
-    return parseInstalledValues(result.exitCode === 0 ? result.stdout : "{}");
+    return result.exitCode === 0 ? parseInstalledValues(result.stdout) : null;
   }
 
   // ---- dry run -----------------------------------------------------------
@@ -735,10 +786,12 @@ export class GatewayInstaller {
         );
       const parsed = parseDryRun(result.stdout, resolved.namespace);
       const dryRunId = crypto.randomUUID();
+      const egressId = randomBytes(3).toString("hex");
       this.#dryRuns.set(dryRunId, {
         key: key(resolved),
         at: this.#now,
         preflight,
+        egressId,
       });
       const warnings = logLines(result.stderr).join("\n");
       return {
@@ -749,7 +802,7 @@ export class GatewayInstaller {
         objects: [
           ...this.#ownObjects(resolved.namespace, preflight.state),
           ...parsed.objects,
-          ...EGRESS_OBJECTS,
+          ...egressObjects(egressId),
         ],
         notes: [warnings, parsed.notes].filter(Boolean).join("\n\n"),
       };
@@ -960,6 +1013,11 @@ export class GatewayInstaller {
       (installedUrl && loopbackPort(installedUrl) === null
         ? installedUrl
         : undefined);
+    if (!devLogin && !publicUrl)
+      throw new DaedalusError(
+        "VALIDATION",
+        "With dev login off the gateway has no sign-in yet, and without a public address only this Mac reaches it: keep dev login on, or give the gateway's public address",
+      );
     const turnedOn = devLogin && !(installed?.devLogin ?? false);
     if (
       devLogin &&
@@ -992,7 +1050,7 @@ export class GatewayInstaller {
       context: resolved.context,
       namespace: resolved.namespace,
     });
-    void this.#installCluster(resolved, preflight, {
+    void this.#installCluster(resolved, preflight, dryRun.egressId, {
       email,
       devLogin,
       publicUrl,
@@ -1027,6 +1085,7 @@ export class GatewayInstaller {
   async #installCluster(
     input: ResolvedInput,
     preflight: PreflightRecord,
+    egressId: string,
     choice: {
       email: string;
       devLogin: boolean;
@@ -1093,6 +1152,7 @@ export class GatewayInstaller {
       target,
       input.namespace,
       this.#runnerImage(input, preflight),
+      egressId,
     );
     if (choice.devLogin)
       await this.#signIn(gatewayUrl, choice.email, port !== null);
@@ -1280,21 +1340,22 @@ export class GatewayInstaller {
     target: Target,
     namespace: string,
     image: string,
+    id: string,
   ): Promise<void> {
     this.#append(["Checking what a workspace can reach"]);
     try {
-      this.#setEgress(await this.#runEgress(target, namespace, image));
+      this.#setEgress(await this.#runEgress(target, namespace, image, id));
     } catch (error) {
       this.#append([
         `The egress check did not run: ${error instanceof Error ? error.message : String(error)}`,
       ]);
     } finally {
+      // By its label only, so nothing it did not make goes.
       await this.#kubectl(target, [
         "delete",
         "namespace",
-        EGRESS_PROBE_NAMESPACE,
-        EGRESS_CONTROL_NAMESPACE,
-        "--ignore-not-found",
+        "-l",
+        `${EGRESS_LABEL}=${id}`,
         "--wait=false",
       ]).catch(() => undefined);
     }
@@ -1323,7 +1384,11 @@ export class GatewayInstaller {
       )
     )
       this.#append([
-        "A workspace cannot reach something it needs; check the cluster's egress and the gateway's runner Service",
+        "A workspace cannot reach the gateway's runner Service; check the gateway's NetworkPolicy and Service",
+      ]);
+    if (results.some((result) => result.result === "warn"))
+      this.#append([
+        "A workspace cannot reach the internet from this cluster; sessions that need it will fail",
       ]);
   }
 
@@ -1331,7 +1396,9 @@ export class GatewayInstaller {
     target: Target,
     namespace: string,
     image: string,
+    id: string,
   ): Promise<NonNullable<GatewayInstallDto["egress"]>> {
+    const names = egressNamespaces(id);
     const policy = await this.#kubectl(target, [
       "get",
       "configmap",
@@ -1353,19 +1420,6 @@ export class GatewayInstaller {
       "-o",
       "jsonpath={.items[0].status.podIP}",
     ]);
-    await this.#kubectl(
-      target,
-      [
-        "delete",
-        "namespace",
-        EGRESS_PROBE_NAMESPACE,
-        EGRESS_CONTROL_NAMESPACE,
-        "--ignore-not-found",
-        "--wait=true",
-        "--timeout=120s",
-      ],
-      { timeoutMs: 130_000 },
-    );
     const namespaces = await this.#kubectl(target, ["create", "-f", "-"], {
       stdin: JSON.stringify({
         apiVersion: "v1",
@@ -1376,14 +1430,17 @@ export class GatewayInstaller {
             kind: "Namespace",
             // The tenant label is what lets the runner port in.
             metadata: {
-              name: EGRESS_PROBE_NAMESPACE,
-              labels: { "daedalus.dev/user": "egress-check" },
+              name: names.probe,
+              labels: {
+                "daedalus.dev/user": "egress-check",
+                [EGRESS_LABEL]: id,
+              },
             },
           },
           {
             apiVersion: "v1",
             kind: "Namespace",
-            metadata: { name: EGRESS_CONTROL_NAMESPACE },
+            metadata: { name: names.control, labels: { [EGRESS_LABEL]: id } },
           },
         ],
       }),
@@ -1392,17 +1449,17 @@ export class GatewayInstaller {
       throw new Error(failureText(namespaces.stderr));
     const applied = await this.#kubectl(
       target,
-      ["apply", "-n", EGRESS_PROBE_NAMESPACE, "-f", "-"],
+      ["apply", "-n", names.probe, "-f", "-"],
       { stdin: policy.stdout },
     );
     if (applied.exitCode !== 0) throw new Error(failureText(applied.stderr));
-    for (const ns of [EGRESS_PROBE_NAMESPACE, EGRESS_CONTROL_NAMESPACE]) {
+    for (const ns of [names.probe, names.control]) {
       const pod = await this.#kubectl(target, ["create", "-n", ns, "-f", "-"], {
         stdin: JSON.stringify(egressPod(image)),
       });
       if (pod.exitCode !== 0) throw new Error(failureText(pod.stderr));
     }
-    for (const ns of [EGRESS_PROBE_NAMESPACE, EGRESS_CONTROL_NAMESPACE]) {
+    for (const ns of [names.probe, names.control]) {
       const ready = await this.#kubectl(
         target,
         [
@@ -1457,10 +1514,13 @@ export class GatewayInstaller {
     ];
     const results: NonNullable<GatewayInstallDto["egress"]> = [];
     for (const [host, port, want] of targets) {
-      const got = await probe(EGRESS_PROBE_NAMESPACE, host, port);
-      let result: "pass" | "fail" | "unproven" = got === want ? "pass" : "fail";
+      const got = await probe(names.probe, host, port);
+      let result: "pass" | "fail" | "unproven" | "warn" =
+        got === want ? "pass" : "fail";
+      // A cluster without internet egress is a choice, not a leak.
+      if (result === "fail" && host === "1.1.1.1") result = "warn";
       if (want === "blocked" && got === "blocked") {
-        const control = await probe(EGRESS_CONTROL_NAMESPACE, host, port);
+        const control = await probe(names.control, host, port);
         if (control !== "open") result = "unproven";
       }
       results.push({ target: `${host}:${port}`, want, got, result });
@@ -1476,6 +1536,11 @@ export class GatewayInstaller {
     this.#phase("signing-in", `Signing in to ${gatewayUrl} as ${email}`);
     await this.#health(gatewayUrl);
     await this.options.signIn(gatewayUrl, email);
+    const forward = this.#forward?.record;
+    if (forward?.gatewayUrl === gatewayUrl) {
+      forward.signedIn = true;
+      await this.#saveForward(forward);
+    }
     this.#finish(gatewayUrl, portForward, true);
   }
 
@@ -1573,7 +1638,11 @@ export class GatewayInstaller {
 
   async #stillWanted(record: PortForwardRecord): Promise<boolean> {
     const signedIn = await this.options.signedInGateway?.();
-    return signedIn === undefined || signedIn === record.gatewayUrl;
+    if (signedIn === undefined || signedIn === record.gatewayUrl) return true;
+    // Signed in to another gateway: this one is not the app's any more.
+    if (signedIn !== null) return false;
+    // Signed out: the end only for a forward a sign-in had used.
+    return record.signedIn !== true;
   }
 
   /**
@@ -1689,6 +1758,8 @@ export class GatewayInstaller {
       throw new Error(
         missing.map((tool) => `${tool.name}: ${tool.hint}`).join("\n"),
       );
+    const helm = helmCheck(await this.#helmVersion());
+    if (helm.status === "fail") throw new Error(helm.detail ?? helm.label);
     const kubeconfig = this.localKubeconfig;
     const target: Target = { context: LOCAL_CONTEXT, kubeconfig };
 
@@ -1753,6 +1824,7 @@ export class GatewayInstaller {
       target,
       DEFAULT_NAMESPACE,
       `daedalus-runner:${LOCAL_IMAGE_TAG}`,
+      randomBytes(3).toString("hex"),
     );
     await this.#signIn(gatewayUrl, email, false);
   }
