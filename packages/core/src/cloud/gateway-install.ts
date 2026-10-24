@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ import { DaedalusError } from "../errors";
 import {
   ADMIN_SECRET,
   canIAnswer,
+  CLUSTER_CAS_JSONPATH,
   CLUSTERS_JSONPATH,
   CONTEXTS_JSONPATH,
   DEFAULT_NAMESPACE,
@@ -32,9 +33,19 @@ import {
   imageRefs,
   imagesCheck,
   installPermissions,
+  loopbackPort,
   logLines,
+  namespaceCheck,
   networkPolicyCheck,
   parseContexts,
+  parseContextTargets,
+  parseInstalledValues,
+  POD_SECURITY_LABEL,
+  reservedNamespace,
+  vpcCniPolicy,
+  type InstalledValues,
+  type KubeContextTarget,
+  type NamespaceState,
   parseDryRun,
   parseReleases,
   permissionsCheck,
@@ -90,9 +101,88 @@ interface Target {
 
 interface ResolvedInput {
   context: string;
+  /** What the context pointed at when read; part of the checks' key. */
+  server: string;
+  caFingerprint: string;
   namespace: string;
   storageClass?: string;
   images?: { registry: string; tag: string };
+}
+
+interface PreflightRecord {
+  at: number;
+  ready: boolean;
+  acknowledge: "networkPolicy"[];
+  state: NamespaceState;
+  installed: InstalledValues | null;
+}
+
+type StartInput = GatewayInstallTargetInput & {
+  dryRunId: string;
+  confirm: string;
+  email: string;
+  publicUrl?: string;
+  devLogin?: boolean;
+  acknowledgeDevLogin?: boolean;
+  acknowledgeNetworkPolicy?: boolean;
+};
+
+const EGRESS_PROBE_NAMESPACE = "daedalus-egress-check";
+const EGRESS_CONTROL_NAMESPACE = "daedalus-egress-control";
+const FORWARD_CHECK_MS = 30_000;
+
+/** Shown in the dry run: the egress check's namespaces, made and removed after the install. */
+const EGRESS_OBJECTS: GatewayDryRunDto["objects"] = [
+  {
+    kind: "Namespace",
+    name: EGRESS_PROBE_NAMESPACE,
+    namespace: null,
+    note: "temporary: the egress check after the install, with the workspaces' NetworkPolicy and one pod; deleted after",
+  },
+  {
+    kind: "Namespace",
+    name: EGRESS_CONTROL_NAMESPACE,
+    namespace: null,
+    note: "temporary: the egress check's control pod; deleted after",
+  },
+];
+
+/** Prints "open" or "blocked" for host and port (from egress-check.sh). */
+const PROBE_SCRIPT = `const [host, port] = [process.argv[1], Number(process.argv[2])];
+const done = (r) => { console.log(r); process.exit(0); };
+setTimeout(() => done("blocked"), 3000);
+Bun.connect({ hostname: host, port, socket: { open() { done("open") }, data() {} } }).catch(() => done("blocked"));`;
+
+function egressPod(image: string): unknown {
+  return {
+    apiVersion: "v1",
+    kind: "Pod",
+    metadata: { name: "probe" },
+    spec: {
+      automountServiceAccountToken: false,
+      securityContext: {
+        runAsNonRoot: true,
+        runAsUser: 1000,
+        seccompProfile: { type: "RuntimeDefault" },
+      },
+      containers: [
+        {
+          name: "probe",
+          image,
+          imagePullPolicy: "IfNotPresent",
+          command: ["sleep", "600"],
+          securityContext: {
+            allowPrivilegeEscalation: false,
+            capabilities: { drop: ["ALL"] },
+          },
+          resources: {
+            requests: { cpu: "50m", memory: "64Mi" },
+            limits: { cpu: "500m", memory: "256Mi" },
+          },
+        },
+      ],
+    },
+  };
 }
 
 /** The port-forward the app keeps for a gateway only this Mac reaches. */
@@ -135,9 +225,23 @@ export interface GatewayInstallerOptions {
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
+/**
+ * The context flags go before a `--`: after it they would be the remote
+ * command's arguments (`kubectl exec ... -- bun ...`), and kubectl would
+ * fall back to the kubeconfig's current-context.
+ */
+export function withTargetFlags(args: string[], flags: string[]): string[] {
+  const end = args.indexOf("--");
+  return end < 0
+    ? [...args, ...flags]
+    : [...args.slice(0, end), ...flags, ...args.slice(end)];
+}
+
 function key(input: ResolvedInput): string {
   return JSON.stringify([
     input.context,
+    input.server,
+    input.caFingerprint,
     input.namespace,
     input.storageClass ?? "",
     input.images?.registry ?? "",
@@ -147,8 +251,12 @@ function key(input: ResolvedInput): string {
 
 export class GatewayInstaller {
   #current: GatewayInstallDto | undefined;
-  readonly #preflights = new Map<string, { at: number; ready: boolean }>();
-  readonly #dryRuns = new Map<string, { key: string; at: number }>();
+  readonly #preflights = new Map<string, PreflightRecord>();
+  readonly #dryRuns = new Map<
+    string,
+    { key: string; at: number; preflight: PreflightRecord }
+  >();
+  #adminToken: { token: string; secret: string; namespace: string } | undefined;
   #forward: { record: PortForwardRecord; stop(): void } | undefined;
   #closed = false;
 
@@ -230,11 +338,10 @@ export class GatewayInstaller {
   ): Promise<CommandResult> {
     return this.#exec(
       "kubectl",
-      [
-        ...args,
+      withTargetFlags(args, [
         `--context=${target.context}`,
         ...(target.kubeconfig ? [`--kubeconfig=${target.kubeconfig}`] : []),
-      ],
+      ]),
       options,
     );
   }
@@ -246,11 +353,10 @@ export class GatewayInstaller {
   ): Promise<CommandResult> {
     return this.#exec(
       "helm",
-      [
-        ...args,
+      withTargetFlags(args, [
         `--kube-context=${target.context}`,
         ...(target.kubeconfig ? [`--kubeconfig=${target.kubeconfig}`] : []),
-      ],
+      ]),
       options,
     );
   }
@@ -278,19 +384,36 @@ export class GatewayInstaller {
     return { contexts, tools };
   }
 
+  async #configView(jsonpath: string, raw = false): Promise<string> {
+    const result = await this.#exec(
+      "kubectl",
+      [
+        "config",
+        "view",
+        ...(raw ? ["--raw"] : []),
+        "-o",
+        `jsonpath=${jsonpath}`,
+      ],
+      { timeoutMs: 10_000 },
+    );
+    return result.exitCode === 0 ? result.stdout : "";
+  }
+
   /** Context names and server hosts; never a credential, never current-context. */
   async contexts(): Promise<KubeContextDto[]> {
-    const read = async (jsonpath: string) => {
-      const result = await this.#exec(
-        "kubectl",
-        ["config", "view", "-o", `jsonpath=${jsonpath}`],
-        { timeoutMs: 10_000 },
-      );
-      return result.exitCode === 0 ? result.stdout : "";
-    };
     return parseContexts(
-      await read(CONTEXTS_JSONPATH),
-      await read(CLUSTERS_JSONPATH),
+      await this.#configView(CONTEXTS_JSONPATH),
+      await this.#configView(CLUSTERS_JSONPATH),
+    );
+  }
+
+  /** The contexts with the server URL and CA fingerprint the checks are bound to. */
+  async #contextTargets(): Promise<KubeContextTarget[]> {
+    return parseContextTargets(
+      await this.#configView(CONTEXTS_JSONPATH),
+      await this.#configView(CLUSTERS_JSONPATH),
+      await this.#configView(CLUSTER_CAS_JSONPATH, true),
+      (value) => createHash("sha256").update(value).digest("hex"),
     );
   }
 
@@ -303,19 +426,31 @@ export class GatewayInstaller {
         "VALIDATION",
         "The local cluster is installed with Try it locally",
       );
-    const known = await this.contexts();
-    if (!known.some((entry) => entry.name === context))
-      throw new DaedalusError(
-        "NOT_FOUND",
-        `There is no context ${context} in the kubeconfig`,
-      );
     const namespace = input.namespace?.trim() || DEFAULT_NAMESPACE;
     if (!validNamespace(namespace))
       throw new DaedalusError(
         "VALIDATION",
         "A namespace is lowercase letters, digits and dashes",
       );
-    const resolved: ResolvedInput = { context, namespace };
+    if (reservedNamespace(namespace))
+      throw new DaedalusError(
+        "VALIDATION",
+        `Namespace ${namespace} is not for the gateway: choose a new one, such as daedalus`,
+      );
+    const known = (await this.#contextTargets()).find(
+      (entry) => entry.name === context,
+    );
+    if (!known)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `There is no context ${context} in the kubeconfig`,
+      );
+    const resolved: ResolvedInput = {
+      context,
+      namespace,
+      server: known.server,
+      caFingerprint: known.caFingerprint,
+    };
     const storageClass = input.storageClass?.trim();
     if (storageClass) {
       if (!validStorageClass(storageClass))
@@ -361,15 +496,8 @@ export class GatewayInstaller {
         `The cluster did not answer: ${failureText(version.stderr)}`,
       );
 
-    const namespaceRead = await this.#kubectl(target, [
-      "get",
-      "namespace",
-      namespace,
-      "-o",
-      "name",
-      REQUEST_TIMEOUT,
-    ]);
-    const namespaceExists = namespaceRead.exitCode === 0;
+    const podSecurity = await this.#namespaceLabel(target, namespace);
+    const namespaceExists = podSecurity !== undefined;
 
     const permissions = await Promise.all(
       installPermissions(namespaceExists).map(async (permission) => {
@@ -411,6 +539,22 @@ export class GatewayInstaller {
       "-o",
       'jsonpath={range .items[*]}{.metadata.name}{"\\t"}{.spec.template.spec.containers[*].image}{"\\n"}{end}',
     ]);
+    // EKS: aws-node carries the network policy agent either way; only its
+    // flag says whether it enforces.
+    const vpcCni =
+      daemonsets !== null && /^aws-node\t/m.test(daemonsets)
+        ? vpcCniPolicy(
+            await listing([
+              "get",
+              "daemonset",
+              "aws-node",
+              "-n",
+              "kube-system",
+              "-o",
+              'jsonpath={range .spec.template.spec.containers[*]}{.name}{"\\t"}{.args}{"\\n"}{end}',
+            ]),
+          )
+        : null;
 
     let releases = await this.#helm(target, [
       "list",
@@ -426,14 +570,29 @@ export class GatewayInstaller {
         "-o",
         "json",
       ]);
+    const listed = releases.exitCode === 0;
     const { check: release, release: existing } = releaseCheck(
-      releases.exitCode === 0 ? parseReleases(releases.stdout) : [],
+      listed ? parseReleases(releases.stdout) : [],
       namespace,
     );
+    const holdsRelease =
+      existing !== null && /^daedalus-\d/.test(existing.chart);
+    const state: NamespaceState = !namespaceExists
+      ? { kind: "new" }
+      : holdsRelease
+        ? { kind: "release", podSecurity }
+        : listed
+          ? { kind: "taken" }
+          : { kind: "unknown" };
+    const installed = holdsRelease
+      ? await this.#installedValues(target, namespace)
+      : null;
 
+    const network = networkPolicyCheck(daemonsets, vpcCni);
     const checks: GatewayCheckDto[] = [
       versionCheck(version.stdout),
       permissionsCheck(permissions),
+      namespaceCheck(namespace, state),
       storage === null
         ? {
             id: "storageClass",
@@ -444,8 +603,8 @@ export class GatewayInstaller {
       nodes === null
         ? { id: "gvisor", status: "unknown", label: "Could not list nodes" }
         : gvisorCheck(nodes),
-      networkPolicyCheck(daemonsets),
-      releases.exitCode === 0
+      network,
+      listed
         ? release
         : {
             id: "release",
@@ -453,23 +612,84 @@ export class GatewayInstaller {
             label: "Could not list helm releases",
             detail: failureText(releases.stderr),
           },
-      imagesCheck(resolved.context, resolved.images),
+      imagesCheck(
+        resolved.context,
+        resolved.images ?? installed?.images ?? undefined,
+      ),
     ];
     const ready = checks.every((check) => check.status !== "fail");
-    this.#preflights.set(key(resolved), { at: this.#now, ready });
+    const acknowledge: "networkPolicy"[] =
+      network.status === "unknown" ? ["networkPolicy"] : [];
+    this.#preflights.set(key(resolved), {
+      at: this.#now,
+      ready,
+      acknowledge,
+      state,
+      installed,
+    });
     return {
       context: resolved.context,
       namespace,
       checks,
       ready,
-      release: existing
-        ? {
-            namespace: existing.namespace,
-            revision: existing.revision,
-            chartVersion: existing.chart.replace(/^daedalus-/, ""),
-          }
-        : null,
+      acknowledge,
+      release:
+        existing && installed
+          ? {
+              namespace: existing.namespace,
+              revision: existing.revision,
+              chartVersion: existing.chart.replace(/^daedalus-/, ""),
+              ...installed,
+            }
+          : null,
     };
+  }
+
+  /**
+   * The namespace's Pod Security enforce label: undefined when there is no
+   * such namespace, null when it has none.
+   */
+  async #namespaceLabel(
+    target: Target,
+    namespace: string,
+  ): Promise<string | null | undefined> {
+    const result = await this.#kubectl(target, [
+      "get",
+      "namespace",
+      namespace,
+      "-o",
+      "jsonpath={.metadata.labels}",
+      REQUEST_TIMEOUT,
+    ]);
+    if (result.exitCode !== 0) return undefined;
+    try {
+      const labels = JSON.parse(result.stdout || "{}") as Record<
+        string,
+        unknown
+      >;
+      const value = labels[POD_SECURITY_LABEL];
+      return typeof value === "string" ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Named values of the installed release; the raw output stays here. */
+  async #installedValues(
+    target: Target,
+    namespace: string,
+  ): Promise<InstalledValues> {
+    const result = await this.#helm(target, [
+      "get",
+      "values",
+      RELEASE_NAME,
+      "-n",
+      namespace,
+      "-o",
+      "json",
+    ]);
+    // Never logged or shown: it can hold whatever an operator passed.
+    return parseInstalledValues(result.exitCode === 0 ? result.stdout : "{}");
   }
 
   // ---- dry run -----------------------------------------------------------
@@ -485,7 +705,12 @@ export class GatewayInstaller {
         "The checks found something to fix first",
       );
     const target: Target = { context: resolved.context };
-    const values = await this.#writeValues(this.#clusterValues(resolved, ""));
+    const upgrade = preflight.state.kind === "release";
+    const values = await this.#writeValues(
+      upgrade
+        ? this.#upgradeValues(resolved, {})
+        : this.#newValues(resolved, { devLogin: true, publicUrl: "" }),
+    );
     try {
       const result = await this.#helm(
         target,
@@ -496,6 +721,7 @@ export class GatewayInstaller {
           this.options.chartDirectory,
           "--namespace",
           resolved.namespace,
+          ...(upgrade ? ["--reset-then-reuse-values"] : []),
           "--dry-run=server",
           "-f",
           values.file,
@@ -508,16 +734,23 @@ export class GatewayInstaller {
           `The dry run failed: ${failureText(result.stderr, result.stdout)}`,
         );
       const parsed = parseDryRun(result.stdout, resolved.namespace);
-      const extra = await this.#ownObjects(target, resolved.namespace);
       const dryRunId = crypto.randomUUID();
-      this.#dryRuns.set(dryRunId, { key: key(resolved), at: this.#now });
+      this.#dryRuns.set(dryRunId, {
+        key: key(resolved),
+        at: this.#now,
+        preflight,
+      });
       const warnings = logLines(result.stderr).join("\n");
       return {
         context: resolved.context,
         namespace: resolved.namespace,
         dryRunId,
-        upgrade: /has been upgraded|^REVISION: (?!1$)\d+$/m.test(result.stdout),
-        objects: [...extra, ...parsed.objects],
+        upgrade,
+        objects: [
+          ...this.#ownObjects(resolved.namespace, preflight.state),
+          ...parsed.objects,
+          ...EGRESS_OBJECTS,
+        ],
         notes: [warnings, parsed.notes].filter(Boolean).join("\n\n"),
       };
     } finally {
@@ -525,47 +758,47 @@ export class GatewayInstaller {
     }
   }
 
-  /** The namespace and admin Secret the install makes itself, when missing. */
-  async #ownObjects(
-    target: Target,
+  /** What the install itself makes or changes besides the chart. */
+  #ownObjects(
     namespace: string,
-  ): Promise<GatewayDryRunDto["objects"]> {
-    const objects: GatewayDryRunDto["objects"] = [];
-    const ns = await this.#kubectl(target, [
-      "get",
-      "namespace",
-      namespace,
-      "-o",
-      "name",
-      REQUEST_TIMEOUT,
-    ]);
-    if (ns.exitCode !== 0)
-      objects.push({ kind: "Namespace", name: namespace, namespace: null });
-    const secret =
-      ns.exitCode === 0
-        ? await this.#kubectl(target, [
-            "get",
-            "secret",
-            ADMIN_SECRET,
-            "-n",
-            namespace,
-            "-o",
-            "name",
-            REQUEST_TIMEOUT,
-          ])
-        : null;
-    if (!secret || secret.exitCode !== 0)
-      objects.push({ kind: "Secret", name: ADMIN_SECRET, namespace });
-    return objects;
+    state: NamespaceState,
+  ): GatewayDryRunDto["objects"] {
+    const label = `${POD_SECURITY_LABEL}=restricted`;
+    if (state.kind === "new")
+      return [
+        {
+          kind: "Namespace",
+          name: namespace,
+          namespace: null,
+          note: `new; label ${label}`,
+        },
+        {
+          kind: "Secret",
+          name: ADMIN_SECRET,
+          namespace,
+          note: "new; the admin page's token",
+        },
+      ];
+    if (state.kind === "release" && state.podSecurity !== "restricted")
+      return [
+        {
+          kind: "Namespace",
+          name: namespace,
+          namespace: null,
+          note: `label ${label} (now ${state.podSecurity ?? "none"})`,
+        },
+      ];
+    return [];
   }
 
-  #clusterValues(input: ResolvedInput, publicUrl: string): unknown {
-    const refs = input.images ? imageRefs(input.images) : null;
-    const repository = (ref: string) => ref.slice(0, ref.lastIndexOf(":"));
+  /** Values for a new install: everything the app needs. */
+  #newValues(
+    input: ResolvedInput,
+    gateway: { devLogin: boolean; publicUrl: string },
+  ): unknown {
     return {
       gateway: {
-        devLogin: true,
-        publicUrl,
+        ...gateway,
         ...(input.storageClass
           ? { storage: { storageClass: input.storageClass } }
           : {}),
@@ -574,20 +807,45 @@ export class GatewayInstaller {
         ? { workspace: { storageClass: input.storageClass } }
         : {}),
       admin: { enabled: true, bootstrap: { existingSecret: ADMIN_SECRET } },
-      ...(refs && input.images
-        ? {
-            image: {
-              gateway: {
-                repository: repository(refs.gateway),
-                tag: input.images.tag,
-              },
-              runner: {
-                repository: repository(refs.runner),
-                tag: input.images.tag,
-              },
-            },
-          }
+      ...this.#imageValues(input),
+    };
+  }
+
+  /**
+   * Values for an upgrade, laid over the installed ones with
+   * `--reset-then-reuse-values`: only what the user changed.
+   */
+  #upgradeValues(
+    input: ResolvedInput,
+    gateway: { devLogin?: boolean; publicUrl?: string },
+  ): unknown {
+    const gatewayValues = {
+      ...gateway,
+      ...(input.storageClass
+        ? { storage: { storageClass: input.storageClass } }
         : {}),
+    };
+    return {
+      ...(Object.keys(gatewayValues).length ? { gateway: gatewayValues } : {}),
+      ...(input.storageClass
+        ? { workspace: { storageClass: input.storageClass } }
+        : {}),
+      ...this.#imageValues(input),
+    };
+  }
+
+  #imageValues(input: ResolvedInput): Record<string, unknown> {
+    if (!input.images) return {};
+    const refs = imageRefs(input.images);
+    const repository = (ref: string) => ref.slice(0, ref.lastIndexOf(":"));
+    return {
+      image: {
+        gateway: {
+          repository: repository(refs.gateway),
+          tag: input.images.tag,
+        },
+        runner: { repository: repository(refs.runner), tag: input.images.tag },
+      },
     };
   }
 
@@ -612,6 +870,7 @@ export class GatewayInstaller {
   #begin(target: GatewayInstallDto["target"]): GatewayInstallDto {
     if (this.#busy())
       throw new DaedalusError("CONFLICT", "An install is already running");
+    this.#adminToken = undefined;
     this.#current = { target, phase: "checking", log: [] };
     this.#notify();
     return this.current()!;
@@ -645,18 +904,22 @@ export class GatewayInstaller {
     if (this.#busy())
       throw new DaedalusError("CONFLICT", "The install is still running");
     this.#current = undefined;
+    this.#adminToken = undefined;
     this.#notify();
   }
 
-  async start(
-    input: GatewayInstallTargetInput & {
-      dryRunId: string;
-      confirm: string;
-      email: string;
-      publicUrl?: string;
-      acknowledgeDevLogin?: boolean;
-    },
-  ): Promise<GatewayInstallDto> {
+  /** The admin token the Keychain refused, once. */
+  adminToken(): { token: string; secret: string; namespace: string } | null {
+    const token = this.#adminToken ?? null;
+    this.#adminToken = undefined;
+    if (this.#current?.adminTokenWaiting) {
+      delete this.#current.adminTokenWaiting;
+      this.#notify();
+    }
+    return token;
+  }
+
+  async start(input: StartInput): Promise<GatewayInstallDto> {
     const resolved = await this.#resolve(input);
     if (input.confirm !== resolved.context)
       throw new DaedalusError(
@@ -673,25 +936,69 @@ export class GatewayInstaller {
         "CONFLICT",
         "Run the checks and the dry run again for these settings",
       );
+    const { preflight } = dryRun;
+    if (
+      preflight.acknowledge.includes("networkPolicy") &&
+      input.acknowledgeNetworkPolicy !== true
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "Whether this cluster enforces NetworkPolicy is unknown; without it workspaces reach other pods and the instance metadata. Acknowledge it to go on",
+      );
     const email = this.#email(input.email);
-    let publicUrl: string | undefined;
-    if (input.publicUrl?.trim()) {
-      publicUrl = this.#publicUrl(input.publicUrl);
-      if (input.acknowledgeDevLogin !== true)
-        throw new DaedalusError(
-          "VALIDATION",
-          "Anyone who can reach this gateway can sign in as any email until company sign-in is set up; acknowledge it to go on",
-        );
-    }
+    const typedUrl = input.publicUrl?.trim()
+      ? this.#publicUrl(input.publicUrl)
+      : undefined;
+    const installed = preflight.installed;
+    const devLogin =
+      typeof input.devLogin === "boolean"
+        ? input.devLogin
+        : (installed?.devLogin ?? true);
+    const installedUrl = installed?.publicUrl ?? "";
+    const publicUrl =
+      typedUrl ??
+      (installedUrl && loopbackPort(installedUrl) === null
+        ? installedUrl
+        : undefined);
+    const turnedOn = devLogin && !(installed?.devLogin ?? false);
+    if (
+      devLogin &&
+      publicUrl &&
+      (typedUrl !== undefined || turnedOn) &&
+      input.acknowledgeDevLogin !== true
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "Anyone who can reach this gateway can sign in as any email until company sign-in is set up; acknowledge it to go on",
+      );
+    // The namespace must still be what the dry run saw.
+    const now = await this.#namespaceLabel(
+      { context: resolved.context },
+      resolved.namespace,
+    );
+    if (preflight.state.kind === "new" && now !== undefined)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Namespace ${resolved.namespace} was made since the checks; run them again`,
+      );
+    if (preflight.state.kind === "release" && now === undefined)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Namespace ${resolved.namespace} is gone since the checks; run them again`,
+      );
     this.#dryRuns.delete(input.dryRunId);
     const started = this.#begin({
       kind: "cluster",
       context: resolved.context,
       namespace: resolved.namespace,
     });
-    void this.#installCluster(resolved, email, publicUrl).catch((error) =>
-      this.#fail(error),
-    );
+    void this.#installCluster(resolved, preflight, {
+      email,
+      devLogin,
+      publicUrl,
+      setDevLogin: typeof input.devLogin === "boolean",
+      setPublicUrl: typedUrl !== undefined,
+    }).catch((error) => this.#fail(error));
     return started;
   }
 
@@ -719,20 +1026,53 @@ export class GatewayInstaller {
 
   async #installCluster(
     input: ResolvedInput,
-    email: string,
-    publicUrl: string | undefined,
+    preflight: PreflightRecord,
+    choice: {
+      email: string;
+      devLogin: boolean;
+      publicUrl: string | undefined;
+      setDevLogin: boolean;
+      setPublicUrl: boolean;
+    },
   ): Promise<void> {
     const target: Target = { context: input.context };
-    const port = publicUrl ? null : await this.#freePort();
-    const gatewayUrl = publicUrl ?? `http://127.0.0.1:${port}`;
+    const upgrade = preflight.state.kind === "release";
+    // Without a public URL only this Mac reaches the gateway. An upgrade
+    // keeps the port the app (or an earlier install) already forwards.
+    const kept = this.#forward?.record ?? (await this.#readForward());
+    const port = choice.publicUrl
+      ? null
+      : (loopbackPort(preflight.installed?.publicUrl ?? "") ??
+        (kept?.context === input.context && kept.namespace === input.namespace
+          ? kept.port
+          : await this.#freePort()));
+    const gatewayUrl = choice.publicUrl ?? `http://127.0.0.1:${port}`;
     this.#phase(
       "installing",
-      `Installing into ${input.namespace} on ${input.context}`,
+      `${upgrade ? "Upgrading" : "Installing"} into ${input.namespace} on ${input.context}`,
     );
-    await this.#prepareNamespace(target, input.namespace);
-    await this.#helmInstall(target, input.namespace, [
-      this.#clusterValues(input, gatewayUrl),
-    ]);
+    await this.#prepareNamespace(target, input.namespace, preflight.state);
+    if (!upgrade) await this.#adminSecret(target, input.namespace);
+    const publicUrlChanged =
+      choice.setPublicUrl ||
+      (port !== null && preflight.installed?.publicUrl !== gatewayUrl);
+    await this.#helmInstall(
+      target,
+      input.namespace,
+      [
+        upgrade
+          ? this.#upgradeValues(input, {
+              ...(choice.setDevLogin ? { devLogin: choice.devLogin } : {}),
+              ...(publicUrlChanged ? { publicUrl: gatewayUrl } : {}),
+            })
+          : this.#newValues(input, {
+              devLogin: choice.devLogin,
+              publicUrl: gatewayUrl,
+            }),
+      ],
+      [],
+      upgrade,
+    );
     await this.#waitForGateway(target, input.namespace);
     if (port !== null) {
       const record: PortForwardRecord = {
@@ -749,27 +1089,68 @@ export class GatewayInstaller {
     } else {
       await this.#clearForward();
     }
-    await this.#signIn(gatewayUrl, email, port !== null);
+    await this.#egress(
+      target,
+      input.namespace,
+      this.#runnerImage(input, preflight),
+    );
+    if (choice.devLogin)
+      await this.#signIn(gatewayUrl, choice.email, port !== null);
+    else this.#finish(gatewayUrl, port !== null, false);
   }
 
-  async #prepareNamespace(target: Target, namespace: string): Promise<void> {
-    const manifest = {
-      apiVersion: "v1",
-      kind: "Namespace",
-      metadata: {
-        name: namespace,
-        labels: { "pod-security.kubernetes.io/enforce": "restricted" },
-      },
-    };
-    const applied = await this.#kubectl(target, ["apply", "-f", "-"], {
-      stdin: JSON.stringify(manifest),
-    });
-    if (applied.exitCode !== 0)
-      throw new Error(
-        `Could not prepare namespace ${namespace}: ${failureText(applied.stderr)}`,
-      );
-    this.#append(logLines(applied.stdout));
+  #runnerImage(input: ResolvedInput, preflight: PreflightRecord): string {
+    const images = input.images ?? preflight.installed?.images;
+    return images ? imageRefs(images).runner : "daedalus-runner:dev";
+  }
 
+  /**
+   * A new namespace is created with the Pod Security label; one holding this
+   * release gets the label only when it differs. No other namespace gets
+   * here: the preflight refuses it and `start` checks again.
+   */
+  async #prepareNamespace(
+    target: Target,
+    namespace: string,
+    state: NamespaceState,
+  ): Promise<void> {
+    if (state.kind === "new") {
+      const created = await this.#kubectl(target, ["create", "-f", "-"], {
+        stdin: JSON.stringify({
+          apiVersion: "v1",
+          kind: "Namespace",
+          metadata: {
+            name: namespace,
+            labels: { [POD_SECURITY_LABEL]: "restricted" },
+          },
+        }),
+      });
+      if (created.exitCode !== 0)
+        throw new Error(
+          `Could not create namespace ${namespace}: ${failureText(created.stderr)}`,
+        );
+      this.#append(logLines(created.stdout));
+      return;
+    }
+    if (state.kind !== "release")
+      throw new Error(`Namespace ${namespace} is not one the install may use`);
+    if (state.podSecurity === "restricted") return;
+    const labelled = await this.#kubectl(target, [
+      "label",
+      "namespace",
+      namespace,
+      `${POD_SECURITY_LABEL}=restricted`,
+      "--overwrite",
+    ]);
+    if (labelled.exitCode !== 0)
+      throw new Error(
+        `Could not label namespace ${namespace}: ${failureText(labelled.stderr)}`,
+      );
+    this.#append(logLines(labelled.stdout));
+  }
+
+  /** The admin page's Secret, unless there is one; the token never in an argument. */
+  async #adminSecret(target: Target, namespace: string): Promise<void> {
     const existing = await this.#kubectl(target, [
       "get",
       "secret",
@@ -784,17 +1165,15 @@ export class GatewayInstaller {
       return;
     }
     const token = randomBytes(36).toString("base64url");
-    const secret = {
-      apiVersion: "v1",
-      kind: "Secret",
-      metadata: { name: ADMIN_SECRET, namespace },
-      type: "Opaque",
-      stringData: { "admin-token": token },
-    };
     // `create`, not `apply`: apply would copy the token into an annotation.
-    // The token goes on standard input, never in an argument.
     const created = await this.#kubectl(target, ["create", "-f", "-"], {
-      stdin: JSON.stringify(secret),
+      stdin: JSON.stringify({
+        apiVersion: "v1",
+        kind: "Secret",
+        metadata: { name: ADMIN_SECRET, namespace },
+        type: "Opaque",
+        stringData: { "admin-token": token },
+      }),
     });
     if (created.exitCode !== 0)
       throw new Error(
@@ -804,13 +1183,27 @@ export class GatewayInstaller {
       this.options.saveAdminToken ??
       ((account: string, value: string) =>
         writeKeychainPassword(KEYCHAIN_SERVICE, account, value));
-    await save(`${target.context}/${namespace}`, token).catch((error) =>
-      this.options.log?.("admin token not kept in the Keychain", {
-        message: String(error),
-      }),
+    const account = `${target.context}/${namespace}`;
+    const kept = await save(account, token).then(
+      () => true,
+      (error: unknown) => {
+        // The error's words only: never the token.
+        this.options.log?.("admin token not kept in the Keychain", {
+          message: error instanceof Error ? error.message : "unknown",
+        });
+        return false;
+      },
     );
+    if (kept) {
+      this.#append([
+        `Secret ${ADMIN_SECRET} created; its admin token is in the Keychain (${KEYCHAIN_SERVICE}, ${account})`,
+      ]);
+      return;
+    }
+    this.#adminToken = { token, secret: ADMIN_SECRET, namespace };
+    if (this.#current) this.#current.adminTokenWaiting = true;
     this.#append([
-      `Secret ${ADMIN_SECRET} created; its admin token is in the Keychain`,
+      `Secret ${ADMIN_SECRET} created; the Keychain did not take its admin token. Show it once from here and keep it; it is also in the Secret.`,
     ]);
   }
 
@@ -819,6 +1212,7 @@ export class GatewayInstaller {
     namespace: string,
     values: unknown[],
     valueFiles: string[] = [],
+    reuseValues = false,
   ): Promise<void> {
     const written = await Promise.all(
       values.map((value) => this.#writeValues(value)),
@@ -833,6 +1227,7 @@ export class GatewayInstaller {
           this.options.chartDirectory,
           "--namespace",
           namespace,
+          ...(reuseValues ? ["--reset-then-reuse-values"] : []),
           ...valueFiles.flatMap((file) => ["-f", file]),
           ...written.flatMap((file) => ["-f", file.file]),
         ],
@@ -873,6 +1268,206 @@ export class GatewayInstaller {
     this.#append(logLines(result.stdout, 3));
   }
 
+  // ---- egress check ------------------------------------------------------
+
+  /**
+   * deploy/kind/egress-check.sh, from the app: a probe pod in a temporary
+   * namespace with the workspaces' NetworkPolicy and the tenant label, and a
+   * control pod in one without, try the same targets. A block counts only
+   * when the control pod gets through. Both namespaces go afterwards.
+   */
+  async #egress(
+    target: Target,
+    namespace: string,
+    image: string,
+  ): Promise<void> {
+    this.#append(["Checking what a workspace can reach"]);
+    try {
+      this.#setEgress(await this.#runEgress(target, namespace, image));
+    } catch (error) {
+      this.#append([
+        `The egress check did not run: ${error instanceof Error ? error.message : String(error)}`,
+      ]);
+    } finally {
+      await this.#kubectl(target, [
+        "delete",
+        "namespace",
+        EGRESS_PROBE_NAMESPACE,
+        EGRESS_CONTROL_NAMESPACE,
+        "--ignore-not-found",
+        "--wait=false",
+      ]).catch(() => undefined);
+    }
+  }
+
+  #setEgress(results: NonNullable<GatewayInstallDto["egress"]>): void {
+    if (!this.#current) return;
+    this.#current.egress = results;
+    this.#append(
+      results.map(
+        (result) =>
+          `${result.target}: ${result.got}, want ${result.want} (${result.result})`,
+      ),
+    );
+    if (
+      results.some(
+        (result) => result.result === "fail" && result.want === "blocked",
+      )
+    )
+      this.#append([
+        "A workspace reaches something the NetworkPolicy should block; check the network plugin enforces NetworkPolicy",
+      ]);
+    if (
+      results.some(
+        (result) => result.result === "fail" && result.want === "open",
+      )
+    )
+      this.#append([
+        "A workspace cannot reach something it needs; check the cluster's egress and the gateway's runner Service",
+      ]);
+  }
+
+  async #runEgress(
+    target: Target,
+    namespace: string,
+    image: string,
+  ): Promise<NonNullable<GatewayInstallDto["egress"]>> {
+    const policy = await this.#kubectl(target, [
+      "get",
+      "configmap",
+      "daedalus-tenant",
+      "-n",
+      namespace,
+      "-o",
+      "jsonpath={.data.networkpolicy\\.yaml}",
+    ]);
+    if (policy.exitCode !== 0 || !policy.stdout.trim())
+      throw new Error("the workspaces' NetworkPolicy could not be read");
+    const gatewayIp = await this.#kubectl(target, [
+      "get",
+      "pods",
+      "-n",
+      namespace,
+      "-l",
+      "app.kubernetes.io/component=gateway",
+      "-o",
+      "jsonpath={.items[0].status.podIP}",
+    ]);
+    await this.#kubectl(
+      target,
+      [
+        "delete",
+        "namespace",
+        EGRESS_PROBE_NAMESPACE,
+        EGRESS_CONTROL_NAMESPACE,
+        "--ignore-not-found",
+        "--wait=true",
+        "--timeout=120s",
+      ],
+      { timeoutMs: 130_000 },
+    );
+    const namespaces = await this.#kubectl(target, ["create", "-f", "-"], {
+      stdin: JSON.stringify({
+        apiVersion: "v1",
+        kind: "List",
+        items: [
+          {
+            apiVersion: "v1",
+            kind: "Namespace",
+            // The tenant label is what lets the runner port in.
+            metadata: {
+              name: EGRESS_PROBE_NAMESPACE,
+              labels: { "daedalus.dev/user": "egress-check" },
+            },
+          },
+          {
+            apiVersion: "v1",
+            kind: "Namespace",
+            metadata: { name: EGRESS_CONTROL_NAMESPACE },
+          },
+        ],
+      }),
+    });
+    if (namespaces.exitCode !== 0)
+      throw new Error(failureText(namespaces.stderr));
+    const applied = await this.#kubectl(
+      target,
+      ["apply", "-n", EGRESS_PROBE_NAMESPACE, "-f", "-"],
+      { stdin: policy.stdout },
+    );
+    if (applied.exitCode !== 0) throw new Error(failureText(applied.stderr));
+    for (const ns of [EGRESS_PROBE_NAMESPACE, EGRESS_CONTROL_NAMESPACE]) {
+      const pod = await this.#kubectl(target, ["create", "-n", ns, "-f", "-"], {
+        stdin: JSON.stringify(egressPod(image)),
+      });
+      if (pod.exitCode !== 0) throw new Error(failureText(pod.stderr));
+    }
+    for (const ns of [EGRESS_PROBE_NAMESPACE, EGRESS_CONTROL_NAMESPACE]) {
+      const ready = await this.#kubectl(
+        target,
+        [
+          "wait",
+          "-n",
+          ns,
+          "--for=condition=Ready",
+          "pod/probe",
+          "--timeout=120s",
+        ],
+        { timeoutMs: 130_000 },
+      );
+      if (ready.exitCode !== 0)
+        throw new Error(
+          `the probe pod did not start: ${failureText(ready.stderr)}`,
+        );
+    }
+    const probe = async (ns: string, host: string, port: number) => {
+      const result = await this.#kubectl(
+        target,
+        [
+          "exec",
+          "-n",
+          ns,
+          "probe",
+          "--",
+          "bun",
+          "-e",
+          PROBE_SCRIPT,
+          host,
+          String(port),
+        ],
+        { timeoutMs: 20_000 },
+      );
+      return result.stdout.trim().split("\n").pop() === "open"
+        ? ("open" as const)
+        : ("blocked" as const);
+    };
+    const targets: [string, number, "open" | "blocked"][] = [
+      ["169.254.169.254", 80, "blocked"],
+      ...(gatewayIp.stdout.trim()
+        ? [
+            [gatewayIp.stdout.trim(), 8080, "blocked"] as [
+              string,
+              number,
+              "blocked",
+            ],
+          ]
+        : []),
+      [`${GATEWAY_SERVICE}-runners.${namespace}.svc`, 8081, "open"],
+      ["1.1.1.1", 443, "open"],
+    ];
+    const results: NonNullable<GatewayInstallDto["egress"]> = [];
+    for (const [host, port, want] of targets) {
+      const got = await probe(EGRESS_PROBE_NAMESPACE, host, port);
+      let result: "pass" | "fail" | "unproven" = got === want ? "pass" : "fail";
+      if (want === "blocked" && got === "blocked") {
+        const control = await probe(EGRESS_CONTROL_NAMESPACE, host, port);
+        if (control !== "open") result = "unproven";
+      }
+      results.push({ target: `${host}:${port}`, want, got, result });
+    }
+    return results;
+  }
+
   async #signIn(
     gatewayUrl: string,
     email: string,
@@ -881,10 +1476,20 @@ export class GatewayInstaller {
     this.#phase("signing-in", `Signing in to ${gatewayUrl} as ${email}`);
     await this.#health(gatewayUrl);
     await this.options.signIn(gatewayUrl, email);
+    this.#finish(gatewayUrl, portForward, true);
+  }
+
+  #finish(gatewayUrl: string, portForward: boolean, signedIn: boolean): void {
     if (!this.#current) return;
     this.#current.gatewayUrl = gatewayUrl;
     if (portForward) this.#current.portForward = true;
-    this.#phase("done", "Signed in");
+    this.#current.signedIn = signedIn;
+    this.#phase(
+      "done",
+      signedIn
+        ? "Signed in"
+        : "Installed. Dev login is off on this gateway, so the app did not sign in",
+    );
   }
 
   async #health(gatewayUrl: string): Promise<void> {
@@ -927,7 +1532,26 @@ export class GatewayInstaller {
     });
   }
 
-  async #clearForward(): Promise<void> {
+  async #readForward(): Promise<PortForwardRecord | undefined> {
+    let record: PortForwardRecord;
+    try {
+      record = JSON.parse(
+        await readFile(this.#forwardFile, "utf8"),
+      ) as PortForwardRecord;
+    } catch {
+      return undefined;
+    }
+    return validContextName(record.context) &&
+      validNamespace(record.namespace) &&
+      Number.isInteger(record.port) &&
+      typeof record.gatewayUrl === "string"
+      ? record
+      : undefined;
+  }
+
+  async #clearForward(reason?: string): Promise<void> {
+    if (reason && this.#forward)
+      this.options.log?.("gateway port-forward stopped", { reason });
     this.#forward?.stop();
     this.#forward = undefined;
     await rm(this.#forwardFile, { force: true });
@@ -938,29 +1562,38 @@ export class GatewayInstaller {
    * Cloud sign-in still uses that gateway.
    */
   async resume(): Promise<void> {
-    let record: PortForwardRecord;
-    try {
-      record = JSON.parse(
-        await readFile(this.#forwardFile, "utf8"),
-      ) as PortForwardRecord;
-    } catch {
+    const record = await this.#readForward();
+    if (!record) return;
+    if (!(await this.#stillWanted(record))) {
+      await this.#clearForward("not signed in to it");
       return;
     }
-    if (
-      !validContextName(record.context) ||
-      !validNamespace(record.namespace) ||
-      !Number.isInteger(record.port)
-    )
-      return;
-    const signedIn = await this.options.signedInGateway?.();
-    if (signedIn !== undefined && signedIn !== record.gatewayUrl) return;
     this.#keepForward(record);
+  }
+
+  async #stillWanted(record: PortForwardRecord): Promise<boolean> {
+    const signedIn = await this.options.signedInGateway?.();
+    return signedIn === undefined || signedIn === record.gatewayUrl;
+  }
+
+  /**
+   * Stops the port-forward when the Cloud sign-in no longer uses its
+   * gateway: after a sign-out or a sign-in elsewhere. The RPC calls it after
+   * either, and the forward checks on its own every half minute.
+   */
+  async checkForward(): Promise<void> {
+    const forward = this.#forward;
+    if (!forward || this.#busy()) return;
+    if (!(await this.#stillWanted(forward.record)))
+      await this.#clearForward("signed out or signed in elsewhere");
   }
 
   #keepForward(record: PortForwardRecord): void {
     this.#forward?.stop();
     let stopped = false;
     let child: ForwardProcess | undefined;
+    const watch = setInterval(() => void this.checkForward(), FORWARD_CHECK_MS);
+    (watch as { unref?: () => void }).unref?.();
     const loop = async () => {
       while (!stopped && !this.#closed) {
         const executable = await this.#which("kubectl");
@@ -991,6 +1624,25 @@ export class GatewayInstaller {
         child = spawn(argv, env);
         await child.exited;
         if (stopped || this.#closed) return;
+        // The release removed, or the sign-in moved on: stop for good.
+        const service = await this.#kubectl({ context: record.context }, [
+          "get",
+          "service",
+          GATEWAY_SERVICE,
+          "-n",
+          record.namespace,
+          "-o",
+          "name",
+          REQUEST_TIMEOUT,
+        ]).catch(() => null);
+        if (service && /NotFound|not found/.test(service.stderr)) {
+          await this.#clearForward("the gateway is gone");
+          return;
+        }
+        if (!this.#busy() && !(await this.#stillWanted(record))) {
+          await this.#clearForward("signed out or signed in elsewhere");
+          return;
+        }
         this.options.log?.("gateway port-forward ended; restarting", {
           context: record.context,
         });
@@ -1002,6 +1654,7 @@ export class GatewayInstaller {
       record,
       stop: () => {
         stopped = true;
+        clearInterval(watch);
         child?.kill();
       },
     };
@@ -1064,7 +1717,17 @@ export class GatewayInstaller {
       await this.#localImage(name);
 
     this.#phase("installing", "Installing the gateway");
-    await this.#prepareNamespace(target, DEFAULT_NAMESPACE);
+    // The local cluster is the app's own: its namespace is new or holds
+    // the release from an earlier Try it locally.
+    const podSecurity = await this.#namespaceLabel(target, DEFAULT_NAMESPACE);
+    await this.#prepareNamespace(
+      target,
+      DEFAULT_NAMESPACE,
+      podSecurity === undefined
+        ? { kind: "new" }
+        : { kind: "release", podSecurity },
+    );
+    await this.#adminSecret(target, DEFAULT_NAMESPACE);
     await this.#helmInstall(
       target,
       DEFAULT_NAMESPACE,
@@ -1086,6 +1749,11 @@ export class GatewayInstaller {
     );
     await this.#waitForGateway(target, DEFAULT_NAMESPACE);
     await this.#clearForward();
+    await this.#egress(
+      target,
+      DEFAULT_NAMESPACE,
+      `daedalus-runner:${LOCAL_IMAGE_TAG}`,
+    );
     await this.#signIn(gatewayUrl, email, false);
   }
 
@@ -1172,7 +1840,13 @@ export class GatewayInstaller {
         throw new Error(
           `kind could not create the cluster: ${failureText(created.stderr)}`,
         );
-      this.#append(logLines(created.stderr, 8));
+      // kind's closing lines name `kubectl config` commands for its own
+      // file; they would read as a change to the user's kubeconfig.
+      this.#append(
+        logLines(created.stderr, 12)
+          .filter((line) => /[✓✗]/.test(line))
+          .map((line) => line.replace(/[^\x20-\x7e✓✗]/gu, "").trim()),
+      );
     } finally {
       await rm(file, { force: true });
     }

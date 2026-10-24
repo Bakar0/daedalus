@@ -24,6 +24,54 @@ export const CONTEXTS_JSONPATH =
 /** jsonpath for the kubeconfig's clusters: name and server URL only. */
 export const CLUSTERS_JSONPATH =
   '{range .clusters[*]}{.name}{"\\t"}{.cluster.server}{"\\n"}{end}';
+/**
+ * jsonpath for each cluster's CA, read with `--raw` because without it
+ * kubectl prints DATA+OMITTED. A CA is public; the query selects nothing
+ * under users, so no credential is printed.
+ */
+export const CLUSTER_CAS_JSONPATH =
+  '{range .clusters[*]}{.name}{"\\t"}{.cluster.certificate-authority-data}{"\\t"}{.cluster.certificate-authority}{"\\n"}{end}';
+
+/** A context with what the install binds its checks to. */
+export interface KubeContextTarget {
+  name: string;
+  server: string;
+  /** sha256 of the cluster's CA data or file path; "" when there is none. */
+  caFingerprint: string;
+}
+
+/** The contexts with server and CA fingerprint, from the three listings. */
+export function parseContextTargets(
+  contexts: string,
+  clusters: string,
+  cas: string,
+  hash: (value: string) => string,
+): KubeContextTarget[] {
+  const servers = new Map<string, string>();
+  for (const line of clusters.split("\n")) {
+    const [name, server] = line.split("\t");
+    if (name && server) servers.set(name, server.trim());
+  }
+  const fingerprints = new Map<string, string>();
+  for (const line of cas.split("\n")) {
+    const [name, data, file] = line.split("\t");
+    if (name && (data || file))
+      fingerprints.set(name, hash(`${data ?? ""}\u0000${file ?? ""}`));
+  }
+  const seen = new Set<string>();
+  const result: KubeContextTarget[] = [];
+  for (const line of contexts.split("\n")) {
+    const [name, cluster] = line.split("\t");
+    if (!name || !validContextName(name) || seen.has(name)) continue;
+    seen.add(name);
+    result.push({
+      name,
+      server: servers.get(cluster ?? "") ?? "",
+      caFingerprint: fingerprints.get(cluster ?? "") ?? "",
+    });
+  }
+  return result;
+}
 
 /** The host of a server URL, or "" when it is not one. */
 export function serverHost(server: string): string {
@@ -76,6 +124,118 @@ const TAG = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 
 export function validNamespace(namespace: string): boolean {
   return DNS_LABEL.test(namespace);
+}
+
+/** Namespaces the install never uses: Kubernetes' own and the egress check's. */
+export function reservedNamespace(namespace: string): boolean {
+  return (
+    namespace === "default" ||
+    namespace.startsWith("kube-") ||
+    namespace.startsWith("daedalus-egress-")
+  );
+}
+
+export const POD_SECURITY_LABEL = "pod-security.kubernetes.io/enforce";
+
+/**
+ * Whether the namespace is new, holds this chart's release (the only kind of
+ * existing namespace the install takes), or is someone else's.
+ */
+export type NamespaceState =
+  | { kind: "new" }
+  | { kind: "release"; podSecurity: string | null }
+  | { kind: "taken" }
+  | { kind: "unknown" };
+
+export function namespaceCheck(
+  namespace: string,
+  state: NamespaceState,
+): GatewayCheckDto {
+  switch (state.kind) {
+    case "new":
+      return {
+        id: "namespace",
+        status: "pass",
+        label: `New namespace ${namespace}`,
+      };
+    case "release":
+      return {
+        id: "namespace",
+        status: "pass",
+        label: `Namespace ${namespace} holds this gateway`,
+      };
+    case "taken":
+      return {
+        id: "namespace",
+        status: "fail",
+        label: `Namespace ${namespace} already exists`,
+        detail:
+          "It holds no Daedalus gateway, and the install would change its Pod Security label. Choose a new namespace.",
+      };
+    case "unknown":
+      return {
+        id: "namespace",
+        status: "fail",
+        label: `Could not tell what namespace ${namespace} holds`,
+        detail:
+          "The helm releases could not be listed. Choose a new namespace.",
+      };
+  }
+}
+
+/**
+ * The few values of an installed release the app looks at, read from
+ * `helm get values -o json`. Nothing else of that output is kept: it can hold
+ * whatever an operator passed.
+ */
+export interface InstalledValues {
+  devLogin: boolean;
+  publicUrl: string;
+  images: GatewayImagesDto | null;
+  storageClass: string;
+}
+
+export function parseInstalledValues(json: string): InstalledValues {
+  let values: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    if (parsed && typeof parsed === "object")
+      values = parsed as Record<string, unknown>;
+  } catch {
+    // An unreadable answer reads as the chart's defaults.
+  }
+  const object = (value: unknown): Record<string, unknown> =>
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  const gateway = object(values.gateway);
+  const gatewayImage = object(object(values.image).gateway);
+  const repository = text(gatewayImage.repository);
+  const tag = text(gatewayImage.tag);
+  const registry = repository.endsWith("/daedalus-gateway")
+    ? repository.slice(0, -"/daedalus-gateway".length)
+    : "";
+  const images = registry && tag ? { registry, tag } : null;
+  return {
+    devLogin: gateway.devLogin === true,
+    publicUrl: text(gateway.publicUrl),
+    images: images && validImages(images) ? images : null,
+    storageClass: text(object(gateway.storage).storageClass),
+  };
+}
+
+/** Whether a gateway URL is this Mac's own port-forward. */
+export function loopbackPort(url: string): number | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "127.0.0.1" && parsed.hostname !== "localhost")
+      return null;
+    const port = Number.parseInt(parsed.port, 10);
+    return Number.isInteger(port) ? port : null;
+  } catch {
+    return null;
+  }
 }
 
 export function validStorageClass(name: string): boolean {
@@ -303,7 +463,39 @@ export function gvisorCheck(
  * accepted by every cluster; only the network plugin enforces it, so this
  * looks for one known to.
  */
-export function networkPolicyCheck(listing: string | null): GatewayCheckDto {
+/**
+ * EKS: the VPC CNI enforces NetworkPolicy only with its node agent running
+ * with `--enable-network-policy=true`. Lines of `<container>\t<args JSON>`
+ * from the aws-node DaemonSet; null when there is no aws-node.
+ */
+export function vpcCniPolicy(containers: string | null): boolean | null {
+  if (containers === null) return null;
+  const agent = containers
+    .split("\n")
+    .map((line) => line.split("\t"))
+    .find(([name]) => name === "aws-eks-nodeagent");
+  if (!agent) return false;
+  return /--enable-network-policy=true/.test(agent[1] ?? "");
+}
+
+export function networkPolicyCheck(
+  listing: string | null,
+  vpcCni: boolean | null = null,
+): GatewayCheckDto {
+  if (vpcCni === true)
+    return {
+      id: "networkPolicy",
+      status: "pass",
+      label: "NetworkPolicy enforced by the VPC CNI",
+    };
+  if (vpcCni === false)
+    return {
+      id: "networkPolicy",
+      status: "fail",
+      label: "The VPC CNI does not enforce NetworkPolicy",
+      detail:
+        'Without it workspaces reach the instance metadata and the VPC. Turn it on in the vpc-cni add-on: configuration values {"enableNetworkPolicy": "true"} (deploy/eks/README.md).',
+    };
   const unknown: GatewayCheckDto = {
     id: "networkPolicy",
     status: "unknown",
