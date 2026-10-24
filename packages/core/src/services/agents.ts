@@ -1,3 +1,4 @@
+import { isCodexThread, podCodexRollout } from "./codex-move";
 import type { SessionHost } from "./session-host";
 import type { SessionHosts } from "./session-hosts";
 import {
@@ -679,6 +680,14 @@ export class AgentService {
         // activity runs on the rollout tier, so this one is not a question
         // that blocks startup.
         return "ready";
+      if (
+        provider === "codex" &&
+        host !== this.hosts.local &&
+        screen.includes("Sign in with ChatGPT")
+      )
+        // A cloud Codex signed out: the cloud service picks the method, and
+        // the sign-in panel takes the user through the page.
+        return "ready";
       if (startupQuestion(provider, screen)) {
         questionSince ??= Date.now();
         if (Date.now() - questionSince >= STARTUP_QUESTION_SETTLE_MS)
@@ -881,10 +890,9 @@ export class AgentService {
   }
 
   /**
-   * Spawns on the workspace's cloud host. Stage 0 runs Claude or a login
-   * shell in the workspace root of the pod: no worktrees, no account
-   * profiles, no continuation and no brief drafting. Hooks reach the Mac
-   * through the pod's `daedal`, which the runner relays.
+   * Spawns on the workspace's cloud host: Claude, Codex or a login shell,
+   * each in its own folder of the pod. Hooks reach the Mac through the
+   * pod's `daedal`, which the runner relays.
    */
   private async spawnCloud(
     input: Parameters<AgentService["spawn"]>[0] & { host: string },
@@ -907,29 +915,34 @@ export class AgentService {
         "A terminal session cannot also select an agent provider",
       );
     const provider = input.terminal ? undefined : (input.provider ?? "claude");
-    if (provider !== undefined && provider !== "claude")
+    if (provider !== undefined && provider !== "claude" && provider !== "codex")
       throw new DaedalusError(
         "CONFLICT",
-        "Only Claude runs in the cloud; move the workspace home to this Mac to start Codex",
+        "Only Claude and Codex run in the cloud; move the workspace home to this Mac to start it",
       );
+    const agentProvider = provider ?? "claude";
     if (input.draftBrief && !input.taskId)
       throw new DaedalusError(
         "VALIDATION",
         "Drafting a brief needs the task it is for",
       );
     const predecessor = input.continueFrom;
-    // A terminal has no account. Claude runs on the one asked for, else the
-    // previous session's, else the workspace's default; what it brings to
-    // the pod is the cloud service's.
+    // A terminal has no account. An agent runs on the one asked for, else
+    // the previous session's, else the workspace's default; what it brings
+    // to the pod is the cloud service's.
+    const workspaceDefault =
+      agentProvider === "codex"
+        ? workspace.defaultCodexAccount
+        : workspace.defaultClaudeAccount;
     const requestedAccount = input.terminal
       ? undefined
       : (input.account ??
         predecessor?.account ??
-        (accountProfile(this.config, "claude", workspace.defaultClaudeAccount)
-          ? workspace.defaultClaudeAccount
+        (accountProfile(this.config, agentProvider, workspaceDefault)
+          ? workspaceDefault
           : undefined));
     // Throws for an account that is not there.
-    const profile = findAccount(this.config, "claude", requestedAccount);
+    const profile = findAccount(this.config, agentProvider, requestedAccount);
     const task = input.taskId ? this.tasks.get(input.taskId) : undefined;
     if (task && task.workspaceId !== workspace.id)
       throw new DaedalusError(
@@ -955,7 +968,7 @@ export class AgentService {
       : this.abilities.validate(
           {
             kind: input.terminal ? "terminal" : "agent",
-            provider: "claude",
+            provider: agentProvider,
             hostId: host.id,
           },
           input.abilities ?? [],
@@ -964,7 +977,7 @@ export class AgentService {
     const name =
       requestedName ||
       task?.title ||
-      (input.terminal ? "Terminal" : "Claude session");
+      (input.terminal ? "Terminal" : `${providerLabel(agentProvider)} session`);
     const team =
       predecessor?.teamId && predecessor.teamHandle
         ? { teamId: predecessor.teamId, handle: predecessor.teamHandle }
@@ -973,7 +986,7 @@ export class AgentService {
       taskNumber: task?.number,
       refinement:
         input.draftBrief && !predecessor
-          ? await this.refinementInvocation("claude")
+          ? await this.refinementInvocation(agentProvider)
           : undefined,
       message: [
         ...this.abilities.launchLines(abilities),
@@ -998,13 +1011,21 @@ export class AgentService {
         : await preparePodSession(host, {
             task,
             sessionId: id,
-            provider: "claude",
+            provider: agentProvider,
             instructions: this.config.workspaceInstructionFilesEnabled,
           });
-    const { executable, args } = input.terminal
+    const {
+      executable,
+      args,
+      providerSessionId: launchedId,
+    }: {
+      executable: string;
+      args: string[];
+      providerSessionId?: string;
+    } = input.terminal
       ? { executable: CLOUD_SHELL, args: ["-l"] }
       : await resolveProvider(this.config, {
-          provider: "claude",
+          provider: agentProvider,
         }).adapter.buildLaunch({
           target: "cloud",
           sessionId: id,
@@ -1019,7 +1040,7 @@ export class AgentService {
       workspaceId: workspace.id,
       taskId: task?.id ?? null,
       name,
-      provider: input.terminal ? "custom" : "claude",
+      provider: input.terminal ? "custom" : agentProvider,
       kind: input.terminal ? "terminal" : "agent",
       tmuxSession: `daedalus_${id.replaceAll("-", "")}`,
       command: executable,
@@ -1029,7 +1050,8 @@ export class AgentService {
       exitCode: null,
       startedAt: new Date().toISOString(),
       endedAt: null,
-      providerSessionId: input.terminal ? null : id,
+      // Codex names its own thread, which its first hook reports.
+      providerSessionId: input.terminal ? null : (launchedId ?? null),
       archivedAt: null,
       resumeCount: 0,
       lostReason: null,
@@ -1063,7 +1085,11 @@ export class AgentService {
       const launched = await this.startCloud(host, session, extras);
       const startup = input.terminal
         ? "ready"
-        : await this.waitForProviderReady("claude", session.tmuxSession, host);
+        : await this.waitForProviderReady(
+            agentProvider,
+            session.tmuxSession,
+            host,
+          );
       const running = { ...session, status: "running" as const };
       this.repositories.updateAgent(running);
       if (task && !input.terminal) this.markTaskStarted(workspace, task.id);
@@ -1136,7 +1162,10 @@ export class AgentService {
     const host = this.hosts.get(agent.hostId);
     const unavailable = await host.probe();
     if (unavailable) throw new DaedalusError("DEPENDENCY", unavailable);
-    if (agent.kind === "agent" && !agent.providerSessionId)
+    const codex = agent.kind === "agent" && agent.provider === "codex";
+    // Codex names its thread at the first turn, so a Codex session without
+    // one starts a new conversation, as it does on this Mac.
+    if (agent.kind === "agent" && !codex && !agent.providerSessionId)
       throw new DaedalusError(
         "CONFLICT",
         "This session has no conversation to resume",
@@ -1147,22 +1176,24 @@ export class AgentService {
       options.fresh ||
       (agent.kind === "agent" &&
         isPodAccess(host) &&
-        (
-          await host.run({
-            cwd: ".",
-            executable: "test",
-            args: [
-              "-f",
-              `${POD_CLAUDE_PROJECTS}/${claudeProjectKey(podWorkingDirectory(agent.workingDirectory))}/${agent.providerSessionId}.jsonl`,
-            ],
-          })
-        ).exitCode !== 0);
+        (codex
+          ? !(await podCodexRollout(host, agent.providerSessionId))
+          : (
+              await host.run({
+                cwd: ".",
+                executable: "test",
+                args: [
+                  "-f",
+                  `${POD_CLAUDE_PROJECTS}/${claudeProjectKey(podWorkingDirectory(agent.workingDirectory))}/${agent.providerSessionId}.jsonl`,
+                ],
+              })
+            ).exitCode !== 0));
     // The executable too: a session that moved here from this Mac recorded
-    // this Mac's path to Claude, which the pod does not have.
+    // this Mac's path to its provider, which the pod does not have.
     const launch =
       agent.kind === "agent"
         ? await resolveProvider(this.config, {
-            provider: "claude",
+            provider: codex ? "codex" : "claude",
           }).adapter.buildLaunch({
             target: "cloud",
             sessionId: agent.id,
@@ -1172,7 +1203,9 @@ export class AgentService {
               Boolean(agent.teamId) ||
               Boolean(this.abilities.held(agent.id, "orchestration")),
             resume: {
-              nativeId: agent.providerSessionId!,
+              ...(agent.providerSessionId
+                ? { nativeId: agent.providerSessionId }
+                : {}),
               startedAt: agent.startedAt,
               archived: Boolean(agent.archivedAt),
               workingDirectory: agent.workingDirectory,
@@ -1209,7 +1242,7 @@ export class AgentService {
       const startup =
         agent.kind === "agent"
           ? await this.waitForProviderReady(
-              "claude",
+              codex ? "codex" : "claude",
               restoring.tmuxSession,
               host,
             )
@@ -2147,6 +2180,33 @@ export class AgentService {
   /** Where Claude keeps this session's conversations on this Mac. */
   claudeProjectsDirectory(agent: AgentSession): string {
     return this.sessionConfig(agent).claudeProjectsDirectory;
+  }
+
+  /**
+   * Records a cloud Codex session's thread from its hook, once: the session
+   * resumes, comes home and takes team messages by it. A thread another
+   * session has is not taken.
+   */
+  bindCloudCodexThread(sessionId: string, thread: string): void {
+    const agent = this.repositories.findAgent(sessionId);
+    if (
+      !agent ||
+      agent.kind !== "agent" ||
+      agent.provider !== "codex" ||
+      !agent.hostId ||
+      agent.providerSessionId ||
+      !isCodexThread(thread) ||
+      this.repositories
+        .listAgents()
+        .some((other) => other.providerSessionId === thread)
+    )
+      return;
+    this.repositories.updateAgent({ ...agent, providerSessionId: thread });
+  }
+
+  /** Where Codex keeps this session's conversations on this Mac. */
+  codexSessionsDirectory(agent: AgentSession): string {
+    return this.sessionConfig(agent).codexSessionsDirectory;
   }
 
   async remove(id: string): Promise<AgentSession> {

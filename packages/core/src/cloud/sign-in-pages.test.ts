@@ -22,6 +22,30 @@ describe("checkSignInUrl", () => {
     });
   });
 
+  test("Codex's ChatGPT page with its listener on 127.0.0.1:1455", () => {
+    const codex = (redirect: string, extra = "") =>
+      `https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_x&redirect_uri=${encodeURIComponent(redirect)}&code_challenge=x&code_challenge_method=S256&state=s1&originator=codex-tui${extra}`;
+    expect(
+      checkSignInUrl(codex("http://127.0.0.1:1455/auth/callback"), SSO),
+    ).toMatchObject({
+      kind: "codex",
+      host: "auth.openai.com",
+      callback: { port: 1455, path: "/auth/callback", state: "s1" },
+    });
+    for (const refused of [
+      // Claude's listeners are not Codex's, nor the other way round.
+      codex("http://localhost:1455/callback"),
+      codex("http://localhost:1455/auth/callback"),
+      codex("https://evil.test/auth/callback"),
+      codex("http://127.0.0.1:1455/auth/callback", "&state=s2"),
+      claude("http://127.0.0.1:1455/auth/callback"),
+      "https://auth.openai.com/oauth/authorize?state=s1",
+      "https://auth.openai.com/codex/device",
+      "https://chatgpt.com/oauth/authorize?redirect_uri=x&state=s1",
+    ])
+      expect(typeof checkSignInUrl(refused, SSO)).toBe("string");
+  });
+
   test("the paste-code page has no callback", () => {
     const checked = checkSignInUrl(
       claude("https://platform.claude.com/oauth/code/callback"),

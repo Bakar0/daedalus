@@ -1,6 +1,6 @@
 /**
- * How a session on a cloud host is launched. Stage 0 runs Claude or a login
- * shell in the root of the workspace's pod. Nothing here reads this Mac's
+ * How a session on a cloud host is launched: Claude, Codex or a login shell
+ * in the workspace's pod. Nothing here reads this Mac's
  * provider folders or writes a file for the session: every path a local
  * launch puts in the arguments is a path on this Mac, which the pod does not
  * have.
@@ -58,6 +58,7 @@ export const CLOUD_WORKING_DIRECTORY = ".";
 /** On the pod's PATH, from the runner image. */
 export const CLOUD_DAEDAL = "daedal";
 export const CLOUD_CLAUDE = "claude";
+export const CLOUD_CODEX = "codex";
 export const CLOUD_SHELL = "bash";
 
 /**

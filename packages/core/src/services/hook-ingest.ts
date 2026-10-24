@@ -129,6 +129,14 @@ export async function ingestHook(input: HookIngestInput): Promise<void> {
       : observed;
     const providerSessionId =
       typeof payload.session_id === "string" ? payload.session_id : undefined;
+    // A cloud Codex names its thread only here: its rollouts are in the pod,
+    // where this Mac cannot look for them.
+    if (input.cloudMark && providerSessionId)
+      await context()
+        .then((opened) =>
+          opened.agents.bindCloudCodexThread(sessionId, providerSessionId),
+        )
+        .catch(() => undefined);
     await applyObservation({
       home,
       sessionId,

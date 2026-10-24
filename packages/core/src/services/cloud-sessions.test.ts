@@ -4,6 +4,7 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   cloudHostId,
   createApplicationContext,
+  ingestHook,
   type SessionCheckpoint,
   type SessionHost,
   type SessionHostLaunch,
@@ -60,7 +61,21 @@ class FakeCloudHost implements SessionHost {
   readonly files = new Map<string, Uint8Array>();
   /** Claude conversations by id: the sessions here had turns. */
   readonly conversations = new Set<string>();
+  /** Codex rollouts by thread id, as the pod's `find` lists them. */
+  readonly rollouts = new Map<string, string>();
+  screen = "Claude Code v2.1.251\nshift+tab to cycle";
   async run(command: { executable: string; args: string[] }) {
+    if (command.executable === "find") {
+      const thread = /^rollout-\*-(.+)\.jsonl$/.exec(
+        command.args[command.args.indexOf("-name") + 1] ?? "",
+      )?.[1];
+      const path = thread && this.rollouts.get(thread);
+      return {
+        exitCode: 0,
+        stdout: path ? `${command.args[0]}/${path}\0` : "",
+        stderr: "",
+      };
+    }
     // A conversation is there once a launch started it (see `start`).
     if (command.executable === "test" && command.args[0] === "-f") {
       const id = /([^/]+)\.jsonl$/.exec(command.args[1] ?? "")?.[1];
@@ -102,7 +117,7 @@ class FakeCloudHost implements SessionHost {
     return [...this.sessions];
   }
   async capture() {
-    return "Claude Code v2.1.251\nshift+tab to cycle";
+    return this.screen;
   }
   async sendKeys() {}
   async send(_session: string, text: string) {
@@ -234,15 +249,9 @@ describe("cloud sessions", () => {
     });
   });
 
-  test("refuses other providers and custom commands in the cloud", async () => {
+  test("refuses custom commands in the cloud", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const { context, workspace, host } = await setUp(home);
-      await expect(
-        context.agents.spawn({ workspace: workspace.id, provider: "codex" }),
-      ).rejects.toMatchObject({
-        code: "CONFLICT",
-        message: expect.stringContaining("move the workspace home"),
-      });
       await expect(
         context.agents.spawn({ workspace: workspace.id, command: "rm" }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
@@ -325,6 +334,115 @@ describe("cloud sessions", () => {
       const launch = host.launches.at(-1)!;
       expect(launch.args.slice(-2)).toEqual(["--session-id", session.id]);
       expect(launch.args).not.toContain("--resume");
+      context.close();
+    });
+  });
+
+  test("runs Codex in the pod, with full access and no daemon", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, host } = await setUp(home);
+      host.screen = "OpenAI Codex\n› Ask Codex to do anything";
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+        message: "Hello",
+      });
+      expect(session.provider).toBe("codex");
+      expect(session.name).toBe("Codex session");
+      // Codex names its thread at the first turn; its hook reports it.
+      expect(session.providerSessionId).toBeNull();
+      const launch = host.launches.at(-1)!;
+      expect(launch.executable).toBe("codex");
+      expect(launch.args).toContain("--no-daemon");
+      expect(launch.args).toContain('sandbox_mode="danger-full-access"');
+      expect(launch.args.join(" ")).not.toContain(home);
+      // The workspace's Anthropic key is Claude's.
+      expect(launch.secrets).toEqual({});
+      context.close();
+    });
+  });
+
+  test("a lost cloud Codex session resumes its thread when the pod has it, else starts anew", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, host } = await setUp(home);
+      host.screen = "OpenAI Codex\n› Ask Codex to do anything";
+      const spawned = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const thread = "01a16fbf-b6aa-7f33-8df1-3d80160ed7bc";
+      context.repositories.updateAgent({
+        ...spawned,
+        providerSessionId: thread,
+      });
+      host.sessions.clear();
+      await context.agents.reconcile(new Set());
+      expect((await context.agents.reviveLost(spawned.id)).status).toBe(
+        "running",
+      );
+      expect(host.launches.at(-1)!.args).not.toContain("resume");
+
+      host.rollouts.set(
+        thread,
+        `2026/10/25/rollout-2026-10-25T00-09-57-${thread}.jsonl`,
+      );
+      host.sessions.clear();
+      await context.agents.reconcile(new Set());
+      await context.agents.reviveLost(spawned.id);
+      expect(host.launches.at(-1)!.args.slice(-2)).toEqual(["resume", thread]);
+      context.close();
+    });
+  });
+
+  test("a cloud Codex session takes its thread from its first hook, once", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, host } = await setUp(home);
+      host.screen = "OpenAI Codex\n› Ask Codex to do anything";
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      const thread = "01a16fbf-b6aa-7f33-8df1-3d80160ed7bc";
+      const hook = (id: string, cloudMark?: string) =>
+        ingestHook({
+          home,
+          sessionId: session.id,
+          event: "UserPromptSubmit",
+          readPayload: async () =>
+            JSON.stringify({
+              session_id: id,
+              turn_id: "t1",
+              cwd: "/workspace",
+            }),
+          ...(cloudMark ? { cloudMark } : {}),
+          openContext: async () => ({ ...context, close: () => {} }),
+        });
+      // Only through the Mac's answer to the pod's daedal.
+      await hook(thread);
+      expect(
+        context.repositories.findAgent(session.id)?.providerSessionId,
+      ).toBeNull();
+      await hook(thread, "[from cloud workspace Cloud]");
+      expect(
+        context.repositories.findAgent(session.id)?.providerSessionId,
+      ).toBe(thread);
+      await hook(
+        "01a16fbf-0000-7f33-8df1-3d80160ed7bc",
+        "[from cloud workspace Cloud]",
+      );
+      expect(
+        context.repositories.findAgent(session.id)?.providerSessionId,
+      ).toBe(thread);
+      // Not a thread, or one another session has: nothing.
+      const other = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      context.agents.bindCloudCodexThread(other.id, thread);
+      context.agents.bindCloudCodexThread(other.id, "../x");
+      expect(
+        context.repositories.findAgent(other.id)?.providerSessionId,
+      ).toBeNull();
       context.close();
     });
   });

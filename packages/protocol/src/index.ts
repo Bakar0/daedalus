@@ -967,7 +967,7 @@ export interface CloudStateDto {
  */
 export interface CloudSignInDto {
   sessionId: string;
-  kind: "claude" | "aws";
+  kind: "claude" | "codex" | "aws";
   phase: "starting" | "waiting" | "browser" | "pasting" | "failed";
   /** Set while `waiting`: what Open sign-in page opens. */
   requestId?: string;

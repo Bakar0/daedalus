@@ -52,6 +52,8 @@ class FakePod {
   readonly typed: string[] = [];
   readonly keys: string[][] = [];
   readonly commands: string[][] = [];
+  /** Runs at every capture, as a pod acting on its own would. */
+  onCapture?: () => void;
 
   readonly transport: RunnerTransport = {
     unavailable: async () => undefined,
@@ -71,6 +73,7 @@ class FakePod {
         case "host.listLive":
           return [...this.live];
         case "host.capture":
+          this.onCapture?.();
           return this.signingIn.has(p.session as string)
             ? "Select login method:\n❯ 1. Claude account with subscription"
             : this.screen;
@@ -148,7 +151,8 @@ const setUp = async (
   logs?: { event: string; fields?: Record<string, unknown> }[],
 ) => {
   const context = await createApplicationContext({
-    env: { DAEDALUS_HOME: home },
+    // This Mac's Codex setup is the test's, never the user's.
+    env: { DAEDALUS_HOME: home, CODEX_HOME: join(home, "codex") },
     tmux: new NoTmux(),
     cloud: {
       ...(logs ? { log: (event, fields) => logs.push({ event, fields }) } : {}),
@@ -534,6 +538,105 @@ describe("automatic sign-in", () => {
       await context.cloud.autoSignIn(plain, { apiKey: true });
       expect(pod.typed).toEqual([]);
       expect(context.cloud.signIns.list()).toEqual([]);
+      context.close();
+    });
+  });
+});
+
+describe("cloud Codex", () => {
+  const CONFIG = ".home/.codex/config.toml";
+  const REVIEW =
+    "Hooks need review\n› 1. Review hooks\n  2. Trust all and continue";
+  const keysSent = async (pod: FakePod) => {
+    for (let tries = 0; tries < 100 && !pod.keys.length; tries++)
+      await Bun.sleep(50);
+  };
+
+  test("gets its config and the user's setup, and Daedalus trusts its own hooks", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod } = await setUp(home);
+      await Bun.write(
+        join(home, "codex", "config.toml"),
+        'model = "gpt-5"\nnotify = ["/Users/me/notify"]\n',
+      );
+      await Bun.write(join(home, "codex", "AGENTS.md"), "be brief\n");
+      pod.files.set(".home/.codex/auth.json", "{}");
+      pod.screen = REVIEW;
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      await keysSent(pod);
+      const config = pod.files.get(CONFIG)!;
+      expect(config).toContain('model = "gpt-5"');
+      expect(config).not.toContain("notify");
+      expect(config).toContain(
+        `[projects."${posix.join("/workspace", session.workingDirectory)}"]`,
+      );
+      expect(config).toContain("'daedal' agent event Stop || true");
+      expect(pod.files.get(".home/.codex/AGENTS.md")).toBe("be brief\n");
+      expect(pod.keys).toEqual([["Down", "Enter"]]);
+      // Signed in already: no sign-in to show.
+      expect(context.cloud.signIns.get(session.id)).toBeUndefined();
+      context.close();
+    });
+  });
+
+  test("a config the pod changed after the launch wrote it leaves the review to the user", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const logs: { event: string }[] = [];
+      const { context, workspace, pod } = await setUp(home, logs);
+      pod.files.set(".home/.codex/auth.json", "{}");
+      pod.screen = REVIEW;
+      pod.onCapture = () => {
+        const config = pod.files.get(CONFIG);
+        if (config && !config.includes("evil"))
+          pod.files.set(CONFIG, `${config}\n[[hooks.Stop]]\n# evil\n`);
+      };
+      await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      for (
+        let tries = 0;
+        tries < 100 &&
+        !logs.some((log) => log.event === "cloud_codex_hooks_left");
+        tries++
+      )
+        await Bun.sleep(50);
+      expect(logs.map((log) => log.event)).toContain("cloud_codex_hooks_left");
+      expect(pod.keys).toEqual([]);
+      context.close();
+    });
+  });
+
+  test("a cloud Codex that opens signed out picks ChatGPT, then the page waits for the click", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      pod.screen =
+        "Welcome to Codex\n> 1. Sign in with ChatGPT\n  2. Sign in with Device Code\n  Press enter to continue";
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      expect(session.status).toBe("running");
+      await keysSent(pod);
+      expect(pod.keys).toEqual([["Enter"]]);
+      expect(context.cloud.signIns.get(session.id)).toMatchObject({
+        phase: "starting",
+        kind: "codex",
+      });
+      expect(
+        context.cloud.offerSignIn(
+          hostId,
+          session.id,
+          "https://auth.openai.com/oauth/authorize?response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&state=s",
+        ).exitCode,
+      ).toBe(0);
+      expect(context.cloud.signIns.get(session.id)).toMatchObject({
+        phase: "waiting",
+        host: "auth.openai.com",
+      });
       context.close();
     });
   });

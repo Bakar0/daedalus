@@ -17,13 +17,17 @@ const CLAUDE_PAGES: Record<string, string> = {
   "platform.claude.com": "/oauth/authorize",
   "claude.ai": "/oauth/authorize",
 };
+/** Codex's ChatGPT sign-in page, by host. */
+const CODEX_PAGES: Record<string, string> = {
+  "auth.openai.com": "/oauth/authorize",
+};
 /** An AWS access portal's start page; the device page is its fragment. */
 const AWS_START_PATHS = new Set(["/start", "/start/"]);
 /** Where Claude's paste-code flow sends the browser. */
 export const CLAUDE_PASTE_REDIRECT =
   "https://platform.claude.com/oauth/code/callback";
 
-export type SignInKind = "claude" | "aws";
+export type SignInKind = "claude" | "codex" | "aws";
 
 /** Where the browser comes back to, on a tool's listener in the pod. */
 export interface SignInCallback {
@@ -45,23 +49,30 @@ export interface CheckedSignInUrl {
 function checkRedirect(
   value: string,
   state: string | null,
+  kind: SignInKind,
 ): SignInCallback | undefined | string {
-  if (value === CLAUDE_PASTE_REDIRECT) return undefined;
+  if (kind === "claude" && value === CLAUDE_PASTE_REDIRECT) return undefined;
   let redirect: URL;
   try {
     redirect = new URL(value);
   } catch {
     return "a redirect that is not a URL";
   }
+  // Each tool's own listener: Claude's on localhost, the AWS CLI's and
+  // Codex's on 127.0.0.1.
   const local =
     redirect.protocol === "http:" &&
     !redirect.username &&
     !redirect.password &&
     !redirect.search &&
     !redirect.hash &&
-    ((redirect.hostname === "localhost" && redirect.pathname === "/callback") ||
-      (redirect.hostname === "127.0.0.1" &&
-        redirect.pathname === "/oauth/callback"));
+    (kind === "codex"
+      ? redirect.hostname === "127.0.0.1" &&
+        redirect.pathname === "/auth/callback"
+      : (redirect.hostname === "localhost" &&
+          redirect.pathname === "/callback") ||
+        (redirect.hostname === "127.0.0.1" &&
+          redirect.pathname === "/oauth/callback"));
   const port = Number(redirect.port);
   if (!local || !Number.isInteger(port) || port < 1024 || port > 65535)
     return "a redirect to somewhere other than a sign-in listener";
@@ -94,6 +105,7 @@ export function checkSignInUrl(
   const host = url.hostname.toLowerCase();
   let kind: SignInKind;
   if (CLAUDE_PAGES[host] === url.pathname) kind = "claude";
+  else if (CODEX_PAGES[host] === url.pathname) kind = "codex";
   else if (ssoHosts.includes(host) && AWS_START_PATHS.has(url.pathname))
     kind = "aws";
   else return `a page on ${host} that is not a sign-in page`;
@@ -102,17 +114,21 @@ export function checkSignInUrl(
   const keys = [...url.searchParams.keys()];
   if (new Set(keys).size !== keys.length)
     return "a URL that repeats a parameter";
-  // Claude's pages always name where the browser comes back to, and the
-  // state the listener checks.
+  // Claude's and Codex's pages always name where the browser comes back
+  // to, and the state the listener checks.
   if (
-    kind === "claude" &&
+    (kind === "claude" || kind === "codex") &&
     (!url.searchParams.has("redirect_uri") || !url.searchParams.has("state"))
   )
     return "a sign-in page without a redirect_uri and a state";
   const redirect = url.searchParams.get("redirect_uri");
   let callback: SignInCallback | undefined;
   if (redirect !== null) {
-    const checked = checkRedirect(redirect, url.searchParams.get("state"));
+    const checked = checkRedirect(
+      redirect,
+      url.searchParams.get("state"),
+      kind,
+    );
     if (typeof checked === "string") return checked;
     callback = checked;
   }

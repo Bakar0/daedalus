@@ -66,6 +66,25 @@ test("serves the AWS CLI's path too, and leaves out a long Location", async () =
   ).toEqual({ status: 200 });
 });
 
+test("serves Codex's path, and keeps its success page, which carries a token, in the pod", async () => {
+  const port = listen(
+    () =>
+      new Response(null, {
+        status: 302,
+        headers: {
+          location: "http://localhost:1455/success?id_token=eyJsecret",
+        },
+      }),
+  );
+  const result = await authCallback({
+    port,
+    path: "/auth/callback",
+    query: "code=1&state=2",
+  });
+  expect(result).toEqual({ status: 302 });
+  expect(JSON.stringify(result)).not.toContain("eyJsecret");
+});
+
 test("refuses other paths, ports and queries before connecting", async () => {
   let hits = 0;
   const port = listen(() => {

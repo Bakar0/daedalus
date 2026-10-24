@@ -7765,49 +7765,46 @@ export function WorkspaceApp({
                       { id: "claude", label: "Claude" },
                       { id: "codex", label: "Codex" },
                     ] as const
-                  )
-                    // Codex does not run in a pod yet.
-                    .filter((tool) => !sessionInCloud || tool.id === "claude")
-                    .map((tool) => {
-                      // The pod has its own Claude.
-                      const available =
-                        sessionInCloud ||
-                        Boolean(
-                          snapshot.settings.providers.find(
-                            (item) => item.name === tool.id,
-                          )?.available,
-                        );
-                      return (
-                        <button
-                          aria-checked={sessionType === tool.id}
-                          className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
-                          data-testid={`session-tool-${tool.id}`}
-                          disabled={!available}
-                          key={tool.id}
-                          onClick={() => {
-                            setSessionType(tool.id);
-                            setSessionModel("");
-                            setSessionAccount("");
-                            setRememberSessionModel(false);
-                            setModelCatalogError(undefined);
-                          }}
-                          role="radio"
-                          type="button"
-                        >
-                          <span className={`session-tool-icon tool-${tool.id}`}>
-                            <ToolIcon tool={tool.id} />
-                          </span>
-                          <strong>{tool.label}</strong>
-                          <small>
-                            {!available
-                              ? "Unavailable"
-                              : sessionInCloud
-                                ? "In the pod"
-                                : (toolAccountLabel(tool.id) ?? "Available")}
-                          </small>
-                        </button>
+                  ).map((tool) => {
+                    // The pod has its own Claude and Codex.
+                    const available =
+                      sessionInCloud ||
+                      Boolean(
+                        snapshot.settings.providers.find(
+                          (item) => item.name === tool.id,
+                        )?.available,
                       );
-                    })}
+                    return (
+                      <button
+                        aria-checked={sessionType === tool.id}
+                        className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
+                        data-testid={`session-tool-${tool.id}`}
+                        disabled={!available}
+                        key={tool.id}
+                        onClick={() => {
+                          setSessionType(tool.id);
+                          setSessionModel("");
+                          setSessionAccount("");
+                          setRememberSessionModel(false);
+                          setModelCatalogError(undefined);
+                        }}
+                        role="radio"
+                        type="button"
+                      >
+                        <span className={`session-tool-icon tool-${tool.id}`}>
+                          <ToolIcon tool={tool.id} />
+                        </span>
+                        <strong>{tool.label}</strong>
+                        <small>
+                          {!available
+                            ? "Unavailable"
+                            : sessionInCloud
+                              ? "In the pod"
+                              : (toolAccountLabel(tool.id) ?? "Available")}
+                        </small>
+                      </button>
+                    );
+                  })}
                 </div>
               </fieldset>
               {sessionType !== "terminal" && (

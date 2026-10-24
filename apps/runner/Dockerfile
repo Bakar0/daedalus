@@ -8,7 +8,9 @@ RUN bun install --frozen-lockfile --filter @daedalus/runner \
 
 FROM debian:bookworm-slim
 ARG CLAUDE_CODE_VERSION=latest
-ARG CODEX_VERSION=latest
+# Pinned: cloud Codex launch and sign-in were checked against this one
+# (artifacts/cloud-sessions/codex-spike.md).
+ARG CODEX_VERSION=0.163.0
 ARG AWS_CLI_VERSION=2.38.4
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
