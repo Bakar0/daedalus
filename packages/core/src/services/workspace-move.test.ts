@@ -25,7 +25,11 @@ import { claudeProjectKey, LocalMoveSide, type PodAccess } from "./move-side";
 import { podSessionInstructions } from "./cloud-folder";
 import { sessionInstructionsTemplate } from "./workspace-content";
 import { packMac, unpackFromPod } from "./workspace-move-files";
-import { MOVED_HOME_NOTICE, WorkspaceMoves } from "./workspace-move";
+import {
+  MOVED_HOME_ASK_NOTICE,
+  MOVED_HOME_NOTICE,
+  WorkspaceMoves,
+} from "./workspace-move";
 import type { SessionHosts } from "./session-hosts";
 import type { WorkspaceService } from "./workspaces";
 
@@ -354,7 +358,10 @@ describe("moving a workspace", () => {
     s.starts.length = 0;
 
     const home = await s.moves.move({ workspace: "w1", to: "mac" });
-    expect(home).toMatchObject({ status: "moved", notice: MOVED_HOME_NOTICE });
+    expect(home).toMatchObject({
+      status: "moved",
+      notice: `${MOVED_HOME_NOTICE} ${MOVED_HOME_ASK_NOTICE}`,
+    });
     expect(s.place().place).toBe("mac");
     expect(s.sessions.get(SESSION)).toMatchObject({
       hostId: null,
@@ -422,6 +429,19 @@ describe("moving a workspace", () => {
     const bytes = await readFile(archive, "latin1");
     expect(bytes).toContain("BRIEF.md");
     expect(bytes).not.toContain("._BRIEF.md");
+  });
+
+  test("with no session to restart, the move home only says it is back", async () => {
+    const s = await setup();
+    await s.moves.move({ workspace: "w1", to: "cloud" });
+    s.sessions.set(SESSION, {
+      ...s.sessions.get(SESSION)!,
+      status: "exited",
+    });
+    expect(await s.moves.move({ workspace: "w1", to: "mac" })).toMatchObject({
+      status: "moved",
+      notice: MOVED_HOME_NOTICE,
+    });
   });
 
   test("a session that never had a turn comes home starting its conversation", async () => {
