@@ -161,6 +161,10 @@ export interface CloudServiceOptions {
  */
 export const COLLECTED_CONFIRM_MS = 60 * 60 * 1000;
 
+/** Why a session did not start in a workspace that just fell back. */
+export const CLOUD_UNLINKED_MESSAGE =
+  "This workspace's cloud copy is gone, so it is back on this Mac from its backup; start the session again";
+
 /** How long a create waits for deleted orphans' pods to go. */
 const CREATE_AFTER_CLEANUP_MS = 60_000;
 
@@ -477,6 +481,8 @@ export class CloudService {
         );
       const workspace =
         await this.options.workspaces.getActive(workspaceReference);
+      if (await this.fallBackIfUnlinked(workspace.id))
+        throw new DaedalusError("CONFLICT", CLOUD_UNLINKED_MESSAGE);
       const pending = this.#preparations.get(workspace.id);
       if (pending) return pending;
       const preparation = this.#prepare(workspace.id).finally(() =>
@@ -691,30 +697,75 @@ export class CloudService {
    * and a notice on it until the user dismisses it.
    */
   #fallBackToBackup(cloudId: string): void {
+    const workspaceId = this.options.repositories.workspaceForCloud(cloudId);
+    if (workspaceId) this.#backToBackup(workspaceId);
+  }
+
+  /**
+   * Puts a workspace in the cloud back on this Mac at its backup: every
+   * session it had in a pod is this Mac's, lost if it ran, and the
+   * workspace carries the fallback notice until dismissed.
+   */
+  #backToBackup(workspaceId: string): void {
     const { repositories } = this.options;
-    const workspaceId = repositories.workspaceForCloud(cloudId);
-    if (
-      !workspaceId ||
-      repositories.workspacePlace(workspaceId).place !== "cloud"
-    )
-      return;
+    if (repositories.workspacePlace(workspaceId).place !== "cloud") return;
     const workspace = repositories.findWorkspace(workspaceId);
     if (!workspace) return;
-    const hostId = cloudHostId(cloudId);
-    repositories.setWorkspacePlace(
-      workspaceId,
-      { place: "mac", notice: CLOUD_COLLECTED_NOTICE },
-      repositories
-        .listAgents({ workspaceId })
-        .filter((session) => session.hostId === hostId)
-        .map((session) => ({
+    const now = new Date().toISOString();
+    const inPods = repositories
+      .listAgents({ workspaceId })
+      .filter((session) => session.hostId !== null);
+    repositories.transaction(() => {
+      for (const session of inPods)
+        if (session.status === "running" || session.status === "starting")
+          repositories.updateAgent({
+            ...session,
+            status: "lost",
+            endedAt: now,
+            lostReason: CLOUD_COLLECTED_REASON,
+          });
+      repositories.setWorkspacePlace(
+        workspaceId,
+        { place: "mac", notice: CLOUD_COLLECTED_NOTICE },
+        inPods.map((session) => ({
           id: session.id,
           hostId: null,
           workingDirectory: isAbsolute(session.workingDirectory)
             ? session.workingDirectory
             : join(workspace.path, session.workingDirectory),
         })),
-    );
+      );
+    });
+  }
+
+  /**
+   * A workspace in the cloud with no copy this account links (deleted as a
+   * leftover, or made under another account) cannot run, move home or be
+   * archived, and no copy is made for it unasked: it falls back to its
+   * backup on this Mac at once. Signed out, nothing is decided. Returns
+   * whether it fell back now.
+   */
+  async fallBackIfUnlinked(workspaceId: string): Promise<boolean> {
+    const { repositories } = this.options;
+    if (
+      repositories.workspacePlace(workspaceId).place !== "cloud" ||
+      !(await this.account.signIn())
+    )
+      return false;
+    // Settles the account the links are read for.
+    await this.#client();
+    if (repositories.cloudWorkspaceId(workspaceId)) return false;
+    this.#backToBackup(workspaceId);
+    this.options.log?.("cloud_workspace_unlinked", { workspaceId });
+    return true;
+  }
+
+  /** `fallBackIfUnlinked` for every workspace; the ids that fell back. */
+  async fallBackUnlinked(): Promise<string[]> {
+    const fell: string[] = [];
+    for (const workspace of this.options.repositories.listWorkspaces())
+      if (await this.fallBackIfUnlinked(workspace.id)) fell.push(workspace.id);
+    return fell;
   }
 
   /** Deletes the pod, its volume and its token; the local workspace stays. */

@@ -109,6 +109,11 @@ export interface WorkspaceMoveCloud {
   prepareForSession(workspaceReference: string): Promise<string>;
   /** Deletes the copy, its pod and volumes, and the link to it. */
   delete(workspaceReference: string): Promise<unknown>;
+  /**
+   * Puts a workspace whose copy this account does not link back on this
+   * Mac at its backup; whether it did.
+   */
+  fallBackIfUnlinked(workspaceId: string): Promise<boolean>;
 }
 
 export interface WorkspaceMovesOptions {
@@ -576,6 +581,12 @@ export class WorkspaceMoves {
   ): Promise<WorkspaceMoveResult> {
     const { repositories, agents, cloud } = this.options;
     const cloudId = repositories.cloudWorkspaceId(workspace.id);
+    // No copy to bring home: the backup here is all there is.
+    if (!cloudId && (await cloud.fallBackIfUnlinked(workspace.id)))
+      return {
+        status: "moved",
+        workspace: await this.options.workspaces.getActive(workspace.id),
+      };
     if (!cloudId)
       throw new DaedalusError(
         "CONFLICT",
