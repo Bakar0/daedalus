@@ -95,8 +95,8 @@ describe("GatewayInstallProgress", () => {
             {
               target: "1.1.1.1:443",
               want: "open",
-              got: "open",
-              result: "pass",
+              got: "blocked",
+              result: "warn",
             },
           ],
         }}
@@ -107,6 +107,8 @@ describe("GatewayInstallProgress", () => {
     expect(markup).toContain('data-testid="gateway-install-egress"');
     expect(markup).toContain('data-status="fail"');
     expect(markup).toContain("workspaces are not fenced in");
+    expect(markup).toContain('data-status="warn"');
+    expect(markup).toContain("which is not a failure");
   });
 
   test("a token the Keychain refused waits behind a button", () => {

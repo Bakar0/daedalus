@@ -53,7 +53,7 @@ const plainBlock = (text: string, max = 4000): string => {
 const EGRESS_MARK: Record<
   NonNullable<GatewayInstallDto["egress"]>[number]["result"],
   string
-> = { pass: "✓", fail: "✕", unproven: "?" };
+> = { pass: "✓", fail: "✕", unproven: "?", warn: "!" };
 
 type AdminToken = { token: string; secret: string; namespace: string };
 
@@ -87,7 +87,9 @@ function EgressResults({
                   ? `should be ${row.want}`
                   : row.result === "fail"
                     ? `should be ${row.want}: workspaces are not fenced in on this cluster`
-                    : "not reachable from outside the policy either, so this proves nothing"}
+                    : row.result === "warn"
+                      ? "not reachable: the cluster may have no internet access, which is not a failure"
+                      : "not reachable from outside the policy either, so this proves nothing"}
               </small>
             </span>
           </li>
