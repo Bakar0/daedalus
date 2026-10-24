@@ -534,8 +534,22 @@ describe("dry run and start", () => {
     expect(done.portForward).toBe(true);
     expect(signIns).toEqual([["http://127.0.0.1:18123", "me@example.com"]]);
 
-    for (const call of clusterCalls("kubectl"))
-      expect(call.args).toContain(`--context=${CONTEXT}`);
+    for (const call of clusterCalls("kubectl")) {
+      const end = call.args.indexOf("--");
+      // Before any `--`, where kubectl reads it, not the remote command.
+      expect(
+        (end < 0 ? call.args : call.args.slice(0, end)).includes(
+          `--context=${CONTEXT}`,
+        ),
+      ).toBe(true);
+      if (end >= 0)
+        expect(
+          call.args.slice(end).some((arg) => arg.startsWith("--context")),
+        ).toBe(false);
+    }
+    expect(
+      clusterCalls("kubectl").some((call) => call.args[0] === "exec"),
+    ).toBe(true);
     for (const call of clusterCalls("helm"))
       expect(call.args).toContain(`--kube-context=${CONTEXT}`);
 
@@ -1083,7 +1097,12 @@ describe("try it locally", () => {
       kubeconfig,
     );
     for (const call of [...clusterCalls("kubectl"), ...clusterCalls("helm")]) {
-      expect(call.args).toContain(`--kubeconfig=${kubeconfig}`);
+      const end = call.args.indexOf("--");
+      expect(
+        (end < 0 ? call.args : call.args.slice(0, end)).includes(
+          `--kubeconfig=${kubeconfig}`,
+        ),
+      ).toBe(true);
       expect(
         call.args.includes(`--context=${LOCAL_CONTEXT}`) ||
           call.args.includes(`--kube-context=${LOCAL_CONTEXT}`),

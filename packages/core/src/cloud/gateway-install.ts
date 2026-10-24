@@ -225,6 +225,18 @@ export interface GatewayInstallerOptions {
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
+/**
+ * The context flags go before a `--`: after it they would be the remote
+ * command's arguments (`kubectl exec ... -- bun ...`), and kubectl would
+ * fall back to the kubeconfig's current-context.
+ */
+export function withTargetFlags(args: string[], flags: string[]): string[] {
+  const end = args.indexOf("--");
+  return end < 0
+    ? [...args, ...flags]
+    : [...args.slice(0, end), ...flags, ...args.slice(end)];
+}
+
 function key(input: ResolvedInput): string {
   return JSON.stringify([
     input.context,
@@ -326,11 +338,10 @@ export class GatewayInstaller {
   ): Promise<CommandResult> {
     return this.#exec(
       "kubectl",
-      [
-        ...args,
+      withTargetFlags(args, [
         `--context=${target.context}`,
         ...(target.kubeconfig ? [`--kubeconfig=${target.kubeconfig}`] : []),
-      ],
+      ]),
       options,
     );
   }
@@ -342,11 +353,10 @@ export class GatewayInstaller {
   ): Promise<CommandResult> {
     return this.#exec(
       "helm",
-      [
-        ...args,
+      withTargetFlags(args, [
         `--kube-context=${target.context}`,
         ...(target.kubeconfig ? [`--kubeconfig=${target.kubeconfig}`] : []),
-      ],
+      ]),
       options,
     );
   }
@@ -1299,9 +1309,21 @@ export class GatewayInstaller {
           `${result.target}: ${result.got}, want ${result.want} (${result.result})`,
       ),
     );
-    if (results.some((result) => result.result === "fail"))
+    if (
+      results.some(
+        (result) => result.result === "fail" && result.want === "blocked",
+      )
+    )
       this.#append([
         "A workspace reaches something the NetworkPolicy should block; check the network plugin enforces NetworkPolicy",
+      ]);
+    if (
+      results.some(
+        (result) => result.result === "fail" && result.want === "open",
+      )
+    )
+      this.#append([
+        "A workspace cannot reach something it needs; check the cluster's egress and the gateway's runner Service",
       ]);
   }
 
