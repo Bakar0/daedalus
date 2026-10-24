@@ -535,10 +535,6 @@ const RUNNABLE_EXTENSIONS = new Set([
   ".inetloc",
 ]);
 
-function notYet(): never {
-  throw new DaedalusError("DEPENDENCY", "The gateway install is not built yet");
-}
-
 export function createDesktopRequestHandlers(
   context: ApplicationContext,
   host: Partial<DesktopHost> = {},
@@ -569,6 +565,7 @@ export function createDesktopRequestHandlers(
         cloudSignIns: context.cloud.signIns.list(),
         workspaceMoves: context.workspaceMoves.list(),
         cloudPreparing: context.cloud.preparing(),
+        gatewayInstall: context.gatewayInstall.current(),
       })),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
       mutate(async () => {
@@ -954,13 +951,20 @@ export function createDesktopRequestHandlers(
         });
         return null;
       }),
-    // Stubs until the installer lands on this branch.
-    gatewayInstallContexts: () => result(() => notYet()),
-    gatewayInstallPreflight: () => result(() => notYet()),
-    gatewayInstallDryRun: () => result(() => notYet()),
-    gatewayInstallStart: () => result(() => notYet()),
-    gatewayInstallLocal: () => result(() => notYet()),
-    gatewayInstallDismiss: () => result(() => null),
+    gatewayInstallContexts: () => result(() => context.gatewayInstall.tools()),
+    gatewayInstallPreflight: (params) =>
+      result(() => context.gatewayInstall.preflight(params)),
+    gatewayInstallDryRun: (params) =>
+      result(() => context.gatewayInstall.dryRun(params)),
+    gatewayInstallStart: (params) =>
+      mutate(() => context.gatewayInstall.start(params)),
+    gatewayInstallLocal: ({ email }) =>
+      mutate(() => context.gatewayInstall.local({ email })),
+    gatewayInstallDismiss: () =>
+      mutate(() => {
+        context.gatewayInstall.dismiss();
+        return null;
+      }),
     remoteGet: () => result(() => remote.state()),
     remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
     remoteSetKeepAwake: ({ enabled }) =>

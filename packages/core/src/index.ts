@@ -30,6 +30,8 @@ export * from "./cloud/sign-in-pages";
 export * from "./cloud/cloud-service";
 export * from "./cloud/cloud-sessions";
 export * from "./cloud/gateway-client";
+export * from "./cloud/gateway-install";
+export * from "./cloud/gateway-install-checks";
 export * from "./cloud/link";
 export * from "./cloud/remote-session-host";
 export * from "./services/notifications";
