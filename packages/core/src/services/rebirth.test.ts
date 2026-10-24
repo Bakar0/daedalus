@@ -474,4 +474,92 @@ describe("automatic rebirth", () => {
       );
     });
   });
+  test("the retries back off, stop at three, and then tell the user", async () => {
+    await withRebirthContext(async (context, tmux) => {
+      const { workspace, first } = await startedTask(context);
+      await context.workspaces.update(workspace.id, {
+        autoRebirthPercent: 85,
+      });
+      const full = [{ sessionId: first.id, context: { usedPercent: 90 } }];
+      expect(await context.agents.sweepAutoRebirths(full)).toHaveLength(1);
+      const idleFor = async (minutes: number) => {
+        context.repositories.saveAgentActivity({
+          sessionId: first.id,
+          activity: "idle",
+          detail: null,
+          since: new Date().toISOString(),
+          observedAt: new Date().toISOString(),
+          source: "hook",
+          notifiedActivity: null,
+          notifiedAt: null,
+        });
+        context.repositories.updateAgent({
+          ...(await context.agents.get(first.id)),
+          rebirthRequestedAt: new Date(
+            Date.now() - minutes * 60_000,
+          ).toISOString(),
+        });
+        return (await context.agents.sweepAutoRebirths(full)).length;
+      };
+      // Each retry waits twice as long as the one before: 15, 30, 60 minutes.
+      expect(await idleFor(16)).toBe(1);
+      expect(await idleFor(16)).toBe(0);
+      expect(await idleFor(31)).toBe(1);
+      expect(await idleFor(31)).toBe(0);
+      expect(await idleFor(61)).toBe(1);
+      expect(tmux.sent).toHaveLength(4);
+      // A continue that always fails is not asked about forever: after three
+      // retries the session goes on the user's badge, and nothing is sent.
+      expect(await idleFor(240)).toBe(0);
+      expect(tmux.sent).toHaveLength(4);
+      const activity = context.repositories.findAgentActivity(first.id);
+      expect(activity?.activity).toBe("needs_input");
+      expect(activity?.detail).toContain("4 times");
+      expect(await idleFor(480)).toBe(0);
+      expect(tmux.sent).toHaveLength(4);
+    });
+  });
+
+  test("a predecessor waiting to be archived is not asked again", async () => {
+    await withRebirthContext(async (context, tmux) => {
+      const { workspace, first } = await startedTask(context);
+      await context.workspaces.update(workspace.id, {
+        autoRebirthPercent: 85,
+      });
+      const full = [{ sessionId: first.id, context: { usedPercent: 90 } }];
+      const requested = await context.agents.sweepAutoRebirths(full);
+      // Asked long ago; the agent wrote its note and ran continue itself.
+      context.repositories.updateAgent({
+        ...requested[0]!,
+        rebirthRequestedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+      });
+      const { predecessor } = await context.agents.continueSession({
+        id: first.id,
+        archive: "later",
+      });
+      // The continue stamps the mark afresh rather than keeping the old time.
+      expect(
+        Date.now() - Date.parse(predecessor.rebirthRequestedAt!),
+      ).toBeLessThan(60_000);
+      // Even once that time has passed, a predecessor at its prompt with a
+      // successor running is waiting to be archived, not stuck.
+      context.repositories.saveAgentActivity({
+        sessionId: first.id,
+        activity: "done",
+        detail: null,
+        since: new Date().toISOString(),
+        observedAt: new Date().toISOString(),
+        source: "hook",
+        notifiedActivity: null,
+        notifiedAt: null,
+      });
+      context.repositories.updateAgent({
+        ...(await context.agents.get(first.id)),
+        rebirthRequestedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+      });
+      const sent = tmux.sent.length;
+      expect(await context.agents.sweepAutoRebirths(full)).toEqual([]);
+      expect(tmux.sent).toHaveLength(sent);
+    });
+  });
 });

@@ -294,26 +294,23 @@ const homeBasename = (home: string): string =>
  * Anything a channel writes outside its own home has to be named with this, or
  * two installed builds end up fighting over one record.
  *
- * `~/.daedalus` is stable. `~/.daedalus-<name>` is `<name>`, whole: a dev build
- * run with `DAEDALUS_HOME=~/.daedalus-cloudtest` lands in
- * `~/.daedalus-cloudtest-dev` (see `channelHome`), and naming that one `dev`
- * would make it fight the real `~/.daedalus-dev`. Reading it as stable was
- * worse: it relinked the stable app's skills to its own CLI, so every stable
- * session's rebirth ran a CLI that did not know the session.
+ * A non-stable build always ends its home in `-<channel>` (see `channelHome`),
+ * so a home without one of those suffixes is the stable app's: `~/.daedalus`,
+ * or any home a stable build was pointed at.
  *
- * Any other home is stable only when nothing says a non-stable build made it.
- * Such a build always ends its home in `-<channel>`, so a home ending in a
- * build channel's suffix is named after its folder. The rest is a stable
- * build's chosen home, or an unpackaged run's.
+ * `~/.daedalus-<name>-dev` is `<name>-dev`, whole: a dev build run with
+ * `DAEDALUS_HOME=~/.daedalus-cloudtest` lands in `~/.daedalus-cloudtest-dev`,
+ * and naming that one `dev` would make it fight the real `~/.daedalus-dev`.
+ * Reading it as stable was worse: it relinked the stable app's skills to its
+ * own CLI, so every stable session's rebirth ran a CLI that did not know the
+ * session. A channelled home outside `~/.daedalus-*` is named after its folder.
  */
 export function channelName(home: string): string {
   const base = homeBasename(home);
-  if (base === ".daedalus") return "stable";
-  const named = /^\.daedalus-([a-z0-9][a-z0-9-]*)$/.exec(base)?.[1];
-  if (named) return named;
   const channelled = new RegExp(`-(${NON_STABLE_CHANNELS.join("|")})$`);
   if (!channelled.test(base)) return "stable";
-  return base.replace(/^\.+/, "").replace(/[^a-z0-9-]+/g, "-");
+  const named = /^\.daedalus-([a-z0-9][a-z0-9-]*)$/.exec(base)?.[1];
+  return named ?? base.replace(/^\.+/, "").replace(/[^a-z0-9-]+/g, "-");
 }
 
 /**

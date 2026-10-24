@@ -25,6 +25,7 @@ import {
   readdir,
   readlink,
   readFile,
+  realpath,
   rm,
   symlink,
   unlink,
@@ -451,9 +452,12 @@ export async function ensureSkillLink(
     const existing = resolve(dirname(linkPath), await readlink(linkPath));
     if (existing === target) return true;
     // Ours, pointing somewhere stale: a renamed home, or an older layout.
-    const homeOf = (path: string) => dirname(dirname(path));
+    // Resolved, so a home reached through a symlink is still the same home.
+    const homeOf = (path: string) =>
+      realpath(dirname(dirname(path))).catch(() => dirname(dirname(path)));
     const anotherHome =
-      homeOf(existing) !== homeOf(target) && (await pathExists(existing));
+      (await homeOf(existing)) !== (await homeOf(target)) &&
+      (await pathExists(existing));
     if (
       basename(existing) === basename(target) &&
       (!anotherHome || options.reclaim)

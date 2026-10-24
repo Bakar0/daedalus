@@ -195,6 +195,10 @@ test("names every home other than the stable one apart from the rest", () => {
   expect(channelName("/tmp/scratch/home-dev")).toBe("home-dev");
   // A stable build's own choice of home, or an unpackaged run's.
   expect(channelName("/tmp/scratch/home")).toBe("stable");
+  expect(channelName("/Users/x/.daedalus-work-2")).toBe("stable");
+  expect(channelIdentifier("/Users/x/.daedalus-work-2")).toBe(
+    "dev.daedalus.app",
+  );
 });
 
 test("raises the app that owns a home, however that home is named", () => {
