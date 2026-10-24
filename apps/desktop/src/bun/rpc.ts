@@ -535,6 +535,10 @@ const RUNNABLE_EXTENSIONS = new Set([
   ".inetloc",
 ]);
 
+function notYet(): never {
+  throw new DaedalusError("DEPENDENCY", "The gateway install is not built yet");
+}
+
 export function createDesktopRequestHandlers(
   context: ApplicationContext,
   host: Partial<DesktopHost> = {},
@@ -950,6 +954,13 @@ export function createDesktopRequestHandlers(
         });
         return null;
       }),
+    // Stubs until the installer lands on this branch.
+    gatewayInstallContexts: () => result(() => notYet()),
+    gatewayInstallPreflight: () => result(() => notYet()),
+    gatewayInstallDryRun: () => result(() => notYet()),
+    gatewayInstallStart: () => result(() => notYet()),
+    gatewayInstallLocal: () => result(() => notYet()),
+    gatewayInstallDismiss: () => result(() => null),
     remoteGet: () => result(() => remote.state()),
     remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
     remoteSetKeepAwake: ({ enabled }) =>
