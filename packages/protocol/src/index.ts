@@ -1095,6 +1095,7 @@ export interface GatewayCheckDto {
     | "storageClass"
     | "gvisor"
     | "networkPolicy"
+    | "namespace"
     | "release"
     | "images";
   status: "pass" | "warn" | "fail" | "unknown";
@@ -1110,8 +1111,26 @@ export interface GatewayPreflightDto {
   checks: GatewayCheckDto[];
   /** False while any check is `fail`. */
   ready: boolean;
-  /** A daedalus release already in the namespace: the install upgrades it. */
-  release: { namespace: string; revision: number; chartVersion: string } | null;
+  /**
+   * A daedalus release already in the namespace: the install upgrades it and
+   * keeps its values. Only these named values reach the window, read in the
+   * host from `helm get values`; the rest never leaves it.
+   */
+  release: {
+    namespace: string;
+    revision: number;
+    chartVersion: string;
+    devLogin: boolean;
+    /** The gateway.publicUrl it was installed with; "" for none. */
+    publicUrl: string;
+    images: GatewayImagesDto | null;
+    storageClass: string;
+  } | null;
+  /**
+   * Checks the user must acknowledge before installing; `gatewayInstallStart`
+   * refuses without the matching flag. `networkPolicy`: enforcement unknown.
+   */
+  acknowledge: "networkPolicy"[];
 }
 
 export interface GatewayDryRunDto {
@@ -1120,7 +1139,17 @@ export interface GatewayDryRunDto {
   /** What `gatewayInstallStart` must carry; valid 15 minutes in this run. */
   dryRunId: string;
   upgrade: boolean;
-  objects: { kind: string; name: string; namespace: string | null }[];
+  /**
+   * What the install creates or changes. `note` says what happens beyond
+   * creating it, such as "new; label pod-security.kubernetes.io/enforce=restricted"
+   * or "temporary: the egress check, deleted after".
+   */
+  objects: {
+    kind: string;
+    name: string;
+    namespace: string | null;
+    note?: string;
+  }[];
   /** helm's notes and warnings, plain text. */
   notes: string;
 }
@@ -1147,6 +1176,24 @@ export interface GatewayInstallDto {
   gatewayUrl?: string;
   /** True when only this Mac reaches it, through a port-forward the app keeps. */
   portForward?: boolean;
+  /** False when the gateway has dev login off, so the app did not sign in. */
+  signedIn?: boolean;
+  /**
+   * The Keychain did not take the new admin token: `gatewayInstallAdminToken`
+   * returns it once.
+   */
+  adminTokenWaiting?: boolean;
+  /**
+   * The egress check after the install, from a temporary namespace that has
+   * the workspaces' NetworkPolicy (deploy/kind/egress-check.sh). `unproven`:
+   * the target was not reachable from outside the policy either.
+   */
+  egress?: {
+    target: string;
+    want: "open" | "blocked";
+    got: "open" | "blocked";
+    result: "pass" | "fail" | "unproven";
+  }[];
 }
 
 /** A Pro key (an invite code), as an admin sees it. */
@@ -1430,9 +1477,25 @@ export interface DesktopRpcSchema {
           confirm: string;
           email: string;
           publicUrl?: string;
+          /**
+           * Dev login on or off. A new install defaults to on; an upgrade keeps
+           * the installed value unless this is sent. Turning it on while the
+           * gateway has a public URL needs `acknowledgeDevLogin`.
+           */
+          devLogin?: boolean;
           acknowledgeDevLogin?: boolean;
+          /** Required when the preflight's `acknowledge` has `networkPolicy`. */
+          acknowledgeNetworkPolicy?: boolean;
         },
         GatewayInstallDto
+      >;
+      /**
+       * The admin token the Keychain refused, once; null after that or when
+       * there is none. Never in the snapshot or the log.
+       */
+      gatewayInstallAdminToken: Request<
+        Record<string, never>,
+        { token: string; secret: string; namespace: string } | null
       >;
       /** Try it locally: kind cluster daedalus-local through Docker. */
       gatewayInstallLocal: Request<{ email: string }, GatewayInstallDto>;

@@ -892,6 +892,7 @@ export function createDesktopRequestHandlers(
     cloudSignIn: ({ gatewayUrl, email }) =>
       mutate(async () => {
         await context.cloud.signIn(gatewayUrl.trim(), email.trim());
+        await context.gatewayInstall.checkForward();
         return cloudStateDto(await context.cloud.overview());
       }),
     cloudMcpServers: () =>
@@ -904,6 +905,7 @@ export function createDesktopRequestHandlers(
     cloudSignOut: () =>
       mutate(async () => {
         await context.cloud.logout();
+        await context.gatewayInstall.checkForward();
         return cloudStateDto(await context.cloud.overview());
       }),
     cloudWorkspaceCreate: ({ workspace }) =>
@@ -972,6 +974,8 @@ export function createDesktopRequestHandlers(
       mutate(() => context.gatewayInstall.start(params)),
     gatewayInstallLocal: ({ email }) =>
       mutate(() => context.gatewayInstall.local({ email })),
+    gatewayInstallAdminToken: () =>
+      result(() => context.gatewayInstall.adminToken()),
     gatewayInstallDismiss: () =>
       mutate(() => {
         context.gatewayInstall.dismiss();
