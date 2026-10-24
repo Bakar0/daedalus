@@ -1,3 +1,4 @@
+import { BootstrapAuth, createAdmin } from "./admin";
 import { loadConfig } from "./config";
 import { Controller, loadTenantObjects } from "./controller";
 import { inClusterKube } from "./kube";
@@ -12,12 +13,8 @@ const controller = new Controller(
   config,
   loadTenantObjects(config.tenantDir),
 );
-const gateway = createGateway({
-  config,
-  store,
-  controller,
-  relay: new Relay(),
-});
+const relay = new Relay();
+const gateway = createGateway({ config, store, controller, relay });
 const servers = [
   Bun.serve({ ...gateway.public, hostname: "0.0.0.0", port: config.port }),
   // Only the in-cluster Service exposes this one; runner tokens work here only.
@@ -27,6 +24,24 @@ const servers = [
     port: config.runnerPort,
   }),
 ];
+// The admin page: off unless its port is set; 127.0.0.1 unless exposed.
+if (config.admin) {
+  const admin = config.admin;
+  servers.push(
+    Bun.serve({
+      ...createAdmin({
+        config: { ...config, admin },
+        store,
+        controller,
+        relay,
+        workspaces: gateway.workspaces,
+        auth: BootstrapAuth.fromDir(admin.tokenDir),
+      }),
+      hostname: admin.host,
+      port: admin.port,
+    }),
+  );
+}
 // Collection: once now, then on a timer, one pass at a time.
 let collecting = false;
 const collect = () => {
@@ -44,7 +59,7 @@ const collect = () => {
 collect();
 setInterval(collect, config.collectMs);
 console.log(
-  `Gateway listening on ${config.port}, runners on ${config.runnerPort}${config.devLogin ? ", with dev login" : ""}`,
+  `Gateway listening on ${config.port}, runners on ${config.runnerPort}${config.admin ? `, admin on ${config.admin.host}:${config.admin.port}` : ""}${config.devLogin ? ", with dev login" : ""}`,
 );
 
 for (const signal of ["SIGTERM", "SIGINT"] as const)

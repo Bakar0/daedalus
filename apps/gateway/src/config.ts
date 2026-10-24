@@ -49,6 +49,21 @@ export interface GatewayConfig {
   retention: { asleepMs: number };
   /** How often collection runs. */
   collectMs: number;
+  /** The admin page's listener; null when it is off (the default). */
+  admin: AdminConfig | null;
+}
+
+export interface AdminConfig {
+  port: number;
+  /** 127.0.0.1 unless the chart exposes it through its own Service. */
+  host: string;
+  /** Host header values accepted besides localhost, as `name` or `name:port`. */
+  hosts: string[];
+  /** The mounted Secret: `admin-token`, and `viewer-token` if any. */
+  tokenDir: string;
+  sessionMs: number;
+  /** A link on the page when set; http or https only. */
+  opencostUrl: string;
 }
 
 export function loadConfig(env: Record<string, string | undefined>) {
@@ -121,7 +136,34 @@ export function loadConfig(env: Record<string, string | undefined>) {
       1_000,
       amount("DAEDALUS_GATEWAY_COLLECT_SECONDS", "3600", 1_000),
     ),
+    admin: null,
   };
+  const adminPort = port("DAEDALUS_GATEWAY_ADMIN_PORT", "0");
+  if (adminPort !== 0) {
+    const opencostUrl = get("DAEDALUS_GATEWAY_OPENCOST_URL");
+    if (opencostUrl && !/^https?:\/\/[^\s]+$/i.test(opencostUrl))
+      throw new Error("DAEDALUS_GATEWAY_OPENCOST_URL is not an http(s) URL");
+    const sessionMs = amount(
+      "DAEDALUS_GATEWAY_ADMIN_SESSION_HOURS",
+      "8",
+      3_600_000,
+    );
+    if (sessionMs <= 0)
+      throw new Error("DAEDALUS_GATEWAY_ADMIN_SESSION_HOURS must be above 0");
+    config.admin = {
+      port: adminPort,
+      host: get("DAEDALUS_GATEWAY_ADMIN_HOST", "127.0.0.1"),
+      hosts: get("DAEDALUS_GATEWAY_ADMIN_HOSTS")
+        .split(",")
+        .map((host) => host.trim().toLowerCase())
+        .filter(Boolean),
+      tokenDir: get("DAEDALUS_GATEWAY_ADMIN_TOKEN_DIR", "/etc/daedalus/admin"),
+      sessionMs,
+      opencostUrl,
+    };
+    if (adminPort === config.port || adminPort === config.runnerPort)
+      throw new Error("The admin port must differ from the other two");
+  }
   if (config.port === config.runnerPort && config.port !== 0)
     throw new Error("The public and runner ports must differ");
   if (!config.internalUrl)

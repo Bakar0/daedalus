@@ -2,3 +2,9 @@ Daedalus gateway installed in namespace {{ .Release.Namespace }}.
 In-cluster URL: {{ include "daedalus.internalUrl" . }}
 Label the namespace for restricted Pod Security:
   kubectl label ns {{ .Release.Namespace }} pod-security.kubernetes.io/enforce=restricted
+{{- if .Values.admin.enabled }}
+Admin page{{ if .Values.admin.expose }} (Service {{ include "daedalus.gatewayName" . }}-admin){{ end }}:
+  kubectl -n {{ .Release.Namespace }} port-forward deploy/{{ include "daedalus.gatewayName" . }} {{ .Values.admin.port }}
+  open http://localhost:{{ .Values.admin.port }}/admin/
+  Sign in with the admin-token key of Secret {{ .Values.admin.bootstrap.existingSecret }}.
+{{- end }}

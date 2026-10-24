@@ -12,6 +12,28 @@ export interface UserRow {
   email: string;
 }
 
+/** A user as the admin page lists them. */
+export interface AdminUserRow extends UserRow {
+  createdAt: string;
+  /** The admin's override of the workspace limit; null for the default. */
+  maxWorkspaces: number | null;
+}
+
+/** One admin action, as the admin page's audit panel shows it. */
+export interface AuditEntry {
+  at: string;
+  subject: string;
+  session: string;
+  address: string;
+  action: string;
+  target: string;
+  result: string;
+  detail: string;
+}
+
+/** Audit rows kept; older ones are pruned on insert. */
+const AUDIT_KEEP = 1000;
+
 export type TokenOwner =
   | { kind: "user"; userId: string }
   | { kind: "runner"; userId: string; workspaceId: string };
@@ -29,6 +51,8 @@ export interface WorkspaceRow {
   sleeping: boolean;
   /** When it last went to sleep; null while awake. */
   sleptAt: string | null;
+  /** When the Mac and the pod last exchanged a frame, or it was woken. */
+  lastActiveAt: string | null;
   createdAt: string;
 }
 
@@ -58,6 +82,17 @@ CREATE TABLE IF NOT EXISTS workspaces (
   created_at TEXT NOT NULL,
   PRIMARY KEY (user_id, workspace_id)
 );
+CREATE TABLE IF NOT EXISTS admin_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  session TEXT NOT NULL,
+  address TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target TEXT NOT NULL,
+  result TEXT NOT NULL,
+  detail TEXT NOT NULL
+);
 `;
 
 interface WorkspaceRecord {
@@ -71,6 +106,7 @@ interface WorkspaceRecord {
   runner_key: string | null;
   sleeping: number;
   slept_at: string | null;
+  last_active_at: string | null;
   created_at: string;
 }
 
@@ -85,6 +121,7 @@ const toWorkspace = (row: WorkspaceRecord): WorkspaceRow => ({
   runnerKey: row.runner_key,
   sleeping: row.sleeping === 1,
   sleptAt: row.slept_at,
+  lastActiveAt: row.last_active_at,
   createdAt: row.created_at,
 });
 
@@ -111,6 +148,24 @@ export class Store {
     this.#db.run("PRAGMA foreign_keys = ON");
     this.#db.run(SCHEMA);
     this.#addCollectionColumns();
+    this.#addAdminColumns();
+  }
+
+  /** The columns the admin page reads, added to a database from before it. */
+  #addAdminColumns(): void {
+    const columns = (table: string) =>
+      new Set(
+        this.#db
+          .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+          .all()
+          .map((column) => column.name),
+      );
+    this.#db.transaction(() => {
+      if (!columns("workspaces").has("last_active_at"))
+        this.#db.run("ALTER TABLE workspaces ADD COLUMN last_active_at TEXT");
+      if (!columns("users").has("max_workspaces"))
+        this.#db.run("ALTER TABLE users ADD COLUMN max_workspaces INTEGER");
+    })();
   }
 
   /**
@@ -150,6 +205,94 @@ export class Store {
       .query("INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)")
       .run(user.id, user.email, new Date().toISOString());
     return user;
+  }
+
+  /** Every user, for the admin page. */
+  allUsers(): AdminUserRow[] {
+    return this.#db
+      .query<
+        {
+          id: string;
+          email: string;
+          created_at: string;
+          max_workspaces: number | null;
+        },
+        []
+      >(
+        "SELECT id, email, created_at, max_workspaces FROM users ORDER BY email",
+      )
+      .all()
+      .map((row) => ({
+        id: row.id,
+        email: row.email,
+        createdAt: row.created_at,
+        maxWorkspaces: row.max_workspaces,
+      }));
+  }
+
+  /** The user's own workspace limit, or null for the configured default. */
+  maxWorkspaces(userId: string): number | null {
+    return (
+      this.#db
+        .query<{ max_workspaces: number | null }, [string]>(
+          "SELECT max_workspaces FROM users WHERE id = ?",
+        )
+        .get(userId)?.max_workspaces ?? null
+    );
+  }
+
+  /** Sets or (with null) clears the user's limit. False for no such user. */
+  setMaxWorkspaces(userId: string, max: number | null): boolean {
+    return (
+      this.#db
+        .query("UPDATE users SET max_workspaces = ? WHERE id = ?")
+        .run(max, userId).changes > 0
+    );
+  }
+
+  /** Records when the workspace was last in use. */
+  touch(userId: string, workspaceId: string, at = new Date()): void {
+    this.#db
+      .query(
+        "UPDATE workspaces SET last_active_at = ? WHERE user_id = ? AND workspace_id = ?",
+      )
+      .run(at.toISOString(), userId, workspaceId);
+  }
+
+  /** Adds an audit entry and drops all but the newest AUDIT_KEEP. */
+  audit(entry: AuditEntry): void {
+    this.#db.transaction(() => {
+      this.#db
+        .query(
+          `INSERT INTO admin_audit (at, subject, session, address, action, target, result, detail)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          entry.at,
+          entry.subject,
+          entry.session,
+          entry.address,
+          entry.action,
+          entry.target,
+          entry.result,
+          entry.detail,
+        );
+      this.#db
+        .query(
+          "DELETE FROM admin_audit WHERE id <= (SELECT MAX(id) FROM admin_audit) - ?",
+        )
+        .run(AUDIT_KEEP);
+    })();
+  }
+
+  /** The newest audit entries, newest first. */
+  auditLog(limit: number): AuditEntry[] {
+    return this.#db
+      .query<AuditEntry, [number]>(
+        `SELECT at, subject, session, address, action, target, result, detail
+         FROM admin_audit ORDER BY id DESC LIMIT ?`,
+      )
+      .all(limit);
   }
 
   user(id: string): UserRow | null {
@@ -192,15 +335,18 @@ export class Store {
    * one with this id already.
    */
   insertWorkspace(
-    workspace: Omit<WorkspaceRow, "runnerKey" | "sleeping" | "sleptAt">,
+    workspace: Omit<
+      WorkspaceRow,
+      "runnerKey" | "sleeping" | "sleptAt" | "lastActiveAt"
+    >,
     runnerToken: string,
   ): boolean {
     return this.#db.transaction(() => {
       const inserted = this.#db
         .query(
           `INSERT OR IGNORE INTO workspaces
-             (user_id, workspace_id, name, mac_id, mac_key, cpu, memory, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             (user_id, workspace_id, name, mac_id, mac_key, cpu, memory, created_at, last_active_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           workspace.userId,
@@ -210,6 +356,7 @@ export class Store {
           workspace.macKey,
           workspace.cpu,
           workspace.memory,
+          workspace.createdAt,
           workspace.createdAt,
         );
       if (inserted.changes === 0) return false;

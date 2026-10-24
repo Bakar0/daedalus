@@ -55,6 +55,8 @@ function send(socket: PeerSocket, data: string | Uint8Array): void {
 export class Relay {
   /** userId -> deviceId -> the device's one socket. */
   readonly #rooms = new Map<string, Map<string, PeerSocket>>();
+  /** Told of every frame forwarded to or from a workspace's runner. */
+  onActivity?: (userId: string, workspaceId: string) => void;
 
   isOnline(userId: string, deviceId: string): boolean {
     return this.#rooms.get(userId)?.has(deviceId) ?? false;
@@ -132,6 +134,10 @@ export class Relay {
     out.set(from, 1);
     out.set(payload, 1 + from.length);
     send(target, out);
+    this.onActivity?.(
+      sender.userId,
+      sender.role === "runner" ? sender.workspaceId : to.slice("ws:".length),
+    );
   }
 
   /**

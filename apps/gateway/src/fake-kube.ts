@@ -89,6 +89,25 @@ export class FakeKube implements KubeApi {
       return { status: 200, body: { kind: "NamespaceList", items } };
     }
 
+    // A label-selected list of one kind in a namespace.
+    const inNamespace =
+      /^(\/api\/v1\/namespaces\/[^/]+\/[a-z]+)\?labelSelector=(.+)$/.exec(path);
+    if (inNamespace && method === "GET") {
+      const [, collection, selector] = inNamespace;
+      const label = decodeURIComponent(selector!);
+      const items = [...this.objects.entries()]
+        .filter(
+          ([key, object]) =>
+            key.startsWith(`${collection}/`) &&
+            !key.slice(collection!.length + 1).includes("/") &&
+            label in
+              (((object.metadata as Record<string, unknown>)?.labels ??
+                {}) as Record<string, unknown>),
+        )
+        .map(([, object]) => object);
+      return { status: 200, body: { kind: "List", items } };
+    }
+
     const object = this.objects.get(path);
     if (!object) return fail(404, "not found");
     if (method === "GET") return { status: 200, body: object };

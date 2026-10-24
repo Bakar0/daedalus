@@ -1,6 +1,8 @@
 # Who may reach the gateway pod. The public port is open to all, as the
 # public Service decides. The runner port takes traffic only from tenant
-# namespaces (those with the daedalus.dev/user label the gateway sets).
+# namespaces (those with the daedalus.dev/user label the gateway sets). The
+# admin port, when exposed, takes traffic only from admin.allowFrom; with no
+# peers listed, nothing reaches it but kubectl port-forward.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -25,3 +27,10 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.gateway.service.runnerPort }}
+    {{- if and .Values.admin.enabled .Values.admin.expose .Values.admin.allowFrom }}
+    - from:
+        {{- toYaml .Values.admin.allowFrom | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.admin.port }}
+    {{- end }}
