@@ -47,6 +47,7 @@
     "test:cloud-dialog-ui": "bun run scripts/cloud-dialog-ui-check.ts",
     "test:cloud-cards-ui": "bun run scripts/cloud-cards-ui-check.ts",
     "test:cloud-signin-ui": "bun run scripts/cloud-signin-ui-check.ts",
+    "test:sidebar-ui": "bun run scripts/sidebar-ui-check.ts",
     "test:session-focus": "bun run scripts/session-focus-check.ts",
     "test:status-native": "bun run scripts/status-native-check.ts",
     "typecheck": "bun run scripts/typecheck.ts",

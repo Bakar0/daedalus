@@ -8046,13 +8046,15 @@ dd {
   margin-top: 6px;
 }
 /* Plain outlined buttons, not the accent fill. */
-.center-empty-actions button {
+.center-empty-actions button,
+.workspace-list-empty button {
   background: transparent;
   border: 1px solid var(--line-strong);
   color: var(--text);
   font-weight: 500;
 }
-.center-empty-actions button:hover:not(:disabled) {
+.center-empty-actions button:hover:not(:disabled),
+.workspace-list-empty button:hover:not(:disabled) {
   background: var(--raised-hover);
 }
 .center-empty > span:not(.center-empty-actions) {
@@ -9066,4 +9068,19 @@ dd {
   color: var(--secondary);
   cursor: pointer;
   font-size: 12px;
+}
+
+/* The sidebar with no workspace open: a way to make one, in the center
+   empty state's outlined button. */
+.workspace-list-empty svg {
+  fill: none;
+  height: 28px;
+  margin-bottom: 4px;
+  stroke: var(--muted);
+  stroke-linecap: round;
+  stroke-width: 1.5;
+  width: 28px;
+}
+.workspace-list-empty button {
+  margin-top: 6px;
 }

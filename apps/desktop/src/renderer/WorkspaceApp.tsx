@@ -6404,13 +6404,22 @@ export function WorkspaceApp({
               {!snapshot && !error && (
                 <div className="empty">Loading workspaces…</div>
               )}
-              {activeWorkspaces.length === 0 &&
-                archivedWorkspaces.length === 0 && (
-                  <div className="empty large">
-                    <strong>No workspaces yet</strong>
-                    <span>Use + to create one.</span>
-                  </div>
-                )}
+              {snapshot && activeWorkspaces.length === 0 && (
+                <div className="empty large workspace-list-empty">
+                  <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <rect height="14" rx="2" width="18" x="3" y="5" />
+                    <path d="M3 9h18M12 12v4M10 14h4" />
+                  </svg>
+                  <span>
+                    {archivedWorkspaces.length > 0
+                      ? "No open workspaces."
+                      : "No workspaces yet."}
+                  </span>
+                  <button onClick={() => setModal("workspace")} type="button">
+                    Create workspace
+                  </button>
+                </div>
+              )}
               {orderedWorkspaces.map((item) => {
                 const itemSessions = agents.filter(
                   (session) =>

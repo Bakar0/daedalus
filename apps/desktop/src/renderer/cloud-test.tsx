@@ -117,6 +117,9 @@ const session = (
   ...overrides,
 });
 
+// `workspaces=none`: nothing in the sidebar yet.
+const noWorkspaces = query.get("workspaces") === "none";
+
 const snapshot = {
   workspaces: [
     workspace("local-ws", "Plain local", 1),
@@ -129,7 +132,7 @@ const snapshot = {
         }
       : { ...workspace("sleepy-ws", "Sleepy project", 3), place: "cloud" },
     { ...workspace("other-ws", "Other account", 4), place: "cloud" },
-  ],
+  ].filter(() => !noWorkspaces),
   tasks: [],
   // A sign-in page the cloud Claude session asked to open. The URL never
   // reaches the window, only its host. `signin=claude|aws`, `paste=1` for
