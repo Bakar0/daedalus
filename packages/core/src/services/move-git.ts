@@ -234,64 +234,6 @@ export async function fetchBundle(
   return { head: objectId(workParents[0]!, "commit"), index, work };
 }
 
-/** Paths whose contents differ between two commits' trees. */
-export async function changedPaths(
-  side: MoveSide,
-  dir: string,
-  from: string,
-  to: string,
-): Promise<string[]> {
-  const result = await side.run(dir, "git", [
-    "diff",
-    "--name-only",
-    "-z",
-    "--no-renames",
-    from,
-    to,
-  ]);
-  if (result.exitCode !== 0)
-    throw new DaedalusError(
-      "DEPENDENCY",
-      `git diff failed on ${side.label}: ${result.stderr.trim()}`,
-    );
-  return result.stdout.split("\0").filter(Boolean);
-}
-
-/**
- * Paths that are symbolic links in `to` and were not the same link in
- * `from`. A link can point anywhere on this Mac, so a new one is the user's
- * to approve, whatever its name.
- */
-export async function changedLinks(
-  side: MoveSide,
-  dir: string,
-  from: string,
-  to: string,
-): Promise<string[]> {
-  const result = await side.run(dir, "git", [
-    "diff",
-    "--raw",
-    "-z",
-    "--no-renames",
-    "--no-abbrev",
-    from,
-    to,
-  ]);
-  if (result.exitCode !== 0)
-    throw new DaedalusError(
-      "DEPENDENCY",
-      `git diff failed on ${side.label}: ${result.stderr.trim()}`,
-    );
-  // `:<old mode> <new mode> <old id> <new id> <status>` then the path.
-  const fields = result.stdout.split("\0");
-  const links: string[] = [];
-  for (let index = 0; index + 1 < fields.length; index += 2) {
-    const newMode = fields[index]!.split(" ")[1];
-    if (newMode === "120000") links.push(fields[index + 1]!);
-  }
-  return links;
-}
-
 /**
  * Whether the copy on this side is as the session left it: the commit and
  * working tree it last sent or received. A side with no record of the
@@ -420,57 +362,6 @@ export const foldPath = (path: string): string =>
     .toUpperCase()
     .toLowerCase()
     .normalize("NFKC");
-
-/** Folders whose files steer an agent or run on open, at any depth. */
-const STEERING_FOLDERS = [
-  ".claude",
-  ".husky",
-  ".githooks",
-  ".vscode",
-  ".devcontainer",
-  // Other agents' configuration.
-  ".cursor",
-  ".codex",
-  ".windsurf",
-  ".gemini",
-];
-/** Files that do, by name at any depth. */
-const STEERING_FILES = [
-  "claude.md",
-  "claude.local.md",
-  "agents.md",
-  "gemini.md",
-  ".mcp.json",
-  ".envrc",
-  ".cursorrules",
-  ".windsurfrules",
-  // Tool managers act on these when a shell enters the folder.
-  ".mise.toml",
-  ".tool-versions",
-  // git's own: filters (git-lfs and the like) run on checkout, and
-  // submodules can be fetched with it.
-  ".gitattributes",
-  ".lfsconfig",
-  ".gitmodules",
-];
-
-/** Whether a repository path steers an agent or runs when it is opened. */
-export function steersAgent(path: string): boolean {
-  const parts = foldPath(path).split("/");
-  const name = parts.at(-1) ?? "";
-  return (
-    parts.some((part) => STEERING_FOLDERS.includes(part)) ||
-    STEERING_FILES.includes(name) ||
-    // Copilot's instructions live under .github, beside files that do not.
-    parts.some(
-      (part, index) =>
-        part === ".github" &&
-        (parts[index + 1] === "instructions" ||
-          (parts[index + 1] === "copilot-instructions.md" &&
-            index + 2 === parts.length)),
-    )
-  );
-}
 
 /**
  * Paths in a commit's tree that this Mac would lay down as one file: two

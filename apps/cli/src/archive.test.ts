@@ -1,17 +1,8 @@
 import { describe, expect, test } from "vitest";
 import type { Workspace } from "@daedalus/core";
-import { approvedPaths, workspaceArchivedOrExplain } from "./archive";
+import { workspaceArchivedOrExplain } from "./archive";
 
 describe("archiving from the CLI", () => {
-  test("--approve takes a comma list", () => {
-    expect(approvedPaths("app/CLAUDE.md, app/.mcp.json,")).toEqual([
-      "app/CLAUDE.md",
-      "app/.mcp.json",
-    ]);
-    expect(approvedPaths(undefined)).toBeUndefined();
-    expect(approvedPaths(",")).toBeUndefined();
-  });
-
   test("an archived workspace comes back as it is", () => {
     const workspace = { id: "w1" } as Workspace;
     expect(
@@ -19,15 +10,7 @@ describe("archiving from the CLI", () => {
     ).toBe(workspace);
   });
 
-  test("what the app would ask names the flag that answers it", () => {
-    expect(() =>
-      workspaceArchivedOrExplain(
-        { status: "needsApproval", paths: ["CLAUDE.md", "repos/app/.envrc"] },
-        "ops",
-      ),
-    ).toThrow(
-      "Look at them, then run 'daedal workspace archive ops --approve CLAUDE.md,repos/app/.envrc'",
-    );
+  test("one too big to come home says what is over the cap", () => {
     expect(() =>
       workspaceArchivedOrExplain(
         {

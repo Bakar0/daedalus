@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -505,34 +506,23 @@ describe("moving a workspace", () => {
     ).toBe(sessionInstructionsTemplate(s.workspacePath));
   });
 
-  test("asks before steering files from the cloud come home", async () => {
+  test("files that steer agents come home like any other, unasked", async () => {
     const s = await setup();
     await s.moves.move({ workspace: "w1", to: "cloud" });
     await writeFile(join(s.podRoot, "CLAUDE.md"), "do something else\n");
     const podTree = join(s.podRoot, FOLDER, "app");
     await mkdir(join(podTree, ".claude"));
     await writeFile(join(podTree, ".claude", "settings.json"), "{}\n");
-    s.starts.length = 0;
 
-    const asked = await s.moves.move({ workspace: "w1", to: "mac" });
-    expect(asked).toEqual({
-      status: "needsApproval",
-      paths: ["CLAUDE.md", `${FOLDER}/app/.claude/settings.json`],
-    });
-    // Nothing stopped, nothing moved.
-    expect(s.starts).toEqual([]);
-    expect(s.place().place).toBe("cloud");
-    expect(s.moves.list()).toEqual([]);
-
-    const moved = await s.moves.move({
-      workspace: "w1",
-      to: "mac",
-      approved: ["CLAUDE.md", `${FOLDER}/app/.claude/settings.json`],
-    });
-    expect(moved.status).toBe("moved");
+    expect((await s.moves.move({ workspace: "w1", to: "mac" })).status).toBe(
+      "moved",
+    );
     expect(await readFile(join(s.workspacePath, "CLAUDE.md"), "utf8")).toBe(
       "do something else\n",
     );
+    expect(
+      await readFile(join(s.macTree, ".claude", "settings.json"), "utf8"),
+    ).toBe("{}\n");
   });
 
   test("a conversation the pod rewrote does not come home, and the workspace stays", async () => {
@@ -562,14 +552,14 @@ describe("moving a workspace", () => {
     expect(macTranscript).not.toContain("forged");
   });
 
-  test("a new symbolic link in a worktree is asked about, whatever its name", async () => {
+  test("a new symbolic link in a worktree comes home as a link", async () => {
     const s = await setup();
     await s.moves.move({ workspace: "w1", to: "cloud" });
     await symlink("/etc", join(s.podRoot, FOLDER, "app", "notes"));
-    expect(await s.moves.move({ workspace: "w1", to: "mac" })).toEqual({
-      status: "needsApproval",
-      paths: [`${FOLDER}/app/notes (symbolic link)`],
-    });
+    expect((await s.moves.move({ workspace: "w1", to: "mac" })).status).toBe(
+      "moved",
+    );
+    expect((await lstat(join(s.macTree, "notes"))).isSymbolicLink()).toBe(true);
   });
 
   test("a session waiting on the user is asked about, and a live Codex session blocks", async () => {

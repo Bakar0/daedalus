@@ -739,12 +739,9 @@ export function createDesktopRequestHandlers(
           workspaceDto(workspace),
         ),
       ),
-    workspaceArchive: ({ reference, approved }) =>
+    workspaceArchive: ({ reference }) =>
       mutate(async () => {
-        const archived = await context.archive.archiveWorkspace({
-          reference,
-          ...(approved ? { approved } : {}),
-        });
+        const archived = await context.archive.archiveWorkspace({ reference });
         return archived.status === "archived"
           ? {
               status: "archived" as const,
@@ -752,12 +749,11 @@ export function createDesktopRequestHandlers(
             }
           : archived;
       }),
-    workspaceMove: ({ reference, to, approved, stopWorking }) =>
+    workspaceMove: ({ reference, to, stopWorking }) =>
       mutate(async () => {
         const moved = await context.workspaceMoves.move({
           workspace: reference,
           to,
-          ...(approved ? { approved } : {}),
           ...(stopWorking ? { stopWorking } : {}),
         });
         return moved.status === "moved"

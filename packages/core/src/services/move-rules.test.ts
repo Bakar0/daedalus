@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "@daedalus/platform";
-import { snapshotRepository, steersAgent } from "./move-git";
+import { snapshotRepository } from "./move-git";
 import { LocalMoveSide } from "./move-side";
 import {
   lastPermissionMode,
@@ -51,47 +51,6 @@ describe("move rules", () => {
     expect(await git(repo, "rev-parse", `${second.work}^{tree}`)).toBe(
       await git(repo, "rev-parse", `${first.work}^{tree}`),
     );
-  });
-
-  test("names what steers an agent or runs on open", () => {
-    for (const path of [
-      ".claude/settings.json",
-      ".claude/commands/x.md",
-      "pkg/.claude/skills/a/SKILL.md",
-      "CLAUDE.md",
-      "docs/AGENTS.md",
-      ".mcp.json",
-      ".envrc",
-      ".husky/pre-commit",
-      ".githooks/post-checkout",
-      ".vscode/tasks.json",
-      ".devcontainer/devcontainer.json",
-      ".gitattributes",
-      "sub/.lfsconfig",
-      ".gitmodules",
-      ".cursor/rules/a.mdc",
-      ".codex/config.toml",
-      ".windsurf/rules.md",
-      ".github/copilot-instructions.md",
-      ".github/instructions/a.instructions.md",
-      "GEMINI.md",
-      // The Kelvin sign folds to k, and a decomposed é to a composed one.
-      ".githoo\u212As/pre-commit",
-      ".cla\u200cude/settings.json",
-      "\ufeffCLAUDE.md",
-      ".en\u200bvrc",
-      ".mcp\ufe0f.json",
-      "AGENTS\u200d.md",
-      "docs/AGENTS.md".normalize("NFD"),
-    ])
-      expect(steersAgent(path)).toBe(true);
-    for (const path of [
-      "src/claude.ts",
-      "README.md",
-      "claude/notes.md",
-      ".github/workflows/ci.yml",
-    ])
-      expect(steersAgent(path)).toBe(false);
   });
 
   test("rewrites cwd and the permission mode, and reads the last mode", () => {

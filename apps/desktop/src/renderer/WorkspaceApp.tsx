@@ -95,7 +95,6 @@ import {
 } from "./dialogs";
 import {
   cloudLimitMessage,
-  pathLines,
   sessionLines,
   tooBigLines,
   WorkspaceMoveState,
@@ -4248,7 +4247,6 @@ export function WorkspaceApp({
    */
   async function moveWorkspace(item: WorkspaceDto, to: "cloud" | "mac") {
     setMoveErrors(({ [item.id]: _gone, ...rest }) => rest);
-    let approved: string[] | undefined;
     let stopWorking = false;
     for (let round = 0; round < 4; round++) {
       const answer = await workspaceMoveActions.run(
@@ -4256,7 +4254,6 @@ export function WorkspaceApp({
           .workspaceMove({
             reference: item.id,
             to,
-            ...(approved ? { approved } : {}),
             ...(stopWorking ? { stopWorking } : {}),
           })
           .then(
@@ -4276,12 +4273,6 @@ export function WorkspaceApp({
       );
       if (!answer) return;
       if (answer.status === "moved") return;
-      if (answer.status === "needsApproval") {
-        if (!(await askBringChanges(item.name, answer.paths, "Move with them")))
-          return;
-        approved = answer.paths;
-        continue;
-      }
       if (answer.status === "busy") {
         const stop = await askChoice({
           title: "Stop sessions that wait for you?",
@@ -4313,26 +4304,6 @@ export function WorkspaceApp({
       });
       return;
     }
-  }
-
-  /**
-   * Files that steer agents changed in the cloud: bring them, or stop. The
-   * paths come from the pod, so they are listed as plain, short lines.
-   */
-  async function askBringChanges(
-    name: string,
-    paths: string[],
-    confirmLabel: string,
-  ) {
-    return (
-      (await askChoice({
-        title: "Bring these changes to this Mac?",
-        message: `In the cloud, sessions in ${name} changed files that steer agents or run when a folder opens:`,
-        lines: pathLines(paths),
-        // A security question: Enter must not answer it.
-        choices: [{ id: "bring", label: confirmLabel, danger: true }],
-      })) === "bring"
-    );
   }
 
   // The button runs the same thing as `/daedalus-rebirth`: a running agent
@@ -4563,34 +4534,16 @@ export function WorkspaceApp({
       setSelectedTaskId(undefined);
       setActiveSessionId(undefined);
     }
-    // A workspace in the cloud comes home first, which may ask about files
-    // that steer agents; one that is too big to come home is not archived.
-    let approved: string[] | undefined;
-    let archived = false;
-    for (let round = 0; round < 3; round++) {
-      const answer = await perform(
-        client.request.workspaceArchive({
-          reference: item.id,
-          ...(approved ? { approved } : {}),
-        }),
+    // A workspace in the cloud comes home first; one that is too big to
+    // come home is not archived.
+    const answer = await perform(
+      client.request.workspaceArchive({ reference: item.id }),
+    );
+    const archived = answer?.status === "archived";
+    if (answer?.status === "needsSmaller")
+      setError(
+        `${item.name} is too big to come home from the cloud, so it is not archived. ${tooBigLines(answer.items).join("; ")}`,
       );
-      if (!answer) break;
-      if (answer.status === "archived") {
-        archived = true;
-        break;
-      }
-      if (answer.status === "needsSmaller") {
-        setError(
-          `${item.name} is too big to come home from the cloud, so it is not archived. ${tooBigLines(answer.items).join("; ")}`,
-        );
-        break;
-      }
-      if (
-        !(await askBringChanges(item.name, answer.paths, "Archive with them"))
-      )
-        break;
-      approved = answer.paths;
-    }
     setArchivingWorkspaceIds((current) => {
       const next = new Set(current);
       next.delete(item.id);

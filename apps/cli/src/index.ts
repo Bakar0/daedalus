@@ -29,7 +29,7 @@ import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
-import { approvedPaths, workspaceArchivedOrExplain } from "./archive";
+import { workspaceArchivedOrExplain } from "./archive";
 import {
   execCommand,
   execJsonFlag,
@@ -125,9 +125,8 @@ const commandHelp: Record<string, string> = {
       [--default-model <model>|none] [--auto-rebirth <percent>|off|default]
       [--default-claude-account <account>|default]
       [--default-codex-account <account>|default]
-  daedal workspace archive <workspace> [--approve <path>,...]
-  daedal workspace move <workspace> --to cloud|mac [--approve <path>,...]
-      [--stop-working]
+  daedal workspace archive <workspace>
+  daedal workspace move <workspace> --to cloud|mac [--stop-working]
   daedal workspace restore <workspace>
   daedal workspace delete <workspace> --force
   daedal workspace remove <workspace> [--delete-files] --force
@@ -159,10 +158,8 @@ never ignored files), the other files of the folder, and every Claude
 conversation. It waits for working sessions to end their turns (up to 30
 minutes) unless --stop-working stops them at once, then resumes them on the
 other side. In the cloud, every session and terminal of the workspace runs
-there, and this Mac keeps its folder as it was, as a backup. Moving home
-lists files changed in the cloud that steer an agent or run on this Mac,
-such as .claude/, CLAUDE.md or .envrc, and stops unless --approve names
-them; sessions come home asking before they act. On a failure the
+there, and this Mac keeps its folder as it was, as a backup. Sessions
+resume in the permission mode they had on this Mac. On a failure the
 workspace stays where it was.`,
   task: `Task commands:
   daedal task create [--workspace <workspace>] --title <title> [--description <text> | --description-file <path|->] [--priority <priority>]
@@ -630,16 +627,14 @@ async function workspaceCommand(
     return 0;
   }
   if (action === "archive") {
-    const parsed = parseArguments(args, ["approve"]);
+    const parsed = parseArguments(args, []);
     expectPositionals(
       parsed.positionals,
       1,
-      "daedal workspace archive <workspace> [--approve <path>,...]",
+      "daedal workspace archive <workspace>",
     );
-    const approved = approvedPaths(parsed.values.approve);
     const archived = await context.archive.archiveWorkspace({
       reference: parsed.positionals[0]!,
-      ...(approved ? { approved } : {}),
     });
     const result = workspaceArchivedOrExplain(archived, parsed.positionals[0]!);
     printResult(result, json, () =>
@@ -649,27 +644,20 @@ async function workspaceCommand(
   }
   if (action === "move") {
     const usage =
-      "daedal workspace move <workspace> --to cloud|mac [--approve <path>,...] [--stop-working]";
-    const parsed = parseArguments(args, ["to", "approve"], ["stop-working"]);
+      "daedal workspace move <workspace> --to cloud|mac [--stop-working]";
+    const parsed = parseArguments(args, ["to"], ["stop-working"]);
     expectPositionals(parsed.positionals, 1, usage);
     const to = parsed.values.to;
     if (to !== "cloud" && to !== "mac")
       throw new DaedalusError("VALIDATION", "--to is cloud or mac");
-    const approved = approvedPaths(parsed.values.approve);
     const result = await context.workspaceMoves.move({
       workspace: parsed.positionals[0]!,
       to,
-      ...(approved?.length ? { approved } : {}),
       ...(parsed.flags.has("stop-working") ? { stopWorking: true } : {}),
     });
     if (result.status !== "moved") {
       printResult(result, json, () => {
-        if (result.status === "needsApproval") {
-          console.log(
-            "These files changed in the cloud and steer an agent or run on this Mac; move again with --approve <path>,... naming them:",
-          );
-          for (const path of result.paths) console.log(`  ${path}`);
-        } else if (result.status === "busy") {
+        if (result.status === "busy") {
           console.log(
             "These sessions wait for an answer, so their turns will not end; answer them, or move again with --stop-working:",
           );
