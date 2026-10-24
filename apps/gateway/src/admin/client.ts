@@ -1,12 +1,86 @@
 /**
- * The admin page's script. The gateway serves `(adminClient)()` as
- * /admin/admin.js, so everything it needs lives inside the function: it may
- * use only browser globals, never an import or a module-level value.
+ * The admin page's script. The gateway serves
+ * `(adminClient)((filterTools)())` as /admin/admin.js, so each function
+ * holds everything it needs: it may use only browser globals and what it is
+ * passed, never an import or a module-level value.
  *
  * Every value from the gateway goes into the page as text (textContent and
  * attributes), never as HTML. Workspace names and emails come from users.
  */
-export function adminClient(): void {
+
+/** The filter's matching, as `filterTools()` returns it. */
+export interface FilterTools {
+  distance(a: string, b: string): number;
+  find(text: string, term: string): [number, number] | null;
+  matches(fields: string[], terms: string[]): boolean;
+}
+
+/**
+ * The admin page's fuzzy matching. Self-contained like `adminClient`: the
+ * gateway serves `(adminClient)((filterTools)())`, and the tests call it.
+ */
+export function filterTools(): FilterTools {
+  /** Optimal string alignment distance: edits, with swaps of neighbours. */
+  function distance(a: string, b: string): number {
+    const rows: number[][] = [];
+    for (let i = 0; i <= a.length; i++) {
+      rows.push([i]);
+      for (let j = 1; j <= b.length; j++) {
+        if (i === 0) {
+          rows[0]!.push(j);
+          continue;
+        }
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        let best = Math.min(
+          rows[i - 1]![j]! + 1,
+          rows[i]![j - 1]! + 1,
+          rows[i - 1]![j - 1]! + cost,
+        );
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1])
+          best = Math.min(best, rows[i - 2]![j - 2]! + 1);
+        rows[i]!.push(best);
+      }
+    }
+    return rows[a.length]![b.length]!;
+  }
+
+  /**
+   * Where `term` is in `text`: as a substring, else a word (or the start of
+   * one) within one typo for terms of 4 or more letters, two from 8.
+   */
+  function find(text: string, term: string): [number, number] | null {
+    const lower = text.toLowerCase();
+    const at = lower.indexOf(term);
+    if (at >= 0) return [at, at + term.length];
+    const typos = term.length >= 8 ? 2 : term.length >= 4 ? 1 : 0;
+    if (!typos) return null;
+    const words = /[a-z0-9]+/g;
+    for (let match = words.exec(lower); match; match = words.exec(lower)) {
+      const word = match[0];
+      // The whole word first, then its starts, nearest the term's length.
+      const lengths = [word.length];
+      for (let step = 0; step <= typos; step++)
+        for (const length of [term.length + step, term.length - step])
+          if (length >= term.length && length < word.length)
+            lengths.push(length);
+      for (const length of lengths)
+        if (distance(word.slice(0, length), term) <= typos)
+          return [match.index, match.index + length];
+    }
+    return null;
+  }
+
+  /** Whether every term is somewhere in the fields. */
+  function matches(fields: string[], list: string[]): boolean {
+    return list.every((term) =>
+      fields.some((text) => find(text, term) !== null),
+    );
+  }
+
+  return { distance, find, matches };
+}
+
+export function adminClient(tools: FilterTools): void {
   interface Session {
     subject: string;
     role: "viewer" | "admin";
@@ -25,6 +99,7 @@ export function adminClient(): void {
     daysUntilCollection: number | null;
     disk: { name: string; size: string }[];
     diskBytes: number;
+    live: { cpu: number; memory: number } | null;
     resources: {
       cpu: { request: string; limit: string };
       memory: { request: string; limit: string };
@@ -57,6 +132,59 @@ export function adminClient(): void {
       memoryRequestedBytes: number;
     };
     users: User[];
+    health: Health;
+  }
+  interface Health {
+    ok: boolean;
+    problems: {
+      severity: "error" | "warning";
+      area: string;
+      message: string;
+    }[];
+    nodes:
+      | {
+          name: string;
+          ready: boolean;
+          readyMessage: string | null;
+          unschedulable: boolean;
+          runtime: boolean | null;
+          allocatable: { cpu: number; memory: number; ephemeral: number };
+          requested: { cpu: number; memory: number; ephemeral: number };
+          workspacePods: number;
+        }[]
+      | null;
+    nodesError: string | null;
+    runtimeClass: string;
+    runtimeHandler: string;
+    pods: {
+      email: string;
+      workspace: string;
+      pod: string;
+      kind: string;
+      detail: string;
+    }[];
+    volumes: { email: string; volume: string; phase: string }[];
+    quotas: {
+      email: string;
+      storage: { used: number; hard: number } | null;
+      volumes: { used: number; hard: number } | null;
+      pods: { used: number; hard: number } | null;
+    }[];
+    metrics: { available: boolean; reason: string | null };
+    gateway: {
+      startedAt: string;
+      uptimeSeconds: number;
+      macs: number;
+      runners: number;
+      collectMinutes: number;
+      lastCollection: {
+        at: string;
+        workspaces: number;
+        namespaces: number;
+        failures: number;
+      } | null;
+    };
+    recentLog: { at: string; message: string }[];
   }
   interface AuditEntry {
     at: string;
@@ -135,6 +263,91 @@ export function adminClient(): void {
     unknown: "Unknown",
   };
 
+  /** Words a status filter matches, besides the label. */
+  const STATUS_WORDS: Record<string, string> = {
+    running: "running awake",
+    sleeping: "asleep sleeping",
+    starting: "starting",
+    failed: "failed error",
+    unknown: "unknown",
+  };
+
+  type Page = "overview" | "health" | "workspaces" | "audit";
+  const PAGES: { id: Page; label: string }[] = [
+    { id: "overview", label: "Overview" },
+    { id: "health", label: "Health" },
+    { id: "workspaces", label: "Workspaces" },
+    { id: "audit", label: "Audit" },
+  ];
+
+  /**
+   * The page and the filter live in the URL hash, so a view can be shared:
+   * `#health`, `#audit`, `#workspaces?q=omer asleep`. The older `#q=...`
+   * opens Workspaces with that filter.
+   */
+  function readRoute(): { page: Page; query: string } {
+    const hash = window.location.hash.replace(/^#/, "");
+    const [name = "", search = ""] = hash.split("?", 2) as [string?, string?];
+    const decode = (text: string) => {
+      try {
+        return decodeURIComponent(text);
+      } catch {
+        return "";
+      }
+    };
+    if (name.startsWith("q="))
+      return { page: "workspaces", query: decode(name.slice(2)) };
+    const page = PAGES.find((item) => item.id === name)?.id ?? "overview";
+    const match = /(?:^|&)q=([^&]*)/.exec(search);
+    return { page, query: match ? decode(match[1]!) : "" };
+  }
+
+  let { page, query } = readRoute();
+
+  /** The hash for a page, carrying the filter on Workspaces. */
+  function hashFor(target: Page): string {
+    if (target === "workspaces" && query.trim())
+      return `#workspaces?q=${encodeURIComponent(query.trim())}`;
+    return target === "overview" ? "#" : `#${target}`;
+  }
+
+  const terms = () =>
+    query
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((term) => term.length > 0);
+
+  const { find, matches: matchAll } = tools;
+  /** Whether every term is somewhere in the fields. */
+  const matches = (fields: string[], list = terms()) => matchAll(fields, list);
+
+  const workspaceFields = (user: User, workspace: Workspace) => [
+    user.email,
+    user.id,
+    workspace.name,
+    workspace.workspaceId,
+    `${STATUS_LABEL[workspace.status] ?? ""} ${STATUS_WORDS[workspace.status] ?? ""}`,
+  ];
+
+  /** The text with every filter match marked. */
+  function marked(text: string): Node {
+    const list = terms();
+    if (!list.length) return document.createTextNode(text);
+    const ranges = list
+      .map((term) => find(text, term))
+      .filter((range): range is [number, number] => range !== null)
+      .sort((a, b) => a[0] - b[0]);
+    const out = document.createDocumentFragment();
+    let at = 0;
+    for (const [start, end] of ranges) {
+      if (start < at) continue;
+      out.append(text.slice(at, start), el("mark", {}, text.slice(start, end)));
+      at = end;
+    }
+    out.append(text.slice(at));
+    return out;
+  }
+
   function when(iso: string | null): string {
     if (!iso) return "–";
     const date = new Date(iso);
@@ -210,11 +423,48 @@ export function adminClient(): void {
       out.addEventListener("click", () => void signOut());
       right.append(out);
     }
-    return el("header", {}, el("h1", {}, "Daedalus cloud admin"), right);
+    const nav = el("nav", { "aria-label": "Admin pages" });
+    if (session && overview)
+      for (const item of PAGES) {
+        const link = el(
+          "a",
+          {
+            href: hashFor(item.id),
+            class: item.id === page ? "current" : "",
+            "data-testid": `nav-${item.id}`,
+            ...(item.id === page ? { "aria-current": "page" } : {}),
+          },
+          item.label,
+        );
+        if (item.id === "health" && !overview.health.ok)
+          link.append(
+            el(
+              "span",
+              { class: "count", "data-testid": "nav-health-count" },
+              String(overview.health.problems.length),
+            ),
+          );
+        if (item.id === "workspaces")
+          link.append(
+            el(
+              "span",
+              { class: "count quiet" },
+              String(overview.summary.workspaces),
+            ),
+          );
+        nav.append(link);
+      }
+    return el(
+      "header",
+      {},
+      el("div", { class: "brand" }, el("h1", {}, "Daedalus cloud admin"), nav),
+      right,
+    );
   }
 
   function signInView(error = "") {
     stopTimer();
+    shell = null;
     root.replaceChildren();
     const input = el("input", {
       type: "password",
@@ -310,9 +560,23 @@ export function adminClient(): void {
           ),
         ),
     );
+    const { health } = overview;
+    const count = health.problems.length;
+    const badge = el(
+      "a",
+      {
+        href: "#health",
+        class: `health-badge ${health.ok ? "ok" : "bad"}`,
+        "data-testid": "health-badge",
+      },
+      health.ok
+        ? "Healthy"
+        : `${count} problem${count === 1 ? "" : "s"}: see Health`,
+    );
     return el(
       "section",
       { class: "summary", "data-testid": "admin-summary" },
+      el("div", { class: "summary-head" }, badge),
       el(
         "div",
         { class: "stats" },
@@ -475,6 +739,13 @@ export function adminClient(): void {
       { class: "resources" },
       el("div", {}, `CPU ${cpu.request}, up to ${cpu.limit}`),
       el("div", {}, `Memory ${memory.request}, up to ${memory.limit}`),
+      workspace.live
+        ? el(
+            "div",
+            { class: "live", "data-testid": "workspace-live" },
+            `Using ${cores(workspace.live.cpu)} CPU, ${bytes(workspace.live.memory)}`,
+          )
+        : null,
     );
   }
 
@@ -488,7 +759,7 @@ export function adminClient(): void {
           class: `pill ${workspace.status}`,
           "data-testid": "workspace-status",
         },
-        STATUS_LABEL[workspace.status] ?? workspace.status,
+        marked(STATUS_LABEL[workspace.status] ?? workspace.status),
       ),
       workspace.reason
         ? el("div", { class: "reason" }, workspace.reason)
@@ -512,8 +783,8 @@ export function adminClient(): void {
       el(
         "td",
         {},
-        el("div", { class: "name" }, workspace.name),
-        el("div", { class: "id" }, workspace.workspaceId),
+        el("div", { class: "name" }, marked(workspace.name)),
+        el("div", { class: "id" }, marked(workspace.workspaceId)),
       ),
       status,
       el("td", { title: workspace.createdAt }, when(workspace.createdAt)),
@@ -576,7 +847,7 @@ export function adminClient(): void {
     return el("div", { class: "limit-editor" }, label, input, save);
   }
 
-  function userSection(user: User) {
+  function userSection(user: User, shown = user.workspaces) {
     const table = el(
       "table",
       { class: "workspaces" },
@@ -602,7 +873,7 @@ export function adminClient(): void {
       el(
         "tbody",
         {},
-        ...user.workspaces.flatMap((workspace) =>
+        ...shown.flatMap((workspace) =>
           confirming.has(workspace.workspaceId) && session?.role === "admin"
             ? [workspaceRow(user, workspace), confirmRow(user, workspace)]
             : [workspaceRow(user, workspace)],
@@ -618,19 +889,27 @@ export function adminClient(): void {
         el(
           "div",
           {},
-          el("h2", {}, user.email),
+          el("h2", {}, marked(user.email)),
           el(
             "div",
             { class: "id" },
-            `${user.id} · since ${when(user.createdAt)}`,
+            marked(user.id),
+            ` · since ${when(user.createdAt)}`,
           ),
         ),
         limitEditor(user),
       ),
       user.error ? el("p", { class: "message error" }, user.error) : null,
-      user.workspaces.length
+      shown.length
         ? el("div", { class: "table-wrap" }, table)
         : el("p", { class: "hint" }, "No workspaces."),
+      shown.length < user.workspaces.length
+        ? el(
+            "p",
+            { class: "hint" },
+            `${user.workspaces.length - shown.length} more hidden by the filter.`,
+          )
+        : null,
     );
   }
 
@@ -656,9 +935,9 @@ export function adminClient(): void {
       ),
     );
     return el(
-      "details",
+      "section",
       { class: "audit", "data-testid": "admin-audit" },
-      el("summary", {}, `Audit log (${entries.length} newest)`),
+      el("h2", {}, `Audit log, ${entries.length} newest`),
       el(
         "div",
         { class: "table-wrap" },
@@ -688,7 +967,450 @@ export function adminClient(): void {
     );
   }
 
-  let auditOpen = false;
+  function uptime(seconds: number): string {
+    if (seconds < 3600) return `${Math.round(seconds / 60)} min`;
+    if (seconds < 172_800) return `${Math.round(seconds / 3600)} h`;
+    return `${Math.round(seconds / 86_400)} days`;
+  }
+
+  function share(used: number, total: number, show: (value: number) => string) {
+    const text = `${show(used)} of ${show(total)}`;
+    return total > 0 && used >= total * 0.9
+      ? el("span", { class: "near-full" }, text)
+      : text;
+  }
+
+  const table = (titles: string[], rows: HTMLElement[]) =>
+    el(
+      "div",
+      { class: "table-wrap" },
+      el(
+        "table",
+        {},
+        el(
+          "thead",
+          {},
+          el("tr", {}, ...titles.map((title) => el("th", {}, title))),
+        ),
+        el("tbody", {}, ...rows),
+      ),
+    );
+
+  function healthSection(health: Health) {
+    const parts: (HTMLElement | null)[] = [];
+    if (health.problems.length)
+      parts.push(
+        el(
+          "ul",
+          { class: "problems", "data-testid": "health-problems" },
+          ...health.problems.map((item) =>
+            el(
+              "li",
+              { class: item.severity },
+              el("span", { class: "area" }, item.area),
+              item.message,
+            ),
+          ),
+        ),
+      );
+    else parts.push(el("p", { class: "ok-line" }, "Nothing needs attention."));
+
+    parts.push(el("h3", {}, "Nodes"));
+    if (health.nodes)
+      parts.push(
+        table(
+          [
+            "Node",
+            "Ready",
+            health.runtimeClass
+              ? `${health.runtimeHandler} runtime`
+              : "Runtime",
+            "CPU requested",
+            "Memory requested",
+            "Disk requested",
+            "Workspace pods",
+          ],
+          health.nodes.map((node) =>
+            el(
+              "tr",
+              { "data-testid": "health-node" },
+              el("td", {}, node.name),
+              el(
+                "td",
+                {},
+                node.ready
+                  ? node.unschedulable
+                    ? el("span", { class: "near-full" }, "Ready, cordoned")
+                    : "Ready"
+                  : el(
+                      "span",
+                      { class: "bad" },
+                      `Not ready: ${node.readyMessage ?? ""}`,
+                    ),
+              ),
+              el(
+                "td",
+                {},
+                node.runtime === null
+                  ? health.runtimeClass
+                    ? "not reported"
+                    : "not required"
+                  : node.runtime
+                    ? "yes"
+                    : el("span", { class: "bad" }, "missing"),
+              ),
+              el(
+                "td",
+                {},
+                share(node.requested.cpu, node.allocatable.cpu, cores),
+              ),
+              el(
+                "td",
+                {},
+                share(node.requested.memory, node.allocatable.memory, bytes),
+              ),
+              el(
+                "td",
+                {},
+                share(
+                  node.requested.ephemeral,
+                  node.allocatable.ephemeral,
+                  bytes,
+                ),
+              ),
+              el("td", {}, String(node.workspacePods)),
+            ),
+          ),
+        ),
+        el(
+          "p",
+          { class: "hint" },
+          "Requested counts workspace pods only; the gateway cannot see other namespaces.",
+        ),
+      );
+    else
+      parts.push(
+        el(
+          "p",
+          { class: "message error" },
+          `Nodes: ${health.nodesError ?? "not readable"}`,
+        ),
+      );
+
+    if (health.pods.length)
+      parts.push(
+        el("h3", {}, "Workspace pods with problems"),
+        table(
+          ["Workspace", "User", "Pod", "Problem", "Detail"],
+          health.pods.map((item) =>
+            el(
+              "tr",
+              {},
+              el("td", {}, item.workspace),
+              el("td", {}, item.email),
+              el("td", { class: "id" }, item.pod),
+              el("td", {}, item.kind),
+              el("td", { class: "detail" }, item.detail),
+            ),
+          ),
+        ),
+      );
+    if (health.volumes.length)
+      parts.push(
+        el("h3", {}, "Volumes not bound"),
+        table(
+          ["Volume", "User", "Phase"],
+          health.volumes.map((item) =>
+            el(
+              "tr",
+              {},
+              el("td", { class: "id" }, item.volume),
+              el("td", {}, item.email),
+              el("td", {}, item.phase),
+            ),
+          ),
+        ),
+      );
+    if (health.quotas.length)
+      parts.push(
+        el("h3", {}, "Quota per user"),
+        table(
+          ["User", "Storage", "Volumes", "Pods"],
+          health.quotas.map((item) => {
+            const cell = (
+              value: { used: number; hard: number } | null,
+              show: (value: number) => string,
+            ) =>
+              el("td", {}, value ? share(value.used, value.hard, show) : "–");
+            return el(
+              "tr",
+              {},
+              el("td", {}, item.email),
+              cell(item.storage, bytes),
+              cell(item.volumes, String),
+              cell(item.pods, String),
+            );
+          }),
+        ),
+      );
+
+    const { gateway } = health;
+    const last = gateway.lastCollection;
+    parts.push(
+      el("h3", {}, "Gateway"),
+      el(
+        "div",
+        { class: "stats small", "data-testid": "health-gateway" },
+        stat("Up", uptime(gateway.uptimeSeconds), "health-uptime"),
+        stat("Macs connected", String(gateway.macs), "health-macs"),
+        stat("Runners connected", String(gateway.runners), "health-runners"),
+        stat(
+          "Last collection",
+          last ? ago(last.at) : "not yet",
+          "health-collection",
+        ),
+      ),
+      el(
+        "p",
+        { class: "hint" },
+        last
+          ? `The last pass deleted ${last.workspaces} workspace${last.workspaces === 1 ? "" : "s"} and ${last.namespaces} namespace${last.namespaces === 1 ? "" : "s"}, with ${last.failures} failure${last.failures === 1 ? "" : "s"}. `
+          : "",
+        `Collection runs every ${gateway.collectMinutes} min. `,
+        health.metrics.available
+          ? "Live CPU and memory come from metrics-server."
+          : `Pod resources are requests only: ${health.metrics.reason ?? "no metrics"}.`,
+      ),
+    );
+    if (health.recentLog.length)
+      parts.push(
+        el(
+          "details",
+          { class: "log" },
+          el(
+            "summary",
+            {},
+            `Recent gateway log (${health.recentLog.length} line${health.recentLog.length === 1 ? "" : "s"})`,
+          ),
+          el(
+            "ul",
+            {},
+            ...health.recentLog.map((line) =>
+              el(
+                "li",
+                {},
+                el("span", { class: "id" }, when(line.at)),
+                " ",
+                line.message,
+              ),
+            ),
+          ),
+        ),
+      );
+
+    return el(
+      "section",
+      {
+        id: "health",
+        class: `health ${health.ok ? "healthy" : "sick"}`,
+        "data-testid": "admin-health",
+      },
+      el(
+        "h2",
+        {},
+        health.ok
+          ? "Health: all good"
+          : `Health: ${health.problems.length} to look at`,
+      ),
+      ...parts,
+    );
+  }
+
+  /** The overview's short list of what is wrong, pointing at Health. */
+  function attention(health: Health) {
+    const first = health.problems.slice(0, 5);
+    return el(
+      "section",
+      {
+        class: `attention ${health.ok ? "healthy" : "sick"}`,
+        "data-testid": "admin-attention",
+      },
+      el("h2", {}, health.ok ? "Nothing needs attention" : "Needs attention"),
+      health.ok
+        ? el(
+            "p",
+            { class: "hint" },
+            `${health.nodes?.length ?? 0} node${health.nodes?.length === 1 ? "" : "s"} ready, no workspace pod or volume in trouble.`,
+          )
+        : el(
+            "ul",
+            { class: "problems" },
+            ...first.map((item) =>
+              el(
+                "li",
+                { class: item.severity },
+                el("span", { class: "area" }, item.area),
+                item.message,
+              ),
+            ),
+          ),
+      el(
+        "a",
+        { href: "#health", class: "more" },
+        health.problems.length > first.length
+          ? `All ${health.problems.length} on the Health page`
+          : "Open the Health page",
+      ),
+    );
+  }
+
+  let lastOverview: Overview | null = null;
+  let lastAudit: AuditEntry[] = [];
+  /** The signed-in page's parts; the filter box survives every refresh. */
+  let shell: {
+    header: HTMLElement;
+    content: HTMLElement;
+    filterBar: HTMLElement;
+    list: HTMLElement;
+    filter: HTMLInputElement;
+  } | null = null;
+
+  function buildShell() {
+    const filter = el("input", {
+      type: "search",
+      class: "filter",
+      placeholder:
+        "Filter by email, user id, workspace name or id, or status (asleep, failed, running)",
+      "aria-label": "Filter users and workspaces",
+      spellcheck: "false",
+      autocomplete: "off",
+      "data-testid": "admin-filter",
+    }) as HTMLInputElement;
+    filter.value = query;
+    filter.addEventListener("input", () => {
+      query = filter.value;
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${window.location.search}${hashFor("workspaces")}`,
+      );
+      renderList();
+    });
+    const filterBar = el(
+      "div",
+      { class: "filter-bar" },
+      filter,
+      el("span", {
+        class: "hint",
+        id: "filter-count",
+        "data-testid": "filter-count",
+      }),
+    );
+    const header = el("header", {});
+    const content = el("div", { class: "stack" });
+    const list = el("div", { class: "stack" });
+    root.replaceChildren(
+      header,
+      el(
+        "main",
+        {},
+        el("p", { class: "message", id: "message", hidden: "" }),
+        content,
+      ),
+    );
+    shell = { header, content, filterBar, list, filter };
+  }
+
+  // The menu's links, a pasted link and Back change the page or filter.
+  window.addEventListener("hashchange", () => {
+    const next = readRoute();
+    const moved = next.page !== page;
+    page = next.page;
+    query = next.query;
+    if (shell && shell.filter.value !== query) shell.filter.value = query;
+    render();
+    if (moved) window.scrollTo(0, 0);
+  });
+
+  const stamp = (overview: Overview) =>
+    el(
+      "p",
+      { class: "hint stamp" },
+      `Updated ${when(overview.generatedAt)}; refreshes every 15 s.`,
+    );
+
+  /** Draws the current page from the last data, keeping the filter box. */
+  function render() {
+    if (!shell || !lastOverview) return;
+    const overview = lastOverview;
+    const fresh = header(overview);
+    shell.header.replaceWith(fresh);
+    shell.header = fresh;
+    document.title = `${PAGES.find((item) => item.id === page)!.label} · Daedalus admin`;
+    const { content } = shell;
+    if (page === "workspaces") {
+      if (shell.filterBar.parentElement !== content)
+        content.replaceChildren(shell.filterBar, shell.list);
+      renderList();
+      return;
+    }
+    if (page === "health")
+      content.replaceChildren(healthSection(overview.health), stamp(overview));
+    else if (page === "audit")
+      content.replaceChildren(auditSection(lastAudit), stamp(overview));
+    else
+      content.replaceChildren(
+        summary(overview),
+        attention(overview.health),
+        stamp(overview),
+      );
+  }
+
+  function renderList() {
+    if (!shell || !lastOverview || page !== "workspaces") return;
+    const overview = lastOverview;
+    const list = terms();
+    // Users with workspaces first; the order is otherwise by email.
+    const ordered = [
+      ...overview.users.filter((user) => user.workspaces.length),
+      ...overview.users.filter((user) => !user.workspaces.length),
+    ];
+    const sections: HTMLElement[] = [];
+    let shownCount = 0;
+    for (const user of ordered) {
+      const shown = list.length
+        ? user.workspaces.filter((workspace) =>
+            matches(workspaceFields(user, workspace), list),
+          )
+        : user.workspaces;
+      const visible = list.length
+        ? shown.length > 0 ||
+          (!user.workspaces.length && matches([user.email, user.id], list))
+        : true;
+      if (!visible) continue;
+      shownCount += shown.length;
+      sections.push(userSection(user, shown));
+    }
+    const counter = document.getElementById("filter-count");
+    if (counter)
+      counter.textContent = list.length
+        ? `${shownCount} of ${overview.summary.workspaces} workspaces, ${sections.length} of ${overview.users.length} users`
+        : "";
+    shell.list.replaceChildren(
+      ...(overview.users.length
+        ? sections.length
+          ? sections
+          : [
+              el(
+                "p",
+                { class: "hint", "data-testid": "filter-empty" },
+                "Nothing matches the filter.",
+              ),
+            ]
+        : [el("p", { class: "hint" }, "No users have signed in yet.")]),
+      stamp(overview),
+    );
+  }
 
   async function load() {
     stopTimer();
@@ -710,34 +1432,10 @@ export function adminClient(): void {
       return;
     }
     defaultLimit = overview.settings.defaultLimit;
-    const previous = document.getElementById("message");
-    const kept = previous && !previous.hidden ? previous.cloneNode(true) : null;
-    const details = root.querySelector("details.audit");
-    if (details) auditOpen = (details as HTMLDetailsElement).open;
-    const audits = auditSection(audit.entries);
-    if (auditOpen) audits.setAttribute("open", "");
-    root.replaceChildren(
-      header(overview),
-      el(
-        "main",
-        {},
-        kept ?? el("p", { class: "message", id: "message", hidden: "" }),
-        summary(overview),
-        ...(overview.users.length
-          ? [
-              // Users with workspaces first; the order is otherwise by email.
-              ...overview.users.filter((user) => user.workspaces.length),
-              ...overview.users.filter((user) => !user.workspaces.length),
-            ].map(userSection)
-          : [el("p", { class: "hint" }, "No users have signed in yet.")]),
-        audits,
-        el(
-          "p",
-          { class: "hint stamp" },
-          `Updated ${when(overview.generatedAt)}; refreshes every 15 s.`,
-        ),
-      ),
-    );
+    lastOverview = overview;
+    lastAudit = audit.entries;
+    if (!shell) buildShell();
+    render();
     schedule();
   }
 

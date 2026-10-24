@@ -106,6 +106,8 @@ spec:
               value: {{ .Values.workspace.maxResources.memory | quote }}
             - name: DAEDALUS_WORKSPACE_RUNTIME_CLASS
               value: {{ .Values.workspace.runtimeClassName | quote }}
+            - name: DAEDALUS_WORKSPACE_RUNTIME_HANDLER
+              value: {{ .Values.workspace.runtimeClassHandler | default "runsc" | quote }}
             - name: DAEDALUS_WORKSPACE_IDLE_MINUTES
               value: {{ .Values.workspace.idleMinutes | quote }}
             - name: DAEDALUS_WORKSPACE_ASLEEP_DAYS

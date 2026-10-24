@@ -22,6 +22,17 @@ export class FakeKube implements KubeApi {
    * authorizer has seen the binding.
    */
   bindingLag = 0;
+  /** What GET /api/v1/nodes lists. */
+  nodes: KubeObject[] = [
+    {
+      metadata: { name: "node-1" },
+      status: {
+        conditions: [{ type: "Ready", status: "True" }],
+        allocatable: { cpu: "8", memory: "16Gi", "ephemeral-storage": "100Gi" },
+        runtimeHandlers: [{ name: "runc" }, { name: "runsc" }],
+      },
+    },
+  ];
   /** When set, a deleted pod stays, terminating, until `finishDeletes`. */
   slowPodDeletes = false;
   #terminating = new Set<string>();
@@ -87,6 +98,22 @@ export class FakeKube implements KubeApi {
         )
         .map(([, object]) => object);
       return { status: 200, body: { kind: "NamespaceList", items } };
+    }
+
+    if (path === "/api/v1/nodes" && method === "GET")
+      return { status: 200, body: { kind: "NodeList", items: this.nodes } };
+
+    // A whole collection in a namespace, as resourcequotas are read.
+    const collection = /^\/api\/v1\/namespaces\/[^/]+\/[a-z]+$/.exec(path);
+    if (collection && method === "GET" && !this.objects.has(path)) {
+      const items = [...this.objects.entries()]
+        .filter(
+          ([key]) =>
+            key.startsWith(`${path}/`) &&
+            !key.slice(path.length + 1).includes("/"),
+        )
+        .map(([, object]) => object);
+      return { status: 200, body: { kind: "List", items } };
     }
 
     // A label-selected list of one kind in a namespace.

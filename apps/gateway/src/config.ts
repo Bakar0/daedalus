@@ -41,6 +41,8 @@ export interface GatewayConfig {
     cacheSize: string;
     tmpSize: string;
     runtimeClass: string;
+    /** The RuntimeClass's handler, which nodes must offer (runsc). */
+    runtimeHandler: string;
     idleMinutes: string;
   };
   /** Directory holding the chart's `daedalus-tenant` ConfigMap files. */
@@ -131,6 +133,7 @@ export function loadConfig(env: Record<string, string | undefined>) {
       cacheSize: get("DAEDALUS_WORKSPACE_CACHE_SIZE", "2Gi"),
       tmpSize: get("DAEDALUS_WORKSPACE_TMP_SIZE", "1Gi"),
       runtimeClass: get("DAEDALUS_WORKSPACE_RUNTIME_CLASS"),
+      runtimeHandler: get("DAEDALUS_WORKSPACE_RUNTIME_HANDLER", "runsc"),
       idleMinutes: get("DAEDALUS_WORKSPACE_IDLE_MINUTES", "15"),
     },
     tenantDir: get("DAEDALUS_TENANT_DIR", "/etc/daedalus/tenant"),

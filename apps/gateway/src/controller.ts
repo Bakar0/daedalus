@@ -8,6 +8,7 @@ import {
 } from "@daedalus/remote-protocol";
 import type { GatewayConfig } from "./config";
 import { KubeError, type KubeApi, type KubeObject } from "./kube";
+import { parseQuantity } from "./quantity";
 import type { WorkspaceRow } from "./store";
 
 /**
@@ -156,8 +157,148 @@ export function workspaceStatus(
 /** A workspace's pod and volumes, as the admin page shows them. */
 export interface WorkspaceUsage {
   pod: PodState | null;
-  disk: { name: string; size: string }[];
+  /** What the admin page's health section reads of the pod. */
+  podHealth: PodHealth | null;
+  disk: {
+    name: string;
+    size: string;
+    phase: string;
+    createdAt: string | null;
+  }[];
 }
+
+/** A pod as the health section reads it. */
+export interface PodHealth {
+  name: string;
+  node: string | null;
+  phase: string;
+  createdAt: string | null;
+  /** PodScheduled is False: why, as the scheduler says. */
+  unscheduled: string | null;
+  /** Containers waiting, with Kubernetes' reason and message. */
+  waiting: { container: string; reason: string; message: string }[];
+  restarts: number;
+  /** Requests summed over the containers, in cores and bytes. */
+  requests: { cpu: number; memory: number; ephemeral: number };
+}
+
+/** A node as the health section reads it. */
+export interface NodeHealth {
+  name: string;
+  ready: boolean;
+  /** The Ready condition's message when not ready. */
+  readyMessage: string | null;
+  unschedulable: boolean;
+  allocatable: { cpu: number; memory: number; ephemeral: number };
+  /** Runtime handlers the node reports; null when it reports none. */
+  runtimeHandlers: string[] | null;
+}
+
+/** A tenant namespace's quota, as used against hard. */
+export interface QuotaHealth {
+  name: string;
+  hard: Record<string, string>;
+  used: Record<string, string>;
+}
+
+/** Live CPU and memory per pod name, or why there are none. */
+export type PodMetrics =
+  | { available: true; pods: Map<string, { cpu: number; memory: number }> }
+  | { available: false; reason: string };
+
+const amount = (value: unknown): number =>
+  (typeof value === "string" ? parseQuantity(value) : null) ?? 0;
+
+export function podHealth(pod: KubeObject): PodHealth {
+  const conditions = field(pod, "status", "conditions");
+  let unscheduled: string | null = null;
+  for (const condition of Array.isArray(conditions) ? conditions : [])
+    if (
+      field(condition, "type") === "PodScheduled" &&
+      field(condition, "status") === "False"
+    )
+      unscheduled =
+        [text(field(condition, "reason")), text(field(condition, "message"))]
+          .filter(Boolean)
+          .join(": ") || "Not scheduled";
+  const statuses = field(pod, "status", "containerStatuses");
+  const waiting: PodHealth["waiting"] = [];
+  let restarts = 0;
+  for (const status of Array.isArray(statuses) ? statuses : []) {
+    const count = field(status, "restartCount");
+    if (typeof count === "number") restarts += count;
+    const reason = text(field(status, "state", "waiting", "reason"));
+    if (reason)
+      waiting.push({
+        container: text(field(status, "name")) ?? "",
+        reason,
+        message: text(field(status, "state", "waiting", "message")) ?? "",
+      });
+  }
+  const requests = { cpu: 0, memory: 0, ephemeral: 0 };
+  const containers = field(pod, "spec", "containers");
+  for (const container of Array.isArray(containers) ? containers : []) {
+    requests.cpu += amount(field(container, "resources", "requests", "cpu"));
+    requests.memory += amount(
+      field(container, "resources", "requests", "memory"),
+    );
+    requests.ephemeral += amount(
+      field(container, "resources", "requests", "ephemeral-storage"),
+    );
+  }
+  return {
+    name: text(field(pod, "metadata", "name")) ?? "",
+    node: text(field(pod, "spec", "nodeName")) ?? null,
+    phase: text(field(pod, "status", "phase")) ?? "Pending",
+    createdAt: text(field(pod, "metadata", "creationTimestamp")) ?? null,
+    unscheduled,
+    waiting,
+    restarts,
+    requests,
+  };
+}
+
+export function nodeHealth(node: unknown): NodeHealth {
+  const conditions = field(node, "status", "conditions");
+  let ready = false;
+  let readyMessage: string | null = "The node reports no Ready condition";
+  for (const condition of Array.isArray(conditions) ? conditions : [])
+    if (field(condition, "type") === "Ready") {
+      ready = field(condition, "status") === "True";
+      readyMessage = ready
+        ? null
+        : (text(field(condition, "message")) ??
+          text(field(condition, "reason")) ??
+          "Not ready");
+    }
+  const handlers = field(node, "status", "runtimeHandlers");
+  return {
+    name: text(field(node, "metadata", "name")) ?? "",
+    ready,
+    readyMessage,
+    unschedulable: field(node, "spec", "unschedulable") === true,
+    allocatable: {
+      cpu: amount(field(node, "status", "allocatable", "cpu")),
+      memory: amount(field(node, "status", "allocatable", "memory")),
+      ephemeral: amount(
+        field(node, "status", "allocatable", "ephemeral-storage"),
+      ),
+    },
+    runtimeHandlers: Array.isArray(handlers)
+      ? handlers
+          .map((handler) => text(field(handler, "name")))
+          .filter((name): name is string => name !== undefined)
+      : null,
+  };
+}
+
+const stringMap = (value: unknown): Record<string, string> => {
+  const out: Record<string, string> = {};
+  if (isObject(value))
+    for (const [key, item] of Object.entries(value))
+      if (typeof item === "string") out[key] = item;
+  return out;
+};
 
 export interface PodResources {
   cpu: { request: string; limit: string };
@@ -456,14 +597,17 @@ export class Controller {
       if (typeof id !== "string") return undefined;
       let found = usage.get(id);
       if (!found) {
-        found = { pod: null, disk: [] };
+        found = { pod: null, podHealth: null, disk: [] };
         usage.set(id, found);
       }
       return found;
     };
     for (const item of await list("pods", "Listing the user's pods")) {
       const found = entry(item);
-      if (found && isObject(item)) found.pod = podState(item);
+      if (found && isObject(item)) {
+        found.pod = podState(item);
+        found.podHealth = podHealth(item);
+      }
     }
     for (const item of await list(
       "persistentvolumeclaims",
@@ -474,9 +618,88 @@ export class Controller {
       const size = text(
         field(item, "spec", "resources", "requests", "storage"),
       );
-      if (found && name && size) found.disk.push({ name, size });
+      if (found && name && size)
+        found.disk.push({
+          name,
+          size,
+          phase: text(field(item, "status", "phase")) ?? "Pending",
+          createdAt: text(field(item, "metadata", "creationTimestamp")) ?? null,
+        });
     }
     return usage;
+  }
+
+  /** Every node, read-only (the chart grants nodes get and list). */
+  async nodes(): Promise<NodeHealth[]> {
+    const response = await this.kube.request("GET", "/api/v1/nodes");
+    if (response.status >= 300)
+      throw KubeError.from(response, "Listing the nodes");
+    const items =
+      isObject(response.body) && Array.isArray(response.body.items)
+        ? response.body.items
+        : [];
+    return items.map(nodeHealth);
+  }
+
+  /** The user's namespace quotas, hard and used. */
+  async quotas(userId: string): Promise<QuotaHealth[]> {
+    const response = await this.kube.request(
+      "GET",
+      core(namespaceFor(userId), "resourcequotas"),
+    );
+    if (response.status === 404) return [];
+    if (response.status >= 300)
+      throw KubeError.from(response, "Reading the user's quota");
+    const items =
+      isObject(response.body) && Array.isArray(response.body.items)
+        ? response.body.items
+        : [];
+    return items.map((item) => ({
+      name: text(field(item, "metadata", "name")) ?? "",
+      hard: stringMap(field(item, "status", "hard")),
+      used: stringMap(field(item, "status", "used")),
+    }));
+  }
+
+  /** Whether the cluster serves metrics.k8s.io at all. */
+  async metricsServed(): Promise<boolean> {
+    const response = await this.kube.request(
+      "GET",
+      "/apis/metrics.k8s.io/v1beta1",
+    );
+    return response.status < 300;
+  }
+
+  /**
+   * Live CPU and memory of the user's pods from metrics-server, summed over
+   * containers. Not available when the gateway may not read them.
+   */
+  async podMetrics(userId: string): Promise<PodMetrics> {
+    const response = await this.kube.request(
+      "GET",
+      `/apis/metrics.k8s.io/v1beta1/namespaces/${namespaceFor(userId)}/pods`,
+    );
+    if (response.status === 403)
+      return { available: false, reason: "The gateway may not read metrics" };
+    if (response.status >= 300)
+      return { available: false, reason: "metrics-server did not answer" };
+    const pods = new Map<string, { cpu: number; memory: number }>();
+    const items =
+      isObject(response.body) && Array.isArray(response.body.items)
+        ? response.body.items
+        : [];
+    for (const item of items) {
+      const name = text(field(item, "metadata", "name"));
+      if (!name) continue;
+      const total = { cpu: 0, memory: 0 };
+      const containers = field(item, "containers");
+      for (const container of Array.isArray(containers) ? containers : []) {
+        total.cpu += amount(field(container, "usage", "cpu"));
+        total.memory += amount(field(container, "usage", "memory"));
+      }
+      pods.set(name, total);
+    }
+    return { available: true, pods };
   }
 
   /** The session container's CPU and memory, as `podSpec` sets them. */
