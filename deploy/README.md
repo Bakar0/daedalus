@@ -77,11 +77,17 @@ By default the port is bound to 127.0.0.1 inside the pod, so only
 Service and lets in only the `admin.allowFrom` peers. Sign-in off loopback
 needs https: put a TLS proxy in front and list its addresses in
 `admin.trustedProxies`, since the gateway believes `X-Forwarded-Proto` only
-from those. Loopback is decided from the socket address, not the Host header. Every admin action is logged to the
-gateway's stdout as a JSON line (`"audit":"admin"`) and kept in its database.
-To rotate the token, change the Secret and restart the gateway. The design
-and threat model are in `artifacts/cloud-sessions/admin-design.md` in the
-Daedalus workspace.
+from those. Loopback is decided from the socket address, not the Host header.
+
+Every admin action is logged to the gateway's stdout as a JSON line
+(`"audit":"admin"`) and kept in its database (the newest 1000). So are refused
+writes and sign-ins (CSRF, origin, plain http, rate limit); refusals without a
+session are logged once a minute per address and reason.
+
+The gateway reads the tokens once at start and keeps sessions in memory. To
+rotate a token, change the Secret and restart the gateway, which also signs
+every admin out. The design and threat model are in
+`artifacts/cloud-sessions/admin-design.md` in the Daedalus workspace.
 
 ## gVisor
 

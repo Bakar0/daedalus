@@ -317,6 +317,11 @@ describe("sign-in", () => {
       (await login({ Host: "admin.example.com", "X-Forwarded-Proto": "https" }))
         .status,
     ).toBe(403);
+    // Audited once a minute per address and reason, so a flood stays small.
+    const refusals = audits().filter((entry) => entry.detail === "plain http");
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]!.address).toBe("10.244.0.9");
+    expect(refusals[0]!.result).toBe("refused");
   });
 
   test("a trusted proxy's X-Forwarded-Proto counts, and its cookie is Secure", async () => {
@@ -443,6 +448,92 @@ describe("sign-in", () => {
     const later = await signIn();
     clock += config.admin.sessionMs;
     expect((await call(later, "GET", "overview")).status).toBe(401);
+  });
+});
+
+describe("refusals are audited", () => {
+  test("CSRF, origin, site and content-type refusals of a session's writes", async () => {
+    const { user, token } = await devLogin("u@example.com");
+    expect(await createWorkspace(token)).toBe(201);
+    const session = await signIn();
+    const path = `users/${user.id}/workspaces/${WS_A}/sleep`;
+    await call(session, "POST", path, {}, { "X-Daedalus-CSRF": "" });
+    await call(session, "POST", path, {}, { "X-Daedalus-CSRF": "" });
+    await call(
+      session,
+      "POST",
+      path,
+      {},
+      { Origin: "https://evil.example.net" },
+    );
+    await call(session, "POST", path, {}, { "Sec-Fetch-Site": "cross-site" });
+    await fetch(`${adminBase}/admin/api/${path}`, {
+      method: "POST",
+      headers: {
+        Cookie: session.cookie,
+        "X-Daedalus-CSRF": session.csrf,
+        "Content-Type": "text/plain",
+      },
+      body: "{}",
+    });
+    const refused = audits().filter((entry) => entry.action === "write");
+    // With a session every refusal is audited: an admin's own browser.
+    expect(refused.map((entry) => entry.detail)).toEqual([
+      "csrf",
+      "csrf",
+      "origin",
+      "sec-fetch-site",
+      "content-type",
+    ]);
+    expect(refused[0]!.subject).toBe("bootstrap-admin");
+    expect(refused[0]!.target).toBe(`/admin/api/${path}`);
+    expect(refused[0]!.result).toBe("refused");
+  });
+
+  test("rate-limited and cross-site sign-ins, once a minute per address", async () => {
+    remote = "10.0.0.7";
+    for (let i = 0; i < SIGN_IN_FAILURES_PER_MINUTE + 3; i++)
+      await call(
+        null,
+        "POST",
+        "login",
+        { token: "nope" },
+        {
+          "X-Forwarded-Proto": "https",
+        },
+      );
+    remote = "127.0.0.1";
+    for (let i = 0; i < SIGN_IN_FAILURES_PER_MINUTE + 3; i++)
+      await call(null, "POST", "login", { token: "nope" });
+    const limited = audits().filter((entry) => entry.detail === "rate limited");
+    expect(limited).toHaveLength(1);
+    expect(limited[0]!.address).toBe("127.0.0.1");
+    for (let i = 0; i < 3; i++)
+      await call(
+        null,
+        "POST",
+        "login",
+        { token: ADMIN_TOKEN },
+        {
+          Origin: "https://evil.example.net",
+        },
+      );
+    expect(audits().filter((entry) => entry.detail === "origin")).toHaveLength(
+      1,
+    );
+    clock += 61_000;
+    await call(
+      null,
+      "POST",
+      "login",
+      { token: ADMIN_TOKEN },
+      {
+        Origin: "https://evil.example.net",
+      },
+    );
+    expect(audits().filter((entry) => entry.detail === "origin")).toHaveLength(
+      2,
+    );
   });
 });
 

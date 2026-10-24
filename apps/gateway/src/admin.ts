@@ -200,6 +200,8 @@ class AdminError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** Why, in a few words, for the audit of a refused request. */
+    readonly reason = "",
   ) {
     super(message);
   }
@@ -373,6 +375,53 @@ export function createAdmin(deps: AdminDeps) {
     print(JSON.stringify({ audit: "admin", ...entry }));
   }
 
+  /**
+   * Refusals of requests without a session are audited once per address,
+   * reason and minute, so a flood of them cannot push real entries out of
+   * the audit table. Stdout gets the same lines.
+   */
+  const refusalAudits = new Map<string, number>();
+  function auditRefusal(
+    actor: Actor,
+    action: string,
+    target: string,
+    reason: string,
+  ) {
+    const at = now();
+    if (!actor.session) {
+      const key = `${actor.address} ${action} ${reason}`;
+      if (at - (refusalAudits.get(key) ?? -Infinity) < 60_000) return;
+      if (refusalAudits.size >= MAX_TRACKED_ADDRESSES) {
+        // Quiet keys go first, then the oldest, as in FailureCounter.
+        for (const [other, time] of refusalAudits)
+          if (at - time >= 60_000) refusalAudits.delete(other);
+        for (const other of refusalAudits.keys()) {
+          if (refusalAudits.size < MAX_TRACKED_ADDRESSES) break;
+          refusalAudits.delete(other);
+        }
+      }
+      refusalAudits.delete(key);
+      refusalAudits.set(key, at);
+    }
+    audit(actor, action, target, "refused", reason);
+  }
+
+  /** Runs a check; a refusal it throws is audited before it goes on. */
+  function audited<T>(
+    actor: Actor,
+    action: string,
+    target: string,
+    run: () => T,
+  ): T {
+    try {
+      return run();
+    } catch (error) {
+      if (error instanceof AdminError && error.reason)
+        auditRefusal(actor, action, target, error.reason);
+      throw error;
+    }
+  }
+
   function respond(body: unknown, status = 200, headers: HeadersInit = {}) {
     return Response.json(body, {
       status,
@@ -438,17 +487,27 @@ export function createAdmin(deps: AdminDeps) {
     const origin = request.headers.get("Origin");
     const expected = `${from.https ? "https" : "http"}://${request.headers.get("Host")}`;
     if (origin !== null && origin !== expected)
-      throw new AdminError(403, "FORBIDDEN", "Cross-origin request");
+      throw new AdminError(403, "FORBIDDEN", "Cross-origin request", "origin");
     const site = request.headers.get("Sec-Fetch-Site");
     if (site !== null && site !== "same-origin" && site !== "none")
-      throw new AdminError(403, "FORBIDDEN", "Cross-site request");
+      throw new AdminError(
+        403,
+        "FORBIDDEN",
+        "Cross-site request",
+        "sec-fetch-site",
+      );
     const type = request.headers.get("Content-Type") ?? "";
     if (!type.toLowerCase().startsWith("application/json"))
-      throw new AdminError(415, "VALIDATION", "Send JSON");
+      throw new AdminError(415, "VALIDATION", "Send JSON", "content-type");
     if (!found) return;
     const csrf = request.headers.get(CSRF_HEADER) ?? "";
     if (!sameText(csrf, found.csrf))
-      throw new AdminError(403, "FORBIDDEN", "Missing or wrong CSRF token");
+      throw new AdminError(
+        403,
+        "FORBIDDEN",
+        "Missing or wrong CSRF token",
+        "csrf",
+      );
   }
 
   async function signIn(request: Request, from: Client) {
@@ -458,6 +517,7 @@ export function createAdmin(deps: AdminDeps) {
         403,
         "FORBIDDEN",
         "Sign in over https, or through kubectl port-forward on localhost",
+        "plain http",
       );
     const at = now();
     if (!failures.allowed(address, at))
@@ -465,6 +525,7 @@ export function createAdmin(deps: AdminDeps) {
         429,
         "RATE_LIMITED",
         "Too many failed sign-ins; try again in a minute",
+        "rate limited",
       );
     const body = await readJson(request);
     const principal = auth.signIn(body);
@@ -685,14 +746,24 @@ export function createAdmin(deps: AdminDeps) {
       throw new AdminError(404, "NOT_FOUND", "No such route");
 
     if (path === "/admin/api/login" && method === "POST") {
-      checkWrite(request, from, null);
-      return signIn(request, from);
+      const anonymous = actorFor(null, address);
+      audited(anonymous, "sign-in", "", () => checkWrite(request, from, null));
+      try {
+        return await signIn(request, from);
+      } catch (error) {
+        if (error instanceof AdminError && error.reason)
+          auditRefusal(anonymous, "sign-in", "", error.reason);
+        throw error;
+      }
     }
 
     const found = session(request);
     if (!found) throw new AdminError(401, "UNAUTHORIZED", "Sign in");
     const actor = actorFor(found, address);
-    if (method !== "GET") checkWrite(request, from, found);
+    if (method !== "GET")
+      audited(actor, "write", path.slice(0, 200), () =>
+        checkWrite(request, from, found),
+      );
 
     if (path === "/admin/api/session" && method === "GET")
       return respond(sessionBody(found));
