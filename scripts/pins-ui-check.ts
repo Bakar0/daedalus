@@ -193,4 +193,66 @@ await withBrowser({ port: 41802, page: "cloud-test.html" }, async (browser) => {
   await browser.screenshot("pins-all-showing");
 });
 
+// A narrow sidebar: each workspace's name has its line up to the actions,
+// the count sits on a second line in full, and a workspace out of focus
+// keeps no empty row for its archived sessions.
+await withBrowser(
+  { port: 41804, page: "cloud-test.html", query: "archived=1" },
+  async (browser) => {
+    await browser.waitFor(
+      "document.querySelector('summary[aria-label=\"Settings of Plain local\"]')",
+      "the workspace list",
+    );
+    await browser.evaluate(
+      `localStorage.setItem('daedalus.panel.workspace-width', '200'); localStorage.setItem('daedalus.pins', JSON.stringify({ workspace: ['archive'], session: ['rebirth', 'archive'] })); location.reload()`,
+    );
+    await browser.waitFor(
+      "document.querySelector('summary[aria-label=\"Settings of Plain local\"]')",
+      "the workspace list after the reload",
+    );
+    await Bun.sleep(600);
+    // Focus on another workspace, so Plain local's archive is out of focus.
+    await browser.evaluate(
+      `document.querySelector('summary[aria-label="Settings of Cloud project"]').closest('.workspace-card').querySelector('.workspace-item').click()`,
+    );
+    await Bun.sleep(300);
+    const seen = await browser.evaluate<{
+      column: number;
+      bad: string[];
+      gap: number;
+    }>(`(() => {
+      const bad = [];
+      for (const card of document.querySelectorAll('.workspace-group > .workspace-card')) {
+        const name = card.querySelector('.workspace-card-name > span:first-child');
+        const count = card.querySelector('.workspace-insight-copy');
+        const actions = card.querySelector(':scope > .workspace-card-actions').getBoundingClientRect();
+        const nameBox = name.getBoundingClientRect();
+        const countBox = count.getBoundingClientRect();
+        const label = name.textContent;
+        if (countBox.top < nameBox.bottom - 1) bad.push(label + ': the count shares the name line');
+        if (nameBox.right > actions.left + 1) bad.push(label + ': the name runs under the actions');
+        // Cut short only at the actions: a cut name reaches them.
+        if (name.scrollWidth > name.clientWidth + 1 && nameBox.right < actions.left - 30)
+          bad.push(label + ': the name is cut short of the actions');
+        if (count.scrollWidth > count.clientWidth + 1) bad.push(label + ': the count is cut');
+      }
+      const group = document.querySelector('summary[aria-label="Settings of Plain local"]').closest('.workspace-group');
+      const cards = group.querySelectorAll('.workspace-sessions .session-card');
+      const last = cards[cards.length - 1].getBoundingClientRect();
+      return {
+        column: Math.round(document.querySelector('.workspace-column').getBoundingClientRect().width),
+        bad,
+        gap: Math.round(group.getBoundingClientRect().bottom - last.bottom),
+      };
+    })()`);
+    expect(seen.column <= 210, `the sidebar is ${seen.column}px, not narrow`);
+    expect(!seen.bad.length, `narrow sidebar: ${JSON.stringify(seen.bad)}`);
+    expect(
+      seen.gap <= 10,
+      `${seen.gap}px of empty space under Plain local's last session`,
+    );
+    await browser.screenshot("pins-narrow");
+  },
+);
+
 console.log("pins check passed");

@@ -5553,9 +5553,8 @@ export function WorkspaceApp({
         (session) => session.archivedAt && !deletingSessionIds.has(session.id),
       )
       .sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
-    // Offered only for the workspace in focus, but its row's space is kept
-    // under every workspace that has some, so focus moving never shifts the
-    // list (#55).
+    // Offered only for the workspace in focus; the others keep no empty row
+    // for it.
     const archiveInFocus = item.id === workspaceId;
     const launches = pendingSessionLaunches(
       sessionLaunches.filter((launch) => launch.workspaceId === item.id),

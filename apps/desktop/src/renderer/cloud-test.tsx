@@ -9,7 +9,8 @@
  * `archive=big` for a cloud workspace's archive that is refused, `wsmove=<phase>` for Cloud project moving home in that phase,
  * `moveAsk=busy|stopped|big|fail|limit` for a move that asks, is refused
  * or fails, `holdMove=1` to hold a move until `releaseMove()`, and
- * `notice=1` for Sleepy project back from its backup.
+ * `notice=1` for Sleepy project back from its backup, `archived=1` for an
+ * archived session under Plain local.
  *
  * Every call a click should make is recorded in `window.requests`. The
  * replies carry a token and a runner key the real host never sends, so the
@@ -170,6 +171,15 @@ const snapshot = {
     session("s-cloud", "cloud-ws", { hostId: "ws:c-run" }),
     session("s-sleepy", "sleepy-ws", { hostId: "ws:c-sleep", status: "lost" }),
     session("s-other", "other-ws", { hostId: "ws:c-other", status: "lost" }),
+    // `archived=1`: an archived session under Plain local.
+    ...(query.get("archived") === "1"
+      ? [
+          session("s-old", "local-ws", {
+            archivedAt: ago(30),
+            status: "exited",
+          }),
+        ]
+      : []),
   ],
   terminals: [],
   repositories: [],

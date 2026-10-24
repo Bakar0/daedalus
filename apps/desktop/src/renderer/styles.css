@@ -700,9 +700,10 @@ button:not(
   margin-top: 2px;
   padding-top: 0;
 }
+/* Only the workspace in focus shows its archived sessions; the others
+   keep no empty row for them. */
 .workspace-sessions .session-archive-list:not([data-in-focus]) {
-  pointer-events: none;
-  visibility: hidden;
+  display: none;
 }
 .workspace-sessions .session-grid {
   gap: 4px;
@@ -8299,7 +8300,14 @@ dd {
 /* The workspace row keeps its count clear of the actions in its corner,
    all of them always showing. */
 .workspace-group > .workspace-card > .workspace-item {
-  padding-right: calc(var(--header-actions, 2) * 23px + 6px);
+  padding-right: 6px;
+}
+/* The name on its own line, up to the actions, which share only that line;
+   the count on a second, small and muted, the card's full width. */
+.workspace-group .workspace-card-content {
+  align-items: stretch;
+  display: grid;
+  gap: 1px;
 }
 .workspace-card-content {
   min-width: 0;
