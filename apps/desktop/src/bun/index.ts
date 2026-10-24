@@ -37,6 +37,7 @@ import {
 } from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
 import { acceptFirstMouse } from "./first-mouse";
+import { daedalusCheckout } from "./checkout";
 import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
 import { UpdateController } from "./updates";
@@ -93,8 +94,14 @@ let windowReady = false;
 // repository finishing in the background during startup.
 let announceRemote = (): void => {};
 
+const checkout = daedalusCheckout(PATHS.RESOURCES_FOLDER);
 const context = await createApplicationContext({
   migrationsDirectory: resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
+  gatewayInstall: {
+    chartDirectory: resolve(PATHS.RESOURCES_FOLDER, "app/deploy/helm/daedalus"),
+    kindDirectory: resolve(PATHS.RESOURCES_FOLDER, "app/deploy/kind"),
+    ...(checkout ? { sourceRoot: checkout } : {}),
+  },
   canDrawToasts: () => windowReady,
   // Electrobun's own notifier is attributed to this bundle and needs nothing
   // installed, so it beats the AppleScript fallback whenever the app is up.
@@ -455,6 +462,8 @@ const remoteStarted = remote.start().catch((error) =>
 // A cloud session asking for a sign-in page shows on its card at once.
 context.cloud.signIns.onChange(() => announce("external"));
 context.workspaceMoves.onChange(() => announce("external"));
+context.gatewayInstall.onChange(() => announce("external"));
+void context.gatewayInstall.resume();
 context.cloud.onPreparingChange(() => announce("external"));
 void remoteStarted
   .then(() => context.cloud.hold())

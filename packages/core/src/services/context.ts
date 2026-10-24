@@ -40,6 +40,7 @@ import { CloudWorktrees } from "./cloud-worktrees";
 import { isPodAccess, PodMoveSide } from "./move-side";
 import { MAX_EXPLORER_BYTES } from "./pod-files";
 import { CloudSessions } from "../cloud/cloud-sessions";
+import { GatewayInstaller } from "../cloud/gateway-install";
 import { SessionArchive } from "./session-archive";
 import { LocalSessionHost } from "./session-host";
 import { SessionHosts } from "./session-hosts";
@@ -111,6 +112,8 @@ export interface ApplicationContext {
   cloudSessions: CloudSessions;
   /** Archiving and deleting where the cloud is involved. */
   archive: SessionArchive;
+  /** Installing the gateway onto a Kubernetes cluster, from Settings > Cloud. */
+  gatewayInstall: GatewayInstaller;
   close(): void;
 }
 
@@ -145,6 +148,15 @@ export interface ApplicationContextOptions {
     | "now"
     | "runnerWaitMs"
   >;
+  /**
+   * The chart and kind scripts the gateway install uses, and a checkout to
+   * build images from. The desktop host passes the copies in its bundle.
+   */
+  gatewayInstall?: {
+    chartDirectory?: string;
+    kindDirectory?: string;
+    sourceRoot?: string;
+  };
   /** Injected so tests never reach the real Notification Center. */
   sendNativeNotification?: (
     notification: NativeNotification,
@@ -399,6 +411,23 @@ export async function createApplicationContext(
       activity.get(sessionId)?.activity,
   });
   cloud.keepWhile((workspaceId) => workspaceMoves.moving(workspaceId));
+  const repositoryRoot = resolve(import.meta.dir, "../../../..");
+  const gatewayInstall = new GatewayInstaller({
+    home: config.home,
+    chartDirectory:
+      options.gatewayInstall?.chartDirectory ??
+      join(repositoryRoot, "deploy/helm/daedalus"),
+    kindDirectory:
+      options.gatewayInstall?.kindDirectory ??
+      join(repositoryRoot, "deploy/kind"),
+    ...(options.gatewayInstall?.sourceRoot
+      ? { sourceRoot: options.gatewayInstall.sourceRoot }
+      : {}),
+    signIn: (gatewayUrl, email) => cloud.signIn(gatewayUrl, email),
+    signedInGateway: async () =>
+      (await cloud.account.signIn())?.gatewayUrl ?? null,
+    log: (message, fields) => cloudLog(message, fields),
+  });
 
   return {
     config,
@@ -432,6 +461,7 @@ export async function createApplicationContext(
     cloud,
     cloudSessions: new CloudSessions({ repositories, agents, cloud }),
     workspaceMoves,
+    gatewayInstall,
     archive: new SessionArchive({
       repositories,
       agents,
@@ -442,6 +472,7 @@ export async function createApplicationContext(
     // Watchers are kernel resources held outside the database, so they are
     // released here rather than left to the process exiting.
     close: () => {
+      gatewayInstall.close();
       cloud.close();
       workspaceWatch.close();
       workspaceContent.close();
