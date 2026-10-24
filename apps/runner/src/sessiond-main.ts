@@ -5,7 +5,7 @@ import {
   findTmuxExecutable,
   TmuxPtyBridge,
 } from "@daedalus/platform";
-import { RUNNER_PATHS } from "@daedalus/remote-protocol";
+import { RUNNER_PATHS, RUNNER_POD_GROUP } from "@daedalus/remote-protocol";
 import { createHandlers } from "./handlers";
 import { deadPanes, privateRuntimeFolder, SessionDaemon } from "./sessiond";
 
@@ -57,7 +57,7 @@ const daemon = new SessionDaemon({
       tmuxPath,
     ),
 });
-daemon.listen(RUNNER_PATHS.sessionSocket);
+daemon.listen(RUNNER_PATHS.sessionSocket, RUNNER_POD_GROUP);
 console.log(`[sessiond] ${VERSION} listening on ${RUNNER_PATHS.sessionSocket}`);
 
 // Both daemons are PID 1 in their container, and the kernel drops signals for

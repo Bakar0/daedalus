@@ -287,6 +287,30 @@ describe("cloud sessions", () => {
     });
   });
 
+  test("the start sweeps this Mac's sessions apart from the cloud's", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, host } = await setUp(home);
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+      });
+      host.sessions.clear();
+      await context.agents.reconcile(new Set());
+      const launches = host.launches.length;
+      const mac = await context.agents.reviveLostSessions({
+        automatic: true,
+        where: "mac",
+      });
+      expect(mac.revived).toEqual([]);
+      expect(host.launches).toHaveLength(launches);
+      const cloud = await context.agents.reviveLostSessions({
+        automatic: true,
+        where: "cloud",
+      });
+      expect(cloud.revived.map((item) => item.id)).toEqual([session.id]);
+      context.close();
+    });
+  });
+
   test("a lost cloud session that never had a turn starts its conversation", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const { context, workspace, host } = await setUp(home);

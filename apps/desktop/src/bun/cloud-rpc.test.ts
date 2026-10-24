@@ -261,6 +261,7 @@ async function withCloud(
     gateway: FakeGateway,
     relay: FakeRelay,
   ) => Promise<void>,
+  options: { runnerWaitMs?: number } = {},
 ): Promise<void> {
   await withTemporaryDaedalusHome(async (home) => {
     const gateway = new FakeGateway();
@@ -279,6 +280,7 @@ async function withCloud(
           secretKey: "mac-secret",
         }),
         now: () => clock.now,
+        ...options,
       },
     });
     try {
@@ -1379,6 +1381,31 @@ describe("cloud RPC", () => {
       else await Bun.write(statePath, before);
     });
   });
+
+  test("a process that opened its own link does not wait for a runner the gateway says is asleep", async () => {
+    // The app's start-up sweep runs before the app holds the link: it met
+    // each asleep runner's wait in turn.
+    await withCloud(
+      async (rpc, context, gateway) => {
+        await rpc.cloudSignIn({
+          gatewayUrl: "http://localhost:8080",
+          email: "dev@example.com",
+        });
+        const workspace = await context.workspaces.create({ name: "Pods" });
+        await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
+        const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
+        gateway.workspaces.get(cloudId)!.status = "sleeping";
+        gateway.workspaces.get(cloudId)!.runnerOnline = false;
+        const host = context.hosts.find(cloudHostId(cloudId))!;
+        const started = Date.now();
+        // Unavailable either way; what matters is how long saying so takes.
+        expect(await host.probe()).toBeDefined();
+        // Far under the minute this run would wait.
+        expect(Date.now() - started).toBeLessThan(30_000);
+      },
+      { runnerWaitMs: 60_000 },
+    );
+  }, 90_000);
 
   test("in the app, a runner that is not linked costs a snapshot nothing", async () => {
     await withCloud(async (rpc, context, gateway) => {

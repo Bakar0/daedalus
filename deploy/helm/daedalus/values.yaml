@@ -45,7 +45,12 @@ workspace:
     limits: { cpu: "2", memory: 4Gi }
   # The most a user may ask for when creating a workspace.
   maxResources: { cpu: "4", memory: 8Gi }
-  runtimeClassName: "" # "gvisor" to sandbox workspace pods
+  # Workspace pods run sandboxed in gVisor: the chart creates this RuntimeClass
+  # with the handler below and the install fails unless a node offers it.
+  # "" runs them on the node's default runtime, sharing the host kernel with
+  # everything else on the node: unsafe on a shared cluster.
+  runtimeClassName: gvisor
+  runtimeClassHandler: runsc
   idleMinutes: 15 # runner asks the gateway to sleep it after this long with nothing working
   # The gateway deletes a workspace (pod, volumes, token, record) asleep this
   # long, Mac or not; its Mac then falls back to the copy it kept. 0 never.

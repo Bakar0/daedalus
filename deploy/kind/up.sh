@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Create a kind cluster, load the gateway and runner images, install the chart.
+# Create a kind cluster with gVisor, load the gateway and runner images,
+# install the chart.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -11,6 +12,7 @@ if ! kind get clusters | grep -qx "$cluster"; then
   kind create cluster --name "$cluster" --config "$here/kind-config.yaml"
 fi
 kubectl config use-context "kind-$cluster" >/dev/null
+KIND_CLUSTER="$cluster" "$here/gvisor.sh" # the chart runs workspaces in gVisor
 
 build() { # name, dockerfile path
   if [ -f "$repo/$2" ]; then

@@ -81,24 +81,44 @@ To rotate the token, change the Secret and restart the gateway. The design
 and threat model are in `artifacts/cloud-sessions/admin-design.md` in the
 Daedalus workspace.
 
-## gVisor (optional)
+## gVisor
 
-Tested on kind with gVisor release-20261012.0, arm64. Newer releases ship one
-tarball per architecture, `https://storage.googleapis.com/gvisor/releases/release/<version>/<arch>/gvisor.tar.bz2`
-with a `.sha512` beside it (there is no `latest` path and no bare `runsc`).
-Extract it and copy `runsc`, `containerd-shim-runsc-v1` and the `gvisor-bin`
-directory into `/usr/local/bin` in the kind node. Use `docker cp` into `/opt`,
-not `/tmp`, which is a tmpfs in the node. Then append to
-`/etc/containerd/config.toml`:
+Workspace pods run in gVisor by default (`workspace.runtimeClassName: gvisor`).
+The chart creates `RuntimeClass gvisor` with handler `runsc`
+(`workspace.runtimeClassHandler`), or uses an existing one of that name, such
+as GKE Sandbox's, when its handler matches. The install fails with a message
+when the nodes report their runtime handlers (`status.runtimeHandlers`, 1.30
+or later with a recent containerd) and none offers the handler. Nodes that
+report none cannot be checked, and NOTES says so. On a cluster with nodes both
+with and without gVisor, add a `nodeSelector` that keeps workspaces on gVisor
+nodes (not in the chart yet).
 
-```
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
-  runtime_type = "io.containerd.runsc.v1"
-```
+`--set workspace.runtimeClassName=""` runs workspaces on the node's default
+runtime. Then workspace code shares the host kernel with every other pod on the
+node, so one kernel bug is a way out of the workspace. Do not do this on a
+shared cluster. The `daedalus-gateway-pods` admission policy requires the
+configured RuntimeClass on every workspace pod, so a compromised gateway cannot
+drop it.
 
-Run `systemctl restart containerd` in the node, create a `RuntimeClass` named
-`gvisor` with handler `runsc`, and install with
-`--set workspace.runtimeClassName=gvisor`. Not scripted yet.
+On kind, `deploy/kind/gvisor.sh` (run by `up.sh`, and safe to run again)
+installs gVisor 20261012.0 into the node: it downloads
+`https://storage.googleapis.com/gvisor/releases/release/<version>/<arch>/gvisor.tar.bz2`
+(`<arch>` is `aarch64` or `x86_64`), checks it against a pinned sha512, copies
+`runsc`, `containerd-shim-runsc-v1` and `gvisor-bin` into `/usr/local/bin`
+through `/opt` (the node's `/tmp` is a tmpfs), adds the `runsc` runtime to
+`/etc/containerd/config.toml` and restarts containerd. On other clusters do
+the same on each node, or use the provider's gVisor option.
+
+The runtime must pass the pod annotations `dev.gvisor.*` to runsc
+(`pod_annotations = ["dev.gvisor.*"]` under the `runsc` runtime in
+containerd). The gateway sets gVisor mount hints on the `shared` volume so it
+is one tmpfs in the pod's sandbox; without them each container sees its own
+copy of the directory, the runner cannot connect to the session's socket, and
+moving a workspace to the cloud fails with "The runner refused: Failed to
+connect". The pod admission policy allows no other `dev.gvisor.*` annotation.
+
+gVisor is slower for file-system-heavy work: in the stage 0 benchmark on kind,
+a git clone was 4 to 6 times slower and a warm `bun install` about 10 times.
 
 ## EKS checklist (before 1b)
 

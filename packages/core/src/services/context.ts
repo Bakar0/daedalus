@@ -143,6 +143,7 @@ export interface ApplicationContextOptions {
     | "apiKey"
     | "log"
     | "now"
+    | "runnerWaitMs"
   >;
   /** Injected so tests never reach the real Notification Center. */
   sendNativeNotification?: (

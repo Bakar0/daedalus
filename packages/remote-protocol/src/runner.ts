@@ -211,6 +211,13 @@ export const RUNNER_PATHS = {
 } as const;
 
 /**
+ * The pod's `fsGroup`, a supplementary group of both containers. `sessiond`
+ * gives its socket this group itself: under gVisor the shared folder is a
+ * sandbox tmpfs owned by root, so the socket does not inherit it.
+ */
+export const RUNNER_POD_GROUP = 2000;
+
+/**
  * Environment the gateway's controller gives the runner container. Nothing
  * secret: the token is a file at `RUNNER_PATHS.token`.
  */

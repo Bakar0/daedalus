@@ -2,6 +2,19 @@ Daedalus gateway installed in namespace {{ .Release.Namespace }}.
 In-cluster URL: {{ include "daedalus.internalUrl" . }}
 Label the namespace for restricted Pod Security:
   kubectl label ns {{ .Release.Namespace }} pod-security.kubernetes.io/enforce=restricted
+{{- if .Values.workspace.runtimeClassName }}
+{{- $reported := false }}
+{{- range ((lookup "v1" "Node" "" "").items | default list) }}
+{{- if (dig "status" "runtimeHandlers" list .) }}{{ $reported = true }}{{ end }}
+{{- end }}
+{{- if not $reported }}
+Could not check that a node offers the runtime handler {{ .Values.workspace.runtimeClassHandler | quote }}
+(no node reports its runtime handlers). Workspace pods will not start on a node without it.
+{{- end }}
+{{- else }}
+WARNING: workspace.runtimeClassName is empty, so workspace pods run without the gVisor
+sandbox and share the node's kernel. Do not use this on a shared cluster.
+{{- end }}
 {{- if .Values.admin.enabled }}
 Admin page{{ if .Values.admin.expose }} (Service {{ include "daedalus.gatewayName" . }}-admin){{ end }}:
   kubectl -n {{ .Release.Namespace }} port-forward deploy/{{ include "daedalus.gatewayName" . }} {{ .Values.admin.port }}
