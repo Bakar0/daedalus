@@ -6,6 +6,7 @@ import { encodeRelayFrame } from "@daedalus/remote-protocol";
 import {
   BootstrapAuth,
   createAdmin,
+  FailureCounter,
   SIGN_IN_FAILURES_PER_MINUTE,
   type AdminOverview,
 } from "./admin";
@@ -386,17 +387,52 @@ describe("sign-in", () => {
     expect(auth.signIn({ token: VIEWER_TOKEN })).toBeNull();
   });
 
-  test(`after ${SIGN_IN_FAILURES_PER_MINUTE} failures a minute, sign-in answers 429`, async () => {
+  test(`after ${SIGN_IN_FAILURES_PER_MINUTE} failures a minute from one address, that address gets 429`, async () => {
+    remote = "127.0.0.1";
     for (let i = 0; i < SIGN_IN_FAILURES_PER_MINUTE; i++) {
       const response = await call(null, "POST", "login", { token: "nope" });
       expect(response.status).toBe(401);
     }
     const blocked = await call(null, "POST", "login", { token: ADMIN_TOKEN });
     expect(blocked.status).toBe(429);
+    // Another client is not locked out by the first one's failures.
+    remote = "::1";
+    expect(
+      (await call(null, "POST", "login", { token: ADMIN_TOKEN })).status,
+    ).toBe(200);
+    remote = "127.0.0.1";
     clock += 61_000;
     expect(
       (await call(null, "POST", "login", { token: ADMIN_TOKEN })).status,
     ).toBe(200);
+  });
+
+  test("the failure counter keeps a global ceiling and a bounded set of addresses", () => {
+    const counter = new FailureCounter({
+      perAddress: 3,
+      global: 10,
+      maxAddresses: 4,
+    });
+    const at = 1_000_000;
+    for (let i = 0; i < 3; i++) counter.fail("a", at);
+    expect(counter.allowed("a", at)).toBe(false);
+    expect(counter.allowed("b", at)).toBe(true);
+    for (const address of ["b", "c", "d", "e", "f"]) counter.fail(address, at);
+    expect(counter.tracked).toBe(4);
+    // The oldest seen ("a") was dropped, so its failures no longer count.
+    expect(counter.allowed("a", at)).toBe(true);
+    // 3 + 5 = 8 failures; two more reach the global ceiling for everyone.
+    counter.fail("g", at);
+    counter.fail("h", at);
+    expect(counter.allowed("z", at)).toBe(false);
+    // A minute on, everyone may try again.
+    expect(counter.allowed("z", at + 60_000)).toBe(true);
+    expect(counter.allowed("f", at + 60_000)).toBe(true);
+    // Addresses with no recent failure go first when the set is full.
+    const later = at + 120_000;
+    for (const address of ["p", "q", "r", "s", "t"])
+      counter.fail(address, later);
+    expect(counter.tracked).toBe(4);
   });
 
   test("sessions expire, and sign-out ends one", async () => {

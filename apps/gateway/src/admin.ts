@@ -121,8 +121,62 @@ export class BootstrapAuth implements AdminAuth {
   }
 }
 
-/** Failed sign-ins allowed per minute across the listener. */
+/** Failed sign-ins allowed per minute from one client address. */
 export const SIGN_IN_FAILURES_PER_MINUTE = 10;
+/** Failed sign-ins allowed per minute from everyone: only a safety net. */
+export const SIGN_IN_FAILURES_GLOBAL_PER_MINUTE = 500;
+/** Client addresses whose failures are remembered at once. */
+export const MAX_TRACKED_ADDRESSES = 1024;
+
+/**
+ * Failed sign-ins in the last minute, per client address, so one client
+ * cannot lock the others out. Past `maxAddresses` the addresses with no
+ * recent failure go first, then the longest unseen.
+ */
+export class FailureCounter {
+  readonly #byAddress = new Map<string, number[]>();
+  #all: number[] = [];
+
+  constructor(
+    private readonly limits = {
+      perAddress: SIGN_IN_FAILURES_PER_MINUTE,
+      global: SIGN_IN_FAILURES_GLOBAL_PER_MINUTE,
+      maxAddresses: MAX_TRACKED_ADDRESSES,
+    },
+  ) {}
+
+  /** Whether this address may try now. */
+  allowed(address: string, at: number): boolean {
+    this.#all = recent(this.#all, at);
+    if (this.#all.length >= this.limits.global) return false;
+    const mine = recent(this.#byAddress.get(address) ?? [], at);
+    return mine.length < this.limits.perAddress;
+  }
+
+  fail(address: string, at: number): void {
+    this.#all.push(at);
+    const mine = recent(this.#byAddress.get(address) ?? [], at);
+    mine.push(at);
+    // Re-inserted, so Map order is the order addresses were last seen.
+    this.#byAddress.delete(address);
+    this.#byAddress.set(address, mine);
+    if (this.#byAddress.size <= this.limits.maxAddresses) return;
+    for (const [other, times] of this.#byAddress)
+      if (!recent(times, at).length) this.#byAddress.delete(other);
+    for (const other of this.#byAddress.keys()) {
+      if (this.#byAddress.size <= this.limits.maxAddresses) break;
+      this.#byAddress.delete(other);
+    }
+  }
+
+  /** How many addresses are remembered, for tests. */
+  get tracked(): number {
+    return this.#byAddress.size;
+  }
+}
+
+const recent = (times: number[], at: number) =>
+  times.filter((time) => at - time < 60_000);
 const COOKIE = "daedalus_admin";
 const CSRF_HEADER = "X-Daedalus-CSRF";
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -295,7 +349,7 @@ export function createAdmin(deps: AdminDeps) {
   const print = deps.print ?? ((line: string) => console.log(line));
   const now = deps.now ?? Date.now;
   const sessions = new Map<string, Session>();
-  let failures: number[] = [];
+  const failures = new FailureCounter();
   const clientScript = `(${adminClient.toString()})();\n`;
 
   function audit(
@@ -408,8 +462,7 @@ export function createAdmin(deps: AdminDeps) {
         "Sign in over https, or through kubectl port-forward on localhost",
       );
     const at = now();
-    failures = failures.filter((time) => at - time < 60_000);
-    if (failures.length >= SIGN_IN_FAILURES_PER_MINUTE)
+    if (!failures.allowed(address, at))
       throw new AdminError(
         429,
         "RATE_LIMITED",
@@ -418,7 +471,7 @@ export function createAdmin(deps: AdminDeps) {
     const body = await readJson(request);
     const principal = auth.signIn(body);
     if (!principal) {
-      failures.push(at);
+      failures.fail(address, at);
       audit(actorFor(null, address), "sign-in", "", "refused");
       throw new AdminError(401, "UNAUTHORIZED", "That token is not right");
     }
