@@ -131,6 +131,10 @@ const CRASHING = new Set([
 ]);
 const IMAGE = new Set(["ErrImagePull", "ImagePullBackOff", "InvalidImageName"]);
 
+/** "container: reason: message", leaving out what is empty. */
+const waitingText = (item: PodHealth["waiting"][number]) =>
+  [item.container, item.reason, item.message].filter(Boolean).join(": ");
+
 const age = (now: number, iso: string | null) =>
   iso ? now - Date.parse(iso) : 0;
 
@@ -159,13 +163,13 @@ function podProblem(
   if (crashing)
     return {
       kind: "crashing",
-      detail: `${crashing.container}: ${crashing.reason}${pod.restarts ? `, ${pod.restarts} restarts` : ""}`,
+      detail: `${[crashing.container, crashing.reason].filter(Boolean).join(": ")}${pod.restarts ? `, ${pod.restarts} restarts` : ""}`,
     };
   const image = pod.waiting.find((item) => IMAGE.has(item.reason));
   if (image)
     return {
       kind: "pending",
-      detail: `${image.container}: ${image.reason}${image.message ? `: ${image.message}` : ""}`,
+      detail: waitingText(image),
     };
   if (pod.phase === "Pending" && age(now, pod.createdAt) >= PENDING_MS) {
     if (pod.unscheduled) return { kind: "pending", detail: pod.unscheduled };
@@ -173,7 +177,7 @@ function podProblem(
     return {
       kind: "pending",
       detail: waiting
-        ? `${waiting.container}: ${waiting.reason}${waiting.message ? `: ${waiting.message}` : ""}`
+        ? waitingText(waiting)
         : "Pending; the volumes may still be attaching",
     };
   }

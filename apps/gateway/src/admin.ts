@@ -20,7 +20,7 @@ import {
   type Store,
   type WorkspaceRow,
 } from "./store";
-import { adminClient } from "./admin/client";
+import { adminClient, filterTools } from "./admin/client";
 import { buildHealth, type AdminHealth, type HealthUser } from "./admin-health";
 import type { Logbook } from "./logbook";
 import pageCss from "./admin/admin.css" with { type: "text" };
@@ -362,7 +362,7 @@ export function createAdmin(deps: AdminDeps) {
   const sessions = new Map<string, Session>();
   const startedAt = now();
   const failures = new FailureCounter();
-  const clientScript = `(${adminClient.toString()})();\n`;
+  const clientScript = `(${adminClient.toString()})((${filterTools.toString()})());\n`;
 
   function audit(
     actor: Actor,
