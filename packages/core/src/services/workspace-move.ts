@@ -41,6 +41,7 @@ import {
 } from "./move-side";
 import {
   appendedTranscript,
+  isClaudePermissionMode,
   lastPermissionMode,
   readTranscript,
   rewriteTranscript,
@@ -149,16 +150,11 @@ export const MAX_MOVE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES = 256 * 1024 * 1024;
 
 /** Shown on the workspace after it comes home. */
-export const MOVED_HOME_NOTICE = "Back on this Mac.";
-/** Added when the move home restarted Claude sessions, in ask mode. */
-export const MOVED_HOME_ASK_NOTICE =
-  "Its Claude sessions ask before acting, since the cloud wrote part of their conversations; press Shift+Tab in a session to switch modes.";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const POD_PROJECTS = POD_CLAUDE_PROJECTS;
 const POD_SCRATCH = ".daedalus-move";
 /** A session the cloud wrote part of comes home asking before it acts. */
-const MOVED_HOME_PERMISSION_MODE: ClaudePermissionMode = "default";
 const LIVE = ["running", "starting"];
 
 /** One git worktree of the workspace as a move carries it. */
@@ -181,7 +177,12 @@ interface Tree {
 interface WorkspaceMoveRecord {
   sessions: Record<
     string,
-    { macWorkingDirectory: string; transcript: SentTranscriptFile[] }
+    {
+      macWorkingDirectory: string;
+      transcript: SentTranscriptFile[];
+      /** Its permission mode on this Mac, which it resumes in at home. */
+      macPermissionMode?: ClaudePermissionMode;
+    }
   >;
   branches: Record<string, string>;
 }
@@ -519,9 +520,11 @@ export class WorkspaceMoves {
             ),
           );
         }
+        const macPermissionMode = modes.get(session.id);
         record.sessions[session.id] = {
           macWorkingDirectory: session.workingDirectory,
           transcript: sent,
+          ...(macPermissionMode ? { macPermissionMode } : {}),
         };
       }
 
@@ -809,6 +812,10 @@ export class WorkspaceMoves {
       }[] = [];
       // Sessions that never had a turn: nothing to resume on this Mac.
       const fresh = new Set<string>();
+      // Each resumes in the mode it had here before the move, whatever the
+      // pod recorded; one started in the cloud in this Mac's mode for new
+      // sessions.
+      const homeModes = new Map<string, ClaudePermissionMode>();
       for (const session of sessions) {
         if (!isClaude(session)) continue;
         const macFolder = macPath(workspace, session.workingDirectory);
@@ -819,6 +826,9 @@ export class WorkspaceMoves {
             `${session.name}'s folder in the cloud is not the one it left this Mac from`,
           );
         const podFolder = podWorkingDirectory(session.workingDirectory);
+        const homeMode =
+          sent?.macPermissionMode ?? this.#defaultPermissionMode();
+        homeModes.set(session.id, homeMode);
         const transcript = await this.#readOptional(
           pod,
           POD_PROJECTS,
@@ -856,7 +866,7 @@ export class WorkspaceMoves {
               rewriteTranscript(text, {
                 from: podFolder,
                 to: macFolder,
-                permissionMode: MOVED_HOME_PERMISSION_MODE,
+                permissionMode: homeMode,
                 strict: true,
               }),
           }),
@@ -913,7 +923,9 @@ export class WorkspaceMoves {
             },
             session.kind === "agent"
               ? {
-                  permissionMode: MOVED_HOME_PERMISSION_MODE,
+                  ...(homeModes.has(session.id)
+                    ? { permissionMode: homeModes.get(session.id)! }
+                    : {}),
                   fresh: fresh.has(session.id),
                 }
               : {},
@@ -928,15 +940,10 @@ export class WorkspaceMoves {
       return {
         status: "moved",
         workspace: await this.options.workspaces.getActive(workspace.id),
-        notice: [
-          MOVED_HOME_NOTICE,
-          ...(stopped.some((session) => session.kind === "agent")
-            ? [MOVED_HOME_ASK_NOTICE]
-            : []),
-          ...(failed.length
-            ? [`Did not start on this Mac: ${failed.join("; ")}`]
-            : []),
-        ].join(" "),
+        // The card says where it is; only a failure needs words.
+        ...(failed.length
+          ? { notice: `Did not start on this Mac: ${failed.join("; ")}` }
+          : {}),
       };
     } catch (error) {
       await this.#resumeWhereTheyWere(stopped, error);
@@ -1363,6 +1370,8 @@ export class WorkspaceMoves {
         if (
           typeof entry?.macWorkingDirectory !== "string" ||
           !isAbsolute(entry.macWorkingDirectory) ||
+          (entry.macPermissionMode !== undefined &&
+            !isClaudePermissionMode(entry.macPermissionMode)) ||
           !Array.isArray(entry.transcript) ||
           !entry.transcript.every(
             (file) =>
