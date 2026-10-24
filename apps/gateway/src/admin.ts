@@ -585,6 +585,8 @@ export function createAdmin(deps: AdminDeps) {
     const address = server.requestIP(request)?.address ?? "";
 
     if (method === "GET") {
+      if (path === "/favicon.ico")
+        return new Response(null, { status: 204, headers: SECURITY_HEADERS });
       if (path === "/admin") return Response.redirect("/admin/", 302);
       if (path === "/admin/")
         return asset(PAGE_HTML, "text/html; charset=utf-8");

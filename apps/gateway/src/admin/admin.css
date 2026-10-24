@@ -168,6 +168,45 @@ table {
   border-collapse: collapse;
 }
 
+table.workspaces {
+  table-layout: fixed;
+  min-width: 1080px;
+}
+
+table.workspaces th:nth-child(1) {
+  width: 20%;
+}
+table.workspaces th:nth-child(2),
+table.workspaces th:nth-child(5) {
+  width: 11%;
+}
+table.workspaces th:nth-child(3) {
+  width: 10%;
+}
+table.workspaces th:nth-child(4),
+table.workspaces th:nth-child(7) {
+  width: 7%;
+}
+table.workspaces th:nth-child(6) {
+  width: 8%;
+}
+table.workspaces th:nth-child(8) {
+  width: 13%;
+}
+table.workspaces th:nth-child(9) {
+  width: 180px;
+}
+
+table.workspaces td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+tr.confirm-row td {
+  border-top: none;
+  padding-top: 0;
+}
+
 th,
 td {
   text-align: left;
@@ -228,12 +267,22 @@ td .name {
   justify-content: flex-end;
 }
 
+.resources {
+  font-size: 13px;
+}
+
 .confirm-box {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  white-space: normal;
-  max-width: 330px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+}
+
+.confirm-box .warn {
+  flex-basis: 100%;
 }
 
 .confirm-box .row {
@@ -262,6 +311,8 @@ input.confirm {
 }
 
 button {
+  white-space: nowrap;
+  overflow-wrap: normal;
   font: inherit;
   padding: 5px 12px;
   border-radius: 6px;

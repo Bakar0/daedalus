@@ -199,7 +199,9 @@ export function adminClient(): void {
         el(
           "span",
           { class: "role", "data-testid": "admin-role" },
-          session.role === "admin" ? "Admin" : "Read only",
+          session.role === "admin"
+            ? "Signed in as admin"
+            : "Signed in read only",
         ),
       );
       const out = el("button", { type: "button", class: "quiet" }, "Sign out");
@@ -350,59 +352,61 @@ export function adminClient(): void {
     await load();
   }
 
-  function workspaceActions(user: User, workspace: Workspace) {
-    const cell = el("td", { class: "actions" });
-    if (session?.role !== "admin") return cell;
+  /** The row under a workspace that asks for its id before a delete. */
+  function confirmRow(user: User, workspace: Workspace) {
     const path = `users/${encodeURIComponent(user.id)}/workspaces/${encodeURIComponent(workspace.workspaceId)}`;
-    if (confirming.has(workspace.workspaceId)) {
-      const input = el("input", {
-        type: "text",
-        class: "confirm",
-        placeholder: workspace.workspaceId,
-        "aria-label": `Type ${workspace.workspaceId} to delete`,
-        "data-testid": "delete-confirm-input",
-      }) as HTMLInputElement;
-      const go = el(
-        "button",
-        {
-          type: "button",
-          class: "danger",
-          disabled: "",
-          "data-testid": "delete-confirm",
-        },
-        "Delete for good",
-      ) as HTMLButtonElement;
-      input.addEventListener("input", () => {
-        go.disabled =
-          input.value.trim().toLowerCase() !== workspace.workspaceId;
-      });
-      go.addEventListener("click", () => {
-        confirming.delete(workspace.workspaceId);
-        void runAction(`Deleted ${workspace.name}`, () =>
-          api("DELETE", path, { confirm: input.value }),
-        );
-      });
-      const cancel = el("button", { type: "button", class: "quiet" }, "Cancel");
-      cancel.addEventListener("click", () => {
-        confirming.delete(workspace.workspaceId);
-        void load();
-      });
-      cell.append(
-        el(
-          "div",
-          { class: "confirm-box" },
-          el(
-            "span",
-            { class: "warn" },
-            "Deletes the pod, both volumes and the record. Type the id:",
-          ),
-          input,
-          el("div", { class: "row" }, go, cancel),
-        ),
+    const input = el("input", {
+      type: "text",
+      class: "confirm",
+      placeholder: workspace.workspaceId,
+      "aria-label": `Type ${workspace.workspaceId} to delete`,
+      "data-testid": "delete-confirm-input",
+    }) as HTMLInputElement;
+    const go = el(
+      "button",
+      {
+        type: "button",
+        class: "danger",
+        disabled: "",
+        "data-testid": "delete-confirm",
+      },
+      "Delete for good",
+    ) as HTMLButtonElement;
+    input.addEventListener("input", () => {
+      go.disabled = input.value.trim().toLowerCase() !== workspace.workspaceId;
+    });
+    go.addEventListener("click", () => {
+      confirming.delete(workspace.workspaceId);
+      void runAction(`Deleted ${workspace.name}`, () =>
+        api("DELETE", path, { confirm: input.value }),
       );
-      queueMicrotask(() => input.focus());
+    });
+    const cancel = el("button", { type: "button", class: "quiet" }, "Cancel");
+    cancel.addEventListener("click", () => {
+      confirming.delete(workspace.workspaceId);
+      void load();
+    });
+    const box = el(
+      "div",
+      { class: "confirm-box" },
+      el(
+        "span",
+        { class: "warn" },
+        `Delete ${workspace.name} for good? This removes its pod, both volumes and its record; the user's Mac falls back to its own copy. Type the workspace id to confirm:`,
+      ),
+      input,
+      el("div", { class: "row" }, go, cancel),
+    );
+    queueMicrotask(() => input.focus());
+    return el("tr", { class: "confirm-row" }, el("td", { colspan: "9" }, box));
+  }
+
+  function workspaceActions(user: User, workspace: Workspace) {
+    const box = el("div", { class: "actions" });
+    const cell = el("td", { class: "actions-cell" }, box);
+    if (session?.role !== "admin" || confirming.has(workspace.workspaceId))
       return cell;
-    }
+    const path = `users/${encodeURIComponent(user.id)}/workspaces/${encodeURIComponent(workspace.workspaceId)}`;
     const button = (
       label: string,
       testId: string,
@@ -418,7 +422,7 @@ export function adminClient(): void {
       return node;
     };
     if (workspace.status === "sleeping")
-      cell.append(
+      box.append(
         button(
           "Wake",
           "workspace-wake",
@@ -429,7 +433,7 @@ export function adminClient(): void {
         ),
       );
     else
-      cell.append(
+      box.append(
         button(
           "Sleep",
           "workspace-sleep",
@@ -439,7 +443,7 @@ export function adminClient(): void {
             ),
         ),
       );
-    cell.append(
+    box.append(
       button(
         "Delete…",
         "workspace-delete",
@@ -461,9 +465,14 @@ export function adminClient(): void {
   }
 
   function resources(workspace: Workspace) {
-    if (!workspace.resources) return "asleep";
+    if (!workspace.resources) return "no pod while asleep";
     const { cpu, memory } = workspace.resources;
-    return `${cpu.request}/${cpu.limit} CPU, ${memory.request}/${memory.limit}`;
+    return el(
+      "div",
+      { class: "resources" },
+      el("div", {}, `CPU ${cpu.request}, up to ${cpu.limit}`),
+      el("div", {}, `Memory ${memory.request}, up to ${memory.limit}`),
+    );
   }
 
   function workspaceRow(user: User, workspace: Workspace) {
@@ -566,7 +575,7 @@ export function adminClient(): void {
   function userSection(user: User) {
     const table = el(
       "table",
-      {},
+      { class: "workspaces" },
       el(
         "thead",
         {},
@@ -589,7 +598,11 @@ export function adminClient(): void {
       el(
         "tbody",
         {},
-        ...user.workspaces.map((workspace) => workspaceRow(user, workspace)),
+        ...user.workspaces.flatMap((workspace) =>
+          confirming.has(workspace.workspaceId) && session?.role === "admin"
+            ? [workspaceRow(user, workspace), confirmRow(user, workspace)]
+            : [workspaceRow(user, workspace)],
+        ),
       ),
     );
     return el(
