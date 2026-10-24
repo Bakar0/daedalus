@@ -4,6 +4,11 @@ metadata:
   name: ws-abc
   namespace: u-t
   labels: { daedalus.dev/user: t, daedalus.dev/workspace: abc }
+  ownerReferences:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      name: ws-abc
+      uid: 00000000-0000-4000-8000-000000000001
   annotations:
     dev.gvisor.spec.mount.shared.share: pod
     dev.gvisor.spec.mount.shared.type: tmpfs

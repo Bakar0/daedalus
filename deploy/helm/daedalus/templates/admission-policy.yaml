@@ -121,6 +121,13 @@ spec:
         !has(object.metadata.annotations) || object.metadata.annotations.all(k,
           !k.startsWith('dev.gvisor.') ||
           (k in variables.gvisor && object.metadata.annotations[k] == variables.gvisor[k]))
+    - message: pod must be owned by exactly its workspace PVC, not as a controller and without blockOwnerDeletion
+      expression: >-
+        has(object.metadata.ownerReferences) && size(object.metadata.ownerReferences) == 1 &&
+        object.metadata.ownerReferences.all(o,
+          o.apiVersion == 'v1' && o.kind == 'PersistentVolumeClaim' && o.name == variables.name &&
+          (!has(o.controller) || o.controller == false) &&
+          (!has(o.blockOwnerDeletion) || o.blockOwnerDeletion == false))
     - message: volumes must be exactly the workspace and state PVCs of this pod, its runner Secret, and emptyDirs
       expression: >-
         has(variables.spec.volumes) && variables.spec.volumes.all(v,
