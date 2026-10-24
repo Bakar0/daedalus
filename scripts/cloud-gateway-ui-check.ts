@@ -124,6 +124,21 @@ await withBrowser(
       text.includes("daedalus-gateway") && !text.includes("\u0007"),
       "the dry run does not list the objects, or keeps a control character",
     );
+    expect(
+      text.includes("label pod-security.kubernetes.io/enforce=restricted"),
+      "the dry run does not show the namespace's labels",
+    );
+    // A new install with no public address keeps dev login: it is how this
+    // Mac signs in.
+    expect(
+      await disabled(browser, "gateway-install-dev-login"),
+      "dev login can be turned off without a public address",
+    );
+    expect(
+      (await browser.text("gateway-install-confirm-host")) ===
+        "API server ABCD1234.gr7.eu-west-1.eks.amazonaws.com",
+      "the confirm field does not name the API server",
+    );
 
     // Off until email, the exact name, and the acknowledgement.
     expect(
@@ -206,6 +221,113 @@ await withBrowser(
       "window.requests.some((one) => 'gatewayInstallDismiss' in one)",
       "the dismiss call",
     );
+  },
+);
+
+// An upgrade starts from the installed values and sends only what changed;
+// NetworkPolicy 'unknown' needs its own acknowledgement; a token the
+// Keychain refused shows once.
+await withBrowser(
+  {
+    port: 41870,
+    page: "cloud-test.html",
+    query: "modal=settings&signedIn=0&release=1&policy=unknown&keychain=fail",
+  },
+  async (browser) => {
+    await openGateway(browser);
+    await browser.evaluate(
+      `document.querySelector('[data-context="${EKS}"] input').click()`,
+    );
+    await browser.click("gateway-install-check");
+    await browser.waitFor(
+      "document.querySelector('[data-testid=\"gateway-install-upgrade\"]')",
+      "the upgrade note",
+    );
+    const upgrade = await browser.text("gateway-install-upgrade");
+    expect(
+      upgrade.includes("dev login on") &&
+        upgrade.includes("public address https://gw.example.com") &&
+        upgrade.includes("images ghcr.io/acme:0.30.0") &&
+        upgrade.includes("storage class gp3"),
+      `the upgrade note reads "${upgrade}"`,
+    );
+    await browser.click("gateway-install-preview");
+    await browser.waitFor(
+      "document.querySelector('[data-testid=\"gateway-install-objects\"]')",
+      "the dry run",
+    );
+    expect(
+      (await browser.evaluate<string>(
+        "document.querySelector('[data-testid=\"gateway-install-public-url\"]').value",
+      )) === "https://gw.example.com",
+      "the public address does not start from the installed one",
+    );
+    await browser.type("gateway-install-email", "me@example.com");
+    await browser.type("gateway-install-confirm", EKS);
+    expect(
+      !(await browser.has("gateway-install-acknowledge")) &&
+        (await browser.has("gateway-install-acknowledge-policy")) &&
+        (await disabled(browser, "gateway-install-start")),
+      "the NetworkPolicy acknowledgement is missing, or the dev login one shows for a kept address",
+    );
+    await browser.click("gateway-install-acknowledge-policy");
+    await browser.click("gateway-install-dev-login");
+    expect(
+      !(await disabled(browser, "gateway-install-start")),
+      "install stays off after both are settled",
+    );
+    await browser.evaluate(
+      "(() => { const pane = document.querySelector('.settings-pane'); pane.scrollTop = pane.scrollHeight; })()",
+    );
+    await Bun.sleep(300);
+    await browser.screenshot("cloud-gateway-upgrade");
+    await browser.click("gateway-install-start");
+    await browser.waitFor(
+      "window.requests.some((one) => 'gatewayInstallStart' in one)",
+      "the start",
+    );
+    const sent = JSON.stringify(
+      (await calls(browser, "gatewayInstallStart"))[0],
+    );
+    expect(
+      sent ===
+        JSON.stringify({
+          context: EKS,
+          namespace: "daedalus",
+          dryRunId: "dry-1",
+          confirm: EKS,
+          email: "me@example.com",
+          devLogin: false,
+          acknowledgeNetworkPolicy: true,
+        }),
+      `the start sent ${sent}`,
+    );
+    await browser.evaluate("window.cloudFixture.releaseInstall()");
+    await browser.waitFor(
+      "document.querySelector('[data-testid=\"gateway-install-token-show\"]')",
+      "the token button",
+    );
+    expect(
+      (await browser.text("gateway-install-done")).includes(
+        "Dev login is off, so this Mac did not sign in",
+      ) && (await browser.has("gateway-install-egress")),
+      "the done view does not say it did not sign in, or has no egress check",
+    );
+    expect(
+      !(await browser.has("gateway-install-token-value")),
+      "the token shows before it is asked for",
+    );
+    await browser.click("gateway-install-token-show");
+    await browser.waitFor(
+      "document.querySelector('[data-testid=\"gateway-install-token-value\"]')",
+      "the token",
+    );
+    expect(
+      (await browser.text("gateway-install-token-value")) === "adm-once-41c2" &&
+        (await calls(browser, "gatewayInstallAdminToken")).length === 1,
+      "the token is not shown once",
+    );
+    await browser.screenshot("cloud-gateway-token");
   },
 );
 

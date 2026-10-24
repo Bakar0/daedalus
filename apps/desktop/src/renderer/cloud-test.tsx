@@ -692,9 +692,32 @@ const client = {
             status: "unknown",
             label: "The cluster must be able to pull the images",
           },
+          // `policy=unknown`: nothing says whether NetworkPolicy is enforced.
+          ...(query.get("policy") === "unknown"
+            ? [
+                {
+                  id: "networkPolicy",
+                  status: "unknown",
+                  label: "NetworkPolicy enforcement unknown",
+                },
+              ]
+            : []),
         ],
         ready: !failing,
-        release: null,
+        // `release=1`: a gateway is installed here; only named values.
+        release:
+          query.get("release") === "1"
+            ? {
+                namespace: "daedalus",
+                revision: 3,
+                chartVersion: "0.31.0",
+                devLogin: true,
+                publicUrl: "https://gw.example.com",
+                images: { registry: "ghcr.io/acme", tag: "0.30.0" },
+                storageClass: "gp3",
+              }
+            : null,
+        acknowledge: query.get("policy") === "unknown" ? ["networkPolicy"] : [],
       });
     },
     gatewayInstallDryRun: async (params: Record<string, unknown>) => {
@@ -703,9 +726,14 @@ const client = {
         context: params.context,
         namespace: params.namespace ?? "daedalus",
         dryRunId: "dry-1",
-        upgrade: false,
+        upgrade: query.get("release") === "1",
         objects: [
-          { kind: "Namespace", name: "daedalus", namespace: null },
+          {
+            kind: "Namespace",
+            name: "daedalus",
+            namespace: null,
+            note: "new; label pod-security.kubernetes.io/enforce=restricted",
+          },
           {
             kind: "Deployment",
             name: "daedalus-gateway",
@@ -737,13 +765,48 @@ const client = {
           phase: "done",
           log: [...snapshot.gatewayInstall!.log, "gateway ready"],
           gatewayUrl: "http://127.0.0.1:58080",
-          portForward: !params.publicUrl,
+          // An upgrade keeps the installed public address.
+          portForward: !params.publicUrl && query.get("release") !== "1",
+          signedIn: params.devLogin !== false,
+          egress: [
+            {
+              target: "169.254.169.254:80",
+              want: "blocked",
+              got: "blocked",
+              result: "pass",
+            },
+            {
+              target: "1.1.1.1:443",
+              want: "open",
+              got: "open",
+              result: "pass",
+            },
+          ],
+          // `keychain=fail`: the admin token waits for one request.
+          ...(query.get("keychain") === "fail"
+            ? { adminTokenWaiting: true }
+            : {}),
         };
         cloud.signedIn = true;
         cloud.gatewayUrl = "http://127.0.0.1:58080";
         announce();
       })();
       return ok(structuredClone(snapshot.gatewayInstall));
+    },
+    gatewayInstallAdminToken: async () => {
+      record("gatewayInstallAdminToken", {});
+      const waiting = snapshot.gatewayInstall?.adminTokenWaiting;
+      if (snapshot.gatewayInstall)
+        delete snapshot.gatewayInstall.adminTokenWaiting;
+      return ok(
+        waiting
+          ? {
+              token: "adm-once-41c2",
+              secret: "daedalus-admin",
+              namespace: "daedalus",
+            }
+          : null,
+      );
     },
     gatewayInstallLocal: async (params: { email: string }) => {
       record("gatewayInstallLocal", params);

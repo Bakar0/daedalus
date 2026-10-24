@@ -9058,6 +9058,29 @@ dd {
 .gateway-install-acknowledge span {
   font-size: 12px;
 }
+.gateway-install-acknowledge small {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+}
+/* What happens beyond creating an object, such as the labels it gets. */
+.gateway-install-objects small {
+  color: var(--secondary);
+  display: block;
+  font-size: 11px;
+  padding-left: 12px;
+}
+.gateway-install-token code {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.gateway-install-token small {
+  display: block;
+}
 .gateway-install-local {
   border-top: 1px dashed var(--line);
   display: grid;
