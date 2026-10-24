@@ -42,9 +42,15 @@ export function useWorktreeChanges(
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const running = useRef(false);
   const again = useRef(false);
+  // The workspace on screen now. A request is always for this one, and an
+  // answer for any other is dropped: switching while a request was in flight
+  // used to show the old workspace's files, and the new one's first request
+  // re-asked about the old workspace.
+  const current = useRef(workspaceId);
 
   const refresh = useCallback(async (): Promise<void> => {
-    if (!workspaceId) return;
+    const asked = current.current;
+    if (!asked) return;
     if (running.current) {
       again.current = true;
       return;
@@ -54,14 +60,14 @@ export function useWorktreeChanges(
       Awaited<ReturnType<typeof client.request.workspaceChanges>> | undefined;
     try {
       response = await client.request.workspaceChanges({
-        workspace: workspaceId,
+        workspace: asked,
       });
     } catch {
       response = undefined;
     } finally {
       running.current = false;
     }
-    if (response?.ok)
+    if (response?.ok && current.current === asked)
       setChanges(
         new Map(
           response.data.map((tree) => [
@@ -74,9 +80,10 @@ export function useWorktreeChanges(
       again.current = false;
       void refresh();
     }
-  }, [client, workspaceId]);
+  }, [client]);
 
   useEffect(() => {
+    current.current = workspaceId;
     setChanges(new Map());
     if (!workspaceId) return;
     const soon = () => {
@@ -208,13 +215,15 @@ export const commitIsLocal = (
 /**
  * The commits a worktree made since it branched, newest first, folded behind
  * a count. Opening a commit lists the files it changed; a file opens that
- * commit's diff. Read when opened, and again when the count moves.
+ * commit's diff. Read when opened, and again when HEAD or what is pushed
+ * moves.
  */
 export function WorktreeCommits({
   client,
   workspaceId,
   root,
   count,
+  revision,
   landed = false,
   onOpenDiff,
   onOpenFile,
@@ -224,6 +233,11 @@ export function WorktreeCommits({
   root: string;
   /** Commits ahead of the base, from the worktree's git status. */
   count: number;
+  /**
+   * Changes whenever the list could have: HEAD, or what is pushed. A push
+   * or an amend keeps the count and still changes the list.
+   */
+  revision?: string;
   /** The merged pull request holds this tree's HEAD. */
   landed?: boolean;
   onOpenDiff(target: DiffTarget, options: { pinned: boolean }): void;
@@ -245,7 +259,7 @@ export function WorktreeCommits({
     return () => {
       cancelled = true;
     };
-  }, [client, count, open, root, workspaceId]);
+  }, [client, count, open, revision, root, workspaceId]);
 
   const toggleCommit = (commit: WorktreeCommitDto) => {
     if (expanded === commit.sha) {

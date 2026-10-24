@@ -2960,6 +2960,15 @@ dd {
 .workspace-worktree-row:hover {
   background: var(--raised);
 }
+/* The focused session's working trees, with their files and commits, sit on
+   the same wash as its selected card in the session list. */
+.workspace-worktree-group.focused {
+  background: var(--accent-wash);
+  border-radius: 6px;
+}
+.workspace-worktree-group.focused .workspace-worktree-row strong {
+  color: var(--accent);
+}
 .workspace-worktree-row.empty {
   color: var(--muted);
   font-size: 9px;
@@ -2983,10 +2992,16 @@ dd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The pull request and the git indicators sit on a line of their own under
+   the branch, lined up with its text, so a long branch name keeps its room
+   and the line wraps rather than pushing the row's buttons out. */
 .workspace-worktree-status {
+  align-items: center;
   display: flex;
-  flex-shrink: 0;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  margin: -2px 0 2px 33px;
+  padding-bottom: 2px;
 }
 .workspace-worktree-status .git-part {
   font-size: 9px;
@@ -3000,7 +3015,7 @@ dd {
   color: var(--success);
 }
 .git-part.tone-behind {
-  color: var(--danger);
+  color: var(--muted);
 }
 .git-part.tone-clean {
   color: var(--muted);
@@ -6825,6 +6840,39 @@ dd {
 }
 .pr-chip:hover {
   background: var(--raised-hover) !important;
+}
+.pr-chip.stale {
+  opacity: 0.55;
+  border-style: dashed !important;
+}
+.pr-chip-checks {
+  font-weight: 700;
+}
+.pr-chip-checks.checks-passing {
+  color: #3fb950;
+}
+.pr-chip-checks.checks-failing {
+  color: #f85149;
+}
+.pr-chip-checks.checks-pending {
+  color: #d29922;
+}
+.pr-chip-review.review-approved {
+  color: #3fb950;
+}
+.pr-chip-review.review-changes_requested {
+  color: #f85149;
+}
+.worktree-detached {
+  color: #d29922;
+}
+/* Merged, with nothing uncommitted or unpushed left: done, so quieter. */
+.workspace-worktree-group.settled {
+  opacity: 0.6;
+}
+.workspace-worktree-group.settled:hover,
+.workspace-worktree-group.settled.focused {
+  opacity: 1;
 }
 
 /* The commits a worktree made, folded behind a count under its files. */
