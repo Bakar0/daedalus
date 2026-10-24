@@ -239,6 +239,7 @@ async function setup() {
     cloud: {
       prepareForSession: async () => HOST,
       delete: async (id: string) => deleted.push(id),
+      fallBackIfUnlinked: async () => false,
     },
     terminals: { closeInside: async () => undefined },
     activity: async (id) => activity[id] as never,

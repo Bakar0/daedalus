@@ -450,6 +450,8 @@ void remoteStarted
   .then(() => context.cloud.hold())
   // Copies no workspace lives in count against the account's limit.
   .then(() => context.cloud.cleanOrphans())
+  // A workspace in the cloud whose copy is gone comes back to its backup.
+  .then(() => context.cloud.fallBackUnlinked())
   .catch((error) =>
     context.logger.write("error", "cloud_link_failed", {
       message: error instanceof Error ? error.message : String(error),
