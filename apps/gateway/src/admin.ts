@@ -183,8 +183,6 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const USER_ID = /^[a-z0-9]{1,20}$/;
 const WORKSPACE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** The most a limit override may be. */
-export const MAX_LIMIT = 100;
 
 const SECURITY_HEADERS: Record<string, string> = {
   "Content-Security-Policy":
@@ -780,13 +778,13 @@ export function createAdmin(deps: AdminDeps) {
         typeof maxWorkspaces === "number" &&
         Number.isInteger(maxWorkspaces) &&
         maxWorkspaces >= 0 &&
-        maxWorkspaces <= MAX_LIMIT
+        maxWorkspaces <= config.maxWorkspaces
       )
     )
       throw new AdminError(
         400,
         "VALIDATION",
-        `maxWorkspaces must be a whole number from 0 to ${MAX_LIMIT}, or null`,
+        `maxWorkspaces must be a whole number from 0 to ${config.maxWorkspaces} (an override can only lower the limit), or null`,
       );
     const before = USER_ID.test(userId) ? store.maxWorkspaces(userId) : null;
     if (

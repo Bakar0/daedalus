@@ -167,9 +167,16 @@ export function createGateway(deps: GatewayDeps) {
     store.touch(userId, workspaceId, new Date(now));
   };
 
-  /** The user's workspace limit: the admin's override, else the default. */
+  /**
+   * The user's workspace limit: the admin's override, else the default. An
+   * override can only lower it: the chart sizes the tenant's volume quota
+   * for the default, so a higher one could not be used.
+   */
   const limitFor = (userId: string) =>
-    store.maxWorkspaces(userId) ?? config.maxWorkspaces;
+    Math.min(
+      store.maxWorkspaces(userId) ?? config.maxWorkspaces,
+      config.maxWorkspaces,
+    );
 
   /** Turns a Kubernetes failure into the contract's error codes. */
   function kubeFailure(error: unknown): HttpError {

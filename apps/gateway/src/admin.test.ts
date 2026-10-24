@@ -773,7 +773,7 @@ describe("actions", () => {
     expect(view.users[0]!.limit).toBe(1);
     expect(view.users[0]!.limitOverride).toBe(1);
 
-    for (const maxWorkspaces of [-1, 1.5, 101, "3"]) {
+    for (const maxWorkspaces of [-1, 1.5, 6, 101, "3"]) {
       const bad = await call(session, "PUT", `users/${user.id}/limit`, {
         maxWorkspaces,
       });
@@ -794,6 +794,21 @@ describe("actions", () => {
     const changes = audits().filter((entry) => entry.action === "set-limit");
     expect(changes[0]!.detail).toBe("default -> 1");
     expect(changes.at(-1)!.detail).toBe("1 -> default");
+  });
+
+  test("an override above the default, stored before the cap, still counts as the default", async () => {
+    const { user, token } = await devLogin("u@example.com");
+    store.setMaxWorkspaces(user.id, 50);
+    const session = await signIn();
+    const view = await overview(session);
+    expect(view.users[0]!.limit).toBe(5);
+    for (let i = 0; i < 5; i++)
+      expect(
+        await createWorkspace(token, `aaaaaaaa-0000-4000-8000-00000000000${i}`),
+      ).toBe(201);
+    expect(
+      await createWorkspace(token, "aaaaaaaa-0000-4000-8000-000000000009"),
+    ).toBe(429);
   });
 
   test("the audit keeps the newest 1000 entries", () => {

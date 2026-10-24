@@ -75,6 +75,8 @@ export function adminClient(): void {
   let timer: number | undefined;
   /** Workspace ids whose delete is waiting for the typed confirmation. */
   const confirming = new Set<string>();
+  /** The chart's workspaces per user, the most an override may be. */
+  let defaultLimit = 0;
   /** True while a form on the page is being typed into. */
   let editing = false;
 
@@ -331,7 +333,7 @@ export function adminClient(): void {
         settings.asleepDays > 0
           ? `A workspace asleep ${settings.asleepDays} days is deleted; collection runs every ${settings.collectMinutes} min. `
           : "Collection of asleep workspaces is off. ",
-        `Idle workspaces sleep after ${settings.idleMinutes} min. Default limit ${settings.defaultLimit} workspaces per user.`,
+        `Idle workspaces sleep after ${settings.idleMinutes} min. Default limit ${settings.defaultLimit} workspaces per user; an override can only lower it, since each user's volume quota is sized for the default.`,
       ),
     );
   }
@@ -542,11 +544,12 @@ export function adminClient(): void {
     const input = el("input", {
       type: "number",
       min: "0",
-      max: "100",
+      max: String(defaultLimit),
       step: "1",
       value: user.limitOverride === null ? "" : String(user.limitOverride),
       placeholder: "default",
       "aria-label": `Workspace limit for ${user.email}`,
+      title: `An override can only lower the limit, to at most ${defaultLimit}: the volume quota is sized for the default`,
       "data-testid": "limit-input",
     }) as HTMLInputElement;
     input.addEventListener("focus", () => (editing = true));
@@ -706,6 +709,7 @@ export function adminClient(): void {
       schedule();
       return;
     }
+    defaultLimit = overview.settings.defaultLimit;
     const previous = document.getElementById("message");
     const kept = previous && !previous.hidden ? previous.cloneNode(true) : null;
     const details = root.querySelector("details.audit");
