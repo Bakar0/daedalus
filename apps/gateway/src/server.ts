@@ -36,6 +36,9 @@ export interface CollectResult {
   namespaces: string[];
 }
 
+/** How often relay traffic may update a workspace's last active time. */
+export const ACTIVITY_WRITE_MS = 60_000;
+
 export interface GatewayDeps {
   config: GatewayConfig;
   store: Store;
@@ -44,7 +47,7 @@ export interface GatewayDeps {
   log?: (message: string) => void;
 }
 
-class HttpError extends Error {
+export class HttpError extends Error {
   constructor(
     readonly code: GatewayErrorCode,
     message: string,
@@ -62,10 +65,10 @@ const STATUS: Record<GatewayErrorCode, number> = {
   INTERNAL: 500,
 };
 
-const errorResponse = (code: GatewayErrorCode, message: string) =>
+export const errorResponse = (code: GatewayErrorCode, message: string) =>
   Response.json({ error: { code, message } }, { status: STATUS[code] });
 
-const notFound = () => new HttpError("NOT_FOUND", "No such workspace");
+export const notFound = () => new HttpError("NOT_FOUND", "No such workspace");
 const unauthorized = () =>
   new HttpError("UNAUTHORIZED", "Sign in to the gateway");
 
@@ -89,7 +92,9 @@ function bearer(request: Request): string | undefined {
   return header.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
 }
 
-async function readJson(request: Request): Promise<Record<string, unknown>> {
+export async function readJson(
+  request: Request,
+): Promise<Record<string, unknown>> {
   let body: unknown;
   try {
     body = await request.json();
@@ -151,6 +156,20 @@ function parseCreate(
 export function createGateway(deps: GatewayDeps) {
   const { config, store, controller, relay } = deps;
   const log = deps.log ?? ((message: string) => console.error(message));
+
+  // Relay traffic marks the workspace in use, written at most once a minute.
+  const lastWrite = new Map<string, number>();
+  relay.onActivity = (userId, workspaceId) => {
+    const key = `${userId}/${workspaceId}`;
+    const now = Date.now();
+    if (now - (lastWrite.get(key) ?? 0) < ACTIVITY_WRITE_MS) return;
+    lastWrite.set(key, now);
+    store.touch(userId, workspaceId, new Date(now));
+  };
+
+  /** The user's workspace limit: the admin's override, else the default. */
+  const limitFor = (userId: string) =>
+    store.maxWorkspaces(userId) ?? config.maxWorkspaces;
 
   /** Turns a Kubernetes failure into the contract's error codes. */
   function kubeFailure(error: unknown): HttpError {
@@ -215,13 +234,12 @@ export function createGateway(deps: GatewayDeps) {
       runnerKey: null,
       sleeping: false,
       sleptAt: null,
+      lastActiveAt: null,
       createdAt: new Date().toISOString(),
     };
-    if (store.workspaces(userId).length >= config.maxWorkspaces)
-      throw new HttpError(
-        "QUOTA",
-        `You may have at most ${config.maxWorkspaces} workspaces`,
-      );
+    const limit = limitFor(userId);
+    if (store.workspaces(userId).length >= limit)
+      throw new HttpError("QUOTA", `You may have at most ${limit} workspaces`);
     const token = randomToken();
     if (!store.insertWorkspace(row, token))
       throw new HttpError(
@@ -258,6 +276,7 @@ export function createGateway(deps: GatewayDeps) {
     await controller.writeToken(row, token);
     await controller.startPod(row);
     store.setSleeping(row.userId, row.workspaceId, false);
+    store.touch(row.userId, row.workspaceId);
     return Response.json(await view({ ...row, sleeping: false }));
   }
 
@@ -479,5 +498,11 @@ export function createGateway(deps: GatewayDeps) {
     return result;
   }
 
-  return { public: listen("public"), runner: listen("runner"), collect };
+  return {
+    public: listen("public"),
+    runner: listen("runner"),
+    collect,
+    /** What the admin page acts with: the same paths the user's routes use. */
+    workspaces: { view, wake, sleep, remove, limitFor, kubeFailure },
+  };
 }

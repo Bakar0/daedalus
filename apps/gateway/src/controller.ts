@@ -153,6 +153,17 @@ export function workspaceStatus(
   return { status: "starting", reason: null };
 }
 
+/** A workspace's pod and volumes, as the admin page shows them. */
+export interface WorkspaceUsage {
+  pod: PodState | null;
+  disk: { name: string; size: string }[];
+}
+
+export interface PodResources {
+  cpu: { request: string; limit: string };
+  memory: { request: string; limit: string };
+}
+
 /**
  * How long to wait before each retry of the first object after a new
  * RoleBinding: five tries over five seconds. The API server can refuse with
@@ -421,21 +432,76 @@ export class Controller {
     return podState(response.body);
   }
 
+  /**
+   * The user's workspace pods and PVCs, by workspace id, in two list calls,
+   * for the admin page. A PVC's size is what it requests.
+   */
+  async usage(userId: string): Promise<Map<string, WorkspaceUsage>> {
+    const namespace = namespaceFor(userId);
+    const selector = `?labelSelector=${encodeURIComponent(WORKSPACE_LABEL)}`;
+    const list = async (plural: string, what: string) => {
+      const response = await this.kube.request(
+        "GET",
+        `${core(namespace, plural)}${selector}`,
+      );
+      if (response.status === 404) return [];
+      if (response.status >= 300) throw KubeError.from(response, what);
+      return isObject(response.body) && Array.isArray(response.body.items)
+        ? (response.body.items as unknown[])
+        : [];
+    };
+    const usage = new Map<string, WorkspaceUsage>();
+    const entry = (item: unknown) => {
+      const id = field(item, "metadata", "labels", WORKSPACE_LABEL);
+      if (typeof id !== "string") return undefined;
+      let found = usage.get(id);
+      if (!found) {
+        found = { pod: null, disk: [] };
+        usage.set(id, found);
+      }
+      return found;
+    };
+    for (const item of await list("pods", "Listing the user's pods")) {
+      const found = entry(item);
+      if (found && isObject(item)) found.pod = podState(item);
+    }
+    for (const item of await list(
+      "persistentvolumeclaims",
+      "Listing the user's volumes",
+    )) {
+      const found = entry(item);
+      const name = text(field(item, "metadata", "name"));
+      const size = text(
+        field(item, "spec", "resources", "requests", "storage"),
+      );
+      if (found && name && size) found.disk.push({ name, size });
+    }
+    return usage;
+  }
+
+  /** The session container's CPU and memory, as `podSpec` sets them. */
+  resources(row: WorkspaceRow): PodResources {
+    const { workspace } = this.config;
+    // A size the user asked for is both the request and the limit.
+    return {
+      cpu: {
+        request: row.cpu ?? workspace.requests.cpu,
+        limit: row.cpu ?? workspace.limits.cpu,
+      },
+      memory: {
+        request: row.memory ?? workspace.requests.memory,
+        limit: row.memory ?? workspace.limits.memory,
+      },
+    };
+  }
+
   #labels(row: WorkspaceRow): Record<string, string> {
     return { [USER_LABEL]: row.userId, [WORKSPACE_LABEL]: row.workspaceId };
   }
 
   podSpec(row: WorkspaceRow): KubeObject {
     const { workspace, runner } = this.config;
-    // A size the user asked for is both the request and the limit.
-    const cpu = {
-      request: row.cpu ?? workspace.requests.cpu,
-      limit: row.cpu ?? workspace.limits.cpu,
-    };
-    const memory = {
-      request: row.memory ?? workspace.requests.memory,
-      limit: row.memory ?? workspace.limits.memory,
-    };
+    const { cpu, memory } = this.resources(row);
     const value = (name: string, value: string) => ({ name, value });
     const container = (
       name: string,

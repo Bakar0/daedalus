@@ -15,3 +15,9 @@ Could not check that a node offers the runtime handler {{ .Values.workspace.runt
 WARNING: workspace.runtimeClassName is empty, so workspace pods run without the gVisor
 sandbox and share the node's kernel. Do not use this on a shared cluster.
 {{- end }}
+{{- if .Values.admin.enabled }}
+Admin page{{ if .Values.admin.expose }} (Service {{ include "daedalus.gatewayName" . }}-admin){{ end }}:
+  kubectl -n {{ .Release.Namespace }} port-forward deploy/{{ include "daedalus.gatewayName" . }} {{ .Values.admin.port }}
+  open http://localhost:{{ .Values.admin.port }}/admin/
+  Sign in with the admin-token key of Secret {{ .Values.admin.bootstrap.existingSecret }}.
+{{- end }}

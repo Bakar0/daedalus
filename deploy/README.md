@@ -54,6 +54,33 @@ default blocks all RFC 1918 ranges and link-local, which covers pod and service
 CIDRs and the cloud metadata address. Adjust it if your cluster uses public
 ranges for pods.
 
+## Admin page (optional)
+
+The gateway can serve an admin page on a port of its own: users, their
+workspaces with status, sleep times, days until collection, disk and pod
+resources, sleep, wake and delete, a per-user workspace limit, a cluster
+summary and an audit log. It is off by default. To turn it on, make a Secret
+with an `admin-token` key (and optionally `viewer-token`, for read-only
+access), each at least 32 characters:
+
+```
+kubectl -n daedalus create secret generic daedalus-admin \
+  --from-literal=admin-token="$(openssl rand -base64 32)"
+helm upgrade daedalus deploy/helm/daedalus --reset-then-reuse-values \
+  --set admin.enabled=true --set admin.bootstrap.existingSecret=daedalus-admin
+kubectl -n daedalus port-forward deploy/daedalus-gateway 8082
+open http://localhost:8082/admin/
+```
+
+By default the port is bound to 127.0.0.1 inside the pod, so only
+`kubectl port-forward` reaches it. `admin.expose: true` adds a ClusterIP
+Service and lets in only the `admin.allowFrom` peers. Put TLS in front, since
+sign-in off localhost needs https. Every admin action is logged to the
+gateway's stdout as a JSON line (`"audit":"admin"`) and kept in its database.
+To rotate the token, change the Secret and restart the gateway. The design
+and threat model are in `artifacts/cloud-sessions/admin-design.md` in the
+Daedalus workspace.
+
 ## gVisor
 
 Workspace pods run in gVisor by default (`workspace.runtimeClassName: gvisor`).

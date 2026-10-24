@@ -13,6 +13,25 @@ gateway:
   limits:
     workspacesPerUser: 5
   collectSeconds: 3600 # how often the gateway deletes what retention says is unused
+# The admin page (artifacts/cloud-sessions/admin-design.md): users and their
+# workspaces, sleep, wake, delete and per-user limits. Off unless enabled.
+admin:
+  enabled: false
+  port: 8082
+  # false: the gateway binds the admin port to 127.0.0.1 in its pod, so the
+  # only way in is `kubectl port-forward deploy/<release>-gateway 8082`.
+  # true: it binds 0.0.0.0, and the chart adds a ClusterIP Service
+  # <release>-gateway-admin and lets in only the allowFrom peers.
+  expose: false
+  allowFrom: [] # NetworkPolicy peers (namespaceSelector, podSelector, ipBlock) for the admin port
+  hosts: [] # Host header values accepted besides localhost, such as an Ingress name
+  bootstrap:
+    # A Secret you create with key admin-token (role admin) and optionally
+    # viewer-token (read only), each at least 32 characters. Required when
+    # enabled; the chart never makes the token.
+    existingSecret: ""
+  sessionHours: 8
+  opencostUrl: "" # shown as a link on the page when set
 workspace:
   storageClass: ""
   storageSize: 20Gi

@@ -1,4 +1,8 @@
 {{- $r := .Values.workspace.resources }}
+{{- $admin := .Values.admin }}
+{{- if $admin.enabled }}
+{{- $_ := required "admin.bootstrap.existingSecret must name a Secret with an admin-token key when admin.enabled is true" $admin.bootstrap.existingSecret }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -45,6 +49,10 @@ spec:
               containerPort: {{ .Values.gateway.service.port }}
             - name: runners
               containerPort: {{ .Values.gateway.service.runnerPort }}
+            {{- if and $admin.enabled $admin.expose }}
+            - name: admin
+              containerPort: {{ $admin.port }}
+            {{- end }}
           env:
             - name: DAEDALUS_GATEWAY_PORT
               value: {{ .Values.gateway.service.port | quote }}
@@ -106,6 +114,20 @@ spec:
               value: {{ .Values.gateway.collectSeconds | quote }}
             - name: DAEDALUS_TENANT_DIR
               value: /etc/daedalus/tenant
+            {{- if $admin.enabled }}
+            - name: DAEDALUS_GATEWAY_ADMIN_PORT
+              value: {{ $admin.port | quote }}
+            - name: DAEDALUS_GATEWAY_ADMIN_HOST
+              value: {{ if $admin.expose }}"0.0.0.0"{{ else }}"127.0.0.1"{{ end }}
+            - name: DAEDALUS_GATEWAY_ADMIN_HOSTS
+              value: {{ join "," ($admin.hosts | default list) | quote }}
+            - name: DAEDALUS_GATEWAY_ADMIN_TOKEN_DIR
+              value: /etc/daedalus/admin
+            - name: DAEDALUS_GATEWAY_ADMIN_SESSION_HOURS
+              value: {{ $admin.sessionHours | quote }}
+            - name: DAEDALUS_GATEWAY_OPENCOST_URL
+              value: {{ $admin.opencostUrl | quote }}
+            {{- end }}
           readinessProbe:
             httpGet: { path: /health, port: http }
             periodSeconds: 5
@@ -117,6 +139,9 @@ spec:
             - { name: data, mountPath: /data }
             - { name: tmp, mountPath: /tmp }
             - { name: tenant, mountPath: /etc/daedalus/tenant, readOnly: true }
+            {{- if $admin.enabled }}
+            - { name: admin-token, mountPath: /etc/daedalus/admin, readOnly: true }
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -126,3 +151,10 @@ spec:
         - name: tenant
           configMap:
             name: daedalus-tenant
+        {{- if $admin.enabled }}
+        - name: admin-token
+          secret:
+            secretName: {{ $admin.bootstrap.existingSecret }}
+            # Group-readable: fsGroup 1000 is the gateway's group.
+            defaultMode: 0440
+        {{- end }}
