@@ -6,7 +6,6 @@ import {
   mkdir,
   open,
   readdir,
-  readFile,
   realpath,
   rename,
   rm,
@@ -15,9 +14,8 @@ import {
 import { dirname, join, relative, sep } from "node:path";
 import { writeFileAtomic } from "@daedalus/platform";
 import { DaedalusError } from "../errors";
-import { foldPath, steersAgent } from "./move-git";
+import { foldPath } from "./move-git";
 import { must, type LocalMoveSide, type PodMoveSide } from "./move-side";
-import { sha256 } from "./move-transcript";
 
 /**
  * The files of a workspace folder that are not in a git worktree: the brief,
@@ -111,36 +109,6 @@ export async function listPodFiles(
     .sort();
 }
 
-/** sha256 of each named pod file; a file that is gone is left out. */
-export async function podHashes(
-  pod: PodMoveSide,
-  paths: string[],
-): Promise<Map<string, string>> {
-  const hashes = new Map<string, string>();
-  for (let start = 0; start < paths.length; start += 200) {
-    const result = await pod.run(".", "sha256sum", [
-      "-z",
-      "--",
-      ...paths.slice(start, start + 200),
-    ]);
-    for (const line of result.stdout.split("\0")) {
-      const match = /^([0-9a-f]{64}) [ *](.+)$/s.exec(line);
-      if (match) hashes.set(match[2]!, match[1]!);
-    }
-  }
-  return hashes;
-}
-
-/** sha256 of a file on this Mac, or undefined when it is not a regular file. */
-export async function macHash(path: string): Promise<string | undefined> {
-  try {
-    if (!(await lstat(path)).isFile()) return undefined;
-    return sha256(new Uint8Array(await readFile(path)));
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Whether a workspace-relative path is one a move may write on this Mac.
  * Every part is compared as this Mac's file system compares names
@@ -179,22 +147,6 @@ export function insideFolders(
     if (folded === prefix || folded.startsWith(`${prefix}/`)) return true;
   }
   return false;
-}
-
-/**
- * Steering files among `paths` whose contents in the pod differ from this
- * Mac's copy, which is the state both sides last agreed on: nothing writes
- * the Mac's folder while the workspace is in the cloud.
- */
-export async function changedSteering(
-  root: string,
-  podHashOf: Map<string, string>,
-): Promise<string[]> {
-  const changed: string[] = [];
-  for (const [path, hash] of podHashOf)
-    if (steersAgent(path) && (await macHash(join(root, path))) !== hash)
-      changed.push(path);
-  return changed.sort();
 }
 
 /** Writes the Mac's files into a tar archive at `file`. */

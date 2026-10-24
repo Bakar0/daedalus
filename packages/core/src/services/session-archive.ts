@@ -13,14 +13,11 @@ export interface ArchiveCloud {
 
 /**
  * - `archived`: done.
- * - `needsApproval`: the workspace comes home from the cloud first, and
- *   that brings files that steer agents; asked as a move asks, then again
- *   with `approved`.
- * - `needsSmaller`: it cannot come home, being over a cap.
+ * - `needsSmaller`: it cannot come home from the cloud, being over a cap.
  */
 export type WorkspaceArchiveResult =
   | { status: "archived"; workspace: Workspace }
-  | Extract<WorkspaceMoveResult, { status: "needsApproval" | "needsSmaller" }>;
+  | Extract<WorkspaceMoveResult, { status: "needsSmaller" }>;
 
 export interface SessionArchiveOptions {
   repositories: SqliteRepositories;
@@ -48,7 +45,6 @@ export class SessionArchive {
 
   async archiveWorkspace(input: {
     reference: string;
-    approved?: string[];
   }): Promise<WorkspaceArchiveResult> {
     const { repositories, workspaces, workspaceMoves, cloud } = this.options;
     const workspace = await workspaces.get(input.reference);
@@ -61,7 +57,6 @@ export class SessionArchive {
           workspace: workspace.id,
           to: "mac",
           stopWorking: true,
-          ...(input.approved ? { approved: input.approved } : {}),
         });
       } catch (error) {
         throw new DaedalusError(
@@ -69,8 +64,7 @@ export class SessionArchive {
           `${workspace.name} could not come home from the cloud, so it is not archived: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      if (moved.status === "needsApproval" || moved.status === "needsSmaller")
-        return moved;
+      if (moved.status === "needsSmaller") return moved;
       if (moved.status !== "moved")
         throw new DaedalusError(
           "CONFLICT",

@@ -17,15 +17,12 @@ import { cloudHostWorkspace } from "./cloud-launch";
 import {
   applySnapshot,
   caseCollisions,
-  changedLinks,
-  changedPaths,
   fetchBundle,
   isRepository,
   lastRef,
   markLast,
   resolveRef,
   snapshotRepository,
-  steersAgent,
   writeBundle,
   type RepositorySnapshot,
 } from "./move-git";
@@ -47,7 +44,6 @@ import {
   rewriteTranscript,
   safeTranscriptPath,
   sentFile,
-  sha256,
   writeTranscript,
   type ClaudePermissionMode,
   type SentTranscriptFile,
@@ -57,12 +53,10 @@ import type { SessionHosts } from "./session-hosts";
 import {
   applyFromPod,
   insideFolders,
-  changedSteering,
   listMacFiles,
   listPodFiles,
   packInPod,
   packMac,
-  podHashes,
   safeWorkspacePath,
   unpackFromPod,
   unpackInPod,
@@ -98,8 +92,6 @@ export interface TooBig {
 
 /**
  * - `moved`: done; every session that ran runs on the other side.
- * - `needsApproval`: moving home would bring files that steer agents or run
- *   on this Mac; ask, then move again with `approved`.
  * - `busy`: sessions wait for the user to answer a permission question, so
  *   their turn will not end on its own; ask, then move with `stopWorking`.
  * - `needsStopped`: Codex or custom sessions run, which the cloud cannot.
@@ -107,7 +99,6 @@ export interface TooBig {
  */
 export type WorkspaceMoveResult =
   | { status: "moved"; workspace: Workspace; notice?: string }
-  | { status: "needsApproval"; paths: string[] }
   | { status: "busy"; sessions: MoveSessionName[] }
   | { status: "needsStopped"; sessions: MoveSessionName[] }
   | { status: "needsSmaller"; items: TooBig[] };
@@ -251,7 +242,6 @@ export class WorkspaceMoves {
   async move(input: {
     workspace: string;
     to: WorkspacePlaceName;
-    approved?: string[];
     stopWorking?: boolean;
   }): Promise<WorkspaceMoveResult> {
     const { to } = input;
@@ -283,12 +273,7 @@ export class WorkspaceMoves {
       const result =
         to === "cloud"
           ? await this.#toCloud(workspace, state, input.stopWorking ?? false)
-          : await this.#toMac(
-              workspace,
-              state,
-              input.approved ?? [],
-              input.stopWorking ?? false,
-            );
+          : await this.#toMac(workspace, state, input.stopWorking ?? false);
       if (result.status === "moved" && result.notice)
         this.#update(state, {
           phase: "moved",
@@ -587,7 +572,6 @@ export class WorkspaceMoves {
   async #toMac(
     workspace: Workspace,
     state: WorkspaceMoveState & { cancel: AbortController },
-    approved: string[],
     stopWorking: boolean,
   ): Promise<WorkspaceMoveResult> {
     const { repositories, agents, cloud } = this.options;
@@ -623,37 +607,10 @@ export class WorkspaceMoves {
       ...this.#referencePaths(workspace),
     ]);
 
-    // Asked before anything stops: what in the pod would steer an agent or
-    // run on this Mac. Checked again on what arrives.
-    const allowed = new Set(approved);
-    const steering = new Set<string>();
-    for (const tree of trees) {
-      const base = await this.#base(tree, pod);
-      const now = await snapshotRepository(pod, tree.path);
-      for (const path of await steeringIn(pod, tree.path, base, now))
-        steering.add(`${tree.path}/${path}`);
-    }
     // The pod's find compares names exactly; this Mac folds them.
     const podFiles = (await listPodFiles(pod, skip)).filter(
       (path) => safeWorkspacePath(path) && !insideFolders(path, skip),
     );
-    const hashes = await podHashes(pod, podFiles.filter(steersAgent));
-    // Daedalus's own session instructions, as the pod got them, come home
-    // as this Mac's: nothing to ask about.
-    const podInstructions = sha256(
-      new TextEncoder().encode(podSessionInstructions()),
-    );
-    for (const [path, hash] of hashes)
-      if (SESSION_INSTRUCTIONS.test(path) && hash === podInstructions)
-        hashes.delete(path);
-    for (const path of await changedSteering(workspace.path, hashes))
-      steering.add(path);
-    const unapproved = [...steering].filter((path) => !allowed.has(path));
-    if (unapproved.length)
-      return this.#answer(workspace, {
-        status: "needsApproval",
-        paths: unapproved.sort(),
-      });
 
     const stopped = await this.#stopAll(live, state, stopWorking);
     const localScratch = this.#localScratch(workspace.id);
@@ -728,18 +685,6 @@ export class WorkspaceMoves {
                 `The cloud copy of ${tree.path} has names that differ only in case, which this Mac cannot hold apart: ${collisions.slice(0, 5).join(", ")}`,
               );
           }
-          const base = await this.#base(tree, this.#local, library);
-          for (const path of await steeringIn(
-            this.#local,
-            library,
-            base,
-            fetched,
-          ))
-            if (!allowed.has(`${tree.path}/${path}`))
-              throw new DaedalusError(
-                "CONFLICT",
-                `${tree.path}/${path} changed in the cloud after it was approved; move the workspace again`,
-              );
           bases.push(fetched.head);
           received.push({ tree, snapshot: fetched });
         }
@@ -777,30 +722,16 @@ export class WorkspaceMoves {
         skip,
         maxBytes: MAX_FILES_BYTES,
       });
+      // Daedalus's own session instructions come home naming this Mac's
+      // paths.
       const macInstructions = sessionInstructionsTemplate(workspace.path);
-      // Daedalus's own, as the approval left them out: a session born in the
-      // cloud has no copy here to compare with.
-      const own = new Set<string>();
       for (const path of arrived)
         if (
           SESSION_INSTRUCTIONS.test(path) &&
           (await readFile(join(unpacked, path), "utf8")) ===
             podSessionInstructions()
-        ) {
-          await writeFile(join(unpacked, path), macInstructions);
-          own.add(path);
-        }
-      for (const path of arrived)
-        if (
-          steersAgent(path) &&
-          !allowed.has(path) &&
-          !own.has(path) &&
-          !(await sameFile(join(workspace.path, path), join(unpacked, path)))
         )
-          throw new DaedalusError(
-            "CONFLICT",
-            `${path} changed in the cloud after it was approved; move the workspace again`,
-          );
+          await writeFile(join(unpacked, path), macInstructions);
 
       // Every Claude conversation: the pod may only add to what was sent.
       this.#update(state, { detail: "Copying the conversations" });
@@ -1186,27 +1117,6 @@ export class WorkspaceMoves {
     return undefined;
   }
 
-  /**
-   * What a pod worktree's steering files are compared with: the working
-   * tree both sides last agreed on, or for a worktree the cloud made, the
-   * repository's base on this Mac.
-   */
-  async #base(tree: Tree, side: MoveSide, dir = tree.path): Promise<string> {
-    const last = await resolveRef(
-      this.#local,
-      tree.repository.canonicalPath,
-      lastRef(tree.key),
-    );
-    const base = last ?? (await this.#macBase(tree.repository).catch(() => ""));
-    if (
-      base &&
-      (await side.run(dir, "git", ["cat-file", "-e", `${base}^{commit}`]))
-        .exitCode === 0
-    )
-      return base;
-    return EMPTY_TREE;
-  }
-
   async #macBase(repository: WorkspaceRepository): Promise<string> {
     return must(this.#local, repository.canonicalPath, "git", [
       "rev-parse",
@@ -1416,9 +1326,6 @@ export class WorkspaceMoves {
   }
 }
 
-/** git's empty tree: what a worktree with no base on this Mac starts from. */
-const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-
 /** A session folder's instruction file, which Daedalus writes. */
 const SESSION_INSTRUCTIONS = /^worktrees\/[^/]+\/[^/]+\/AGENTS\.md$/;
 /** The workspace's metadata, which the pod gets but never sends back. */
@@ -1468,23 +1375,6 @@ async function lastCommits(side: MoveSide, library: string): Promise<string[]> {
     : [];
 }
 
-/** Paths that steer an agent and differ from `base`, links among them. */
-async function steeringIn(
-  side: MoveSide,
-  dir: string,
-  base: string,
-  now: RepositorySnapshot,
-): Promise<string[]> {
-  const paths = new Set<string>();
-  for (const commit of [now.head, now.index, now.work])
-    for (const path of await changedPaths(side, dir, base, commit))
-      if (steersAgent(path)) paths.add(path);
-  for (const commit of [now.head, now.index, now.work])
-    for (const path of await changedLinks(side, dir, base, commit))
-      paths.add(`${path} (symbolic link)`);
-  return [...paths];
-}
-
 /** A path under `root` as a relative one, `.` for the root itself. */
 function inside(root: string, path: string): string {
   const rel = relative(root, path);
@@ -1502,16 +1392,6 @@ function macPath(workspace: Workspace, folder: string): string {
   const path = join(workspace.path, folder);
   inside(workspace.path, path);
   return path;
-}
-
-/** Whether two files hold the same bytes; false when `a` is missing. */
-async function sameFile(a: string, b: string): Promise<boolean> {
-  const [left, right] = await Promise.all([
-    readFile(a).catch(() => undefined),
-    readFile(b),
-  ]);
-  if (!left) return false;
-  return Buffer.compare(left, right) === 0;
 }
 
 function sameSnapshot(a: RepositorySnapshot, b: RepositorySnapshot): void {

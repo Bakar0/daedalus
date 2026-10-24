@@ -104,15 +104,7 @@ const screenShows = async (
 
 const move = async (workspaceId: string, to: "cloud" | "mac") => {
   const started = Date.now();
-  let answer = await rpc.workspaceMove({ reference: workspaceId, to });
-  if (answer.ok && answer.data.status === "needsApproval") {
-    say(`asked to approve: ${answer.data.paths.join(", ")}`);
-    answer = await rpc.workspaceMove({
-      reference: workspaceId,
-      to,
-      approved: answer.data.paths,
-    });
-  }
+  const answer = await rpc.workspaceMove({ reference: workspaceId, to });
   if (!answer.ok) return fail(`move to ${to}: ${answer.error.message}`);
   if (answer.data.status !== "moved")
     return fail(`move to ${to}: ${JSON.stringify(answer.data)}`);

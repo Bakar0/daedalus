@@ -1016,9 +1016,6 @@ export interface MoveSessionNameDto {
 /**
  * How a workspace move ended when it did not throw. Nothing changed unless
  * `moved`.
- * - `needsApproval`: moving home brings files that steer agents or run on
- *   this Mac (paths relative to the workspace, from the pod: plain text);
- *   ask, then call again with them as `approved`.
  * - `busy`: these sessions wait on the user's answer, so their turn will not
  *   end; ask, then call again with `stopWorking`.
  * - `needsStopped`: Codex or custom sessions run, which the cloud cannot
@@ -1027,7 +1024,6 @@ export interface MoveSessionNameDto {
  */
 export type WorkspaceMoveResultDto =
   | { status: "moved"; workspace: WorkspaceDto; notice?: string }
-  | { status: "needsApproval"; paths: string[] }
   | { status: "busy"; sessions: MoveSessionNameDto[] }
   | { status: "needsStopped"; sessions: MoveSessionNameDto[] }
   | {
@@ -1388,17 +1384,14 @@ export interface DesktopRpcSchema {
       workspaceReorder: Request<{ references: string[] }, WorkspaceDto[]>;
       /**
        * Archives a workspace. One in the cloud comes home first, its
-       * sessions stopped (an answer other than `archived` is that move's:
-       * ask, then call again with `approved`); its cloud copy is deleted,
-       * then it is archived. A failed move home throws, and nothing changes.
+       * sessions stopped (`needsSmaller` when it is over a cap); its cloud
+       * copy is deleted, then it is archived. A failed move home throws,
+       * and nothing changes.
        */
       workspaceArchive: Request<
-        { reference: string; approved?: string[] },
+        { reference: string },
         | { status: "archived"; workspace: WorkspaceDto }
-        | Extract<
-            WorkspaceMoveResultDto,
-            { status: "needsApproval" | "needsSmaller" }
-          >
+        | Extract<WorkspaceMoveResultDto, { status: "needsSmaller" }>
       >;
       /**
        * Moves a whole workspace between this Mac and its cloud copy;
@@ -1411,7 +1404,6 @@ export interface DesktopRpcSchema {
         {
           reference: string;
           to: "cloud" | "mac";
-          approved?: string[];
           stopWorking?: boolean;
         },
         WorkspaceMoveResultDto

@@ -20,14 +20,8 @@ function setup(options: {
     ...(options.place ? { place: options.place } : {}),
   } as unknown as Workspace;
   const workspaceMoves = {
-    move: async (input: {
-      to: string;
-      stopWorking?: boolean;
-      approved?: string[];
-    }) => {
-      calls.push(
-        `move ${input.to} stop=${input.stopWorking} approved=${input.approved?.join(",") ?? ""}`,
-      );
+    move: async (input: { to: string; stopWorking?: boolean }) => {
+      calls.push(`move ${input.to} stop=${input.stopWorking}`);
       const result = await options.move!();
       if (result.status === "moved") {
         const { place: _place, ...home } = workspace;
@@ -80,35 +74,23 @@ describe("archiving where the cloud is involved", () => {
       "archived",
     );
     expect(s.calls).toEqual([
-      "move mac stop=true approved=",
+      "move mac stop=true",
       "dismiss",
       "delete cloud copy",
       "archive workspace place=mac",
     ]);
   });
 
-  test("steering files are asked about, and nothing is archived or deleted", async () => {
-    const s = setup({
-      place: "cloud",
-      linked: true,
-      move: async () => ({ status: "needsApproval", paths: ["CLAUDE.md"] }),
-    });
-    expect(await s.archive.archiveWorkspace({ reference: "w1" })).toEqual({
-      status: "needsApproval",
-      paths: ["CLAUDE.md"],
-    });
-    expect(s.calls).toEqual(["move mac stop=true approved="]);
-
-    const t = setup({
-      place: "cloud",
-      linked: true,
-      move: async () => ({ status: "moved", workspace: {} as Workspace }),
-    });
-    await t.archive.archiveWorkspace({
-      reference: "w1",
-      approved: ["CLAUDE.md"],
-    });
-    expect(t.calls[0]).toBe("move mac stop=true approved=CLAUDE.md");
+  test("a workspace too big to come home is not archived or deleted", async () => {
+    const tooBig = {
+      status: "needsSmaller" as const,
+      items: [{ what: "app", bytes: 2, maxBytes: 1 }],
+    };
+    const s = setup({ place: "cloud", linked: true, move: async () => tooBig });
+    expect(await s.archive.archiveWorkspace({ reference: "w1" })).toEqual(
+      tooBig,
+    );
+    expect(s.calls).toEqual(["move mac stop=true"]);
   });
 
   test("a workspace that cannot come home is not archived, and its copy stays", async () => {
@@ -124,7 +106,7 @@ describe("archiving where the cloud is involved", () => {
     ).rejects.toThrow(
       "Shop could not come home from the cloud, so it is not archived: The runner is offline",
     );
-    expect(s.calls).toEqual(["move mac stop=true approved="]);
+    expect(s.calls).toEqual(["move mac stop=true"]);
   });
 
   test("a workspace on this Mac with a cloud copy asleep has it deleted, unasked", async () => {
