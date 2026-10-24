@@ -635,7 +635,8 @@ describe("cloud RPC", () => {
         (await context.workspaces.get(workspace.id)).archivedAt,
       ).toBeNull();
 
-      // Home again, its copy kept asleep: archiving deletes the copy.
+      // Home again with a copy left over (its delete failed): archiving
+      // deletes it.
       context.repositories.setWorkspacePlace(workspace.id, {
         place: "mac",
         notice: null,

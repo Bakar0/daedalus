@@ -199,7 +199,7 @@ async function setup() {
     },
     claudeProjectsDirectory: () => macProjects,
   } as unknown as AgentService;
-  const slept: string[] = [];
+  const deleted: string[] = [];
   const moves = new WorkspaceMoves({
     config: {
       home: join(base, "home"),
@@ -237,7 +237,7 @@ async function setup() {
     hosts: { get: () => pod } as unknown as SessionHosts,
     cloud: {
       prepareForSession: async () => HOST,
-      sleep: async (id: string) => slept.push(id),
+      delete: async (id: string) => deleted.push(id),
     },
     terminals: { closeInside: async () => undefined },
     activity: async (id) => activity[id] as never,
@@ -250,7 +250,7 @@ async function setup() {
     sessions,
     starts,
     activity,
-    slept,
+    deleted,
     place: () => place,
     workspacePath,
     podRoot,
@@ -363,7 +363,8 @@ describe("moving a workspace", () => {
     expect(s.starts).toEqual([
       { id: SESSION, hostId: null, cwd: s.macFolder, mode: "default" },
     ]);
-    expect(s.slept).toEqual(["w1"]);
+    // The cloud copy goes once the workspace is home.
+    expect(s.deleted).toEqual(["w1"]);
     expect(await git(s.macTree, "log", "-1", "--format=%s")).toBe(
       "from the cloud",
     );
