@@ -2961,6 +2961,14 @@ export function WorkspaceApp({
     );
   };
 
+  /** How many actions a workspace header shows, all of them always. */
+  const headerActionCount = (item: WorkspaceDto) =>
+    2 +
+    (["terminal", "secrets", "archive"] as const).filter((id) =>
+      pins.workspace.has(id),
+    ).length +
+    (workspaceCloudAction(item) ? 1 : 0);
+
   /**
    * The workspace header's cloud action: a cloud that moves the workspace
    * there when pinned, lit while it is there, where a click brings it home.
@@ -5206,7 +5214,26 @@ export function WorkspaceApp({
             : undefined
         }
         data-color={session.color ?? undefined}
-        style={sessionColorStyle(session.color)}
+        style={
+          {
+            ...sessionColorStyle(session.color),
+            // Every action on the card shows; the title keeps clear of them.
+            "--card-actions":
+              1 +
+              Number(
+                session.status === "lost" &&
+                  cloudSleep(session) !== "unavailable",
+              ) +
+              Number(team?.role === "lead" && session.status === "running") +
+              Number(
+                pins.session.has("rebirth") &&
+                  session.kind === "agent" &&
+                  (session.provider === "claude" ||
+                    session.provider === "codex"),
+              ) +
+              Number(pins.session.has("archive")),
+          } as React.CSSProperties
+        }
         data-pinned={session.pinnedAt ? "true" : undefined}
         data-attention={statusView.attention ? "true" : undefined}
         data-dragging={reorder.draggingId === session.id ? "true" : undefined}
@@ -5387,7 +5414,7 @@ export function WorkspaceApp({
           {team?.role === "lead" && session.status === "running" && (
             <button
               aria-label={`Add a member to ${team.team.name}`}
-              className="session-card-action session-card-hover-action"
+              className="session-card-action"
               onClick={() => openAddMember(session)}
               title="Add a member to this session's team"
               type="button"
@@ -5400,7 +5427,7 @@ export function WorkspaceApp({
             (session.provider === "claude" || session.provider === "codex") && (
               <button
                 aria-label={`Rebirth ${sessionName(session)}`}
-                className="session-card-action session-card-hover-action session-rebirth-action"
+                className="session-card-action session-rebirth-action"
                 data-rebirth-requested={
                   session.rebirthRequestedAt ? "true" : undefined
                 }
@@ -5426,7 +5453,7 @@ export function WorkspaceApp({
                   ? "Running work stops and its routines pause. Restoring the session resumes both."
                   : "Running work stops. Its conversation can be restored and resumed later."
               }
-              className="session-card-action session-card-hover-action"
+              className="session-card-action"
               onConfirm={() => void archiveSession(session)}
               title={
                 holdsRoutines
@@ -6449,6 +6476,19 @@ export function WorkspaceApp({
                   >
                     <div
                       className={`workspace-card ${item.id === workspaceId ? "selected" : ""}`}
+                      // Past four, the actions take a row of their own
+                      // under the name, which keeps the whole width.
+                      data-actions-row={
+                        headerActionCount(item) > 4 ? "true" : undefined
+                      }
+                      style={
+                        {
+                          "--header-actions":
+                            headerActionCount(item) > 4
+                              ? 0
+                              : headerActionCount(item),
+                        } as React.CSSProperties
+                      }
                       data-dragging={
                         workspaceReorder.draggingId === item.id
                           ? "true"

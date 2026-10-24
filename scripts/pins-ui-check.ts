@@ -136,4 +136,61 @@ await withBrowser({ port: 41800, page: "cloud-test.html" }, async (browser) => {
   await close(browser);
 });
 
+// Nothing on a header or a card waits for hover: with the pointer away,
+// every action is there, and no name or count runs under them.
+await withBrowser({ port: 41802, page: "cloud-test.html" }, async (browser) => {
+  await browser.waitFor(
+    "document.querySelector('summary[aria-label=\"Settings of Plain local\"]')",
+    "the workspace list",
+  );
+  await Bun.sleep(400);
+  await browser.evaluate(
+    `localStorage.setItem('daedalus.pins', JSON.stringify({ workspace: ['terminal', 'secrets', 'cloud', 'archive'], session: ['rebirth', 'archive'] })); location.reload()`,
+  );
+  await browser.waitFor(
+    "document.querySelector('summary[aria-label=\"Settings of Plain local\"]')",
+    "the workspace list after the reload",
+  );
+  await Bun.sleep(600);
+  await browser.evaluate(
+    "document.dispatchEvent(new MouseEvent('mousemove', { clientX: 900, clientY: 700 }))",
+  );
+  const seen = await browser.evaluate<{
+    hidden: string[];
+    under: string[];
+  }>(`(() => {
+    const hidden = [];
+    const under = [];
+    for (const card of document.querySelectorAll('.workspace-group > .workspace-card, .workspace-sessions .session-card')) {
+      const actions = card.querySelector(':scope > .workspace-card-actions');
+      if (!actions) continue;
+      for (const one of actions.children) {
+        const box = one.getBoundingClientRect();
+        if (getComputedStyle(one).display === 'none' || box.width === 0 || getComputedStyle(one).opacity === '0')
+          hidden.push(one.getAttribute('aria-label') ?? one.className);
+      }
+      const left = actions.getBoundingClientRect().left;
+      for (const text of card.querySelectorAll('.workspace-card-name > span:first-child, .session-card-title > strong, .workspace-insight-copy')) {
+        const box = text.getBoundingClientRect();
+        const top = actions.getBoundingClientRect();
+        if (box.width && box.right > left + 1 && box.top < top.bottom && box.bottom > top.top)
+          under.push(text.textContent);
+        // A name with no room is as bad as one under the actions.
+        if (!text.matches('.workspace-insight-copy') && box.width < 40)
+          under.push(\`\${text.textContent} (no room)\`);
+      }
+    }
+    return { hidden, under };
+  })()`);
+  expect(
+    !seen.hidden.length,
+    `actions wait for hover: ${JSON.stringify(seen.hidden)}`,
+  );
+  expect(
+    !seen.under.length,
+    `text runs under the actions: ${JSON.stringify(seen.under)}`,
+  );
+  await browser.screenshot("pins-all-showing");
+});
+
 console.log("pins check passed");

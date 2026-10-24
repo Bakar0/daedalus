@@ -533,11 +533,6 @@ button:not(
 .workspace-session-create {
   font-size: 16px !important;
   line-height: 1;
-  opacity: 0.48;
-}
-.workspace-card:hover .workspace-session-create,
-.workspace-session-create:focus-visible {
-  opacity: 1;
 }
 
 /* A workspace and the sessions listed under it (#55). */
@@ -769,8 +764,9 @@ button:not(
   align-items: center;
   display: flex;
   min-width: 0;
-  /* Room for Settings and the +, the actions always showing. */
-  padding-right: 50px;
+  /* Room for every action the header shows, all of them always there:
+     --header-actions is their count, set on the card. */
+  padding-right: calc(var(--header-actions, 2) * 23px + 4px);
 }
 /* A long name is cut short with an ellipsis. */
 .workspace-group .workspace-card-name > span:first-child {
@@ -779,32 +775,22 @@ button:not(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Pinned terminal, secrets and archive come in on hover, to the left of
-   Settings and the +, which always show. */
-.workspace-group .workspace-terminal-action,
-.workspace-group .workspace-secrets-action,
-.workspace-group .workspace-card-archive {
-  display: none !important;
-}
-.workspace-group
-  > .workspace-card:is(:hover, :focus-within)
-  :is(
-    .workspace-terminal-action,
-    .workspace-secrets-action,
-    .workspace-card-archive
-  ) {
-  display: flex !important;
-}
-/* An open menu stays put while the pointer is over its popover. */
-.workspace-group .workspace-card-menu[open] {
-  display: flex !important;
-}
 .workspace-group
   > .workspace-card:is(:hover, :focus-within)
   > .workspace-card-actions {
   background: var(--elevated);
   border-radius: 6px;
   box-shadow: 0 0 0 1px var(--line);
+}
+/* Many actions: a row of their own under the name, right-aligned. */
+.workspace-group > .workspace-card[data-actions-row] {
+  flex-wrap: wrap;
+}
+.workspace-group > .workspace-card[data-actions-row] > .workspace-card-actions {
+  flex-basis: 100%;
+  justify-content: flex-end;
+  padding: 0 4px 4px;
+  position: static;
 }
 .workspace-group .workspace-session-insights {
   margin-top: 1px;
@@ -813,23 +799,13 @@ button:not(
   gap: 7px;
   padding: 6px 8px !important;
 }
-.workspace-sessions .session-card-main strong {
-  /* Room for the … menu, the one action always showing. */
-  padding-right: 26px;
+/* The whole title row keeps clear of the card's actions, all always
+   showing, so a badge after the name cannot run under them.
+   --card-actions is their count, set on the card. */
+.workspace-sessions .session-card-main .session-card-title {
+  padding-right: calc(var(--card-actions, 1) * 23px + 3px);
 }
-/* With the revive button too, the whole title row keeps clear of both, so
-   a badge after the name (Cloud, an account) cannot run under them. */
-.workspace-sessions
-  .session-card:has([aria-label^="Revive"])
-  .session-card-main
-  .session-card-title {
-  padding-right: 50px;
-}
-.workspace-sessions
-  .session-card:has([aria-label^="Revive"])
-  .session-card-main
-  .session-card-title
-  > strong {
+.workspace-sessions .session-card-main .session-card-title > strong {
   padding-right: 0;
 }
 /* Clear sits on the status row where its dot was: the dot, then "Clear",
@@ -869,17 +845,6 @@ button:not(
 }
 .workspace-sessions .session-card-status[data-clearable] {
   padding-left: 50px;
-}
-/* Rebirth and archive come in on hover, over the end of the name. A
-   requested rebirth stays visible until the successor takes over. */
-.workspace-sessions .session-card-hover-action {
-  display: none !important;
-}
-.workspace-sessions
-  .session-card:is(:hover, :focus-within)
-  .session-card-hover-action,
-.workspace-sessions .session-rebirth-action[data-rebirth-requested] {
-  display: flex !important;
 }
 .workspace-sessions
   .session-card:is(:hover, :focus-within)
@@ -972,16 +937,6 @@ button:not(
 }
 .session-context-blocks > span[data-lit] {
   background: var(--context-fill);
-}
-.workspace-card-archive,
-.workspace-terminal-action {
-  opacity: 0.48;
-}
-.workspace-card:hover .workspace-card-archive,
-.workspace-card:hover .workspace-terminal-action,
-.workspace-card-archive:focus-visible,
-.workspace-terminal-action:focus-visible {
-  opacity: 1;
 }
 /* A requested rebirth stays visible on the button until the successor takes
    over and this card is archived. */
@@ -7977,12 +7932,6 @@ dd {
 .workspace-disclosure {
   color: var(--muted);
   flex-basis: 12px;
-  opacity: 0;
-}
-.workspace-card:hover .workspace-disclosure,
-.workspace-disclosure:focus-visible,
-.workspace-disclosure[aria-expanded="false"] {
-  opacity: 1;
 }
 .workspace-sessions {
   margin: 1px 0 2px 6px;
@@ -8347,14 +8296,10 @@ dd {
   object-fit: contain;
 }
 
-/* The workspace row keeps its count clear of the + in its corner; the
-   actions that come in on hover take the count's place. */
+/* The workspace row keeps its count clear of the actions in its corner,
+   all of them always showing. */
 .workspace-group > .workspace-card > .workspace-item {
-  padding-right: 52px;
-}
-.workspace-group > .workspace-card:hover .workspace-insight-copy,
-.workspace-group > .workspace-card:focus-within .workspace-insight-copy {
-  visibility: hidden;
+  padding-right: calc(var(--header-actions, 2) * 23px + 6px);
 }
 .workspace-card-content {
   min-width: 0;
@@ -8665,17 +8610,8 @@ dd {
   gap: 2px;
 }
 
-/* The workspace header's cloud action comes in on hover with the pinned
-   ones, but stays while the workspace is in the cloud or moving, lit. */
-.workspace-group .workspace-cloud-action {
-  display: none !important;
-}
-.workspace-group
-  > .workspace-card:is(:hover, :focus-within)
-  .workspace-cloud-action,
-.workspace-group .workspace-cloud-action:is([data-cloud-lit], [data-moving]) {
-  display: flex !important;
-}
+/* The workspace header's cloud action, lit while the workspace is in the
+   cloud. */
 .workspace-cloud-action[data-cloud-lit] {
   color: var(--accent) !important;
 }
@@ -8686,13 +8622,6 @@ dd {
   50% {
     opacity: 0.35;
   }
-}
-.workspace-group
-  > .workspace-card:has(
-    .workspace-cloud-action:is([data-cloud-lit], [data-moving])
-  )
-  .workspace-card-name {
-  padding-right: 74px;
 }
 /* A moving workspace, under its card. */
 .workspace-move,

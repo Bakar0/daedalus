@@ -1,7 +1,7 @@
 /**
  * Moving a whole workspace in a real browser, against `cloud-test.tsx`. The
  * workspace header has a cloud action: lit while the workspace is in the
- * cloud, where a click brings it home; on this Mac it shows on hover and
+ * cloud, where a click brings it home; on this Mac it shows when pinned and
  * moves the workspace to the cloud. Both ask first. While a move runs, the
  * workspace shows where it is going, its steps and the host's detail, Cancel
  * while waiting, and no new session. Questions from the host (files that
@@ -95,7 +95,7 @@ const fits = async (browser: Browser, testId: string) => {
   await browser.resize(820);
 };
 
-// The action, lit or on hover; a move to the cloud end to end, held midway.
+// The action, lit or pinned; a move to the cloud end to end, held midway.
 await withBrowser(
   { port: 41820, page: "cloud-test.html", query: "holdMove=1" },
   async (browser) => {
@@ -149,12 +149,12 @@ await withBrowser(
     );
     expect(
       (await browser.evaluate<boolean>(
-        `${action("Plain local")}.offsetParent === null`,
+        `${action("Plain local")}.offsetParent !== null`,
       )) &&
         (await browser.evaluate<boolean>(
           `${action("Cloud project")}.offsetParent !== null`,
         )),
-      "a pinned, unlit cloud action shows without hover, or the lit one hides",
+      "a pinned cloud action, or the lit one, hides until hover",
     );
 
     await startMove(browser, "Plain local");
