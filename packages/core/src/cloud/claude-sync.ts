@@ -164,7 +164,7 @@ function namesMacPath(bytes: Uint8Array, macHome: string): boolean {
  * only when its real target is inside `root` (the Mac's Claude folder); a
  * link out of it is skipped, as is anything that may hold a secret.
  */
-async function collectTree(
+export async function collectTree(
   root: string,
   source: string,
   target: string,
@@ -229,14 +229,14 @@ async function collectTree(
   });
 }
 
-const newItem = (label: string): SyncItem => ({
+export const newItem = (label: string): SyncItem => ({
   label,
   files: [],
   skipped: [],
   macPaths: false,
 });
 
-async function entries(directory: string): Promise<string[]> {
+export async function entries(directory: string): Promise<string[]> {
   return (await readdir(directory).catch(() => [] as string[]))
     .filter((name) => !SKIPPED_NAMES.has(name) && !name.startsWith("."))
     .sort();
@@ -569,7 +569,10 @@ export function countHooks(settingsText: string | undefined): number {
  * Leaves out whole items past the caps, in order, so what is copied is
  * every file of an item or none of it.
  */
-function applyCaps(items: SyncItem[]): { kept: SyncItem[]; overCap: string[] } {
+export function applyCaps(items: SyncItem[]): {
+  kept: SyncItem[];
+  overCap: string[];
+} {
   const kept: SyncItem[] = [];
   const overCap: string[] = [];
   let bytes = 0;
@@ -676,7 +679,7 @@ function styleName(file: SyncFile): string {
 /* -------------------------------------------------------------------------- */
 
 /** One file's entry in the manifest: its hash and whether it runs. */
-const fingerprint = (file: SyncFile): string =>
+export const fingerprint = (file: SyncFile): string =>
   `${createHash("sha256").update(file.bytes).digest("hex")}${file.executable ? ":x" : ""}`;
 
 export interface SyncManifest {

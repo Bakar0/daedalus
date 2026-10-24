@@ -22,11 +22,23 @@ import {
   pasteCodeUrl,
   SIGN_IN_OFFER_MS,
   SignInOffers,
+  type SignInKind,
 } from "./sign-in-pages";
+import {
+  CODEX_SYNC_MANIFEST_PATH,
+  collectCodexSync,
+  parseCodexManifest,
+  planCodexSync,
+  POD_CODEX_AUTH,
+  POD_CODEX_CONFIG,
+  podCodexConfig,
+} from "./codex-sync";
+import { SkillService } from "../services/skills";
 import {
   CLOUD_COLLECTED_NOTICE,
   CLOUD_COLLECTED_REASON,
   CLOUD_SLEEP_REASON,
+  CLOUD_DAEDAL,
   cloudHostId,
   cloudHostWorkspace,
 } from "../services/cloud-launch";
@@ -78,6 +90,12 @@ const WAKE_RETRY_MS = 30_000;
 const LOGIN_METHODS = /Select login method|Claude account with subscription/i;
 const CLAUDE_SIGNED_IN = /Login successful|Logged in as/i;
 const AWS_SIGNED_IN = /Successfully logged into Start URL/i;
+/** Codex's screens in the pod (artifacts/cloud-sessions/codex-spike.md). */
+const CODEX_LOGIN_METHODS = /Sign in with ChatGPT/;
+const CODEX_HOOK_REVIEW = /Hooks need review/;
+const CODEX_READY = /Ask Codex to do anything|esc to interrupt/;
+const CODEX_RESUMING = /Resuming session/;
+const CODEX_CONTINUE = /Press Enter to continue/i;
 /** How long Claude has to ask for its page after /login. */
 const SIGN_IN_START_MS = 45_000;
 
@@ -183,6 +201,8 @@ export class CloudService {
   /** Sign-in pages cloud sessions asked to open, waiting for a click. */
   readonly signIns = new SignInOffers();
   readonly #signInListeners = new Set<SignInListener>();
+  /** The `config.toml` each cloud Codex launch wrote, by session. */
+  readonly #codexConfigs = new Map<string, Uint8Array>();
   readonly #preparing = new Map<string, CloudPreparing>();
   readonly #preparingListeners = new Set<() => void>();
   readonly #preparations = new Map<string, Promise<string>>();
@@ -821,6 +841,7 @@ export class CloudService {
    * cannot be read or written still gets the launch, with those screens.
    */
   async prepareLaunch(session: AgentSession): Promise<CloudLaunchExtras> {
+    if (session.provider === "codex") return this.#codexLaunch(session);
     const extras = await this.#accountLaunch(session);
     await this.#runSeeders(session);
     return extras;
@@ -852,6 +873,96 @@ export class CloudService {
           message: error instanceof Error ? error.message : String(error),
         }),
       );
+  }
+
+  /** The absolute pod folders of every session the session's pod runs. */
+  #podFolders(session: AgentSession): string[] {
+    return [
+      session,
+      ...this.options.repositories.listAgents({
+        workspaceId: session.workspaceId,
+      }),
+    ]
+      .filter((item) => item.hostId === session.hostId)
+      .map((item) => podWorkingDirectory(item.workingDirectory));
+  }
+
+  /**
+   * Readies the pod for a cloud Codex launch (codex-sync.ts): its whole
+   * `config.toml`, kept here for the hook-trust check, then the user's
+   * Codex files. No launch secret: Codex signs in in the pod, and the
+   * workspace's `ANTHROPIC_API_KEY` is Claude's.
+   */
+  async #codexLaunch(session: AgentSession): Promise<CloudLaunchExtras> {
+    const host = this.options.hosts.find(session.hostId);
+    // A host of another kind (a test's) has no files to seed.
+    if (!(host instanceof RemoteSessionHost)) return { secrets: {} };
+    const codexHome = accountConfig(
+      this.options.config,
+      "codex",
+      session.account,
+    ).codexHome;
+    const failed = (error: unknown) =>
+      this.options.log?.("cloud_seed_failed", {
+        hostId: session.hostId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    this.#codexConfigs.delete(session.id);
+    try {
+      const macFile = Bun.file(join(codexHome, "config.toml"));
+      const config = podCodexConfig({
+        macText: (await macFile.exists())
+          ? await macFile.text().catch(() => undefined)
+          : undefined,
+        podText: await host.readText(POD_CODEX_CONFIG).catch(() => undefined),
+        folders: this.#podFolders(session),
+      });
+      await host.writeText([{ path: POD_CODEX_CONFIG, text: config }]);
+      this.#codexConfigs.set(session.id, new TextEncoder().encode(config));
+    } catch (error) {
+      failed(error);
+    }
+    await this.#codexSync(host, session, codexHome).catch(failed);
+    return { secrets: {} };
+  }
+
+  /** Copies the user's Codex files into the pod, only what changed. */
+  async #codexSync(
+    host: RemoteSessionHost,
+    session: AgentSession,
+    codexHome: string,
+  ): Promise<void> {
+    const sync = await collectCodexSync({
+      codexHome,
+      macHome: homedir(),
+      daedalusSkills: new SkillService(this.options.config).cloudSkills(
+        CLOUD_DAEDAL,
+      ),
+    });
+    const plan = planCodexSync(
+      sync,
+      parseCodexManifest(
+        await host.readText(CODEX_SYNC_MANIFEST_PATH).catch(() => undefined),
+      ),
+    );
+    if (plan.writes.length)
+      await host.writeFiles(
+        plan.writes.map((file) => ({ path: file.path, contents: file.bytes })),
+      );
+    const run = (executable: string, args: string[]) =>
+      host
+        .run({ cwd: ".", executable, args, timeoutMs: 30_000 })
+        .catch(() => undefined);
+    if (plan.executable.length)
+      await run("chmod", ["+x", "--", ...plan.executable]);
+    if (plan.removed.length) await run("rm", ["-f", "--", ...plan.removed]);
+    this.options.log?.("cloud_codex_sync", {
+      hostId: session.hostId,
+      copied: sync.items.map((item) => item.label),
+      written: plan.writes.length,
+      removed: plan.removed.length,
+      ...(sync.overCap.length ? { overCap: sync.overCap } : {}),
+    });
   }
 
   /** The files and launch values a session's account needs in the pod. */
@@ -1083,18 +1194,34 @@ export class CloudService {
       );
     }
     const opened = listener as SignInListener | undefined;
+    // Codex has no page to paste a code from: the port is the only way back.
+    if (offer.kind === "codex" && !opened) {
+      this.signIns.fail(
+        session.id,
+        "Port 1455 on this Mac is in use, perhaps by a Codex sign-in here. Close it, then restart the session, or choose Sign in with Device Code in it.",
+      );
+      throw new DaedalusError(
+        "CONFLICT",
+        "This Mac cannot take the sign-in's port 1455; close the other Codex sign-in and try again",
+      );
+    }
+    const retry =
+      offer.kind === "codex"
+        ? "Restart the session to sign in again."
+        : "Type /login in it to try again.";
     const paste = Boolean(offer.checked.callback) && !opened;
     if (opened) {
       this.#signInListeners.add(opened);
       void opened.done.then((result) => {
         this.#signInListeners.delete(opened);
-        if (result === "forwarded") void this.#followSignIn(session, "claude");
+        if (result === "forwarded")
+          void this.#followSignIn(session, offer.kind);
         else
           this.signIns.fail(
             session.id,
             result === "failed"
-              ? "The sign-in could not reach the session. Type /login in it to try again."
-              : "The sign-in page was not finished in time. Type /login in the session to try again.",
+              ? `The sign-in could not reach the session. ${retry}`
+              : `The sign-in page was not finished in time. ${retry}`,
           );
       });
     } else void this.#followSignIn(session, offer.kind);
@@ -1111,6 +1238,7 @@ export class CloudService {
     session: AgentSession,
     launch: { apiKey: boolean } = { apiKey: false },
   ): Promise<void> {
+    if (session.provider === "codex") return this.#codexReady(session);
     const profile = accountProfile(
       this.options.config,
       "claude",
@@ -1166,12 +1294,98 @@ export class CloudService {
   }
 
   /**
-   * Watches a session whose sign-in page was opened, until the tool says it
-   * is signed in, then clears it. Claude waits for Enter after a sign-in.
+   * Takes a cloud Codex to its prompt: Enter on the sign-in method screen of
+   * one that came up signed out (the ChatGPT page then arrives through
+   * open-url), and the answer to Codex's review of Daedalus's hooks. Ends at
+   * the prompt, when the session is gone, or after the sign-in's time.
    */
-  async #followSignIn(session: AgentSession, kind: "claude" | "aws") {
+  async #codexReady(session: AgentSession): Promise<void> {
     const host = this.options.hosts.find(session.hostId);
     if (!(host instanceof RemoteSessionHost)) return;
+    const signedIn = await host.exists(POD_CODEX_AUTH).catch(() => true);
+    if (!signedIn) this.signIns.begin(host.id, session.id, "codex");
+    // Codex draws the method screen before it takes keys, so an Enter that
+    // came too soon goes again while the screen stays.
+    let enters = signedIn ? 3 : 0;
+    let enteredAt = 0;
+    let reviewed = false;
+    const started = Date.now();
+    while (Date.now() - started < SIGN_IN_OFFER_MS) {
+      const screen = await host.capture(session.tmuxSession).catch(() => null);
+      if (screen === null) {
+        // A capture can fail while the link settles; a session that ended
+        // has nothing more to sign in.
+        if (!(await host.isLive(session.tmuxSession).catch(() => true))) return;
+        this.options.log?.("cloud_codex_capture_failed", {
+          hostId: session.hostId,
+        });
+        await Bun.sleep(1_000);
+        continue;
+      }
+      // The pane's history can hold an earlier prompt: only its bottom
+      // says where Codex is now.
+      const bottom = screen.trimEnd().split("\n").slice(-12).join("\n");
+      const review = CODEX_HOOK_REVIEW.test(bottom);
+      const methods = CODEX_LOGIN_METHODS.test(bottom);
+      if (review && !reviewed) {
+        reviewed = true;
+        await this.#trustCodexHooks(host, session);
+      } else if (methods && enters < 3 && Date.now() - enteredAt > 5_000) {
+        enters += 1;
+        enteredAt = Date.now();
+        await host.sendKeys(session.tmuxSession, ["Enter"]).catch(() => {});
+      } else if (
+        !review &&
+        !methods &&
+        // A resume shows the prompt before it finds Codex signed out.
+        !CODEX_RESUMING.test(bottom) &&
+        CODEX_READY.test(bottom) &&
+        (signedIn || !this.signIns.get(session.id))
+      )
+        return;
+      if (
+        !signedIn &&
+        Date.now() - started > SIGN_IN_START_MS &&
+        this.signIns.get(session.id)?.phase === "starting"
+      )
+        this.signIns.fail(
+          session.id,
+          "Codex did not ask to open a sign-in page. Choose Sign in with ChatGPT in the session.",
+        );
+      await Bun.sleep(1_000);
+    }
+  }
+
+  /**
+   * Answers Codex's review of new hooks with "Trust all", only when the
+   * pod's `config.toml` is byte for byte the one this launch wrote, so the
+   * hooks it trusts are Daedalus's alone. Otherwise the user answers.
+   */
+  async #trustCodexHooks(
+    host: RemoteSessionHost,
+    session: AgentSession,
+  ): Promise<void> {
+    const wrote = this.#codexConfigs.get(session.id);
+    const now = await host.readFile(POD_CODEX_CONFIG).catch(() => undefined);
+    if (!wrote || !now || Buffer.compare(wrote, now) !== 0) {
+      this.options.log?.("cloud_codex_hooks_left", {
+        hostId: session.hostId,
+      });
+      return;
+    }
+    // The second choice: "Trust all and continue".
+    await host.sendKeys(session.tmuxSession, ["Down", "Enter"]).catch(() => {});
+  }
+
+  /**
+   * Watches a session whose sign-in page was opened, until the tool says it
+   * is signed in, then clears it. Claude waits for Enter after a sign-in;
+   * Codex is signed in once its sign-in file is there.
+   */
+  async #followSignIn(session: AgentSession, kind: SignInKind) {
+    const host = this.options.hosts.find(session.hostId);
+    if (!(host instanceof RemoteSessionHost)) return;
+    if (kind === "codex") return this.#followCodexSignIn(host, session);
     const done = kind === "claude" ? CLAUDE_SIGNED_IN : AWS_SIGNED_IN;
     const deadline = Date.now() + SIGN_IN_OFFER_MS;
     while (Date.now() < deadline) {
@@ -1180,6 +1394,22 @@ export class CloudService {
       const screen = await host.capture(session.tmuxSession).catch(() => "");
       if (done.test(screen)) {
         if (kind === "claude")
+          await host.sendKeys(session.tmuxSession, ["Enter"]).catch(() => {});
+        this.signIns.finish(session.id);
+        return;
+      }
+      await Bun.sleep(1_500);
+    }
+  }
+
+  async #followCodexSignIn(host: RemoteSessionHost, session: AgentSession) {
+    const deadline = Date.now() + SIGN_IN_OFFER_MS;
+    while (Date.now() < deadline) {
+      const phase = this.signIns.get(session.id)?.phase;
+      if (phase !== "browser") return;
+      if (await host.exists(POD_CODEX_AUTH).catch(() => false)) {
+        const screen = await host.capture(session.tmuxSession).catch(() => "");
+        if (CODEX_CONTINUE.test(screen))
           await host.sendKeys(session.tmuxSession, ["Enter"]).catch(() => {});
         this.signIns.finish(session.id);
         return;

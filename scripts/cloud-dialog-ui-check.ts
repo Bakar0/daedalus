@@ -147,20 +147,22 @@ await withBrowser({ port: 41768, page: "cloud-test.html" }, async (browser) => {
     "the dialog to close after Create",
   );
 
-  // In the cloud: Claude only, in the pod, abilities kept, no remembering.
+  // In the cloud: Claude and Codex, in the pod, abilities kept, no
+  // remembering.
   browser.scope = "";
   await openDialog(browser, "Cloud project");
   expect(await noRunsOn(browser), "the cloud dialog shows Runs on");
   expect(
-    !(await browser.has("session-tool-codex")) &&
+    (await browser.has("session-tool-codex")) &&
       (await browser.has("session-tool-claude")) &&
       !(await browser.has("session-tool-terminal")),
-    "a cloud workspace should offer Claude only",
+    "a cloud workspace should offer Claude and Codex",
   );
-  expect(
-    (await browser.text("session-tool-claude")).includes("In the pod"),
-    `the Claude tool reads "${await browser.text("session-tool-claude")}"`,
-  );
+  for (const tool of ["claude", "codex"])
+    expect(
+      (await browser.text(`session-tool-${tool}`)).includes("In the pod"),
+      `the ${tool} tool reads "${await browser.text(`session-tool-${tool}`)}"`,
+    );
   expect(
     await present(browser, ABILITIES),
     "a cloud workspace's session lost its abilities",

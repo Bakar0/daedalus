@@ -3,6 +3,7 @@ import { sessionColorStyle } from "./session-color-style";
 
 const KIND_LABEL: Record<CloudSignInDto["kind"], string> = {
   claude: "Claude",
+  codex: "Codex",
   aws: "AWS",
 };
 

@@ -60,7 +60,26 @@ export async function hasPersistedCodexSession(input: {
         return true;
     }
   }
-  return hasCodexRollout(join(codexHome, "archived_sessions"), input.id);
+  if (await hasCodexRollout(join(codexHome, "archived_sessions"), input.id))
+    return true;
+  // A conversation that came home from a cloud workspace is dated by when
+  // it began there, and this Mac's databases have never seen it.
+  try {
+    const glob = new Bun.Glob(`*/*/*/rollout-*-${input.id}.jsonl`);
+    for await (const path of glob.scan({
+      cwd: input.sessionsDirectory,
+      onlyFiles: true,
+    }))
+      if (
+        await stat(join(input.sessionsDirectory, path))
+          .then((file) => file.size > 0)
+          .catch(() => false)
+      )
+        return true;
+  } catch {
+    // No sessions folder yet.
+  }
+  return false;
 }
 
 /**

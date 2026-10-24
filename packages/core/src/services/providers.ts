@@ -28,7 +28,7 @@ import {
   parseClaudeSettingsArgument,
   renderCodexHookBlock,
 } from "./hook-install";
-import { CLOUD_CLAUDE, CLOUD_DAEDAL } from "./cloud-launch";
+import { CLOUD_CLAUDE, CLOUD_CODEX, CLOUD_DAEDAL } from "./cloud-launch";
 
 /**
  * Where a session runs: on this Mac, or in its workspace's pod. Every path a
@@ -912,14 +912,19 @@ class ConfiguredProvider implements AgentProvider {
   }
 
   /**
-   * Claude in a workspace's pod. Stage 0 runs nothing else there. Nothing
-   * here reads this Mac's provider folders or writes a file for the session,
-   * and the configured arguments and executable are this Mac's: the pod runs
-   * the `claude` on its PATH with the settings inline.
+   * Claude or Codex in a workspace's pod. Nothing here reads this Mac's
+   * provider folders or writes a file for the session, and the configured
+   * arguments and executable are this Mac's: the pod runs the `claude` or
+   * `codex` on its PATH with the settings inline.
    */
   private cloudLaunch(input: LaunchInput): ProviderLaunch {
+    if (this.name === "codex" && this.promptArgument)
+      return codexCloudLaunch(input, this.definition.permissionMode);
     if (this.name !== "claude" || !this.promptArgument)
-      throw new DaedalusError("VALIDATION", "A cloud session runs Claude");
+      throw new DaedalusError(
+        "VALIDATION",
+        "A cloud session runs Claude or Codex",
+      );
     const model = input.model?.trim();
     if (model && !isValidModelName(model))
       throw new DaedalusError("VALIDATION", "Model name is invalid");
@@ -1022,6 +1027,47 @@ class ConfiguredProvider implements AgentProvider {
     }
     return ["resume", id];
   }
+}
+
+/**
+ * Codex in a workspace's pod (artifacts/cloud-sessions/codex-spike.md). The
+ * pod has no `ps`, which Codex's shared app server needs, so every session
+ * runs its own (`--no-daemon`), which also gives its hooks the session's
+ * environment. Codex's own sandbox cannot start under gVisor, so it runs
+ * with full access: the pod is the sandbox, as it is for Claude. The hooks
+ * come from the pod's `config.toml`, which the Mac writes before each launch.
+ * A conversation resumes only when the caller found its rollout in the pod.
+ */
+function codexCloudLaunch(
+  input: LaunchInput,
+  permissionMode: AgentPermissionMode | undefined,
+): ProviderLaunch {
+  const model = input.model?.trim();
+  if (model && !isValidModelName(model))
+    throw new DaedalusError("VALIDATION", "Model name is invalid");
+  const resume =
+    input.resume && !input.resume.fresh ? input.resume.nativeId : undefined;
+  const args = [
+    "--no-daemon",
+    ...CODEX_DAEDALUS_TUI_ARGS,
+    "-c",
+    'sandbox_mode="danger-full-access"',
+    "-c",
+    "features.hooks=true",
+    // Never on a resume: see `permissionModeArgs`.
+    ...(input.resume ? [] : permissionModeArgs("codex", permissionMode)),
+    ...(model ? ["--model", model] : []),
+    "-c",
+    `developer_instructions=${JSON.stringify(DAEDALUS_STATUS_INSTRUCTIONS)}`,
+  ];
+  if (resume) args.push("resume", resume);
+  else if (input.prompt && !input.resume) args.push(input.prompt);
+  return {
+    executable: CLOUD_CODEX,
+    args,
+    env: {},
+    ...(resume ? { providerSessionId: resume } : {}),
+  };
 }
 
 export function resolveProvider(

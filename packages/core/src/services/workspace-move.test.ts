@@ -91,6 +91,7 @@ async function setup() {
   const library = join(base, "library", "app.git");
   const podRoot = join(base, "pod");
   const macProjects = join(base, "claude", "projects");
+  const macCodexSessions = join(base, "codex", "sessions");
   const macFolder = join(workspacePath, FOLDER);
   const macTree = join(macFolder, "app");
   const reference = join(workspacePath, "repos", "app");
@@ -199,6 +200,7 @@ async function setup() {
       return running;
     },
     claudeProjectsDirectory: () => macProjects,
+    codexSessionsDirectory: () => macCodexSessions,
   } as unknown as AgentService;
   const deleted: string[] = [];
   const moves = new WorkspaceMoves({
@@ -259,8 +261,45 @@ async function setup() {
     macTree,
     macFolder,
     macProjects,
+    macCodexSessions,
     library,
   };
+}
+
+const THREAD = "01a16fbf-b6aa-7f33-8df1-3d80160ed7bc";
+const ROLLOUT = `2026/10/25/rollout-2026-10-25T00-09-57-${THREAD}.jsonl`;
+const CODEX_FOLDER = "worktrees/unassigned/codex-1";
+
+/** A Codex session in the workspace, with a conversation on this Mac. */
+async function withCodex(s: Awaited<ReturnType<typeof setup>>) {
+  const macCodexFolder = join(s.workspacePath, CODEX_FOLDER);
+  await mkdir(macCodexFolder, { recursive: true });
+  s.sessions.set(CODEX, {
+    ...s.sessions.get(SESSION)!,
+    id: CODEX,
+    name: "Codex one",
+    provider: "codex",
+    providerSessionId: THREAD,
+    workingDirectory: macCodexFolder,
+  });
+  const codexHome = dirname(s.macCodexSessions);
+  const rollout = join(s.macCodexSessions, ...ROLLOUT.split("/"));
+  await mkdir(dirname(rollout), { recursive: true });
+  const text =
+    [
+      JSON.stringify({
+        type: "session_meta",
+        payload: { id: THREAD, cwd: macCodexFolder },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          text: `<cwd>${macCodexFolder}</cwd> ${codexHome}/skills/x/SKILL.md ${macCodexFolder}-other`,
+        },
+      }),
+    ].join("\n") + "\n";
+  await writeFile(rollout, text);
+  return { macCodexFolder, codexHome, rollout, text };
 }
 
 beforeEach(async () => {
@@ -563,7 +602,97 @@ describe("moving a workspace", () => {
     expect((await lstat(join(s.macTree, "notes"))).isSymbolicLink()).toBe(true);
   });
 
-  test("a session waiting on the user is asked about, and a live Codex session blocks", async () => {
+  test("carries a Codex conversation to the cloud and home again, the pod only adding to it", async () => {
+    const s = await setup();
+    const codex = await withCodex(s);
+    expect((await s.moves.move({ workspace: "w1", to: "cloud" })).status).toBe(
+      "moved",
+    );
+    expect(s.sessions.get(CODEX)).toMatchObject({
+      hostId: HOST,
+      workingDirectory: CODEX_FOLDER,
+    });
+    expect(s.starts.map((start) => start.id)).toContain(CODEX);
+    const podRollout = join(s.podRoot, ".home/.codex/sessions", ROLLOUT);
+    const inPod = await readFile(podRollout, "utf8");
+    const podFolder = `/workspace/${CODEX_FOLDER}`;
+    expect(JSON.parse(inPod.split("\n")[0]!).payload.cwd).toBe(podFolder);
+    expect(inPod).toContain(`<cwd>${podFolder}</cwd>`);
+    expect(inPod).toContain("/workspace/.home/.codex/skills/x/SKILL.md");
+    expect(inPod).toContain(`/workspace/${CODEX_FOLDER}-other`);
+    expect(inPod).not.toContain(codex.codexHome);
+    expect(inPod).not.toContain(s.workspacePath);
+
+    const added = JSON.stringify({
+      type: "turn_context",
+      payload: { cwd: podFolder },
+    });
+    await writeFile(podRollout, `${inPod}${added}\n`);
+    expect((await s.moves.move({ workspace: "w1", to: "mac" })).status).toBe(
+      "moved",
+    );
+    const home = await readFile(codex.rollout, "utf8");
+    expect(home.startsWith(codex.text)).toBe(true);
+    expect(JSON.parse(home.slice(codex.text.length).trim()).payload.cwd).toBe(
+      codex.macCodexFolder,
+    );
+    expect(s.sessions.get(CODEX)).toMatchObject({
+      hostId: null,
+      workingDirectory: codex.macCodexFolder,
+      status: "running",
+    });
+  });
+
+  test("a Codex conversation the pod changed, not only added to, does not come home", async () => {
+    const s = await setup();
+    const codex = await withCodex(s);
+    await s.moves.move({ workspace: "w1", to: "cloud" });
+    const podRollout = join(s.podRoot, ".home/.codex/sessions", ROLLOUT);
+    const inPod = await readFile(podRollout, "utf8");
+    await writeFile(podRollout, inPod.replace("skills/x", "skills/y"));
+    await expect(s.moves.move({ workspace: "w1", to: "mac" })).rejects.toThrow(
+      "changed, not only added to",
+    );
+    expect(await readFile(codex.rollout, "utf8")).toBe(codex.text);
+    expect(s.place().place).toBe("cloud");
+  });
+
+  test("a Codex session born in the cloud comes home with its rollout, and a line that is not JSON refuses it", async () => {
+    const s = await setup();
+    await mkdir(join(s.workspacePath, CODEX_FOLDER), { recursive: true });
+    await s.moves.move({ workspace: "w1", to: "cloud" });
+    s.sessions.set(CODEX, {
+      ...s.sessions.get(SESSION)!,
+      id: CODEX,
+      name: "Codex one",
+      provider: "codex",
+      providerSessionId: THREAD,
+      workingDirectory: CODEX_FOLDER,
+    });
+    const podRollout = join(s.podRoot, ".home/.codex/sessions", ROLLOUT);
+    await mkdir(dirname(podRollout), { recursive: true });
+    await writeFile(podRollout, "not json\n");
+    await expect(s.moves.move({ workspace: "w1", to: "mac" })).rejects.toThrow(
+      "not a Codex rollout",
+    );
+    const line = JSON.stringify({
+      type: "session_meta",
+      payload: { cwd: `/workspace/${CODEX_FOLDER}` },
+    });
+    await writeFile(podRollout, `${line}\n`);
+    expect((await s.moves.move({ workspace: "w1", to: "mac" })).status).toBe(
+      "moved",
+    );
+    const home = await readFile(
+      join(s.macCodexSessions, ...ROLLOUT.split("/")),
+      "utf8",
+    );
+    expect(JSON.parse(home.trim()).payload.cwd).toBe(
+      join(s.workspacePath, CODEX_FOLDER),
+    );
+  });
+
+  test("a session waiting on the user is asked about, and a live custom session blocks", async () => {
     const s = await setup();
     s.activity[SESSION] = "needs_permission";
     expect(await s.moves.move({ workspace: "w1", to: "cloud" })).toEqual({
@@ -580,12 +709,12 @@ describe("moving a workspace", () => {
     t.sessions.set(CODEX, {
       ...t.sessions.get(SESSION)!,
       id: CODEX,
-      name: "Codex one",
-      provider: "codex",
+      name: "Make",
+      provider: "custom",
     });
     expect(await t.moves.move({ workspace: "w1", to: "cloud" })).toEqual({
       status: "needsStopped",
-      sessions: [{ id: CODEX, name: "Codex one" }],
+      sessions: [{ id: CODEX, name: "Make" }],
     });
   });
 

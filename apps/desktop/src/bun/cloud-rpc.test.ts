@@ -438,7 +438,7 @@ describe("cloud RPC", () => {
     });
   });
 
-  test("a session in a workspace in the cloud needs a sign-in and its copy, and only Claude runs there", async () => {
+  test("a session in a workspace in the cloud needs a sign-in and its copy, and no custom command runs there", async () => {
     await withCloud(async (rpc, context, gateway) => {
       const workspace = await context.workspaces.create({ name: "Pods" });
       inCloud(context, workspace.id);
@@ -453,12 +453,12 @@ describe("cloud RPC", () => {
         email: "dev@example.com",
       });
       await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
-      const codex = await rpc.agentSpawn({
+      const custom = await rpc.agentSpawn({
         workspace: workspace.id,
-        provider: "codex",
+        command: "make",
       });
-      expect(!codex.ok && codex.error.message).toBe(
-        "Only Claude runs in the cloud; move the workspace home to this Mac to start Codex",
+      expect(!custom.ok && custom.error.message).toBe(
+        "A custom command cannot run in the cloud; move the workspace home to this Mac to run it",
       );
       expect(
         gateway.calls.filter((call) => call === "POST /v1/workspaces"),

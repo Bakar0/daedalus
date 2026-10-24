@@ -968,17 +968,53 @@ describe("buildLaunch on a cloud host", () => {
     });
   });
 
-  test("runs nothing but Claude", async () => {
+  test("runs the pod's codex with full access, its own server and Daedalus's instructions", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await loadConfig({
         DAEDALUS_HOME: home,
         CODEX_HOME: join(home, "codex"),
       });
-      await expect(
+      const codex = (input: Partial<LaunchInput>) =>
         resolveProvider(config, { provider: "codex" }).adapter.buildLaunch({
           target: "cloud",
-        }),
-      ).rejects.toMatchObject({ code: "VALIDATION" });
+          sessionId: "s1",
+          prompt: "Hello",
+          ...input,
+        });
+      const launch = await codex({ model: "gpt-5" });
+      expect(launch.executable).toBe("codex");
+      expect(launch.args[0]).toBe("--no-daemon");
+      expect(launch.args).toContain('sandbox_mode="danger-full-access"');
+      expect(launch.args).toContain("check_for_update_on_startup=false");
+      expect(launch.args).toContain('approval_policy="on-request"');
+      expect(
+        launch.args.some((arg) => arg.startsWith("developer_instructions=")),
+      ).toBe(true);
+      expect(launch.args[launch.args.indexOf("--model") + 1]).toBe("gpt-5");
+      expect(launch.args.at(-1)).toBe("Hello");
+      expect(launch.providerSessionId).toBeUndefined();
+      // Nothing of this Mac: no config written, no path in the arguments.
+      expect(launch.args.join(" ")).not.toContain(home);
+      expect(await Bun.file(join(home, "codex", "config.toml")).exists()).toBe(
+        false,
+      );
+
+      const resume = {
+        nativeId: "t1",
+        startedAt: new Date().toISOString(),
+        archived: false,
+        workingDirectory: ".",
+        env: {},
+      };
+      const resumed = await codex({ resume });
+      expect(resumed.args.slice(-2)).toEqual(["resume", "t1"]);
+      expect(resumed.args).not.toContain("Hello");
+      expect(resumed.args).not.toContain('approval_policy="on-request"');
+      expect(resumed.providerSessionId).toBe("t1");
+      // Nothing in the pod yet: a new conversation.
+      const fresh = await codex({ resume: { ...resume, fresh: true } });
+      expect(fresh.args).not.toContain("resume");
+      expect(fresh.providerSessionId).toBeUndefined();
     });
   });
 });

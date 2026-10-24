@@ -12,6 +12,14 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { AgentService } from "./agents";
 import { podSessionInstructions } from "./cloud-folder";
+import {
+  findCodexRollout,
+  isCodexRolloutPath,
+  isCodexThread,
+  POD_CODEX_HOME,
+  POD_CODEX_SESSIONS,
+  rewriteCodexRollout,
+} from "./codex-move";
 import { podLibrary } from "./cloud-worktrees";
 import { cloudHostWorkspace } from "./cloud-launch";
 import {
@@ -94,7 +102,7 @@ export interface TooBig {
  * - `moved`: done; every session that ran runs on the other side.
  * - `busy`: sessions wait for the user to answer a permission question, so
  *   their turn will not end on its own; ask, then move with `stopWorking`.
- * - `needsStopped`: Codex or custom sessions run, which the cloud cannot.
+ * - `needsStopped`: custom sessions run, which the cloud cannot.
  * - `needsSmaller`: something is over a cap; nothing changed.
  */
 export type WorkspaceMoveResult =
@@ -178,6 +186,8 @@ interface WorkspaceMoveRecord {
       transcript: SentTranscriptFile[];
       /** Its permission mode on this Mac, which it resumes in at home. */
       macPermissionMode?: ClaudePermissionMode;
+      /** Set for Codex: `transcript` is its rollout, by its sessions path. */
+      provider?: "codex";
     }
   >;
   branches: Record<string, string>;
@@ -315,9 +325,7 @@ export class WorkspaceMoves {
     const live = sessions.filter((session) => LIVE.includes(session.status));
     const cannot = live.filter(
       (session) =>
-        session.kind === "agent" &&
-        (session.provider !== "claude" ||
-          !UUID.test(session.providerSessionId ?? "")),
+        session.kind === "agent" && !isClaude(session) && !isCodex(session),
     );
     if (cannot.length)
       return this.#answer(workspace, {
@@ -326,10 +334,15 @@ export class WorkspaceMoves {
       });
     const asking = await this.#asking(live, stopWorking);
     if (asking) return this.#answer(workspace, asking);
-    // Codex and custom sessions stay this Mac's rows; they cannot run there.
+    // Custom sessions stay this Mac's rows; they cannot run there.
     const folders = new Map(
       sessions
-        .filter((session) => isClaude(session) || session.kind === "terminal")
+        .filter(
+          (session) =>
+            isClaude(session) ||
+            isCodex(session) ||
+            session.kind === "terminal",
+        )
         .map((session) => [
           session.id,
           inside(workspace.path, session.workingDirectory),
@@ -515,6 +528,44 @@ export class WorkspaceMoves {
           macWorkingDirectory: session.workingDirectory,
           transcript: sent,
           ...(macPermissionMode ? { macPermissionMode } : {}),
+        };
+      }
+
+      // Every Codex conversation: its one rollout, paths rewritten.
+      for (const session of sessions) {
+        if (!isCodex(session)) continue;
+        const folder = folders.get(session.id)!;
+        const macSessions = agents.codexSessionsDirectory(session);
+        const found = await findCodexRollout(
+          this.#local,
+          macSessions,
+          session.providerSessionId,
+        );
+        const sent: SentTranscriptFile[] = [];
+        if (found) {
+          const mac = await this.#rollout(
+            this.#local,
+            join(macSessions, ...found.split("/")),
+          );
+          const podRollout = new TextEncoder().encode(
+            rewriteCodexRollout(
+              new TextDecoder().decode(mac),
+              codexPaths(
+                workspace,
+                session.workingDirectory,
+                folder,
+                macSessions,
+              ),
+              false,
+            ),
+          );
+          await pod.writeFile(`${POD_CODEX_SESSIONS}/${found}`, podRollout);
+          sent.push(sentFile(found, mac, podRollout));
+        }
+        record.sessions[session.id] = {
+          macWorkingDirectory: session.workingDirectory,
+          transcript: sent,
+          provider: "codex",
         };
       }
 
@@ -815,6 +866,62 @@ export class WorkspaceMoves {
         });
       }
 
+      // Every Codex conversation, by the same rule: the pod may only add.
+      const rollouts: { sessions: string; files: TranscriptFiles }[] = [];
+      for (const session of sessions) {
+        if (!isCodex(session)) continue;
+        const macFolder = macPath(workspace, session.workingDirectory);
+        const sent = record.sessions[session.id];
+        if (sent && sent.macWorkingDirectory !== macFolder)
+          throw new DaedalusError(
+            "CONFLICT",
+            `${session.name}'s folder in the cloud is not the one it left this Mac from`,
+          );
+        const found = await findCodexRollout(
+          pod,
+          POD_CODEX_SESSIONS,
+          session.providerSessionId,
+        );
+        const sentFiles = sent?.transcript ?? [];
+        if (!found) {
+          if (sentFiles.length)
+            throw new DaedalusError(
+              "CONFLICT",
+              `${session.name}'s conversation is no longer in the cloud workspace`,
+            );
+          fresh.add(session.id);
+          continue;
+        }
+        if (sentFiles.length && sentFiles[0]!.path !== found)
+          throw new DaedalusError(
+            "CONFLICT",
+            `${session.name}'s conversation in the cloud workspace is not the one this Mac sent`,
+          );
+        const macSessions = agents.codexSessionsDirectory(session);
+        const podRollout = await this.#rollout(
+          pod,
+          `${POD_CODEX_SESSIONS}/${found}`,
+        );
+        const macCopy = sentFiles.length
+          ? await this.#local.readFile(join(macSessions, ...found.split("/")))
+          : undefined;
+        const back = codexPaths(
+          workspace,
+          macFolder,
+          session.workingDirectory,
+          macSessions,
+        ).map(({ from, to }) => ({ from: to, to: from }));
+        rollouts.push({
+          sessions: macSessions,
+          files: appendedTranscript({
+            pod: { files: [{ path: found, contents: podRollout }] },
+            sent: sentFiles,
+            mac: () => macCopy,
+            rewrite: (text) => rewriteCodexRollout(text, back, true),
+          }),
+        });
+      }
+
       // Nothing in the workspace folder changed until here.
       this.#update(state, { detail: "Laying the workspace down" });
       for (const { tree, snapshot } of received) {
@@ -831,6 +938,12 @@ export class WorkspaceMoves {
       );
       for (const { projects, key, files } of conversations)
         await writeTranscript(this.#local, projects, key, files);
+      for (const { sessions: folder, files } of rollouts)
+        for (const file of files.files)
+          await this.#local.writeFile(
+            join(folder, ...file.path.split("/")),
+            file.contents,
+          );
       for (const { tree, snapshot } of received) {
         await markLast(
           this.#local,
@@ -1136,6 +1249,22 @@ export class WorkspaceMoves {
     ]);
   }
 
+  /** A Codex rollout on one side, within the conversation cap. */
+  async #rollout(side: MoveSide, path: string): Promise<Uint8Array> {
+    const contents = await side.readFile(path);
+    if (!contents)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The session's conversation is not on ${side.label}`,
+      );
+    if (contents.length > MAX_TRANSCRIPT_BYTES)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The session's conversation is over ${MAX_TRANSCRIPT_BYTES} bytes`,
+      );
+    return contents;
+  }
+
   async #readOptional(
     side: MoveSide,
     projects: string,
@@ -1293,11 +1422,15 @@ export class WorkspaceMoves {
           !isAbsolute(entry.macWorkingDirectory) ||
           (entry.macPermissionMode !== undefined &&
             !isClaudePermissionMode(entry.macPermissionMode)) ||
+          (entry.provider !== undefined && entry.provider !== "codex") ||
           !Array.isArray(entry.transcript) ||
+          (entry.provider === "codex" && entry.transcript.length > 1) ||
           !entry.transcript.every(
             (file) =>
               typeof file?.path === "string" &&
-              safeTranscriptPath(file.path) &&
+              (entry.provider === "codex"
+                ? isRolloutName(file.path)
+                : safeTranscriptPath(file.path)) &&
               Number.isSafeInteger(file.macLength) &&
               Number.isSafeInteger(file.podLength) &&
               typeof file.macSha256 === "string" &&
@@ -1350,6 +1483,35 @@ const librarySource = (repository: WorkspaceRepository): string[] =>
   repository.libraryRepositoryId
     ? ["--git-dir", repository.canonicalPath]
     : ["-C", repository.canonicalPath];
+
+/** A Codex session moves with or without a thread: one without starts anew. */
+const isCodex = (session: AgentSession): boolean =>
+  session.kind === "agent" &&
+  session.provider === "codex" &&
+  (session.providerSessionId === null ||
+    isCodexThread(session.providerSessionId));
+
+/** A rollout path in a move record: the thread is its own name's. */
+const isRolloutName = (path: string): boolean => {
+  const thread = /-([0-9a-f-]{36})\.jsonl$/.exec(path)?.[1];
+  return Boolean(thread && isCodexRolloutPath(path, thread));
+};
+
+/**
+ * The folders a Codex rollout names on this Mac and in the pod: the
+ * session's, the workspace's (its instructions name the brief and the
+ * journal), and the Codex home (its skills).
+ */
+const codexPaths = (
+  workspace: Workspace,
+  macFolder: string,
+  podFolder: string,
+  macSessions: string,
+): { from: string; to: string }[] => [
+  { from: macFolder, to: podWorkingDirectory(podFolder) },
+  { from: workspace.path, to: podWorkingDirectory(".") },
+  { from: dirname(macSessions), to: POD_CODEX_HOME },
+];
 
 const isClaude = (session: AgentSession): boolean =>
   session.kind === "agent" &&

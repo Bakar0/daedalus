@@ -90,10 +90,11 @@ export interface RunnerMethods {
    *
    * The runner itself answers, not `sessiond`: it fetches
    * `http://127.0.0.1:<port><path>?<query>` with redirects off and a 10 s
-   * timeout, and returns only the status and `Location`, which the Mac
-   * treats as untrusted. `path` is one of `AUTH_CALLBACK_PATHS`. `query`
-   * holds the authorization code, so neither side logs it, queues it or
-   * passes it on.
+   * timeout, and returns only the status and an https `Location`, which
+   * the Mac treats as untrusted. `path` is one of `AUTH_CALLBACK_PATHS`.
+   * `query` holds the authorization code, so neither side logs it, queues
+   * it or passes it on; a `Location` back to the pod (Codex's success page
+   * carries an ID token) never leaves it.
    */
   "auth.callback": {
     params: { port: number; path: string; query: string };
@@ -101,8 +102,15 @@ export interface RunnerMethods {
   };
 }
 
-/** The redirect paths `auth.callback` serves: Claude's, then the AWS CLI's. */
-export const AUTH_CALLBACK_PATHS = ["/callback", "/oauth/callback"] as const;
+/**
+ * The redirect paths `auth.callback` serves: Claude's, the AWS CLI's, then
+ * Codex's.
+ */
+export const AUTH_CALLBACK_PATHS = [
+  "/callback",
+  "/oauth/callback",
+  "/auth/callback",
+] as const;
 
 /**
  * `daedal` run inside a pod. The pod's `daedal` is a shim that sends this to
