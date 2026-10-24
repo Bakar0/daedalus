@@ -54,6 +54,10 @@ workspace:
   # everything else on the node: unsafe on a shared cluster.
   runtimeClassName: gvisor
   runtimeClassHandler: runsc
+  # scheduling of the RuntimeClass the chart creates ({ nodeSelector, tolerations }).
+  # Kubernetes adds it to every pod that names the class, so it keeps workspaces
+  # on the nodes that have gVisor. Ignored when the RuntimeClass already exists.
+  runtimeClassScheduling: {}
   idleMinutes: 15 # runner asks the gateway to sleep it after this long with nothing working
   # The gateway deletes a workspace (pod, volumes, token, record) asleep this
   # long, Mac or not; its Mac then falls back to the copy it kept. 0 never.
