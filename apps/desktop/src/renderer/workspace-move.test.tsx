@@ -5,7 +5,6 @@ import {
   cloudLimitMessage,
   moveLabel,
   moveStepLabel,
-  pathLines,
   sessionLines,
   tooBigLines,
   WorkspaceMoveState,
@@ -25,13 +24,16 @@ describe("byteSize", () => {
 
 describe("lines from the pod", () => {
   test("are plain, cut short, and capped at twelve", () => {
-    const lines = pathLines([
-      "CLAUDE.md\u001b[31m",
-      "x".repeat(300),
-      ...Array.from({ length: 20 }, (_, index) => `file-${index}`),
+    const lines = sessionLines([
+      { id: "a", name: "server\u001b[31m" },
+      { id: "b", name: "x".repeat(300) },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        id: `s${index}`,
+        name: `session-${index}`,
+      })),
     ]);
-    expect(lines[0]).toBe("CLAUDE.md [31m");
-    expect(lines[1]!.length).toBe(120);
+    expect(lines[0]).toBe("server [31m");
+    expect(lines[1]!.length).toBe(80);
     expect(lines[1]!.endsWith("…")).toBe(true);
     expect(lines).toHaveLength(12);
     expect(lines.at(-1)).toBe("and 11 more");

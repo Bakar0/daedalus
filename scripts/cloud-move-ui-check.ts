@@ -1,15 +1,15 @@
 /**
  * Moving a whole workspace in a real browser, against `cloud-test.tsx`. The
- * workspace header has a cloud action: lit while the workspace is in the
- * cloud, where a click brings it home; on this Mac it shows when pinned and
- * moves the workspace to the cloud. Both ask first. While a move runs, the
- * workspace shows where it is going, its steps and the host's detail, Cancel
- * while waiting, and no new session. Questions from the host (files that
- * steer agents, sessions waiting on the user) are asked and sent back; a
- * refusal (sessions the cloud cannot run, something too big) is shown and
- * nothing is sent again. Text from the pod is plain and cut short. Notices
- * stay until Got it. Signed out, only a workspace in the cloud has the
- * action, and it is off.
+ * move is in the workspace's Settings, with its icon, and on the header
+ * when pinned; while the workspace is in the cloud the header's cloud is
+ * lit and a click brings it home. Nothing asks first. While a move runs the
+ * workspace shows the Mac, the cloud and dots flowing toward where it goes,
+ * the step or the host's detail, Cancel while waiting, and no new session;
+ * it settles with the reached side lit. Sessions waiting on the user are
+ * asked about and stopped; a refusal (sessions the cloud cannot run,
+ * something too big, the cloud's workspace limit) is shown and nothing is
+ * sent again. Moving home leaves no notice. Signed out, only a workspace in
+ * the cloud has the action, and it is off.
  *
  *   bun run test:cloud-move-ui
  */
@@ -295,36 +295,6 @@ await withBrowser(
           '{"workspaceMoveDismiss":{"reference":"cloud-ws"}}',
       ),
       "Got it did not call workspaceMoveDismiss",
-    );
-  },
-);
-
-// Files that steer agents: listed as plain lines, then sent back approved.
-await withBrowser(
-  { port: 41824, page: "cloud-test.html", query: "moveAsk=approval" },
-  async (browser) => {
-    await ready(browser);
-    await startMove(browser, "Cloud project");
-    await browser.waitFor(dialogButton("Move with them"), "the approval");
-    const lines = await browser.evaluate<string[]>(
-      "[...document.querySelectorAll('[data-testid=\"dialog-lines\"] li')].map((one) => one.textContent)",
-    );
-    expect(
-      lines.length === 2 &&
-        lines[0] === ".claude/settings.json" &&
-        lines[1] === "CLAUDE.md [2J",
-      `the approval lists ${JSON.stringify(lines)}`,
-    );
-    await browser.screenshot("cloud-move-approval");
-    await answer(browser, "Move with them");
-    await browser.waitFor(
-      "window.requests.filter((one) => 'workspaceMove' in one).length === 2",
-      "the approved move",
-    );
-    expect(
-      (await moves(browser))[1] ===
-        '{"reference":"cloud-ws","to":"mac","approved":[".claude/settings.json","CLAUDE.md\\u001b[2J"]}',
-      `the approved move sent ${(await moves(browser))[1]}`,
     );
   },
 );

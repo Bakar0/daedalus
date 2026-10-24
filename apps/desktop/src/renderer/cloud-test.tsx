@@ -6,9 +6,8 @@
  * in another cloud account) and a session in each. Query parameters pick the
  * start: `modal=settings|session`, `signedIn=0`, `holdSignIn=1`,
  * `holdWake=1`, `session=<id>` to open a session's view,
- * `archive=approval|big` for a cloud workspace's archive that asks or is
- * refused, `wsmove=<phase>` for Cloud project moving home in that phase,
- * `moveAsk=approval|busy|stopped|big|fail|limit` for a move that asks, is refused
+ * `archive=big` for a cloud workspace's archive that is refused, `wsmove=<phase>` for Cloud project moving home in that phase,
+ * `moveAsk=busy|stopped|big|fail|limit` for a move that asks, is refused
  * or fails, `holdMove=1` to hold a move until `releaseMove()`, and
  * `notice=1` for Sleepy project back from its backup.
  *
@@ -475,20 +474,12 @@ const client = {
         session: structuredClone(found),
       });
     },
-    workspaceArchive: async (params: {
-      reference: string;
-      approved?: string[];
-    }) => {
+    workspaceArchive: async (params: { reference: string }) => {
       record("workspaceArchive", params);
       const found = snapshot.workspaces.find(
         (item) => item.id === params.reference,
       )!;
       const asks = found.place === "cloud" ? query.get("archive") : null;
-      if (asks === "approval" && !params.approved)
-        return ok({
-          status: "needsApproval" as const,
-          paths: [".claude/settings.json", "CLAUDE.md"],
-        });
       if (asks === "big")
         return ok({
           status: "needsSmaller" as const,
@@ -511,7 +502,6 @@ const client = {
     workspaceMove: async (params: {
       reference: string;
       to: "cloud" | "mac";
-      approved?: string[];
       stopWorking?: boolean;
     }) => {
       record("workspaceMove", params);
@@ -519,11 +509,6 @@ const client = {
         (item) => item.id === params.reference,
       )!;
       const asks = query.get("moveAsk");
-      if (asks === "approval" && !params.approved)
-        return ok({
-          status: "needsApproval" as const,
-          paths: [".claude/settings.json", "CLAUDE.md\u001b[2J"],
-        });
       if (asks === "busy" && !params.stopWorking)
         return ok({
           status: "busy" as const,

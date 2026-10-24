@@ -29,10 +29,6 @@ export function byteSize(bytes: number): string {
   return `${shown} ${units[unit]}`;
 }
 
-/** Paths from the pod, one plain line each. */
-export const pathLines = (paths: string[]): string[] =>
-  capped(paths.map((path) => plainLine(path, 120)));
-
 /** Session names, one plain line each. */
 export const sessionLines = (sessions: MoveSessionNameDto[]): string[] =>
   capped(sessions.map((session) => plainLine(session.name, 80)));
