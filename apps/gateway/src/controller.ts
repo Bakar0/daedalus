@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   RUNNER_ENV,
   RUNNER_PATHS,
+  RUNNER_POD_GROUP,
   type CloudWorkspaceStatus,
 } from "@daedalus/remote-protocol";
 import type { GatewayConfig } from "./config";
@@ -159,6 +160,19 @@ export function workspaceStatus(
  * after a namespace was made.
  */
 const BINDING_RETRY_MS = [500, 1000, 1500, 2000] as const;
+
+/**
+ * gVisor gives each container its own view of a plain emptyDir, so the
+ * session's socket in "shared" is not there for the runner. These mount
+ * hints make "shared" one tmpfs inside the pod's sandbox. Runtimes other
+ * than runsc ignore them; containerd passes them on only when its runsc
+ * runtime lists dev.gvisor.* in pod_annotations.
+ */
+export const GVISOR_SHARED_MOUNT = {
+  "dev.gvisor.spec.mount.shared.share": "pod",
+  "dev.gvisor.spec.mount.shared.type": "tmpfs",
+  "dev.gvisor.spec.mount.shared.options": "rw,rprivate",
+} as const;
 
 export class Controller {
   constructor(
@@ -459,7 +473,10 @@ export class Controller {
         name: podName(row.workspaceId),
         namespace: namespaceFor(row.userId),
         labels: this.#labels(row),
-        annotations: { "kubectl.kubernetes.io/default-container": "session" },
+        annotations: {
+          "kubectl.kubernetes.io/default-container": "session",
+          ...(workspace.runtimeClass ? GVISOR_SHARED_MOUNT : {}),
+        },
       },
       spec: {
         serviceAccountName: "runner",
@@ -473,7 +490,7 @@ export class Controller {
           : {}),
         securityContext: {
           runAsNonRoot: true,
-          fsGroup: 2000,
+          fsGroup: RUNNER_POD_GROUP,
           fsGroupChangePolicy: "OnRootMismatch",
           seccompProfile: { type: "RuntimeDefault" },
         },

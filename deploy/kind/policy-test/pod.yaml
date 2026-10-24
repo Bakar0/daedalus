@@ -4,7 +4,12 @@ metadata:
   name: ws-abc
   namespace: u-t
   labels: { daedalus.dev/user: t, daedalus.dev/workspace: abc }
+  annotations:
+    dev.gvisor.spec.mount.shared.share: pod
+    dev.gvisor.spec.mount.shared.type: tmpfs
+    dev.gvisor.spec.mount.shared.options: rw,rprivate
 spec:
+  runtimeClassName: gvisor
   serviceAccountName: runner
   automountServiceAccountToken: false
   shareProcessNamespace: false

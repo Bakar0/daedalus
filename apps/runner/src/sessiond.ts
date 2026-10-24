@@ -1,4 +1,11 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  chownSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  rmSync,
+} from "node:fs";
 import { runCommand } from "@daedalus/platform";
 import { SocketWriter } from "@daedalus/remote-protocol";
 import { RunnerError } from "./errors";
@@ -87,7 +94,8 @@ export class SessionDaemon {
 
   constructor(private readonly deps: SessionDaemonDeps) {}
 
-  listen(path: string): void {
+  /** `group`, when this process is in it, becomes the socket's group. */
+  listen(path: string, group?: number): void {
     if (existsSync(path)) rmSync(path);
     this.#server = Bun.listen<Connection>({
       unix: path,
@@ -107,6 +115,8 @@ export class SessionDaemon {
     // The runner is another uid in the same group, so group access is the
     // one it gets.
     chmodSync(path, 0o660);
+    if (group !== undefined && process.getgroups?.().includes(group))
+      chownSync(path, -1, group);
   }
 
   stop(): void {

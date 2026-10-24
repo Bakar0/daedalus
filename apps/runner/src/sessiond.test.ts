@@ -62,6 +62,28 @@ test("the socket is group accessible only", () => {
   expect(statSync(socket).mode & 0o777).toBe(0o660);
 });
 
+test("the socket takes the pod's group, which the folder may not give it", () => {
+  // Any group this process is in other than its own stands in for the pod's.
+  const group = process.getgroups?.().find((g) => g !== process.getgid?.());
+  if (group === undefined) return;
+  const other = join(dir, "grouped.sock");
+  const grouped = new SessionDaemon({
+    handlers: backend.handlers,
+    deadPanes: async () => ({}),
+    hasSession: async () => false,
+    openTerminal: () => {
+      throw new Error("unused");
+    },
+  });
+  grouped.listen(other, group);
+  try {
+    expect(statSync(other).gid).toBe(group);
+    expect(statSync(other).mode & 0o777).toBe(0o660);
+  } finally {
+    grouped.stop();
+  }
+});
+
 test("requests reach the handlers and come back", async () => {
   backend.tmux.sessions.add("s1");
   expect(await client.call("host.listLive", null)).toEqual(["s1"]);
