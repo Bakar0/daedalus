@@ -548,6 +548,25 @@ describe("dry run and start", () => {
     expect(installer.current()).toBeUndefined();
   });
 
+  test("an upgrade keeps the port it already forwards", async () => {
+    const install = async (target: GatewayInstaller) => {
+      await target.preflight(input);
+      const { dryRunId } = await target.dryRun(input);
+      await target.start({
+        ...input,
+        dryRunId,
+        confirm: CONTEXT,
+        email: "a@b.c",
+      });
+      await settle(target);
+    };
+    await install(installer);
+    installer.close();
+    installer = makeInstaller({ freePort: async () => 19999 });
+    await install(installer);
+    expect(installer.current()?.gatewayUrl).toBe("http://127.0.0.1:18123");
+  });
+
   test("resume brings the port-forward back only for the signed-in gateway", async () => {
     await installer.preflight(input);
     const { dryRunId } = await installer.dryRun(input);

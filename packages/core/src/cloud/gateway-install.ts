@@ -723,7 +723,14 @@ export class GatewayInstaller {
     publicUrl: string | undefined,
   ): Promise<void> {
     const target: Target = { context: input.context };
-    const port = publicUrl ? null : await this.#freePort();
+    // An upgrade keeps the port the app already forwards, so the saved
+    // sign-in still points at it.
+    const kept = this.#forward?.record ?? (await this.#readForward());
+    const port = publicUrl
+      ? null
+      : kept?.context === input.context && kept.namespace === input.namespace
+        ? kept.port
+        : await this.#freePort();
     const gatewayUrl = publicUrl ?? `http://127.0.0.1:${port}`;
     this.#phase(
       "installing",
@@ -927,6 +934,23 @@ export class GatewayInstaller {
     });
   }
 
+  async #readForward(): Promise<PortForwardRecord | undefined> {
+    let record: PortForwardRecord;
+    try {
+      record = JSON.parse(
+        await readFile(this.#forwardFile, "utf8"),
+      ) as PortForwardRecord;
+    } catch {
+      return undefined;
+    }
+    return validContextName(record.context) &&
+      validNamespace(record.namespace) &&
+      Number.isInteger(record.port) &&
+      typeof record.gatewayUrl === "string"
+      ? record
+      : undefined;
+  }
+
   async #clearForward(): Promise<void> {
     this.#forward?.stop();
     this.#forward = undefined;
@@ -938,20 +962,8 @@ export class GatewayInstaller {
    * Cloud sign-in still uses that gateway.
    */
   async resume(): Promise<void> {
-    let record: PortForwardRecord;
-    try {
-      record = JSON.parse(
-        await readFile(this.#forwardFile, "utf8"),
-      ) as PortForwardRecord;
-    } catch {
-      return;
-    }
-    if (
-      !validContextName(record.context) ||
-      !validNamespace(record.namespace) ||
-      !Number.isInteger(record.port)
-    )
-      return;
+    const record = await this.#readForward();
+    if (!record) return;
     const signedIn = await this.options.signedInGateway?.();
     if (signedIn !== undefined && signedIn !== record.gatewayUrl) return;
     this.#keepForward(record);
@@ -1172,7 +1184,13 @@ export class GatewayInstaller {
         throw new Error(
           `kind could not create the cluster: ${failureText(created.stderr)}`,
         );
-      this.#append(logLines(created.stderr, 8));
+      // kind's closing lines name `kubectl config` commands for its own
+      // file; they would read as a change to the user's kubeconfig.
+      this.#append(
+        logLines(created.stderr, 12)
+          .filter((line) => /[✓✗]/.test(line))
+          .map((line) => line.replace(/[^\x20-\x7e✓✗]/gu, "").trim()),
+      );
     } finally {
       await rm(file, { force: true });
     }
