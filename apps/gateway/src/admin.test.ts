@@ -38,6 +38,8 @@ let runnerBase: string;
 let adminBase: string;
 let printed: string[];
 let clock: number;
+/** The client address the admin listener sees; null for the real one. */
+let remote: string | null;
 const sockets: WebSocket[] = [];
 
 function start(env: Record<string, string> = {}) {
@@ -72,6 +74,8 @@ function start(env: Record<string, string> = {}) {
     log: () => {},
     print: (line) => printed.push(line),
     now: () => clock,
+    clientAddress: (request, server) =>
+      remote ?? server.requestIP(request)?.address ?? "",
   });
   servers = [
     Bun.serve({ ...gateway.public, port: 0 }),
@@ -88,6 +92,7 @@ beforeEach(() => {
   kube = new FakeKube();
   printed = [];
   clock = Date.now();
+  remote = null;
   start();
 });
 
@@ -296,26 +301,50 @@ describe("sign-in", () => {
   });
 
   test("off loopback the cookie is Secure, and plain http is refused", async () => {
-    const refused = await fetch(`${adminBase}/admin/api/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Host: "admin.example.com",
-      },
-      body: JSON.stringify({ token: ADMIN_TOKEN }),
-    });
-    expect(refused.status).toBe(403);
+    const login = (headers: Record<string, string>) =>
+      fetch(`${adminBase}/admin/api/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({ token: ADMIN_TOKEN }),
+      });
+    remote = "10.244.0.9";
+    expect((await login({ Host: "admin.example.com" })).status).toBe(403);
+    // A Host header that says localhost does not make the socket loopback.
+    expect((await login({ Host: "localhost" })).status).toBe(403);
+    // X-Forwarded-Proto from a client that is not a trusted proxy is ignored.
+    expect(
+      (await login({ Host: "admin.example.com", "X-Forwarded-Proto": "https" }))
+        .status,
+    ).toBe(403);
+  });
+
+  test("a trusted proxy's X-Forwarded-Proto counts, and its cookie is Secure", async () => {
+    for (const server of servers) await server.stop(true);
+    store.close();
+    start({ DAEDALUS_GATEWAY_ADMIN_TRUSTED_PROXIES: "10.244.0.5, 10.244.0.6" });
+    // IPv4 mapped into IPv6, as a dual-stack socket reports it.
+    remote = "::ffff:10.244.0.5";
     const proxied = await fetch(`${adminBase}/admin/api/login`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Host: "admin.example.com",
         "X-Forwarded-Proto": "https",
+        Origin: "https://admin.example.com",
       },
       body: JSON.stringify({ token: ADMIN_TOKEN }),
     });
     expect(proxied.status).toBe(200);
     expect(proxied.headers.get("Set-Cookie")).toContain("Secure");
+    const plain = await fetch(`${adminBase}/admin/api/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Host: "admin.example.com",
+      },
+      body: JSON.stringify({ token: ADMIN_TOKEN }),
+    });
+    expect(plain.status).toBe(403);
   });
 
   test("wrong, short and user tokens are refused and audited without the token", async () => {

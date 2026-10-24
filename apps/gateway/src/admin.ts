@@ -125,7 +125,7 @@ export class BootstrapAuth implements AdminAuth {
 export const SIGN_IN_FAILURES_PER_MINUTE = 10;
 const COOKIE = "daedalus_admin";
 const CSRF_HEADER = "X-Daedalus-CSRF";
-const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const USER_ID = /^[a-z0-9]{1,20}$/;
 const WORKSPACE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -244,7 +244,26 @@ export interface AdminDeps {
   /** Where audit lines go; stdout by default. */
   print?: (line: string) => void;
   now?: () => number;
+  /** The client's socket address; Bun's by default, set by tests. */
+  clientAddress?: (request: Request, server: Server<unknown>) => string;
 }
+
+/** Where a request came from, as the socket says, not its headers. */
+interface Client {
+  address: string;
+  /** The socket is 127.0.0.1 or ::1: kubectl port-forward, or the pod. */
+  loopback: boolean;
+  /** https, or a trusted proxy said the browser used https. */
+  https: boolean;
+}
+
+/** An IPv4 address mapped into IPv6 is the IPv4 address. */
+const plainAddress = (address: string) =>
+  address.toLowerCase().startsWith("::ffff:") && address.includes(".")
+    ? address.slice(7)
+    : address;
+
+const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1"]);
 
 function cookieValue(request: Request, name: string): string | undefined {
   for (const part of (request.headers.get("Cookie") ?? "").split(";")) {
@@ -317,16 +336,29 @@ export function createAdmin(deps: AdminDeps) {
   /** Whether the Host header names this listener: loopback, or configured. */
   function allowedHost(host: string): boolean {
     const name = hostname(host);
-    if (LOOPBACK.has(name)) return true;
+    if (LOOPBACK_HOSTS.has(name)) return true;
     return admin.hosts.includes(host) || admin.hosts.includes(name);
   }
 
-  const isLoopback = (host: string) => LOOPBACK.has(hostname(host));
-
-  /** Whether the browser reached us over https (or a TLS proxy said so). */
-  const isHttps = (request: Request, url: URL) =>
-    url.protocol === "https:" ||
-    request.headers.get("X-Forwarded-Proto")?.toLowerCase() === "https";
+  /**
+   * Loopback comes from the socket address, never from Host. A
+   * X-Forwarded-Proto header counts only from a configured proxy.
+   */
+  function client(request: Request, url: URL, server: Server<unknown>): Client {
+    const address = plainAddress(
+      deps.clientAddress?.(request, server) ??
+        server.requestIP(request)?.address ??
+        "",
+    );
+    const proxied =
+      admin.trustedProxies.includes(address) &&
+      request.headers.get("X-Forwarded-Proto")?.toLowerCase() === "https";
+    return {
+      address,
+      loopback: LOOPBACK_ADDRESSES.has(address),
+      https: url.protocol === "https:" || proxied,
+    };
+  }
 
   function session(request: Request): Session | null {
     const id = cookieValue(request, COOKIE);
@@ -350,9 +382,9 @@ export function createAdmin(deps: AdminDeps) {
   }
 
   /** The checks every write needs: same origin, JSON, the CSRF header. */
-  function checkWrite(request: Request, url: URL, found: Session | null) {
+  function checkWrite(request: Request, from: Client, found: Session | null) {
     const origin = request.headers.get("Origin");
-    const expected = `${isHttps(request, url) ? "https" : "http"}://${request.headers.get("Host")}`;
+    const expected = `${from.https ? "https" : "http"}://${request.headers.get("Host")}`;
     if (origin !== null && origin !== expected)
       throw new AdminError(403, "FORBIDDEN", "Cross-origin request");
     const site = request.headers.get("Sec-Fetch-Site");
@@ -367,9 +399,9 @@ export function createAdmin(deps: AdminDeps) {
       throw new AdminError(403, "FORBIDDEN", "Missing or wrong CSRF token");
   }
 
-  async function signIn(request: Request, url: URL, address: string) {
-    const host = request.headers.get("Host") ?? "";
-    if (!isLoopback(host) && !isHttps(request, url))
+  async function signIn(request: Request, from: Client) {
+    const { address } = from;
+    if (!from.loopback && !from.https)
       throw new AdminError(
         403,
         "FORBIDDEN",
@@ -409,7 +441,7 @@ export function createAdmin(deps: AdminDeps) {
       "SameSite=Strict",
       "Path=/admin",
       `Max-Age=${Math.floor(admin.sessionMs / 1000)}`,
-      ...(isLoopback(host) ? [] : ["Secure"]),
+      ...(from.loopback ? [] : ["Secure"]),
     ].join("; ");
     return respond(sessionBody(created), 200, { "Set-Cookie": cookie });
   }
@@ -584,7 +616,8 @@ export function createAdmin(deps: AdminDeps) {
     const host = request.headers.get("Host") ?? "";
     if (!allowedHost(host))
       throw new AdminError(421, "MISDIRECTED", "Unknown host");
-    const address = server.requestIP(request)?.address ?? "";
+    const from = client(request, url, server);
+    const { address } = from;
 
     if (method === "GET") {
       if (path === "/favicon.ico")
@@ -601,14 +634,14 @@ export function createAdmin(deps: AdminDeps) {
       throw new AdminError(404, "NOT_FOUND", "No such route");
 
     if (path === "/admin/api/login" && method === "POST") {
-      checkWrite(request, url, null);
-      return signIn(request, url, address);
+      checkWrite(request, from, null);
+      return signIn(request, from);
     }
 
     const found = session(request);
     if (!found) throw new AdminError(401, "UNAUTHORIZED", "Sign in");
     const actor = actorFor(found, address);
-    if (method !== "GET") checkWrite(request, url, found);
+    if (method !== "GET") checkWrite(request, from, found);
 
     if (path === "/admin/api/session" && method === "GET")
       return respond(sessionBody(found));

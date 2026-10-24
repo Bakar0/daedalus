@@ -121,6 +121,8 @@ spec:
               value: {{ if $admin.expose }}"0.0.0.0"{{ else }}"127.0.0.1"{{ end }}
             - name: DAEDALUS_GATEWAY_ADMIN_HOSTS
               value: {{ join "," ($admin.hosts | default list) | quote }}
+            - name: DAEDALUS_GATEWAY_ADMIN_TRUSTED_PROXIES
+              value: {{ join "," ($admin.trustedProxies | default list) | quote }}
             - name: DAEDALUS_GATEWAY_ADMIN_TOKEN_DIR
               value: /etc/daedalus/admin
             - name: DAEDALUS_GATEWAY_ADMIN_SESSION_HOURS

@@ -74,8 +74,10 @@ open http://localhost:8082/admin/
 
 By default the port is bound to 127.0.0.1 inside the pod, so only
 `kubectl port-forward` reaches it. `admin.expose: true` adds a ClusterIP
-Service and lets in only the `admin.allowFrom` peers. Put TLS in front, since
-sign-in off localhost needs https. Every admin action is logged to the
+Service and lets in only the `admin.allowFrom` peers. Sign-in off loopback
+needs https: put a TLS proxy in front and list its addresses in
+`admin.trustedProxies`, since the gateway believes `X-Forwarded-Proto` only
+from those. Loopback is decided from the socket address, not the Host header. Every admin action is logged to the
 gateway's stdout as a JSON line (`"audit":"admin"`) and kept in its database.
 To rotate the token, change the Secret and restart the gateway. The design
 and threat model are in `artifacts/cloud-sessions/admin-design.md` in the
