@@ -853,7 +853,7 @@ export class SqliteRepositories {
     const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
     return this.database
       .query<TaskRow, string[]>(
-        `SELECT * FROM tasks${where} ORDER BY created_at, id`,
+        `SELECT * FROM tasks${where} ORDER BY created_at, number, id`,
       )
       .all(...values)
       .map(taskFromRow);
