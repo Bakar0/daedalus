@@ -134,6 +134,10 @@
   font-weight: 500;
   gap: 7px;
 }
+.modal-form input[aria-invalid="true"],
+.modal-form input[aria-invalid="true"]:focus {
+  border-color: var(--danger);
+}
 .modal-actions {
   gap: 8px;
   justify-content: space-between;
@@ -164,6 +168,13 @@
 }
 .modal:focus {
   outline: none;
+}
+.modal-error {
+  border: 1px solid rgb(255 137 135 / 0.35);
+  border-radius: 8px;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
 }
 .modal-form {
   margin-top: 22px;

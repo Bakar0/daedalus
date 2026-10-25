@@ -1700,6 +1700,17 @@ button:not(
   font-weight: 500;
   gap: 7px;
 }
+/* What is wrong with a field, under it, in the field's own red. */
+.modal-form input[aria-invalid="true"],
+.modal-form input[aria-invalid="true"]:focus {
+  border-color: var(--danger);
+}
+.field-error {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
 .task-editor input,
 .task-editor textarea {
   background: var(--raised);
@@ -1963,6 +1974,15 @@ button:not(
    control, so it draws no ring. */
 .modal:focus {
   outline: none;
+}
+/* The app's error, shown in the dialog because the window's banner is under
+   the backdrop. */
+.modal-error {
+  border: 1px solid rgb(255 137 135 / 0.35);
+  border-radius: 8px;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
 }
 /* A confirm can be asked from inside another dialog, so it sits above them. */
 .app-dialog-backdrop {
