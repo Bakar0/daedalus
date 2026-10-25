@@ -18,6 +18,11 @@ import {
   type AutoRebirth,
   type Workspace,
 } from "../domain";
+import {
+  normalizeWorkspaceSlug,
+  WORKSPACE_NAME_MAX,
+  WORKSPACE_SLUG_MAX,
+} from "@daedalus/protocol";
 import { DaedalusError } from "../errors";
 import { isValidModelName } from "./providers";
 import type { SqliteRepositories } from "../repositories";
@@ -28,16 +33,8 @@ const MARKER_DIRECTORY = ".daedalus";
 const MARKER_FILE = "workspace.json";
 
 export function workspaceSlug(value: string): string {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (
-    !slug ||
-    slug.length > 63 ||
-    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug)
-  ) {
+  const slug = normalizeWorkspaceSlug(value);
+  if (!slug || slug.length > WORKSPACE_SLUG_MAX) {
     throw new DaedalusError(
       "VALIDATION",
       "Workspace slug must contain 1–63 lowercase letters, numbers, or hyphens",
@@ -48,7 +45,7 @@ export function workspaceSlug(value: string): string {
 
 function requiredName(value: string): string {
   const name = value.trim();
-  if (!name || name.length > 120)
+  if (!name || name.length > WORKSPACE_NAME_MAX)
     throw new DaedalusError(
       "VALIDATION",
       "Workspace name must contain 1–120 characters",

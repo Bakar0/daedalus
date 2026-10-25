@@ -502,6 +502,11 @@ const client = {
         session: structuredClone(found),
       });
     },
+    // Only the refusal is faked: a name that is taken, as the core says it.
+    workspaceCreate: async (params: { name: string }) => {
+      record("workspaceCreate", params);
+      return fail(`Workspace '${params.name.toLowerCase()}' already exists`);
+    },
     workspaceArchive: async (params: { reference: string }) => {
       record("workspaceArchive", params);
       const found = snapshot.workspaces.find(

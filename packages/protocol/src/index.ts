@@ -2293,6 +2293,48 @@ export type CliFailure = RpcFailure;
 
 export type CliEnvelope<T> = CliSuccess<T> | CliFailure;
 
+/** The most characters a workspace name may have, once trimmed. */
+export const WORKSPACE_NAME_MAX = 120;
+
+/** The most characters a workspace slug, and so its folder name, may have. */
+export const WORKSPACE_SLUG_MAX = 63;
+
+/**
+ * A workspace name or slug as the slug it becomes: lower case, each run of
+ * other characters one hyphen, none at the ends. Empty when nothing is left.
+ * The core names the workspace and its folder with it.
+ */
+export const normalizeWorkspaceSlug = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+/**
+ * Why a new workspace cannot have this name, in words for under the field,
+ * or undefined when it can. The same rules the core enforces, plus the
+ * workspaces already there, archived ones included, since a slug is taken
+ * for good. A folder already on disk is only known to the core.
+ */
+export function workspaceNameProblem(
+  name: string,
+  workspaces: readonly Pick<WorkspaceDto, "slug" | "name" | "archivedAt">[],
+): string | undefined {
+  const trimmed = name.trim();
+  if (!trimmed) return "Enter a name";
+  if (trimmed.length > WORKSPACE_NAME_MAX)
+    return `Use at most ${WORKSPACE_NAME_MAX} characters`;
+  const slug = normalizeWorkspaceSlug(trimmed);
+  if (!slug) return "Use at least one letter or number";
+  if (slug.length > WORKSPACE_SLUG_MAX) return "Use a shorter name";
+  const taken = workspaces.find((workspace) => workspace.slug === slug);
+  if (!taken) return undefined;
+  return taken.archivedAt
+    ? `An archived workspace is named "${taken.name}"`
+    : `A workspace named "${taken.name}" already exists`;
+}
+
 /**
  * An invite code as it is typed: letters and digits only, upper case, with
  * the dash after the fifth, at most ten. The relay stores codes in exactly

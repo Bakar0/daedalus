@@ -3,6 +3,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
+  createContext,
   lazy,
   Suspense,
   useCallback,
@@ -53,6 +54,7 @@ import type {
 import {
   resolveAutoRebirth,
   ROUTINES_REBIRTH_PERCENT,
+  workspaceNameProblem,
   type AutoRebirthDto,
 } from "@daedalus/protocol";
 import { LargeFileBar } from "./LargeFileBar";
@@ -1178,6 +1180,33 @@ function PullRequestChip({
   );
 }
 
+/**
+ * The app's last error, for whichever dialog is open. The banner at the top
+ * of the window sits under the dialog's backdrop, so a dialog shows the error
+ * itself; otherwise a failed Create looked like nothing happened.
+ */
+const DialogErrorContext = createContext<
+  { message: string; dismiss: () => void } | undefined
+>(undefined);
+
+function AppContexts({
+  children,
+  dialogError,
+  theme,
+}: {
+  children: React.ReactNode;
+  dialogError: { message: string; dismiss: () => void } | undefined;
+  theme: AppTheme;
+}) {
+  return (
+    <AppThemeContext.Provider value={theme}>
+      <DialogErrorContext.Provider value={dialogError}>
+        {children}
+      </DialogErrorContext.Provider>
+    </AppThemeContext.Provider>
+  );
+}
+
 function Modal({
   title,
   onClose,
@@ -1198,6 +1227,7 @@ function Modal({
   wide?: boolean;
 }) {
   const section = useRef<HTMLElement>(null);
+  const error = useContext(DialogErrorContext);
   const close = useRef(onClose);
   close.current = onClose;
   // A dialog opened from a session would otherwise leave the caret in the
@@ -1247,6 +1277,14 @@ function Modal({
             </button>
           )}
         </div>
+        {error && (
+          <div className="error-banner modal-error" role="alert">
+            <span>{error.message}</span>
+            <button onClick={error.dismiss} type="button">
+              Dismiss
+            </button>
+          </div>
+        )}
         {children}
       </section>
     </div>
@@ -2160,6 +2198,12 @@ export function WorkspaceApp({
     },
   };
   const appActions = useMutation(refreshOnSuccess);
+  // Create workspace answers under its Name field, not in the app's banner.
+  const workspaceActions = useMutation({
+    onStart: () => setWorkspaceRefusal(undefined),
+    onError: (message: string) => setWorkspaceRefusal(message),
+    onSettled: refreshOnSuccess.onSettled,
+  });
   const perform = appActions.run;
   const busy = appActions.pending();
   const sessionActions = useMutation(refreshOnSuccess);
@@ -2222,6 +2266,9 @@ export function WorkspaceApp({
     claudeAccount: "default",
     codexAccount: "default",
   });
+  // What the core said when it refused the name, until the name changes.
+  // Anything the form can tell for itself it shows as the user types.
+  const [workspaceRefusal, setWorkspaceRefusal] = useState<string>();
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
   const [sessionType, setSessionType] = useState("claude");
   const [sessionModel, setSessionModel] = useState("");
@@ -4019,9 +4066,16 @@ export function WorkspaceApp({
     setModal(undefined);
   }
 
+  function closeWorkspaceModal() {
+    setWorkspaceRefusal(undefined);
+    setModal(undefined);
+  }
+
   async function createWorkspace(event: React.FormEvent) {
     event.preventDefault();
-    const created = await perform(
+    if (workspaceNameProblem(workspaceForm.name, snapshot?.workspaces ?? []))
+      return;
+    const created = await workspaceActions.run(
       client.request.workspaceCreate({
         name: workspaceForm.name,
         ...(workspaceForm.claudeAccount !== "default"
@@ -6447,8 +6501,26 @@ export function WorkspaceApp({
     </div>
   ) : null;
 
+  // Blank says nothing: the field starts that way, and `required` covers it.
+  const workspaceNameError =
+    (workspaceForm.name
+      ? workspaceNameProblem(workspaceForm.name, snapshot?.workspaces ?? [])
+      : undefined) ?? workspaceRefusal;
+  // Every <Modal> below is open exactly when one of these is set.
+  const dialogOpen =
+    modal !== undefined ||
+    secretsWorkspace !== undefined ||
+    quitRequest !== undefined;
+  const dialogError = useMemo(
+    () =>
+      error
+        ? { message: error, dismiss: () => setError(undefined) }
+        : undefined,
+    [error],
+  );
+
   return (
-    <AppThemeContext.Provider value={theme}>
+    <AppContexts dialogError={dialogError} theme={theme}>
       <main
         className={`app ${terminalPanelOpen ? "terminal-panel-open" : ""}`}
         data-palette={theme === "midnight" ? "midnight" : undefined}
@@ -6486,7 +6558,7 @@ export function WorkspaceApp({
               update={appUpdate}
             />
           )}
-          {error && (
+          {error && !dialogOpen && (
             <div className="error-banner" role="alert">
               <span>{error}</span>
               <button onClick={() => setError(undefined)}>Dismiss</button>
@@ -7606,22 +7678,36 @@ export function WorkspaceApp({
         </section>
 
         {modal === "workspace" && (
-          <Modal onClose={() => setModal(undefined)} title="Create workspace">
+          <Modal onClose={closeWorkspaceModal} title="Create workspace">
             <form className="modal-form" onSubmit={createWorkspace}>
               <label>
                 Name
                 <input
+                  aria-describedby={
+                    workspaceNameError ? "workspace-name-error" : undefined
+                  }
+                  aria-invalid={workspaceNameError ? true : undefined}
                   autoFocus
                   required
                   value={workspaceForm.name}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    setWorkspaceRefusal(undefined);
                     setWorkspaceForm({
                       ...workspaceForm,
                       name: event.target.value,
-                    })
-                  }
+                    });
+                  }}
                   placeholder="My project"
                 />
+                {workspaceNameError && (
+                  <small
+                    aria-live="polite"
+                    className="field-error"
+                    id="workspace-name-error"
+                  >
+                    {workspaceNameError}
+                  </small>
+                )}
               </label>
               {(["claude", "codex"] as const).map((provider) => {
                 // Asked only once a provider has an account besides Default.
@@ -7656,12 +7742,19 @@ export function WorkspaceApp({
               <div className="modal-actions">
                 <button
                   className="quiet"
-                  onClick={() => setModal(undefined)}
+                  onClick={closeWorkspaceModal}
                   type="button"
                 >
                   Cancel
                 </button>
-                <button disabled={busy} type="submit">
+                <button
+                  disabled={
+                    busy ||
+                    workspaceActions.pending() ||
+                    Boolean(workspaceNameError)
+                  }
+                  type="submit"
+                >
                   Create workspace
                 </button>
               </div>
@@ -8320,6 +8413,6 @@ export function WorkspaceApp({
         )}
         <DialogHost />
       </main>
-    </AppThemeContext.Provider>
+    </AppContexts>
   );
 }
