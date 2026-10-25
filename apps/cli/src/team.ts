@@ -2,6 +2,7 @@ import {
   DaedalusError,
   LEAD_HANDLE,
   USER_HANDLE,
+  splitLines,
   type AgentSession,
   type ApplicationContext,
   type Team,
@@ -100,9 +101,11 @@ const time = (iso: string) => {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
-const messageText = (message: TeamMessage) =>
-  `#${message.id} ${time(message.createdAt)} ${message.author}${message.tags.length ? ` → ${message.tags.map((tag) => `@${tag}`).join(" ")}` : ""}\n${message.body
-    .split("\n")
+/** A header line, then every line of the body indented under it. */
+const messageText = (message: TeamMessage, author: string) =>
+  `#${message.id} ${time(message.createdAt)} ${author}${message.tags.length ? ` → ${message.tags.map((tag) => `@${tag}`).join(" ")}` : ""}\n${splitLines(
+    message.body,
+  )
     .map((line) => `  ${line}`)
     .join("\n")}`;
 
@@ -180,14 +183,20 @@ export async function teamCommand(
         ...(limit !== undefined ? { limit } : {}),
       },
     );
-    printResult({ ...result, team: teamSummary(team) }, json, () => {
+    const label = context.teams.authorLabels(team);
+    const messages = result.messages.map((message) => ({
+      ...message,
+      from: label(message.author),
+    }));
+    printResult({ ...result, messages, team: teamSummary(team) }, json, () => {
       if (result.skipped)
         console.log(
           `(${result.skipped} older unread messages not shown; use --limit)`,
         );
       if (!result.messages.length)
         console.log(`Nothing new in the team '${team.name}'.`);
-      for (const message of result.messages) console.log(messageText(message));
+      for (const message of messages)
+        console.log(messageText(message, message.from));
     });
     return 0;
   }

@@ -1,0 +1,42 @@
+# Chart values for the EKS cluster in deploy/eks/cluster.yaml. The image
+# repositories, tags and gateway.publicUrl differ per account, so the helm
+# command in deploy/eks/README.md passes them with --set.
+gateway:
+  # The only sign-in until OIDC (1b): anyone who can reach the gateway gets a
+  # token for any email. Private tests only, behind the ALB's inbound-cidrs.
+  devLogin: true
+  publicUrl: "" # --set gateway.publicUrl=https://<your host>
+  storage: { size: 1Gi, storageClass: gp3 }
+  limits:
+    workspacesPerUser: 5
+workspace:
+  storageClass: gp3
+  storageSize: 20Gi
+  runtimeClassName: gvisor
+  runtimeClassHandler: runsc
+  # Kubernetes adds these to every workspace pod through RuntimeClass gvisor:
+  # they run only on the spot node group that has gVisor, and nothing else does.
+  runtimeClassScheduling:
+    nodeSelector:
+      daedalus.dev/gvisor: "true"
+    tolerations:
+      - key: daedalus.dev/workspaces
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+  idleMinutes: 15
+  retention: { asleepDays: 30 }
+tenant:
+  # The defaults hold: the VPC is 192.168.0.0/16, EKS service addresses are in
+  # 10.100.0.0/16 or 172.20.0.0/16, and 169.254.0.0/16 covers instance
+  # metadata and the Pod Identity agent (169.254.170.23).
+  blockedEgressCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
+    - 169.254.169.254/32
+admin:
+  enabled: true
+  bootstrap:
+    existingSecret: daedalus-admin

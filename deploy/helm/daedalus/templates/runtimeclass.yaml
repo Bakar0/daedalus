@@ -1,0 +1,42 @@
+{{- /*
+The RuntimeClass workspace pods run under, gVisor by default. The install fails
+when the cluster's nodes report their runtime handlers and none offers this one.
+Nodes that report none (an older containerd) cannot be checked; NOTES warns.
+A RuntimeClass of this name that the release does not own (GKE Sandbox makes
+its own "gvisor") is used as it is when its handler matches.
+lookup returns nothing under `helm template` and --dry-run, so both skip this.
+*/ -}}
+{{- $name := .Values.workspace.runtimeClassName }}
+{{- if $name }}
+{{- $handler := .Values.workspace.runtimeClassHandler }}
+{{- $nodes := (lookup "v1" "Node" "" "").items | default list }}
+{{- $reported := false }}
+{{- $offered := false }}
+{{- range $nodes }}
+{{- range (dig "status" "runtimeHandlers" list .) }}
+{{- $reported = true }}
+{{- if eq .name $handler }}{{- $offered = true }}{{- end }}
+{{- end }}
+{{- end }}
+{{- if and $reported (not $offered) }}
+{{- fail (printf "workspace.runtimeClassName is %q but no node offers the runtime handler %q. Install gVisor (runsc) on the nodes (deploy/README.md, deploy/kind/gvisor.sh on kind), set workspace.runtimeClassHandler to the handler your nodes have, or set workspace.runtimeClassName to \"\" to run workspaces without a sandbox (unsafe on a shared cluster)." $name $handler) }}
+{{- end }}
+{{- $existing := lookup "node.k8s.io/v1" "RuntimeClass" "" $name }}
+{{- if and $existing (ne (dig "metadata" "annotations" "meta.helm.sh/release-name" "" $existing) .Release.Name) }}
+{{- if ne $existing.handler $handler }}
+{{- fail (printf "RuntimeClass %q already exists with handler %q, not %q. Set workspace.runtimeClassHandler to match it, or choose another workspace.runtimeClassName." $name $existing.handler $handler) }}
+{{- end }}
+{{- else }}
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+handler: {{ $handler }}
+{{- with .Values.workspace.runtimeClassScheduling }}
+scheduling:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}

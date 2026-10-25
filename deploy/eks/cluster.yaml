@@ -1,0 +1,138 @@
+# eksctl ClusterConfig for a private test of Daedalus cloud workspaces.
+# Read deploy/eks/README.md first. Edit the lines marked EDIT, then:
+#   eksctl create cluster -f deploy/eks/cluster.yaml --kubeconfig "$KUBECONFIG"
+#
+# Two managed node groups in one Availability Zone, Graviton (arm64):
+#   system      on-demand, the gateway and the cluster add-ons
+#   workspaces  spot, gVisor installed at boot, tainted so only workspace pods
+#               (which get the toleration from RuntimeClass gvisor) land there
+# One zone because a workspace's EBS volumes live in the zone where it first
+# ran; nodes in one zone mean a woken workspace always finds a node next to its
+# disks. The control plane still needs subnets in two zones.
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: daedalus
+  region: us-east-1 # EDIT
+  version: "1.35" # standard support until 2027-03-27
+  tags:
+    daedalus.dev/cluster: daedalus
+
+# Stay on standard support: past its end the cluster is upgraded instead of
+# moving to extended support at $0.60 an hour.
+upgradePolicy:
+  supportType: STANDARD
+
+availabilityZones: [us-east-1a, us-east-1b] # EDIT with the region
+
+vpc:
+  cidr: 192.168.0.0/16 # covered by tenant.blockedEgressCIDRs
+  nat:
+    gateway: Single
+  clusterEndpoints:
+    publicAccess: true
+    privateAccess: true
+  # Who may reach the Kubernetes API. Workspace pods hold no token, but there
+  # is no reason to leave the endpoint open to the internet.
+  publicAccessCIDRs: ["203.0.113.10/32"] # EDIT: your address, curl -s https://checkip.amazonaws.com
+
+addons:
+  - name: vpc-cni
+    version: latest
+    # Without this every NetworkPolicy is ignored and workspaces can reach the
+    # node, other pods and 169.254.169.254.
+    configurationValues: '{"enableNetworkPolicy": "true"}'
+    resolveConflicts: overwrite
+  - name: coredns
+    version: latest
+  - name: kube-proxy
+    version: latest
+  - name: eks-pod-identity-agent
+    version: latest
+  - name: aws-ebs-csi-driver
+    version: latest
+    useDefaultPodIdentityAssociations: true
+
+managedNodeGroups:
+  - name: system
+    amiFamily: AmazonLinux2023
+    instanceTypes: [t4g.large]
+    minSize: 1
+    maxSize: 2
+    desiredCapacity: 1
+    availabilityZones: [us-east-1a] # EDIT with the region
+    privateNetworking: true
+    volumeSize: 40
+    volumeType: gp3
+    volumeEncrypted: true
+    disableIMDSv1: true
+    labels:
+      daedalus.dev/pool: system
+
+  - name: workspaces
+    amiFamily: AmazonLinux2023
+    spot: true
+    # 4 vCPU and 16 GiB each: three workspaces at the chart's default request
+    # of 1 CPU and 2 GiB. Several types so spot capacity is easier to find.
+    instanceTypes: [m7g.xlarge, m6g.xlarge, m8g.xlarge]
+    # minSize 1: the chart refuses to install when nodes report their runtime
+    # handlers and none offers runsc. Scale up by hand for more workspaces:
+    #   eksctl scale nodegroup --cluster daedalus --name workspaces --nodes 2
+    minSize: 1
+    maxSize: 3
+    desiredCapacity: 1
+    availabilityZones: [us-east-1a] # EDIT with the region, same as system
+    privateNetworking: true
+    volumeSize: 80
+    volumeType: gp3
+    volumeEncrypted: true
+    disableIMDSv1: true
+    # Hop limit 1: pods cannot reach the instance metadata service even if
+    # the NetworkPolicy were not enforced.
+    disablePodIMDS: true
+    labels:
+      daedalus.dev/gvisor: "true"
+    taints:
+      - key: daedalus.dev/workspaces
+        value: "true"
+        effect: NoSchedule
+    # Runs from user data after nodeadm's config phase and before containerd
+    # and kubelet start. Same release and sha512 as deploy/kind/gvisor.sh.
+    preBootstrapCommands:
+      - |
+        set -euo pipefail
+        version=20261012.0
+        arch="$(uname -m)"
+        case "$arch" in
+          aarch64) sha=2fe7425abd16ad6ca649ab9bc3d7e8e76756834d86ffcc08dbe97c82c3b7262a7d6401f23632f2b296649cc1408b560416b2ab65a4043aa123fc7b90f3a1b2e2 ;;
+          x86_64) sha=9606445eed5aedfcf05310e7ccef61d994089914c6622fc82624c24d2b18db1b2210f40e40a7be27b8b7772859de7d95c501b4eba66423053c960bf671377c5e ;;
+          *) echo "gvisor: no build for $arch" >&2; exit 1 ;;
+        esac
+        command -v bzip2 >/dev/null || dnf install -y bzip2
+        dir="$(mktemp -d)"
+        curl -fsSL --retry 5 -o "$dir/gvisor.tar.bz2" \
+          "https://storage.googleapis.com/gvisor/releases/release/$version/$arch/gvisor.tar.bz2"
+        echo "$sha  $dir/gvisor.tar.bz2" | sha512sum -c -
+        tar -xjf "$dir/gvisor.tar.bz2" -C "$dir"
+        install -m 0755 "$dir/runsc" "$dir/containerd-shim-runsc-v1" /usr/local/bin/
+        rm -rf /usr/local/bin/gvisor-bin
+        cp -r "$dir/gvisor-bin" /usr/local/bin/gvisor-bin
+        chmod -R a+rX /usr/local/bin/gvisor-bin
+        rm -rf "$dir"
+        echo "gvisor $version installed"
+    # On AL2023 eksctl adds this NodeConfig to the user data, and nodeadm
+    # merges spec.containerd.config into /etc/containerd/config.toml. Written
+    # in config version 2 form, which nodeadm migrates on containerd 2.
+    # pod_annotations passes the gateway's dev.gvisor.* mount hints to runsc;
+    # without them moving a workspace to the cloud fails with "The runner
+    # refused: Failed to connect".
+    overrideBootstrapCommand: |
+      apiVersion: node.eks.aws/v1alpha1
+      kind: NodeConfig
+      spec:
+        containerd:
+          config: |
+            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+            runtime_type = "io.containerd.runsc.v1"
+            pod_annotations = ["dev.gvisor.*"]

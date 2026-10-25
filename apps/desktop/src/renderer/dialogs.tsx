@@ -33,7 +33,25 @@ type Request = { id: number } & (
       confirmLabel: string;
       resolve: (answer: string | null) => void;
     }
+  | {
+      kind: "choice";
+      title: string;
+      message: string;
+      lines: string[];
+      choices: { id: string; label: string; danger?: boolean }[];
+      cancelLabel: string;
+      resolve: (answer: string | null) => void;
+    }
 );
+
+/**
+ * Text that may come from outside this Mac, such as a pod, cut to a length
+ * the dialog can hold. React renders it as text, never as markup.
+ */
+export const plainLine = (text: string, max = 160): string => {
+  const flat = text.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
 
 const queue: Request[] = [];
 let nextId = 0;
@@ -88,6 +106,31 @@ export function askText(options: {
   });
 }
 
+/** One of several answers, by id, or `null` when cancelled. */
+export function askChoice(options: {
+  title: string;
+  message: string;
+  /** Listed under the message, one per line, as plain text. */
+  lines?: string[];
+  choices: { id: string; label: string; danger?: boolean }[];
+  /** "OK" when there is nothing to choose, only something to read. */
+  cancelLabel?: string;
+}): Promise<string | null> {
+  return new Promise((resolve) => {
+    queue.push({
+      id: nextId++,
+      kind: "choice",
+      title: options.title,
+      message: options.message,
+      lines: options.lines ?? [],
+      choices: options.choices,
+      cancelLabel: options.cancelLabel ?? "Cancel",
+      resolve,
+    });
+    announce();
+  });
+}
+
 export function DialogHost() {
   const [request, setRequest] = useState<Request | undefined>(queue[0]);
   const [text, setText] = useState("");
@@ -107,7 +150,14 @@ export function DialogHost() {
   const answer = (accepted: boolean) => {
     queue.shift();
     if (request.kind === "confirm") request.resolve(accepted);
-    else request.resolve(accepted ? text : null);
+    else if (request.kind === "text") request.resolve(accepted ? text : null);
+    else request.resolve(null);
+    announce();
+  };
+  const choose = (id: string) => {
+    if (request.kind !== "choice") return;
+    queue.shift();
+    request.resolve(id);
     announce();
   };
 
@@ -154,36 +204,69 @@ export function DialogHost() {
               value={text}
             />
           )}
-          <div className="modal-actions">
-            <button
-              autoFocus={
-                request.kind === "confirm" &&
-                request.danger &&
-                !request.enterConfirms
-              }
-              className="quiet"
-              data-dialog-answer="cancel"
-              onClick={() => answer(false)}
-              type="button"
-            >
-              Cancel
-            </button>
-            <button
-              autoFocus={
-                request.kind === "confirm" &&
-                (!request.danger || request.enterConfirms)
-              }
-              className={
-                request.kind === "confirm" && request.danger
-                  ? "danger-action"
-                  : undefined
-              }
-              data-dialog-answer="confirm"
-              type="submit"
-            >
-              {request.confirmLabel}
-            </button>
-          </div>
+          {request.kind === "choice" && request.lines.length > 0 && (
+            <ul className="app-dialog-lines" data-testid="dialog-lines">
+              {request.lines.map((line, index) => (
+                <li key={index}>{plainLine(line)}</li>
+              ))}
+            </ul>
+          )}
+          {request.kind === "choice" ? (
+            <div className="modal-actions">
+              <button
+                className="quiet"
+                data-dialog-answer="cancel"
+                autoFocus={request.choices.length === 0}
+                onClick={() => answer(false)}
+                type="button"
+              >
+                {request.cancelLabel}
+              </button>
+              {request.choices.map((choice, index) => (
+                <button
+                  autoFocus={index === 0 && !choice.danger}
+                  className={choice.danger ? "danger-action" : undefined}
+                  data-dialog-answer={choice.id}
+                  key={choice.id}
+                  onClick={() => choose(choice.id)}
+                  type="button"
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="modal-actions">
+              <button
+                autoFocus={
+                  request.kind === "confirm" &&
+                  request.danger &&
+                  !request.enterConfirms
+                }
+                className="quiet"
+                data-dialog-answer="cancel"
+                onClick={() => answer(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                autoFocus={
+                  request.kind === "confirm" &&
+                  (!request.danger || request.enterConfirms)
+                }
+                className={
+                  request.kind === "confirm" && request.danger
+                    ? "danger-action"
+                    : undefined
+                }
+                data-dialog-answer="confirm"
+                type="submit"
+              >
+                {request.confirmLabel}
+              </button>
+            </div>
+          )}
         </form>
       </section>
     </div>

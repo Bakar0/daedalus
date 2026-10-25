@@ -15,6 +15,7 @@ import type {
 } from "../domain";
 import type { DaedalusConfig } from "../config";
 import { DaedalusError, normalizeError } from "../errors";
+import { requireOnMac } from "./cloud-launch";
 import type { SqliteRepositories } from "../repositories";
 import {
   GH_EXECUTABLE_FALLBACKS,
@@ -551,14 +552,15 @@ export class RepositoryLibrary {
   // One that cannot move quietly stays where it is; its row says behind, and
   // an explicit sync says why.
   private async followRemote(refreshed: RepositoryLibraryEntry): Promise<void> {
-    const checkouts = this.repositories
-      .listWorkspaceRepositories()
-      .filter(
-        (item) =>
-          item.libraryRepositoryId === refreshed.id &&
-          item.status === "ready" &&
-          item.referencePath,
-      );
+    const checkouts = this.repositories.listWorkspaceRepositories().filter(
+      (item) =>
+        item.libraryRepositoryId === refreshed.id &&
+        item.status === "ready" &&
+        item.referencePath &&
+        // A cloud workspace's checkout here is its backup; the pod's moves
+        // with the pod.
+        this.repositories.workspacePlace(item.workspaceId).place !== "cloud",
+    );
     for (const repository of checkouts) {
       try {
         const moved = await this.moveReferenceCheckout(repository, refreshed);
@@ -821,6 +823,7 @@ export class RepositoryLibrary {
       );
     requireReady(repository);
     const workspace = await this.workspaces.getActive(repository.workspaceId);
+    requireOnMac(workspace);
     if (
       !repository.referencePath ||
       !repository.libraryRepositoryId ||
@@ -958,6 +961,7 @@ export class RepositoryLibrary {
     libraryRepositoryId: string;
   }): Promise<WorkspaceRepository> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    requireOnMac(workspace);
     const libraryRepository = this.repositories.findRepositoryLibraryEntry(
       input.libraryRepositoryId,
     );
@@ -983,6 +987,7 @@ export class RepositoryLibrary {
     githubNameWithOwner?: string;
   }): Promise<WorkspaceRepository> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    requireOnMac(workspace);
     const repository = await this.addRepositoryToLibrary({
       remoteUrl: input.remoteUrl,
       name: input.name,
@@ -1008,6 +1013,7 @@ export class RepositoryLibrary {
     githubNameWithOwner?: string;
   }): Promise<WorkspaceRepository> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    requireOnMac(workspace);
     const remoteUrl = input.remoteUrl.trim();
     if (!remoteUrl || remoteUrl.length > 2048)
       throw new DaedalusError(
@@ -1211,6 +1217,7 @@ export class RepositoryLibrary {
         "NOT_FOUND",
         `Workspace repository '${id}' was not found`,
       );
+    requireOnMac(await this.workspaces.get(repository.workspaceId));
     if (
       this.repositories
         .listSessionWorktrees({ workspaceId: repository.workspaceId })

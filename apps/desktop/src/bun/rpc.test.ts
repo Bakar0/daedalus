@@ -249,6 +249,45 @@ describe("desktop RPC handlers", () => {
     });
   });
 
+  test("opens the AWS guide the app carries, and says when it carries none", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const opened: string[] = [];
+      const guide = join(home, "README.md");
+      const handlers = (awsGuidePath?: string) =>
+        createDesktopRequestHandlers(context, {
+          openPath: (path) => {
+            opened.push(path);
+            return true;
+          },
+          ...(awsGuidePath ? { awsGuidePath } : {}),
+        });
+      try {
+        expect(await handlers(guide).gatewayInstallGuideOpen({})).toMatchObject(
+          {
+            ok: false,
+            error: { code: "NOT_FOUND" },
+          },
+        );
+        await writeFile(guide, "# EKS\n");
+        expect(await handlers(guide).gatewayInstallGuideOpen({})).toEqual({
+          ok: true,
+          data: { opened: true },
+        });
+        expect(await handlers().gatewayInstallGuideOpen({})).toMatchObject({
+          ok: false,
+          error: { code: "NOT_FOUND" },
+        });
+        expect(opened).toEqual([guide]);
+      } finally {
+        context.close();
+      }
+    });
+  });
+
   test("opens a file in its default app, and shows a program in Finder", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const context = await createApplicationContext({

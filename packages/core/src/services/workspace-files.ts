@@ -27,13 +27,16 @@ import type {
 import type { DaedalusConfig } from "../config";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
+import { IN_CLOUD_MESSAGE } from "./cloud-launch";
+import type { PodMoveSide } from "./move-side";
+import { PodFiles } from "./pod-files";
 import type { WorkspaceService } from "./workspaces";
 
-const MAX_VIEWABLE_FILE_BYTES = 1024 * 1024;
-const MAX_VIEWABLE_IMAGE_BYTES = 20 * 1024 * 1024;
-const MAX_IMPORTED_FILE_BYTES = 50 * 1024 * 1024;
+export const MAX_VIEWABLE_FILE_BYTES = 1024 * 1024;
+export const MAX_VIEWABLE_IMAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_IMPORTED_FILE_BYTES = 50 * 1024 * 1024;
 /** The image types the viewer shows, by extension. */
-const IMAGE_MIME_TYPES: Record<string, string> = {
+export const IMAGE_MIME_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -68,7 +71,7 @@ async function isViewableFile(path: string): Promise<boolean> {
  * exactly how the first version of this was reported, as "delete does
  * nothing". The reason travels with the entry so the menu can say it.
  */
-function immutableEntryFields(
+export function immutableEntryFields(
   refusal: { code: "VALIDATION" | "CONFLICT"; message: string } | undefined,
 ): { mutable: boolean; immutableReason?: string } {
   return refusal
@@ -106,8 +109,53 @@ const REGENERATED_WORKSPACE_ENTRIES = [
  * database rows name by path — renaming either orphans those rows silently.
  */
 
+export function immutableReason(
+  repositories: Pick<SqliteRepositories, "listSessionWorktrees">,
+  input: {
+    workspaceId: string;
+    relativePath: string;
+    target: string;
+  },
+): { code: "VALIDATION" | "CONFLICT"; message: string } | undefined {
+  const { relativePath } = input;
+  if (relativePath === "")
+    return {
+      code: "VALIDATION",
+      message: "The workspace root itself cannot be changed",
+    };
+  if (relativePath.split(/[\\/]/)[0] === "repos")
+    return {
+      code: "CONFLICT",
+      message: "Reference checkouts are read-only",
+    };
+  if (MANAGED_WORKSPACE_DIRECTORIES.includes(relativePath))
+    return {
+      code: "CONFLICT",
+      message: `Daedalus manages ${relativePath}/`,
+    };
+  if (REGENERATED_WORKSPACE_ENTRIES.includes(relativePath))
+    return {
+      code: "CONFLICT",
+      message:
+        relativePath.startsWith(".") ||
+        relativePath === "AGENTS.md" ||
+        relativePath === "CLAUDE.md"
+          ? `Daedalus generates ${relativePath} — turn off instruction files in Settings to remove it`
+          : `Daedalus regenerates ${relativePath}, so removing it would not stick`,
+    };
+  const worktree = repositories
+    .listSessionWorktrees({ workspaceId: input.workspaceId })
+    .find((candidate) => resolve(candidate.path) === input.target);
+  if (worktree)
+    return {
+      code: "CONFLICT",
+      message: "A session working tree — remove it from its session",
+    };
+  return undefined;
+}
+
 /** One valid path segment, shared by every verb that takes a new name. */
-function assertEntryName(value: string): string {
+export function assertEntryName(value: string): string {
   const name = value.trim();
   if (
     !name ||
@@ -124,7 +172,7 @@ function assertEntryName(value: string): string {
 }
 
 /** How long a removed entry can still be restored. */
-const TRASH_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+export const TRASH_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 const TRASH_ORIGIN = "origin.json";
 const TRASH_ENTRY = "entry";
 
@@ -160,13 +208,70 @@ export class WorkspaceFiles {
     private readonly repositories: SqliteRepositories,
     private readonly workspaces: WorkspaceService,
     private readonly config: DaedalusConfig,
-  ) {}
+  ) {
+    this.podFiles = new PodFiles(repositories);
+  }
+
+  private readonly podFiles: PodFiles;
+  private podFor: ((workspace: Workspace) => Promise<PodMoveSide>) | undefined;
+
+  /**
+   * Set by the context: how to reach the pod of a workspace in the cloud,
+   * whose files are there rather than in this Mac's folder.
+   */
+  usePod(podFor: (workspace: Workspace) => Promise<PodMoveSide>): void {
+    this.podFor = podFor;
+  }
+
+  /** The pod holding a workspace's files, or undefined while it is here. */
+  private async pod(workspace: Workspace): Promise<PodMoveSide | undefined> {
+    if (workspace.place !== "cloud") return undefined;
+    if (!this.podFor) throw new DaedalusError("CONFLICT", IN_CLOUD_MESSAGE);
+    return this.podFor(workspace);
+  }
+
+  /**
+   * A cloud workspace's brief, journal and top folder, read in its pod, or
+   * undefined while the workspace is on this Mac. A pod asleep gives them
+   * empty, so the rest of the workspace view still shows.
+   */
+  async podContent(
+    workspace: Workspace,
+  ): Promise<
+    { brief: string; journal: string; files: WorkspaceFileEntry[] } | undefined
+  > {
+    if (workspace.place !== "cloud") return undefined;
+    let pod: PodMoveSide;
+    try {
+      pod = (await this.pod(workspace))!;
+    } catch (error) {
+      if (error instanceof DaedalusError && error.code === "CONFLICT")
+        return { brief: "", journal: "", files: [] };
+      throw error;
+    }
+    const text = (path: string) =>
+      this.podFiles.readFile(pod, path).then(
+        (file) => file.content,
+        (error: unknown) => {
+          if (error instanceof DaedalusError && error.code === "NOT_FOUND")
+            return "";
+          throw error;
+        },
+      );
+    return {
+      brief: await text("BRIEF.md"),
+      journal: await text("JOURNAL.md"),
+      files: await this.podFiles.listDirectory(workspace, pod, ""),
+    };
+  }
 
   async listDirectory(
     workspaceReference: string,
     requestedPath = "",
   ): Promise<WorkspaceFileEntry[]> {
     const workspace = await this.workspaces.get(workspaceReference);
+    const pod = await this.pod(workspace);
+    if (pod) return this.podFiles.listDirectory(workspace, pod, requestedPath);
     const { target, relativePath } = await this.resolveVisiblePath(
       workspace,
       requestedPath,
@@ -226,6 +331,10 @@ export class WorkspaceFiles {
     requestedPath: string,
   ): Promise<WorkspaceFile> {
     const workspace = await this.workspaces.get(workspaceReference);
+    const pod = isAbsolute(requestedPath)
+      ? undefined
+      : await this.pod(workspace);
+    if (pod) return this.podFiles.readFile(pod, requestedPath);
     const { target, relativePath } = await this.resolveOpenablePath(
       workspace,
       requestedPath,
@@ -267,6 +376,10 @@ export class WorkspaceFiles {
     requestedPath: string,
   ): Promise<WorkspaceImage> {
     const workspace = await this.workspaces.get(workspaceReference);
+    const pod = isAbsolute(requestedPath)
+      ? undefined
+      : await this.pod(workspace);
+    if (pod) return this.podFiles.readImage(pod, requestedPath);
     const { target, relativePath } = await this.resolveOpenablePath(
       workspace,
       requestedPath,
@@ -306,6 +419,8 @@ export class WorkspaceFiles {
     expectedContent: string;
   }): Promise<WorkspaceFile> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    const pod = isAbsolute(input.path) ? undefined : await this.pod(workspace);
+    if (pod) return this.podFiles.writeFile(pod, input);
     const { target, relativePath } = await this.resolveOpenablePath(
       workspace,
       input.path,
@@ -358,6 +473,8 @@ export class WorkspaceFiles {
     kind: "file" | "directory";
   }): Promise<WorkspaceFileEntry> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    const pod = await this.pod(workspace);
+    if (pod) return this.podFiles.createEntry(workspace, pod, input);
     const name = assertEntryName(input.name);
     const parent = await this.resolveVisiblePath(
       workspace,
@@ -398,6 +515,9 @@ export class WorkspaceFiles {
     name: string;
     base64: string;
   }): Promise<WorkspaceFileEntry> {
+    const placed = await this.workspaces.getActive(input.workspace);
+    const pod = await this.pod(placed);
+    if (pod) return this.podFiles.importFile(placed, pod, input);
     const bytes = Buffer.from(input.base64, "base64");
     if (bytes.byteLength > MAX_IMPORTED_FILE_BYTES)
       throw new DaedalusError(
@@ -426,6 +546,8 @@ export class WorkspaceFiles {
     name: string;
   }): Promise<WorkspaceFileEntry> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    const pod = await this.pod(workspace);
+    if (pod) return this.podFiles.renameEntry(workspace, pod, input);
     const name = assertEntryName(input.name);
     const source = await this.resolveMutablePath(workspace, input.path);
     const destinationPath = join(dirname(source.relativePath), name);
@@ -452,6 +574,8 @@ export class WorkspaceFiles {
     destinationPath: string;
   }): Promise<WorkspaceFileEntry> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    const pod = await this.pod(workspace);
+    if (pod) return this.podFiles.moveEntry(workspace, pod, input);
     const source = await this.resolveMutablePath(workspace, input.path);
     const folder = await this.resolveVisiblePath(
       workspace,
@@ -505,6 +629,8 @@ export class WorkspaceFiles {
     path: string;
   }): Promise<WorkspaceFileEntry & { trashId: string }> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    const pod = await this.pod(workspace);
+    if (pod) return this.podFiles.removeEntry(workspace, pod, input);
     const source = await this.resolveMutablePath(workspace, input.path);
     const entry = await this.describeEntry(
       workspace.id,
@@ -536,6 +662,8 @@ export class WorkspaceFiles {
     trashId: string;
   }): Promise<WorkspaceFileEntry> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    const pod = await this.pod(workspace);
+    if (pod) return this.podFiles.restoreEntry(workspace, pod, input);
     if (!/^[0-9a-f-]{36}$/.test(input.trashId))
       throw new DaedalusError("VALIDATION", "Not a trash id");
     const holder = join(this.trashRoot, input.trashId);
@@ -678,6 +806,9 @@ export class WorkspaceFiles {
     destinationPath: string;
   }): Promise<WorkspaceFileEntry[]> {
     const workspace = await this.workspaces.getActive(input.workspace);
+    // Pasting from Finder into the pod is not offered yet.
+    if (workspace.place === "cloud")
+      throw new DaedalusError("CONFLICT", IN_CLOUD_MESSAGE);
     const folder = await this.resolveVisiblePath(
       workspace,
       input.destinationPath,
@@ -744,41 +875,7 @@ export class WorkspaceFiles {
     relativePath: string;
     target: string;
   }): { code: "VALIDATION" | "CONFLICT"; message: string } | undefined {
-    const { relativePath } = input;
-    if (relativePath === "")
-      return {
-        code: "VALIDATION",
-        message: "The workspace root itself cannot be changed",
-      };
-    if (relativePath.split(/[\\/]/)[0] === "repos")
-      return {
-        code: "CONFLICT",
-        message: "Reference checkouts are read-only",
-      };
-    if (MANAGED_WORKSPACE_DIRECTORIES.includes(relativePath))
-      return {
-        code: "CONFLICT",
-        message: `Daedalus manages ${relativePath}/`,
-      };
-    if (REGENERATED_WORKSPACE_ENTRIES.includes(relativePath))
-      return {
-        code: "CONFLICT",
-        message:
-          relativePath.startsWith(".") ||
-          relativePath === "AGENTS.md" ||
-          relativePath === "CLAUDE.md"
-            ? `Daedalus generates ${relativePath} — turn off instruction files in Settings to remove it`
-            : `Daedalus regenerates ${relativePath}, so removing it would not stick`,
-      };
-    const worktree = this.repositories
-      .listSessionWorktrees({ workspaceId: input.workspaceId })
-      .find((candidate) => resolve(candidate.path) === input.target);
-    if (worktree)
-      return {
-        code: "CONFLICT",
-        message: "A session working tree — remove it from its session",
-      };
-    return undefined;
+    return immutableReason(this.repositories, input);
   }
 
   private async describeEntry(

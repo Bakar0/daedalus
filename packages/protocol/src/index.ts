@@ -48,6 +48,17 @@ export interface WorkspaceDto {
   /** The account each provider's sessions start on; null is the default. */
   defaultClaudeAccount: string | null;
   defaultCodexAccount: string | null;
+  /**
+   * `cloud` while the workspace lives in its cloud copy: every session,
+   * terminal and file is there. Absent while it is on this Mac.
+   */
+  place?: "cloud";
+  /**
+   * Shown on the workspace until `workspaceNoticeDismiss`: it came back to
+   * this Mac from its backup because the cloud copy was deleted after 30
+   * days asleep, or what came home when it was archived.
+   */
+  cloudNotice?: string;
 }
 
 export interface TaskDto {
@@ -123,6 +134,8 @@ export interface AgentSessionDto {
   teamHandle: string | null;
   /** The session that started this one with `agent spawn`, as a handoff does. */
   spawnedBy: string | null;
+  /** The cloud host it runs on (`ws:<cloud workspace id>`); null or absent for this Mac. */
+  hostId?: string | null;
 }
 
 /**
@@ -137,6 +150,7 @@ export type AutoRebirthDto = number | "off" | null;
  * out of a session, early enough that the note is written before the window
  * fills.
  */
+
 export const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
 
 /**
@@ -848,6 +862,8 @@ export interface TeamMessageDto {
   id: number;
   /** `lead`, `user`, `daedalus` or a member's handle. */
   author: string;
+  /** The cloud mark of an author on a cloud host: `[cloud final]`. */
+  cloud?: string;
   body: string;
   tags: string[];
   createdAt: string;
@@ -916,6 +932,278 @@ export interface RemoteStateDto {
     code: string;
     expiresAt: number;
   };
+}
+
+export type CloudConnectionDto =
+  "signed-out" | "connecting" | "online" | "error";
+
+/** A cloud workspace made from a local one. */
+export interface CloudWorkspaceDto {
+  /** The local workspace. */
+  workspaceId: string;
+  /** The gateway's id for it; sessions run on host `ws:<cloudId>`. */
+  cloudId: string;
+  status: "starting" | "running" | "sleeping" | "failed";
+  runnerOnline: boolean;
+  /** Why it failed; null otherwise. */
+  reason: string | null;
+  /** When the gateway made it, ISO 8601. */
+  createdAt: string;
+}
+
+/**
+ * This Mac's cloud sign-in as a window sees it: the gateway, the email and
+ * the state. The token and the runner keys stay in the host.
+ */
+export interface CloudStateDto {
+  signedIn: boolean;
+  gatewayUrl: string | null;
+  email: string | null;
+  connection: CloudConnectionDto;
+  /** Why the gateway could not be read, in words for the user. */
+  error: string | null;
+  /** Only the ones linked to a local workspace. */
+  workspaces: CloudWorkspaceDto[];
+}
+
+/**
+ * Where a cloud session's sign-in stands: `starting` (Daedalus typed /login
+ * and waits for the page), `waiting` (the page waits for the user's click),
+ * `browser` (open; the user finishes in the browser), `pasting` (open in its
+ * paste-code form) or `failed` (see `message`). The URL stays in the host:
+ * it carries the sign-in's state.
+ */
+export interface CloudSignInDto {
+  sessionId: string;
+  kind: "claude" | "codex" | "aws";
+  phase: "starting" | "waiting" | "browser" | "pasting" | "failed";
+  /** Set while `waiting`: what Open sign-in page opens. */
+  requestId?: string;
+  host?: string;
+  message?: string;
+  expiresAt: number;
+}
+
+/**
+ * A workspace's cloud copy while a new cloud session waits for it:
+ * `creating` the first time, `waking` when it slept, `starting` while its
+ * pod starts and its runner connects.
+ */
+export interface CloudPreparingDto {
+  workspaceId: string;
+  phase: "creating" | "waking" | "starting";
+}
+
+/**
+ * A workspace moving between this Mac and its cloud copy
+ * (artifacts/cloud-sessions/workspace-move-design.md). The workspace shows
+ * it moving while an entry exists and is not `failed` or `moved`; Cancel
+ * only while `waiting`.
+ */
+export interface WorkspaceMoveDto {
+  workspaceId: string;
+  to: "cloud" | "mac";
+  /**
+   * `moved`: done, with a `notice` the workspace shows as a one-line banner
+   * until `workspaceMoveDismiss`.
+   */
+  phase: "waiting" | "stopping" | "copying" | "starting" | "failed" | "moved";
+  /** "Waiting for 2 sessions to end their turns", "Copying repos/app". */
+  detail?: string;
+  /** Set when `failed`; the entry stays 30 s so the header can show it. */
+  message?: string;
+  notice?: string;
+}
+
+/** A session a move names: id and name, the name shown as plain text. */
+export interface MoveSessionNameDto {
+  id: string;
+  name: string;
+}
+
+/**
+ * How a workspace move ended when it did not throw. Nothing changed unless
+ * `moved`.
+ * - `busy`: these sessions wait on the user's answer, so their turn will not
+ *   end; ask, then call again with `stopWorking`.
+ * - `needsStopped`: Codex or custom sessions run, which the cloud cannot
+ *   run; the user stops them first.
+ * - `needsSmaller`: what is over its cap, in bytes.
+ */
+export type WorkspaceMoveResultDto =
+  | { status: "moved"; workspace: WorkspaceDto; notice?: string }
+  | { status: "busy"; sessions: MoveSessionNameDto[] }
+  | { status: "needsStopped"; sessions: MoveSessionNameDto[] }
+  | {
+      status: "needsSmaller";
+      items: { what: string; bytes: number; maxBytes: number }[];
+    };
+
+/**
+ * The user's remote MCP servers a cloud session could use. None goes to the
+ * pod until turned on here: a key can sit in a server's URL. The window sees
+ * each server's name and host, never its URL.
+ */
+export interface CloudMcpServersDto {
+  servers: { name: string; host: string; on: boolean }[];
+  /** Servers that cannot go at all, and why (local commands, secrets). */
+  leftOut: { name: string; reason: string }[];
+}
+
+/**
+ * A kubeconfig context as the install window sees it
+ * (artifacts/cloud-sessions/gateway-install-api.md). The host reads names
+ * and server URLs only, never credentials; the window gets the server's host.
+ */
+export interface KubeContextDto {
+  name: string;
+  /** The API server's host, without scheme or path. */
+  serverHost: string;
+}
+
+/** A command the install needs from the user's PATH. */
+export interface GatewayToolDto {
+  name: "kubectl" | "helm" | "kind" | "docker";
+  found: boolean;
+  /** docker only: whether the daemon answers. */
+  running?: boolean;
+  /** How to install it when it is missing, e.g. "brew install helm". */
+  hint?: string;
+}
+
+export interface GatewayToolsDto {
+  /** In kubeconfig order; none preselected. */
+  contexts: KubeContextDto[];
+  tools: GatewayToolDto[];
+}
+
+/**
+ * Where the gateway and runner images come from on a cluster other than
+ * the local kind one: `<registry>/daedalus-gateway:<tag>` and
+ * `<registry>/daedalus-runner:<tag>`.
+ */
+export interface GatewayImagesDto {
+  registry: string;
+  tag: string;
+}
+
+export interface GatewayInstallTargetInput {
+  context: string;
+  /** Default "daedalus". */
+  namespace?: string;
+  /** Needed when the cluster has no default StorageClass. */
+  storageClass?: string;
+  images?: GatewayImagesDto;
+}
+
+export interface GatewayCheckDto {
+  id:
+    | "version"
+    | "permissions"
+    | "storageClass"
+    | "gvisor"
+    | "networkPolicy"
+    | "namespace"
+    | "helm"
+    | "release"
+    | "images";
+  status: "pass" | "warn" | "fail" | "unknown";
+  /** One line, e.g. "Kubernetes 1.33". */
+  label: string;
+  /** Further lines, e.g. the permissions missing. */
+  detail?: string;
+}
+
+export interface GatewayPreflightDto {
+  context: string;
+  namespace: string;
+  checks: GatewayCheckDto[];
+  /** False while any check is `fail`. */
+  ready: boolean;
+  /**
+   * A daedalus release already in the namespace: the install upgrades it and
+   * keeps its values. Only these named values reach the window, read in the
+   * host from `helm get values`; the rest never leaves it.
+   */
+  release: {
+    namespace: string;
+    revision: number;
+    chartVersion: string;
+    devLogin: boolean;
+    /** The gateway.publicUrl it was installed with; "" for none. */
+    publicUrl: string;
+    images: GatewayImagesDto | null;
+    storageClass: string;
+  } | null;
+  /**
+   * Checks the user must acknowledge before installing; `gatewayInstallStart`
+   * refuses without the matching flag. `networkPolicy`: enforcement unknown.
+   */
+  acknowledge: "networkPolicy"[];
+}
+
+export interface GatewayDryRunDto {
+  context: string;
+  namespace: string;
+  /** What `gatewayInstallStart` must carry; valid 15 minutes in this run. */
+  dryRunId: string;
+  upgrade: boolean;
+  /**
+   * What the install creates or changes. `note` says what happens beyond
+   * creating it, such as "new; label pod-security.kubernetes.io/enforce=restricted"
+   * or "temporary: the egress check, deleted after".
+   */
+  objects: {
+    kind: string;
+    name: string;
+    namespace: string | null;
+    note?: string;
+  }[];
+  /** helm's notes and warnings, plain text. */
+  notes: string;
+}
+
+/** An install in progress or just ended, until dismissed. */
+export interface GatewayInstallDto {
+  target:
+    { kind: "cluster"; context: string; namespace: string } | { kind: "local" };
+  phase:
+    | "checking"
+    | "cluster"
+    | "gvisor"
+    | "images"
+    | "installing"
+    | "waiting"
+    | "signing-in"
+    | "done"
+    | "failed";
+  /** Plain-text progress, newest last, at most 200 lines. */
+  log: string[];
+  /** Why it failed. */
+  message?: string;
+  /** Set when done; the Cloud sign-in now uses it. */
+  gatewayUrl?: string;
+  /** True when only this Mac reaches it, through a port-forward the app keeps. */
+  portForward?: boolean;
+  /** False when the gateway has dev login off, so the app did not sign in. */
+  signedIn?: boolean;
+  /**
+   * The Keychain did not take the new admin token: `gatewayInstallAdminToken`
+   * returns it once.
+   */
+  adminTokenWaiting?: boolean;
+  /**
+   * The egress check after the install, from a temporary namespace that has
+   * the workspaces' NetworkPolicy (deploy/kind/egress-check.sh). `unproven`:
+   * the target was not reachable from outside the policy either. `warn`:
+   * the internet was not reachable, as on a cluster without egress.
+   */
+  egress?: {
+    target: string;
+    want: "open" | "blocked";
+    got: "open" | "blocked";
+    result: "pass" | "fail" | "unproven" | "warn";
+  }[];
 }
 
 /** A Pro key (an invite code), as an admin sees it. */
@@ -1029,6 +1317,14 @@ export interface DesktopSnapshotDto {
   routineReports: RoutineReportDto[];
   /** Workspace journals and team files grown past their compact size. */
   largeFiles?: LargeFileDto[];
+  /** Sign-in pages cloud sessions asked to open; absent outside the app. */
+  cloudSignIns?: CloudSignInDto[];
+  /** Workspaces whose cloud copy a new session waits for. */
+  cloudPreparing?: CloudPreparingDto[];
+  /** Workspaces moving between this Mac and the cloud. */
+  workspaceMoves?: WorkspaceMoveDto[];
+  /** The gateway install from Settings > Cloud, while one runs or ended. */
+  gatewayInstall?: GatewayInstallDto;
   settings: DesktopSettingsDto;
 }
 
@@ -1159,6 +1455,101 @@ export interface DesktopRpcSchema {
        * to load — so it is fetched over RPC rather than passed in the URL.
        */
       terminalEndpoint: Request<Record<string, never>, { endpoint: string }>;
+      /** The cloud sign-in and workspaces; asks the gateway once. */
+      cloudState: Request<Record<string, never>, CloudStateDto>;
+      /** The gateway's dev login, the same as `daedal cloud login`. */
+      cloudSignIn: Request<
+        { gatewayUrl: string; email: string },
+        CloudStateDto
+      >;
+      cloudSignOut: Request<Record<string, never>, CloudStateDto>;
+      cloudMcpServers: Request<Record<string, never>, CloudMcpServersDto>;
+      /** Turns one server on or off for cloud sessions. */
+      cloudMcpServerSet: Request<
+        { name: string; on: boolean },
+        CloudMcpServersDto
+      >;
+      /** Run in cloud: the pod for a local workspace (`daedal cloud create`). */
+      cloudWorkspaceCreate: Request<{ workspace: string }, CloudStateDto>;
+      /** Removes the pod and keeps the volume; its sessions end. */
+      cloudWorkspaceSleep: Request<{ workspace: string }, CloudStateDto>;
+      cloudWorkspaceWake: Request<{ workspace: string }, CloudStateDto>;
+      /** Removes the pod, its volume and its token; the local workspace stays. */
+      cloudWorkspaceDelete: Request<
+        { workspace: string; force: true },
+        CloudStateDto
+      >;
+      /**
+       * Opening a cloud session whose workspace sleeps: wakes the workspace,
+       * waits for its runner, then revives the session.
+       */
+      cloudSessionWake: Request<{ sessionId: string }, AgentSessionDto>;
+      /**
+       * The user's click on a cloud session's sign-in page: the host opens
+       * it in the browser. `paste` means the page shows a code to paste
+       * into the session.
+       */
+      cloudSignInOpen: Request<
+        { requestId: string },
+        { host: string; paste: boolean }
+      >;
+      cloudSignInDismiss: Request<
+        { requestId?: string; sessionId?: string },
+        null
+      >;
+      /** Kube contexts and the commands an install needs; reads only. */
+      gatewayInstallContexts: Request<Record<string, never>, GatewayToolsDto>;
+      /** Read-only checks against one context. */
+      gatewayInstallPreflight: Request<
+        GatewayInstallTargetInput,
+        GatewayPreflightDto
+      >;
+      /** `helm upgrade --install --dry-run=server`; writes nothing. */
+      gatewayInstallDryRun: Request<
+        GatewayInstallTargetInput,
+        GatewayDryRunDto
+      >;
+      /**
+       * Installs on a context that passed a preflight and the dry run
+       * `dryRunId` names, with the same input. `confirm` is the context name
+       * as the user typed it. `acknowledgeDevLogin` is required with
+       * `publicUrl`. Returns at once; progress is in `gatewayInstall`.
+       */
+      gatewayInstallStart: Request<
+        GatewayInstallTargetInput & {
+          dryRunId: string;
+          confirm: string;
+          email: string;
+          publicUrl?: string;
+          /**
+           * Dev login on or off. A new install defaults to on; an upgrade keeps
+           * the installed value unless this is sent. Turning it on while the
+           * gateway has a public URL needs `acknowledgeDevLogin`.
+           */
+          devLogin?: boolean;
+          acknowledgeDevLogin?: boolean;
+          /** Required when the preflight's `acknowledge` has `networkPolicy`. */
+          acknowledgeNetworkPolicy?: boolean;
+        },
+        GatewayInstallDto
+      >;
+      /**
+       * The admin token the Keychain refused, once; null after that or when
+       * there is none. Never in the snapshot or the log.
+       */
+      gatewayInstallAdminToken: Request<
+        Record<string, never>,
+        { token: string; secret: string; namespace: string } | null
+      >;
+      /** Try it locally: kind cluster daedalus-local through Docker. */
+      gatewayInstallLocal: Request<{ email: string }, GatewayInstallDto>;
+      /** Clears a done or failed install. */
+      gatewayInstallDismiss: Request<Record<string, never>, null>;
+      /** Opens the AWS setup guide the app carries (deploy/eks/README.md). */
+      gatewayInstallGuideOpen: Request<
+        Record<string, never>,
+        { opened: boolean }
+      >;
       remoteGet: Request<Record<string, never>, RemoteStateDto>;
       remoteSetEnabled: Request<{ enabled: boolean }, RemoteStateDto>;
       remoteSetKeepAwake: Request<{ enabled: boolean }, RemoteStateDto>;
@@ -1244,7 +1635,38 @@ export interface DesktopRpcSchema {
        * stands.
        */
       workspaceReorder: Request<{ references: string[] }, WorkspaceDto[]>;
-      workspaceArchive: Request<{ reference: string }, WorkspaceDto>;
+      /**
+       * Archives a workspace. One in the cloud comes home first, its
+       * sessions stopped (`needsSmaller` when it is over a cap); its cloud
+       * copy is deleted, then it is archived. A failed move home throws,
+       * and nothing changes.
+       */
+      workspaceArchive: Request<
+        { reference: string },
+        | { status: "archived"; workspace: WorkspaceDto }
+        | Extract<WorkspaceMoveResultDto, { status: "needsSmaller" }>
+      >;
+      /**
+       * Moves a whole workspace between this Mac and its cloud copy;
+       * resolves when the move ends (progress is `workspaceMoves` in the
+       * snapshot). Working sessions are waited for, up to 30 minutes,
+       * unless `stopWorking`. On failure it throws and the workspace stays
+       * where it was, its sessions resumed.
+       */
+      workspaceMove: Request<
+        {
+          reference: string;
+          to: "cloud" | "mac";
+          stopWorking?: boolean;
+        },
+        WorkspaceMoveResultDto
+      >;
+      /** Only while the move waits for turns to end. */
+      workspaceMoveCancel: Request<{ reference: string }, null>;
+      /** Clears a `moved` entry's notice. */
+      workspaceMoveDismiss: Request<{ reference: string }, null>;
+      /** Clears `WorkspaceDto.cloudNotice`. */
+      workspaceNoticeDismiss: Request<{ reference: string }, null>;
       workspaceRestore: Request<{ reference: string }, WorkspaceDto>;
       /** Archived workspaces only; deletes the folder and everything in it. */
       workspaceDelete: Request<{ reference: string }, WorkspaceDto>;
@@ -1711,7 +2133,11 @@ export interface DesktopRpcSchema {
         { workspace: string; sessionIds: string[] },
         AgentSessionDto[]
       >;
-      agentArchive: Request<{ id: string; force?: boolean }, AgentSessionDto>;
+      /** Archives a session where it runs, on this Mac or in the cloud. */
+      agentArchive: Request<
+        { id: string; force?: boolean },
+        { status: "archived"; session: AgentSessionDto }
+      >;
       agentRestore: Request<{ id: string }, AgentSessionDto>;
       /**
        * Resumes a session that lost its tmux server, typically to a machine

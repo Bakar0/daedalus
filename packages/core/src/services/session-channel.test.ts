@@ -10,6 +10,7 @@ import {
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
+  type SessionHost,
 } from "../index";
 
 /** Claude at its prompt with an empty input box. */
@@ -328,6 +329,32 @@ describe("session channel", () => {
         kind: "held",
         held: { reason: "stopped", text: "the session is not running" },
       });
+    });
+  });
+
+  test("a cloud session's line goes into its pod's pane, not this Mac's tmux", async () => {
+    await withChannel(async ({ context, tmux, typedClaude }) => {
+      const session = await typedClaude();
+      const sent: string[] = [];
+      const host = {
+        id: "ws:11111111-1111-4111-8111-111111111111",
+        kind: "cloud",
+        capture: async () => IDLE_SCREEN,
+        send: async (_session: string, text: string) => {
+          sent.push(text);
+        },
+        sendKeys: async () => {},
+      } as unknown as SessionHost;
+      context.hosts.register(host);
+      expect(
+        await context.sessionChannel.deliver(
+          { ...session, hostId: host.id },
+          "hand off",
+          { when: "now" },
+        ),
+      ).toEqual({ kind: "delivered" });
+      expect(sent).toEqual(["hand off"]);
+      expect(tmux.sent).toEqual([]);
     });
   });
 });

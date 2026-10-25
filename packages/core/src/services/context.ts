@@ -11,6 +11,7 @@ import {
 } from "@daedalus/platform";
 import { channelIdentifier, loadConfig, type DaedalusConfig } from "../config";
 import type { AgentSession } from "../domain";
+import { DaedalusError } from "../errors";
 import { EventBus } from "../events";
 import { JsonLogger } from "../logging";
 import { runMigrations } from "../repositories/migrations";
@@ -33,10 +34,26 @@ import { NotificationService } from "./notifications";
 import { AppUpdateService } from "./app-updates";
 import { PresenceService } from "./presence";
 import { ShutdownService } from "./shutdown";
+import { claudeSyncSeeder } from "../cloud/claude-sync-seeder";
+import { CloudService, type CloudServiceOptions } from "../cloud/cloud-service";
+import { CLOUD_LAUNCH_SECRETS } from "./cloud-launch";
+import { WorkspaceMoves } from "./workspace-move";
+import { CloudWorktrees } from "./cloud-worktrees";
+import { isPodAccess, PodMoveSide } from "./move-side";
+import { MAX_EXPLORER_BYTES } from "./pod-files";
+import { CloudSessions } from "../cloud/cloud-sessions";
+import { GatewayInstaller } from "../cloud/gateway-install";
+import { SessionArchive } from "./session-archive";
+import { LocalSessionHost } from "./session-host";
+import { SessionHosts } from "./session-hosts";
 import { TaskHistoryService } from "./task-history";
 import { forgetSessionFolders } from "./folder-trust";
 import { TaskService } from "./tasks";
-import { ProviderTeamTransport, type TeamTransport } from "./team-transport";
+import {
+  HostTeamTransport,
+  ProviderTeamTransport,
+  type TeamTransport,
+} from "./team-transport";
 import { TeamService } from "./teams";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
@@ -88,6 +105,18 @@ export interface ApplicationContext {
   /** Ends everything at once. Nothing else in the app reaches for it. */
   shutdown: ShutdownService;
   tmux: TmuxClient;
+  /** Where sessions run: this Mac, and any connected cloud hosts. */
+  hosts: SessionHosts;
+  /** Cloud workspaces: the gateway sign-in and the link to their runners. */
+  cloud: CloudService;
+  /** Moving whole workspaces between this Mac and their cloud copy. */
+  workspaceMoves: WorkspaceMoves;
+  /** Waking a cloud workspace and resuming the sessions its sleep ended. */
+  cloudSessions: CloudSessions;
+  /** Archiving and deleting where the cloud is involved. */
+  archive: SessionArchive;
+  /** Installing the gateway onto a Kubernetes cluster, from Settings > Cloud. */
+  gatewayInstall: GatewayInstaller;
   close(): void;
 }
 
@@ -113,6 +142,28 @@ export interface ApplicationContextOptions {
   sessionInbox?: (session: AgentSession, line: string) => Promise<boolean>;
   /** Injected so staleness decay is testable without waiting ten minutes. */
   now?: () => Date;
+  /** Injected so tests reach a fake gateway, with no Keychain. */
+  cloud?: Pick<
+    CloudServiceOptions,
+    | "fetch"
+    | "account"
+    | "identity"
+    | "connect"
+    | "awsConfig"
+    | "apiKey"
+    | "log"
+    | "now"
+    | "runnerWaitMs"
+  >;
+  /**
+   * The chart and kind scripts the gateway install uses, and a checkout to
+   * build images from. The desktop host passes the copies in its bundle.
+   */
+  gatewayInstall?: {
+    chartDirectory?: string;
+    kindDirectory?: string;
+    sourceRoot?: string;
+  };
   /** Injected so tests never reach the real Notification Center. */
   sendNativeNotification?: (
     notification: NativeNotification,
@@ -148,6 +199,7 @@ export async function createApplicationContext(
       config.home,
       options.env ?? process.env,
     );
+  const hosts = new SessionHosts(new LocalSessionHost(tmux));
   let agents!: AgentService;
   let teams: TeamService | undefined;
   const endedNoted = new Map<string, number>();
@@ -188,7 +240,7 @@ export async function createApplicationContext(
   const deliveryGate = new DeliveryGate(options.now);
   const sessionChannel = new SessionChannel(
     config,
-    tmux,
+    hosts,
     deliveryGate,
     options.now,
     options.sessionInbox,
@@ -198,6 +250,7 @@ export async function createApplicationContext(
     workspaces,
     workspaceContent,
     tasks,
+    hosts,
     tmux,
     config,
     abilities,
@@ -225,14 +278,34 @@ export async function createApplicationContext(
         })
         .catch(() => undefined),
   );
+  agents.onCloudSecrets((workspaceId) =>
+    secrets.values(workspaceId, CLOUD_LAUNCH_SECRETS),
+  );
   const terminals = new IntegratedTerminalService(
     repositories,
     workspaces,
-    tmux,
+    hosts.local,
     config,
   );
-  const events = new EventBus();
   const logger = new JsonLogger(config.logsDirectory);
+  const cloudLog =
+    options.cloud?.log ??
+    ((event: string, fields?: Record<string, unknown>) =>
+      void logger.write("info", event, fields));
+  const cloud = new CloudService({
+    config,
+    repositories,
+    workspaces,
+    hosts,
+    ...options.cloud,
+    log: cloudLog,
+  });
+  agents.onCloudLaunch((session) => cloud.prepareLaunch(session));
+  agents.onCloudHost((workspaceId) => cloud.prepareForSession(workspaceId));
+  // The user's skills, commands, plugins and remote MCP servers.
+  cloud.addLaunchSeeder(claudeSyncSeeder({ config, log: cloudLog }));
+  agents.onCloudReady((session, launch) => cloud.autoSignIn(session, launch));
+  const events = new EventBus();
   const workspaceWatch = new WorkspaceWatchService(
     workspaces,
     events,
@@ -283,10 +356,14 @@ export async function createApplicationContext(
     repositories,
     abilities,
     agents,
-    options.teamTransport ??
-      new ProviderTeamTransport(config, (session) =>
-        agents.codexExecutable(session),
-      ),
+    new HostTeamTransport(
+      options.teamTransport ??
+        new ProviderTeamTransport(config, (session) =>
+          agents.codexExecutable(session),
+        ),
+      sessionChannel,
+      (sessionId) => activity.get(sessionId),
+    ),
     options.now,
     activity,
   );
@@ -315,6 +392,50 @@ export async function createApplicationContext(
     await activity.restore();
     await activity.decay();
   }
+  workspaceContent.useCloudWorktrees(
+    new CloudWorktrees({ config, repositories, workspaces, hosts }),
+  );
+  // The explorer browses an awake pod only; opening a session wakes it.
+  workspaceContent.usePod(async (workspace) => {
+    const host = await cloud.awakeHost(workspace.id);
+    if (!isPodAccess(host))
+      throw new DaedalusError(
+        "CONFLICT",
+        "The cloud workspace is asleep; open a session to wake it",
+      );
+    return new PodMoveSide(host, MAX_EXPLORER_BYTES);
+  });
+  const workspaceMoves = new WorkspaceMoves({
+    config,
+    repositories,
+    workspaces,
+    agents,
+    hosts,
+    cloud,
+    terminals,
+    activity: async (sessionId) =>
+      (await activity.binding(sessionId))?.activity ??
+      activity.get(sessionId)?.activity,
+  });
+  cloud.keepWhile((workspaceId) => workspaceMoves.moving(workspaceId));
+  const repositoryRoot = resolve(import.meta.dir, "../../../..");
+  const gatewayInstall = new GatewayInstaller({
+    home: config.home,
+    chartDirectory:
+      options.gatewayInstall?.chartDirectory ??
+      join(repositoryRoot, "deploy/helm/daedalus"),
+    kindDirectory:
+      options.gatewayInstall?.kindDirectory ??
+      join(repositoryRoot, "deploy/kind"),
+    ...(options.gatewayInstall?.sourceRoot
+      ? { sourceRoot: options.gatewayInstall.sourceRoot }
+      : {}),
+    signIn: (gatewayUrl, email) => cloud.signIn(gatewayUrl, email),
+    signedInGateway: async () =>
+      (await cloud.account.signIn())?.gatewayUrl ?? null,
+    log: (message, fields) => cloudLog(message, fields),
+  });
+
   return {
     config,
     logger,
@@ -344,9 +465,23 @@ export async function createApplicationContext(
     deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),
     tmux,
+    hosts,
+    cloud,
+    cloudSessions: new CloudSessions({ repositories, agents, cloud }),
+    workspaceMoves,
+    gatewayInstall,
+    archive: new SessionArchive({
+      repositories,
+      agents,
+      workspaces,
+      workspaceMoves,
+      cloud,
+    }),
     // Watchers are kernel resources held outside the database, so they are
     // released here rather than left to the process exiting.
     close: () => {
+      gatewayInstall.close();
+      cloud.close();
       workspaceWatch.close();
       workspaceContent.close();
       repositories.close();

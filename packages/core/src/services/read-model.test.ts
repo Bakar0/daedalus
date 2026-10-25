@@ -174,6 +174,7 @@ describe("ReadModel", () => {
         teamId: null,
         teamHandle: null,
         spawnedBy: null,
+        hostId: null,
         autoRebirthPercent: null,
       });
       context.repositories.saveSessionAttention({

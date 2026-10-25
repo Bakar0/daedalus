@@ -1,0 +1,164 @@
+{{- $r := .Values.workspace.resources }}
+{{- $admin := .Values.admin }}
+{{- if $admin.enabled }}
+{{- $_ := required "admin.bootstrap.existingSecret must name a Secret with an admin-token key when admin.enabled is true" $admin.bootstrap.existingSecret }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "daedalus.gatewayName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # SQLite on a ReadWriteOnce volume: never run two gateways at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "daedalus.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "daedalus.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+      annotations:
+        checksum/tenant: {{ include (print $.Template.BasePath "/tenant-configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "daedalus.gatewayName" . }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.gateway.repository }}:{{ .Values.image.gateway.tag }}"
+          imagePullPolicy: {{ .Values.image.gateway.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.service.port }}
+            - name: runners
+              containerPort: {{ .Values.gateway.service.runnerPort }}
+            {{- if and $admin.enabled $admin.expose }}
+            - name: admin
+              containerPort: {{ $admin.port }}
+            {{- end }}
+          env:
+            - name: DAEDALUS_GATEWAY_PORT
+              value: {{ .Values.gateway.service.port | quote }}
+            - name: DAEDALUS_GATEWAY_RUNNER_PORT
+              value: {{ .Values.gateway.service.runnerPort | quote }}
+            - name: DAEDALUS_GATEWAY_MAX_WORKSPACES
+              value: {{ .Values.gateway.limits.workspacesPerUser | quote }}
+            - name: DAEDALUS_GATEWAY_DB
+              value: /data/gateway.sqlite
+            - name: DAEDALUS_GATEWAY_DEV_LOGIN
+              value: {{ .Values.gateway.devLogin | quote }}
+            - name: DAEDALUS_GATEWAY_PUBLIC_URL
+              value: {{ .Values.gateway.publicUrl | quote }}
+            - name: DAEDALUS_GATEWAY_INTERNAL_URL
+              value: {{ include "daedalus.internalUrl" . | quote }}
+            - name: DAEDALUS_GATEWAY_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DAEDALUS_GATEWAY_SERVICE_ACCOUNT
+              value: {{ include "daedalus.gatewayName" . | quote }}
+            - name: DAEDALUS_RUNNER_IMAGE
+              value: "{{ .Values.image.runner.repository }}:{{ .Values.image.runner.tag }}"
+            - name: DAEDALUS_RUNNER_IMAGE_PULL_POLICY
+              value: {{ .Values.image.runner.pullPolicy | quote }}
+            - name: DAEDALUS_WORKSPACE_STORAGE_CLASS
+              value: {{ .Values.workspace.storageClass | quote }}
+            - name: DAEDALUS_WORKSPACE_STORAGE_SIZE
+              value: {{ .Values.workspace.storageSize | quote }}
+            - name: DAEDALUS_WORKSPACE_STATE_SIZE
+              value: {{ .Values.workspace.stateSize | quote }}
+            - name: DAEDALUS_WORKSPACE_CACHE_SIZE
+              value: {{ .Values.workspace.cacheSize | quote }}
+            - name: DAEDALUS_WORKSPACE_TMP_SIZE
+              value: {{ .Values.workspace.tmpSize | quote }}
+            - name: DAEDALUS_WORKSPACE_EPHEMERAL_REQUEST
+              value: {{ .Values.workspace.ephemeralStorage.request | quote }}
+            - name: DAEDALUS_WORKSPACE_EPHEMERAL_LIMIT
+              value: {{ .Values.workspace.ephemeralStorage.limit | quote }}
+            - name: DAEDALUS_WORKSPACE_CPU_REQUEST
+              value: {{ $r.requests.cpu | quote }}
+            - name: DAEDALUS_WORKSPACE_MEMORY_REQUEST
+              value: {{ $r.requests.memory | quote }}
+            - name: DAEDALUS_WORKSPACE_CPU_LIMIT
+              value: {{ $r.limits.cpu | quote }}
+            - name: DAEDALUS_WORKSPACE_MEMORY_LIMIT
+              value: {{ $r.limits.memory | quote }}
+            - name: DAEDALUS_WORKSPACE_CPU_MAX
+              value: {{ .Values.workspace.maxResources.cpu | quote }}
+            - name: DAEDALUS_WORKSPACE_MEMORY_MAX
+              value: {{ .Values.workspace.maxResources.memory | quote }}
+            - name: DAEDALUS_WORKSPACE_RUNTIME_CLASS
+              value: {{ .Values.workspace.runtimeClassName | quote }}
+            - name: DAEDALUS_WORKSPACE_RUNTIME_HANDLER
+              value: {{ .Values.workspace.runtimeClassHandler | default "runsc" | quote }}
+            - name: DAEDALUS_WORKSPACE_IDLE_MINUTES
+              value: {{ .Values.workspace.idleMinutes | quote }}
+            - name: DAEDALUS_WORKSPACE_ASLEEP_DAYS
+              value: {{ .Values.workspace.retention.asleepDays | quote }}
+            - name: DAEDALUS_GATEWAY_COLLECT_SECONDS
+              value: {{ .Values.gateway.collectSeconds | quote }}
+            - name: DAEDALUS_TENANT_DIR
+              value: /etc/daedalus/tenant
+            {{- if $admin.enabled }}
+            - name: DAEDALUS_GATEWAY_ADMIN_PORT
+              value: {{ $admin.port | quote }}
+            - name: DAEDALUS_GATEWAY_ADMIN_HOST
+              value: {{ if $admin.expose }}"0.0.0.0"{{ else }}"127.0.0.1"{{ end }}
+            - name: DAEDALUS_GATEWAY_ADMIN_HOSTS
+              value: {{ join "," ($admin.hosts | default list) | quote }}
+            - name: DAEDALUS_GATEWAY_ADMIN_TRUSTED_PROXIES
+              value: {{ join "," ($admin.trustedProxies | default list) | quote }}
+            - name: DAEDALUS_GATEWAY_ADMIN_TOKEN_DIR
+              value: /etc/daedalus/admin
+            - name: DAEDALUS_GATEWAY_ADMIN_SESSION_HOURS
+              value: {{ $admin.sessionHours | quote }}
+            - name: DAEDALUS_GATEWAY_OPENCOST_URL
+              value: {{ $admin.opencostUrl | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+            - { name: tenant, mountPath: /etc/daedalus/tenant, readOnly: true }
+            {{- if $admin.enabled }}
+            - { name: admin-token, mountPath: /etc/daedalus/admin, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "daedalus.gatewayName" . }}-data
+        - name: tmp
+          emptyDir: {}
+        - name: tenant
+          configMap:
+            name: daedalus-tenant
+        {{- if $admin.enabled }}
+        - name: admin-token
+          secret:
+            secretName: {{ $admin.bootstrap.existingSecret }}
+            # Group-readable: fsGroup 1000 is the gateway's group.
+            defaultMode: 0440
+        {{- end }}

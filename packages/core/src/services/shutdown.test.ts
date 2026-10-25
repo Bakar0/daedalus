@@ -105,6 +105,7 @@ function addSession(
     teamId: null,
     teamHandle: null,
     spawnedBy: null,
+    hostId: null,
     autoRebirthPercent: null,
   };
   context.repositories.createAgent(session);

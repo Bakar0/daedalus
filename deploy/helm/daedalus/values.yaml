@@ -1,0 +1,86 @@
+image:
+  gateway: { repository: daedalus-gateway, tag: dev, pullPolicy: IfNotPresent }
+  runner: { repository: daedalus-runner, tag: dev, pullPolicy: IfNotPresent }
+gateway:
+  devLogin: false # POST /v1/dev/login; the kind values turn it on
+  publicUrl: "" # how Macs reach the gateway
+  storage: { size: 1Gi, storageClass: "" } # gateway SQLite PVC
+  service:
+    port: 8080 # public: Macs and users
+    runnerPort: 8081 # runner pods only; in-cluster Service and NetworkPolicy
+    type: ClusterIP
+    nodePort: null # only used when type is NodePort
+  limits:
+    workspacesPerUser: 5
+  collectSeconds: 3600 # how often the gateway deletes what retention says is unused
+# The admin page (artifacts/cloud-sessions/admin-design.md): users and their
+# workspaces, sleep, wake, delete and per-user limits. Off unless enabled.
+admin:
+  enabled: false
+  port: 8082
+  # false: the gateway binds the admin port to 127.0.0.1 in its pod, so the
+  # only way in is `kubectl port-forward deploy/<release>-gateway 8082`.
+  # true: it binds 0.0.0.0, and the chart adds a ClusterIP Service
+  # <release>-gateway-admin and lets in only the allowFrom peers.
+  expose: false
+  allowFrom: [] # NetworkPolicy peers (namespaceSelector, podSelector, ipBlock) for the admin port
+  hosts: [] # Host header values accepted besides localhost, such as an Ingress name
+  # Addresses of the TLS proxies (an Ingress controller's pod IPs) whose
+  # X-Forwarded-Proto: https is believed. Off loopback, sign-in needs https.
+  trustedProxies: []
+  bootstrap:
+    # A Secret you create with key admin-token (role admin) and optionally
+    # viewer-token (read only), each at least 32 characters. Required when
+    # enabled; the chart never makes the token.
+    existingSecret: ""
+  sessionHours: 8
+  opencostUrl: "" # shown as a link on the page when set
+workspace:
+  storageClass: ""
+  storageSize: 20Gi
+  stateSize: 1Gi # PVC ws-<id>-state: runner identity and event queue
+  cacheSize: 2Gi # sizeLimit of the session /cache emptyDir
+  tmpSize: 1Gi # sizeLimit of the session /tmp emptyDir
+  # Ephemeral storage of the session container; the node's disk is shared.
+  ephemeralStorage: { request: 1Gi, limit: 4Gi }
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "2", memory: 4Gi }
+  # The most a user may ask for when creating a workspace.
+  maxResources: { cpu: "4", memory: 8Gi }
+  # Workspace pods run sandboxed in gVisor: the chart creates this RuntimeClass
+  # with the handler below and the install fails unless a node offers it.
+  # "" runs them on the node's default runtime, sharing the host kernel with
+  # everything else on the node: unsafe on a shared cluster.
+  runtimeClassName: gvisor
+  runtimeClassHandler: runsc
+  # scheduling of the RuntimeClass the chart creates ({ nodeSelector, tolerations }).
+  # Kubernetes adds it to every pod that names the class, so it keeps workspaces
+  # on the nodes that have gVisor. Ignored when the RuntimeClass already exists.
+  runtimeClassScheduling: {}
+  idleMinutes: 15 # runner asks the gateway to sleep it after this long with nothing working
+  # The gateway deletes a workspace (pod, volumes, token, record) asleep this
+  # long, Mac or not; its Mac then falls back to the copy it kept. 0 never.
+  retention: { asleepDays: 30 }
+tenant:
+  # Each workspace has 2 PVCs (data and state) and a runner container that
+  # requests 50m CPU, 64Mi memory and 64Mi ephemeral storage. Size the quota for
+  # gateway.limits.workspacesPerUser workspaces: 5 x (20Gi + 1Gi). The PVC count
+  # is not set here: the chart makes it 2 x workspacesPerUser.
+  quota:
+    pods: "10"
+    requests.storage: 110Gi
+    requests.ephemeral-storage: 20Gi
+    requests.cpu: "8"
+    requests.memory: 16Gi
+  # Egress to these CIDRs is blocked for workspace pods, so a workspace cannot
+  # reach other namespaces' pods, nodes or the cloud metadata service. Set it
+  # to cover your cluster's pod, service and node ranges.
+  # The chart renders IPv4 blocks only; the policy has no IPv6 egress rule, so
+  # fd00:ec2::254 is already unreachable.
+  blockedEgressCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
+    - 169.254.169.254/32 # cloud instance metadata, also inside the /16

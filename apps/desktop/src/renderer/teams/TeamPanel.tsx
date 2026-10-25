@@ -212,6 +212,9 @@ export function TeamPanel({
               >
                 <span className="team-message-head">
                   <strong>{message.author}</strong>
+                  {message.cloud && (
+                    <span className="team-message-cloud">{message.cloud}</span>
+                  )}
                   {message.tags.length > 0 && (
                     <span>
                       {" → "}

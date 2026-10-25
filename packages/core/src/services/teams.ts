@@ -10,6 +10,7 @@ import type { SqliteRepositories } from "../repositories";
 import { TEAM_FILE, TEAM_SKILL, type AbilityService } from "./abilities";
 import type { ActivityService } from "./activity";
 import type { AgentService } from "./agents";
+import { cloudAuthorMark, indentBody, isCloudSession } from "./cloud-mark";
 import { sessionBaseName } from "./providers";
 import type { TeamTransport } from "./team-transport";
 
@@ -104,6 +105,14 @@ export function parseTags(body: string): string[] {
  * pushed into it through the provider's own inbox right away, from whichever
  * process posted them, so nothing waits on the desktop app.
  */
+/**
+ * One message as a session reads it. Every body line after the first is
+ * indented, so only a header starts a line with `[team ` (N-1).
+ */
+export function teamBlock(team: string, author: string, body: string): string {
+  return `[team "${team}"] ${author}: ${indentBody(body)}`;
+}
+
 export class TeamService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -199,6 +208,34 @@ export class TeamService {
           role: "member" as const,
         })),
     ];
+  }
+
+  /**
+   * The cloud mark of each author that is a session on a cloud host,
+   * `[cloud final]`, so its text is never taken for a local session's (N-1).
+   */
+  cloudMarks(team: Team): (author: string) => string | undefined {
+    const sessions = new Map<string, AgentSession>([
+      [LEAD_HANDLE, team.lead],
+      ...this.members(team.id).flatMap((member) =>
+        member.teamHandle ? [[member.teamHandle, member] as const] : [],
+      ),
+    ]);
+    return (author) => {
+      const session = sessions.get(author);
+      if (!session || !isCloudSession(session)) return undefined;
+      const workspace = this.repositories.findWorkspace(session.workspaceId);
+      return cloudAuthorMark(workspace?.name);
+    };
+  }
+
+  /** How authors are named where their messages are shown: `api [cloud final]`. */
+  authorLabels(team: Team): (author: string) => string {
+    const mark = this.cloudMarks(team);
+    return (author) => {
+      const cloud = mark(author);
+      return cloud ? `${author} ${cloud}` : author;
+    };
   }
 
   /** A handle no other member of the team has: `api`, `api-2`, `api-3`. */
@@ -503,8 +540,12 @@ export class TeamService {
     };
     if (!claim.pending.length)
       return { ...base, delivered: false, error: null };
-    if ("skipped" in claim)
+    if ("skipped" in claim) {
+      // Asleep with its cloud workspace: woken and resumed, after which the
+      // session running again delivers these.
+      void this.agents.wakeIfAsleep(reader.session).catch(() => undefined);
       return { ...base, delivered: false, error: claim.cursor.lastError };
+    }
     const claimed = claim.pending.at(-1)!.id;
     try {
       await this.transport.deliver({
@@ -542,8 +583,9 @@ export class TeamService {
     reader: TeamReader,
     pending: TeamMessage[],
   ): string {
-    const blocks = pending.map(
-      (message) => `[team "${team.name}"] ${message.author}: ${message.body}`,
+    const label = this.authorLabels(team);
+    const blocks = pending.map((message) =>
+      teamBlock(team.name, label(message.author), message.body),
     );
     const delivered = new Set(pending.map((message) => message.id));
     const cursor = this.repositories.teams.cursor(team.id, reader.handle);
@@ -565,7 +607,7 @@ export class TeamService {
   private deliveryFrom(team: Team, pending: TeamMessage[]): string {
     const authors = [...new Set(pending.map((message) => message.author))];
     return authors.length === 1
-      ? `[team "${team.name}"] ${authors[0]}`
+      ? `[team "${team.name}"] ${this.authorLabels(team)(authors[0]!)}`
       : `[team "${team.name}"]`;
   }
 

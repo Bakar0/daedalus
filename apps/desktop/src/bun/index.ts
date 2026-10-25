@@ -44,6 +44,7 @@ import {
 } from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
 import { acceptFirstMouse } from "./first-mouse";
+import { daedalusCheckout } from "./checkout";
 import { installCliShim } from "./cli-shim";
 import { QuitController } from "./quit";
 import { UpdateController } from "./updates";
@@ -52,6 +53,7 @@ import { createDesktopRequestHandlers } from "./rpc";
 import {
   authorizeTerminalRequest,
   isTyping,
+  openedBridge,
   TerminalConnection,
 } from "./terminal";
 
@@ -110,8 +112,14 @@ let windowReady = false;
 // repository finishing in the background during startup.
 let announceRemote = (): void => {};
 
+const checkout = daedalusCheckout(PATHS.RESOURCES_FOLDER);
 const context = await createApplicationContext({
   migrationsDirectory: resolve(PATHS.RESOURCES_FOLDER, "app/migrations"),
+  gatewayInstall: {
+    chartDirectory: resolve(PATHS.RESOURCES_FOLDER, "app/deploy/helm/daedalus"),
+    kindDirectory: resolve(PATHS.RESOURCES_FOLDER, "app/deploy/kind"),
+    ...(checkout ? { sourceRoot: checkout } : {}),
+  },
   canDrawToasts: () => windowReady,
   // Electrobun's own notifier is attributed to this bundle and needs nothing
   // installed, so it beats the AppleScript fallback whenever the app is up.
@@ -136,8 +144,18 @@ const context = await createApplicationContext({
 //
 // Each agent comes back idle at its prompt with its conversation loaded.
 // Nothing is sent to it, so no work resumes on its own.
+// A workspace in the cloud whose copy this account does not link comes back
+// to its backup first, so its sessions are this Mac's. No network: a link
+// that fails must not keep it stranded.
+await context.cloud.fallBackUnlinked().catch((error: unknown) =>
+  context.logger.write("error", "cloud_fallback_failed", {
+    message: error instanceof Error ? error.message : String(error),
+  }),
+);
+// This Mac's sessions only: a cloud one needs the link, which is not held
+// yet, and the start must not wait on a gateway. They come back below.
 const revivedSessions = await context.agents
-  .reviveLostSessions({ automatic: true })
+  .reviveLostSessions({ automatic: true, where: "mac" })
   .catch((error: unknown) => {
     void context.logger.write("error", "session_revive_sweep_failed", {
       message: error instanceof Error ? error.message : String(error),
@@ -241,10 +259,12 @@ const server = Bun.serve<SocketData>({
   websocket: {
     async open(socket) {
       try {
-        const target =
+        const agent =
           socket.data.targetKind === "agent"
             ? await context.agents.get(socket.data.targetId)
-            : await context.terminals.get(socket.data.targetId);
+            : undefined;
+        const target =
+          agent ?? (await context.terminals.get(socket.data.targetId));
         if (target.status !== "running" && target.status !== "starting") {
           const status: TerminalServerMessage = {
             type: "status",
@@ -255,6 +275,16 @@ const server = Bun.serve<SocketData>({
           socket.close();
           return;
         }
+        const host = agent
+          ? context.agents.sessionHost(agent)
+          : context.hosts.local;
+        const createBridge = await openedBridge((onOutput) =>
+          host.openTerminal(
+            target.tmuxSession,
+            socket.data.initialSize ?? { cols: 80, rows: 24 },
+            onOutput,
+          ),
+        );
         const connection = new TerminalConnection({
           agentId: target.id,
           socket,
@@ -263,12 +293,7 @@ const server = Bun.serve<SocketData>({
           )
             ? "reconnected"
             : "live",
-          createBridge: (onOutput) =>
-            context.tmux.openPty(
-              target.tmuxSession,
-              socket.data.initialSize,
-              onOutput,
-            ),
+          createBridge,
           onInput: (data) => {
             // A real keystroke holds Daedalus's own typing into this
             // session for a while, so a routine never lands in a draft.
@@ -477,11 +502,43 @@ const remote = new RemoteHost({
   log: (event, fields) => void context.logger.write("info", event, fields),
 });
 announceRemote = () => remote.announce();
-void remote.start().catch((error) =>
+const remoteStarted = remote.start().catch((error) =>
   context.logger.write("error", "remote_start_failed", {
     message: error instanceof Error ? error.message : String(error),
   }),
 );
+
+// Cloud workspaces: the app holds this Mac's one link to the gateway, and a
+// `daedal` command reaches the runners through it. After the phone's store
+// is open, so both use the one device identity rather than racing to make it.
+// A cloud session asking for a sign-in page shows on its card at once.
+context.cloud.signIns.onChange(() => announce("external"));
+context.workspaceMoves.onChange(() => announce("external"));
+context.gatewayInstall.onChange(() => announce("external"));
+void context.gatewayInstall.resume();
+context.cloud.onPreparingChange(() => announce("external"));
+void remoteStarted
+  .then(() => context.cloud.hold())
+  .then(async () => {
+    // Cloud sessions lost while the app was away, now that it holds the
+    // link: a runner that is not linked is skipped at once.
+    const revived = await context.agents.reviveLostSessions({
+      automatic: true,
+      where: "cloud",
+    });
+    if (revived.revived.length || revived.skipped.length)
+      await context.logger.write("info", "cloud_session_revive_sweep", {
+        revived: revived.revived.length,
+        skipped: revived.skipped,
+      });
+    // Copies no workspace lives in count against the account's limit.
+    await context.cloud.cleanOrphans();
+  })
+  .catch((error) =>
+    context.logger.write("error", "cloud_link_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  );
 
 const createRpc = (role: DesktopWindowRole = "main") =>
   BrowserView.defineRPC<DesktopRpcSchema>({
@@ -494,6 +551,10 @@ const createRpc = (role: DesktopWindowRole = "main") =>
         openExternal: Utils.openExternal,
         openPath: Utils.openPath,
         revealPath: Utils.showItemInFolder,
+        awsGuidePath: resolve(
+          PATHS.RESOURCES_FOLDER,
+          "app/deploy/eks/README.md",
+        ),
         terminalEndpoint,
         quit: {
           dialogShown: () => quitController.dialogShown(),

@@ -1,0 +1,7 @@
+**/node_modules
+**/dist
+build
+.git
+apps/desktop
+apps/phone
+apps/relay/.wrangler

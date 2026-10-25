@@ -20,10 +20,12 @@ import {
   DEFAULT_AUTO_REBIRTH_PERCENT,
   type AppUpdateDto,
   type DesktopSettingsDto,
+  type GatewayInstallDto,
   type IntegratedTerminalDto,
   type RpcResult,
 } from "@daedalus/protocol";
 import { AccountsPanel } from "./AccountsPanel";
+import { CloudPanel } from "./CloudPanel";
 import type { DesktopClient } from "./client-types";
 import { AccountPanel, showsPro, useRemoteState } from "./ProPlan";
 import { RemotePanel } from "./RemotePanel";
@@ -39,6 +41,7 @@ export const SETTINGS_SECTIONS = [
   { id: "sessions", label: "Sessions" },
   { id: "notifications", label: "Notifications" },
   { id: "remote", label: "Remote" },
+  { id: "cloud", label: "Cloud" },
   { id: "about", label: "About" },
 ] as const;
 
@@ -159,6 +162,7 @@ export function SettingsModal({
   renderTerminal,
   perform,
   updates,
+  gatewayInstall,
 }: {
   busy: boolean;
   client: DesktopClient;
@@ -173,6 +177,8 @@ export function SettingsModal({
   settings: DesktopSettingsDto;
   theme: AppTheme;
   updates?: SettingsUpdateControls;
+  /** A gateway install in progress, for Settings › Cloud. */
+  gatewayInstall?: GatewayInstallDto;
 }) {
   const updateAvailable = updates?.update?.state === "available";
   // Remote is phone access, a Pro feature: hidden unless the account has Pro
@@ -339,6 +345,17 @@ export function SettingsModal({
               busy={busy}
               client={client}
               onOpenAccount={() => onSection("account")}
+              perform={perform}
+            />
+          </section>
+        ) : undefined}
+
+        {section === "cloud" ? (
+          <section className="settings-section">
+            <CloudPanel
+              busy={busy}
+              client={client}
+              install={gatewayInstall}
               perform={perform}
             />
           </section>

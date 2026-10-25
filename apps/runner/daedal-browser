@@ -1,0 +1,7 @@
+#!/bin/sh
+# BROWSER for sessions in a workspace pod (RUNNER_PATHS.browser). Claude Code
+# and the AWS CLI run it with the sign-in URL as the only argument. The Mac
+# checks the URL and offers the user a button to open it there. Standard
+# input is closed so the shim never waits on a pipe the tool left open.
+[ $# -eq 1 ] || { echo "usage: daedal-browser <url>" >&2; exit 2; }
+exec daedal open-url "$1" </dev/null

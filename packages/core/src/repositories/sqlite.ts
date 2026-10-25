@@ -25,9 +25,25 @@ import type {
   WorkspaceRepositoryAccess,
 } from "../domain";
 import { accountModelKey, derivedDefaultModel } from "../domain";
+import { DaedalusError } from "../errors";
 import { AbilityRepository, RoutineRepository } from "./abilities";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
+
+/** A gateway account: the gateway's origin and the user's id on it. */
+export interface CloudOwner {
+  gatewayUrl: string;
+  userId: string;
+}
+
+/**
+ * Where a workspace lives, and what the user is told about the last change
+ * of place until they dismiss it.
+ */
+export interface WorkspacePlace {
+  place: "mac" | "cloud";
+  notice: string | null;
+}
 
 interface WorkspaceRow {
   id: string;
@@ -46,7 +62,16 @@ interface WorkspaceRow {
   account_models: string;
   default_claude_account: string | null;
   default_codex_account: string | null;
+  /** From `workspace_places`, joined. */
+  place: string | null;
+  place_notice: string | null;
 }
+
+/** A workspace with where it lives. */
+const WORKSPACES = `SELECT workspaces.*, workspace_places.place AS place,
+  workspace_places.notice AS place_notice
+  FROM workspaces LEFT JOIN workspace_places
+  ON workspace_places.workspace_id = workspaces.id`;
 
 interface TaskIdRow {
   task_number: number;
@@ -95,6 +120,7 @@ interface AgentRow {
   team_id: string | null;
   team_handle: string | null;
   spawned_by: string | null;
+  host_id: string | null;
 }
 
 interface IntegratedTerminalRow {
@@ -186,7 +212,12 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => {
     defaultClaudeAccount: row.default_claude_account,
     defaultCodexAccount: row.default_codex_account,
   };
-  return { ...workspace, defaultModel: derivedDefaultModel(workspace) };
+  return {
+    ...workspace,
+    defaultModel: derivedDefaultModel(workspace),
+    ...(row.place === "cloud" ? { place: "cloud" as const } : {}),
+    ...(row.place_notice ? { cloudNotice: row.place_notice } : {}),
+  };
 };
 
 const taskFromRow = (row: TaskRow): Task => ({
@@ -232,6 +263,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   teamId: row.team_id,
   teamHandle: row.team_handle,
   spawnedBy: row.spawned_by,
+  hostId: row.host_id,
 });
 
 const integratedTerminalFromRow = (
@@ -464,7 +496,7 @@ export class SqliteRepositories {
 
   listWorkspaces(): Workspace[] {
     return this.database
-      .query<WorkspaceRow, []>("SELECT * FROM workspaces ORDER BY position, id")
+      .query<WorkspaceRow, []>(`${WORKSPACES} ORDER BY position, id`)
       .all()
       .map(workspaceFromRow);
   }
@@ -495,13 +527,13 @@ export class SqliteRepositories {
 
   findWorkspace(reference: string): Workspace | undefined {
     const byId = this.database
-      .query<WorkspaceRow, [string]>("SELECT * FROM workspaces WHERE id = ?")
+      .query<WorkspaceRow, [string]>(`${WORKSPACES} WHERE workspaces.id = ?`)
       .get(reference);
     const row =
       byId ??
       this.database
         .query<WorkspaceRow, [string]>(
-          "SELECT * FROM workspaces WHERE slug = ?",
+          `${WORKSPACES} WHERE workspaces.slug = ?`,
         )
         .get(reference);
     return row ? workspaceFromRow(row) : undefined;
@@ -821,7 +853,7 @@ export class SqliteRepositories {
     const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
     return this.database
       .query<TaskRow, string[]>(
-        `SELECT * FROM tasks${where} ORDER BY created_at, id`,
+        `SELECT * FROM tasks${where} ORDER BY created_at, number, id`,
       )
       .all(...values)
       .map(taskFromRow);
@@ -873,8 +905,8 @@ export class SqliteRepositories {
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
           resume_on_start, handoff_requested_at, position, pinned_at, color,
-          account, team_id, team_handle, spawned_by, auto_rebirth_percent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          account, team_id, team_handle, spawned_by, auto_rebirth_percent, host_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -905,6 +937,7 @@ export class SqliteRepositories {
         agent.teamHandle,
         agent.spawnedBy,
         autoRebirthColumn(agent.autoRebirthPercent),
+        agent.hostId,
       );
   }
 
@@ -1045,8 +1078,200 @@ export class SqliteRepositories {
       );
   }
 
+  /** Where a session runs, changed only by a session move. */
+  setAgentPlace(
+    id: string,
+    place: { hostId: string | null; workingDirectory: string },
+  ): void {
+    this.database
+      .query(
+        "UPDATE agent_sessions SET host_id = ?, working_directory = ? WHERE id = ?",
+      )
+      .run(place.hostId, place.workingDirectory, id);
+  }
+
   deleteAgent(id: string): void {
     this.database.query("DELETE FROM agent_sessions WHERE id = ?").run(id);
+  }
+
+  /** Where a workspace lives; `mac` when nothing moved it. */
+  workspacePlace(workspaceId: string): WorkspacePlace {
+    const row = this.database
+      .query<{ place: string; notice: string | null }, [string]>(
+        "SELECT place, notice FROM workspace_places WHERE workspace_id = ?",
+      )
+      .get(workspaceId);
+    return {
+      place: row?.place === "cloud" ? "cloud" : "mac",
+      notice: row?.notice ?? null,
+    };
+  }
+
+  /** The workspaces that live in the cloud now. */
+  cloudPlacedWorkspaces(): string[] {
+    return this.database
+      .query<{ workspace_id: string }, []>(
+        "SELECT workspace_id FROM workspace_places WHERE place = 'cloud'",
+      )
+      .all()
+      .map((row) => row.workspace_id);
+  }
+
+  /**
+   * Moves a workspace and each of its sessions to their new places in one
+   * transaction: a finished workspace move, or the fallback to the backup.
+   */
+  setWorkspacePlace(
+    workspaceId: string,
+    place: WorkspacePlace,
+    sessions: {
+      id: string;
+      hostId: string | null;
+      workingDirectory: string;
+    }[] = [],
+  ): void {
+    this.transaction(() => {
+      this.database
+        .query(
+          `INSERT INTO workspace_places (workspace_id, place, notice)
+           VALUES (?, ?, ?)
+           ON CONFLICT (workspace_id) DO UPDATE SET place = excluded.place,
+             notice = excluded.notice`,
+        )
+        .run(workspaceId, place.place, place.notice);
+      for (const session of sessions) this.setAgentPlace(session.id, session);
+    });
+  }
+
+  /** Clears the workspace's notice, leaving its place. */
+  dismissWorkspaceNotice(workspaceId: string): void {
+    this.database
+      .query("UPDATE workspace_places SET notice = NULL WHERE workspace_id = ?")
+      .run(workspaceId);
+  }
+
+  /** The gateway account this Mac is signed in to, as cloud links name it. */
+  cloudOwner(): CloudOwner | undefined {
+    const row = this.database
+      .query<{ gateway_url: string; user_id: string }, []>(
+        "SELECT gateway_url, user_id FROM cloud_owner WHERE id = 1",
+      )
+      .get();
+    return row
+      ? { gatewayUrl: row.gateway_url, userId: row.user_id }
+      : undefined;
+  }
+
+  /** Sets the signed-in account, or none; only its links are visible. */
+  setCloudOwner(owner: CloudOwner | undefined): void {
+    if (!owner) {
+      this.database.query("DELETE FROM cloud_owner").run();
+      return;
+    }
+    this.database
+      .query(
+        `INSERT INTO cloud_owner (id, gateway_url, user_id) VALUES (1, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET gateway_url = excluded.gateway_url,
+           user_id = excluded.user_id`,
+      )
+      .run(owner.gatewayUrl, owner.userId);
+  }
+
+  /** Gives the links made before links had an account to the current one. */
+  claimUnownedCloudLinks(): void {
+    const owner = this.cloudOwner();
+    if (!owner) return;
+    this.database
+      .query(
+        `UPDATE OR IGNORE cloud_workspace_links SET gateway_url = ?, user_id = ?
+         WHERE gateway_url = '' AND user_id = ''`,
+      )
+      .run(owner.gatewayUrl, owner.userId);
+  }
+
+  /**
+   * The cloud id of a local workspace's twin on the signed-in account's
+   * gateway, if it has one. Another account's links do not count.
+   */
+  cloudWorkspaceId(workspaceId: string): string | undefined {
+    const owner = this.cloudOwner();
+    if (!owner) return undefined;
+    return (
+      this.database
+        .query<{ cloud_id: string }, [string, string, string]>(
+          `SELECT cloud_id FROM cloud_workspace_links
+           WHERE workspace_id = ? AND gateway_url = ? AND user_id = ?`,
+        )
+        .get(workspaceId, owner.gatewayUrl, owner.userId)?.cloud_id ?? undefined
+    );
+  }
+
+  /** The local workspace a cloud workspace of the signed-in account was made from. */
+  workspaceForCloud(cloudId: string): string | undefined {
+    const owner = this.cloudOwner();
+    if (!owner) return undefined;
+    return (
+      this.database
+        .query<{ workspace_id: string }, [string, string, string]>(
+          `SELECT workspace_id FROM cloud_workspace_links
+           WHERE cloud_id = ? AND gateway_url = ? AND user_id = ?`,
+        )
+        .get(cloudId, owner.gatewayUrl, owner.userId)?.workspace_id ?? undefined
+    );
+  }
+
+  /** The cloud ids this Mac links for the signed-in account. */
+  cloudWorkspaceLinks(): string[] {
+    const owner = this.cloudOwner();
+    if (!owner) return [];
+    return this.database
+      .query<{ cloud_id: string }, [string, string]>(
+        `SELECT cloud_id FROM cloud_workspace_links
+         WHERE gateway_url = ? AND user_id = ?`,
+      )
+      .all(owner.gatewayUrl, owner.userId)
+      .map((row) => row.cloud_id);
+  }
+
+  /** Links a local workspace to a cloud id of the signed-in account. */
+  linkCloudWorkspace(workspaceId: string, cloudId: string): void {
+    const owner = this.cloudOwner();
+    if (!owner)
+      throw new DaedalusError("DEPENDENCY", "This Mac is not signed in");
+    this.database
+      .query(
+        `INSERT INTO cloud_workspace_links
+           (workspace_id, cloud_id, gateway_url, user_id) VALUES (?, ?, ?, ?)`,
+      )
+      .run(workspaceId, cloudId, owner.gatewayUrl, owner.userId);
+  }
+
+  unlinkCloudWorkspace(cloudId: string): void {
+    this.database
+      .query("DELETE FROM cloud_workspace_links WHERE cloud_id = ?")
+      .run(cloudId);
+    this.database
+      .query("DELETE FROM cloud_sso_hosts WHERE cloud_id = ?")
+      .run(cloudId);
+  }
+
+  /** Records an AWS access portal host copied into a cloud workspace. */
+  addCloudSsoHost(cloudId: string, host: string): void {
+    this.database
+      .query(
+        "INSERT OR IGNORE INTO cloud_sso_hosts (cloud_id, host) VALUES (?, ?)",
+      )
+      .run(cloudId, host.toLowerCase());
+  }
+
+  /** The AWS access portal hosts copied into a cloud workspace. */
+  cloudSsoHosts(cloudId: string): string[] {
+    return this.database
+      .query<{ host: string }, [string]>(
+        "SELECT host FROM cloud_sso_hosts WHERE cloud_id = ? ORDER BY host",
+      )
+      .all(cloudId)
+      .map((row) => row.host);
   }
 
   createIntegratedTerminal(terminal: IntegratedTerminal): void {

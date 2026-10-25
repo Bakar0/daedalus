@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { mkdir, rm } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
+import { readActivityRecord } from "@daedalus/core";
 import { runCommand } from "@daedalus/platform";
 import {
   NO_LOGIN_SHELL,
@@ -782,6 +783,41 @@ describe("daedal CLI contract", () => {
     });
   });
 
+  test("a hook event from a cloud session is stored with the cloud mark (N-5)", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const sessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+      const payload = JSON.stringify({
+        session_id: "claude-1",
+        hook_event_name: "Notification",
+        notification_type: "permission_prompt",
+        message: "Claude needs your permission to use Bash",
+      });
+      const local = await cli(
+        home,
+        ["agent", "event", "Notification"],
+        { DAEDALUS_SESSION_ID: sessionId },
+        payload,
+      );
+      expect(local.exitCode).toBe(0);
+      expect((await readActivityRecord(home, sessionId))?.detail).toBe(
+        "Claude needs your permission to use Bash",
+      );
+      await cli(
+        home,
+        ["agent", "event", "Notification"],
+        {
+          DAEDALUS_SESSION_ID: sessionId,
+          DAEDALUS_CLOUD_CALLER: "ws:cloud-1",
+          DAEDALUS_CLOUD_MARK: "[from cloud workspace final]",
+        },
+        payload,
+      );
+      expect((await readActivityRecord(home, sessionId))?.detail).toBe(
+        "[from cloud workspace final] Claude needs your permission to use Bash",
+      );
+    });
+  });
+
   test("rejects an unknown notification level", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const result = await cli(home, ["notify", "hi", "--level", "shout"], {
@@ -1265,4 +1301,114 @@ describe("daedal secret and exec", () => {
       expect(empty.stderr).toContain("cannot be empty");
     });
   }, 30_000);
+});
+
+describe("cloud commands", () => {
+  test("sign in, create, wake through a CONFLICT, sleep and delete", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const seen: string[] = [];
+      let wakes = 0;
+      let created: Record<string, unknown> | undefined;
+      const workspace = (status: string) => ({
+        workspaceId: created?.workspaceId,
+        name: created?.name,
+        status,
+        reason: null,
+        runnerOnline: false,
+        runnerKey: null,
+        createdAt: "2026-10-20T00:00:00.000Z",
+      });
+      const gateway = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          const { pathname } = new URL(request.url);
+          seen.push(
+            `${request.method} ${pathname} ${request.headers.get("authorization") ?? "-"}`,
+          );
+          if (pathname === "/v1/dev/login")
+            return Response.json({
+              user: { id: "alice", email: "alice@example.com" },
+              token: "tok",
+            });
+          if (pathname === "/v1/me")
+            return Response.json({ id: "alice", email: "alice@example.com" });
+          if (pathname === "/v1/workspaces" && request.method === "POST") {
+            created = (await request.json()) as Record<string, unknown>;
+            return Response.json(workspace("starting"), { status: 201 });
+          }
+          if (pathname.endsWith("/wake") && wakes++ === 0)
+            return Response.json(
+              { error: { code: "CONFLICT", message: "Still stopping" } },
+              { status: 409 },
+            );
+          if (pathname.endsWith("/wake"))
+            return Response.json(workspace("starting"));
+          if (pathname.endsWith("/sleep"))
+            return Response.json(workspace("sleeping"));
+          if (request.method === "DELETE")
+            return new Response(null, { status: 204 });
+          return Response.json(
+            { error: { code: "NOT_FOUND", message: "No such workspace" } },
+            { status: 404 },
+          );
+        },
+      });
+      const env = { DAEDALUS_REMOTE_VAULT: "file" };
+      try {
+        const notSignedIn = await cli(home, ["cloud", "list"], env);
+        expect(notSignedIn.exitCode).not.toBe(0);
+        expect(notSignedIn.stderr).toContain("daedal cloud login");
+        expect(
+          (
+            await cli(
+              home,
+              [
+                "cloud",
+                "login",
+                `http://127.0.0.1:${gateway.port}`,
+                "--email",
+                "alice@example.com",
+              ],
+              env,
+            )
+          ).stdout,
+        ).toContain("Signed in as alice@example.com");
+        await cli(home, ["workspace", "create", "Remote", "--json"]);
+        const notCloud = await cli(home, ["cloud", "get", "remote"], env);
+        expect(notCloud.stderr).toContain("has no cloud workspace");
+        const made = await cli(home, ["cloud", "create", "remote"], env);
+        expect(made.exitCode).toBe(0);
+        expect(created).toMatchObject({ name: "Remote" });
+        expect(String(created?.workspaceId)).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        );
+        expect(typeof created?.macKey).toBe("string");
+        const woke = await cli(home, ["cloud", "wake", "remote"], env);
+        expect(woke.exitCode).toBe(0);
+        expect(wakes).toBe(2);
+        expect(
+          (await cli(home, ["cloud", "sleep", "remote"], env)).stdout,
+        ).toContain("sleeping");
+        expect(
+          (await cli(home, ["cloud", "delete", "remote"], env)).exitCode,
+        ).toBe(2);
+        expect(
+          (await cli(home, ["cloud", "delete", "remote", "--force"], env))
+            .exitCode,
+        ).toBe(0);
+        expect(seen.filter((line) => !line.includes("/dev/login"))).toEqual(
+          expect.arrayContaining([
+            `POST /v1/workspaces Bearer tok`,
+            `DELETE /v1/workspaces/${created?.workspaceId} Bearer tok`,
+          ]),
+        );
+        // The link to the local workspace goes with the cloud one.
+        expect(
+          (await cli(home, ["cloud", "get", "remote"], env)).stderr,
+        ).toContain("has no cloud workspace");
+      } finally {
+        gateway.stop(true);
+      }
+    });
+  });
 });

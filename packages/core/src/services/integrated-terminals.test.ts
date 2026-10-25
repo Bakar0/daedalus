@@ -50,6 +50,33 @@ class FakeTmux implements TmuxClient {
 }
 
 describe("IntegratedTerminalService", () => {
+  test("refuses a terminal in a workspace that lives in the cloud", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux,
+      });
+      try {
+        const workspace = await context.workspaces.create({ name: "Pods" });
+        context.repositories.setWorkspacePlace(workspace.id, {
+          place: "cloud",
+          notice: null,
+        });
+        await expect(
+          context.terminals.create({ workspace: workspace.id }),
+        ).rejects.toMatchObject({
+          code: "CONFLICT",
+          message:
+            "This workspace runs in the cloud; move it home to this Mac first",
+        });
+        expect(context.repositories.listIntegratedTerminals()).toEqual([]);
+      } finally {
+        context.close();
+      }
+    });
+  });
+
   test("opens home and workspace terminals with persistent distinct tabs", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const tmux = new FakeTmux();

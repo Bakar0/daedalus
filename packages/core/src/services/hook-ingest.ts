@@ -13,6 +13,7 @@ import {
   writeActivityRecord,
   type StoredActivityRecord,
 } from "./activity-store";
+import { markCloudObservation } from "./cloud-mark";
 import type { ApplicationContext } from "./context";
 import { recordSessionCost } from "./cost-ledger";
 import {
@@ -47,6 +48,11 @@ export interface HookIngestInput {
   readPayload: () => Promise<string>;
   /** `DAEDALUS_SESSION_DIRECTORY`, which tells a Codex hook it is ours. */
   sessionDirectory?: string | undefined;
+  /**
+   * Set when the hook came from a cloud session, through the Mac's answer to
+   * its `daedal` call: the mark the text it shows the user goes under.
+   */
+  cloudMark?: string | undefined;
   /** Opens the control plane. Called at most once, and only when needed. */
   openContext: () => Promise<ApplicationContext>;
 }
@@ -106,7 +112,7 @@ export async function ingestHook(input: HookIngestInput): Promise<void> {
       (await context()
         .then((opened) => Boolean(opened.abilities.held(sessionId, "routines")))
         .catch(() => false));
-    const observation =
+    const observed =
       provider === "codex"
         ? observeCodexHook(input.event, payload, { routines })
         : (observeClaudeHook(input.event, payload, {
@@ -116,9 +122,21 @@ export async function ingestHook(input: HookIngestInput): Promise<void> {
             ),
             routines,
           }) ?? observeCodexHook(input.event, payload, { routines }));
-    if (!observation) return;
+    if (!observed) return;
+    // From a cloud session, what it says is marked as the cloud's.
+    const observation = input.cloudMark
+      ? markCloudObservation(input.event, observed, input.cloudMark)
+      : observed;
     const providerSessionId =
       typeof payload.session_id === "string" ? payload.session_id : undefined;
+    // A cloud Codex names its thread only here: its rollouts are in the pod,
+    // where this Mac cannot look for them.
+    if (input.cloudMark && providerSessionId)
+      await context()
+        .then((opened) =>
+          opened.agents.bindCloudCodexThread(sessionId, providerSessionId),
+        )
+        .catch(() => undefined);
     await applyObservation({
       home,
       sessionId,

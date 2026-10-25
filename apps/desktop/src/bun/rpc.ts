@@ -6,6 +6,9 @@ import {
   accountDirectory,
   autoRebirthPercent,
   buildChannel,
+  cloudHostWorkspace,
+  cloudMcpChoices,
+  setCloudMcpServer,
   DaedalusError,
   INSTALL_COMMANDS,
   normalizeError,
@@ -15,6 +18,7 @@ import {
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
+  type CloudOverview,
   type IntegratedTerminal,
   type PendingNotification,
   type PresenceState,
@@ -42,6 +46,8 @@ import type {
   AppUpdateDto,
   QuitChoice,
   AgentSessionDto,
+  CloudMcpServersDto,
+  CloudStateDto,
   DesktopRpcSchema,
   DesktopSnapshotDto,
   DesktopWindowRole,
@@ -128,6 +134,37 @@ const taskDto = (task: Task): TaskDto => ({ ...task });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
   args: [...agent.args],
+});
+/** Name and host only: a server's URL can hold a key. */
+const mcpDto = (
+  choices: Awaited<ReturnType<typeof cloudMcpChoices>>,
+): CloudMcpServersDto => ({
+  servers: choices.servers.map((server) => ({
+    name: server.name,
+    host: server.host,
+    on: server.on,
+  })),
+  leftOut: choices.leftOut.map((one) => ({
+    name: one.name,
+    reason: one.reason,
+  })),
+});
+
+/** Field by field, so nothing else the host knows can come along. */
+const cloudStateDto = (overview: CloudOverview): CloudStateDto => ({
+  signedIn: overview.connection !== "signed-out",
+  gatewayUrl: overview.gatewayUrl,
+  email: overview.email,
+  connection: overview.connection,
+  error: overview.error,
+  workspaces: overview.workspaces.map((workspace) => ({
+    workspaceId: workspace.workspaceId,
+    cloudId: workspace.cloudId,
+    status: workspace.status,
+    runnerOnline: workspace.runnerOnline,
+    reason: workspace.reason,
+    createdAt: workspace.createdAt,
+  })),
 });
 const accountDto = (
   context: ApplicationContext,
@@ -292,9 +329,13 @@ const teamDto = (team: Team): TeamDto => ({
   goal: team.goal,
 });
 
-const teamMessageDto = (message: TeamMessage): TeamMessageDto => ({
+const teamMessageDto = (
+  message: TeamMessage,
+  cloud: string | undefined,
+): TeamMessageDto => ({
   id: message.id,
   author: message.author,
+  ...(cloud ? { cloud } : {}),
   body: message.body,
   tags: [...message.tags],
   createdAt: message.createdAt,
@@ -313,6 +354,7 @@ async function teamDetail(
     all: true,
     limit: TEAM_PANEL_MESSAGES,
   });
+  const cloud = context.teams.cloudMarks(team);
   return {
     team: teamDto(team),
     members: members.map((member) => ({
@@ -325,7 +367,9 @@ async function teamDetail(
       undelivered: member.undelivered,
       lastError: member.lastError,
     })),
-    messages: messages.map(teamMessageDto),
+    messages: messages.map((message) =>
+      teamMessageDto(message, cloud(message.author)),
+    ),
   };
 }
 
@@ -504,6 +548,8 @@ export interface DesktopHost {
   windows: DesktopWindowHost;
   clipboardWrite(text: string): boolean;
   remote: DesktopRemoteHost;
+  /** The AWS setup guide in the app bundle, for Settings > Cloud. */
+  awsGuidePath?: string;
 }
 
 /** Files macOS runs, rather than shows, when they are opened. */
@@ -547,7 +593,16 @@ export function createDesktopRequestHandlers(
   };
 
   return {
-    snapshot: () => result(() => desktopSnapshot(readModel)),
+    // The cloud's parts change only with an announcement that names no
+    // parts, so they come with the whole snapshot and never with a part.
+    snapshot: () =>
+      result(async () => ({
+        ...(await desktopSnapshot(readModel)),
+        cloudSignIns: context.cloud.signIns.list(),
+        workspaceMoves: context.workspaceMoves.list(),
+        cloudPreparing: context.cloud.preparing(),
+        gatewayInstall: context.gatewayInstall.current(),
+      })),
     snapshotParts: ({ parts }) =>
       result(() => desktopSnapshotParts(readModel, parts)),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
@@ -580,7 +635,8 @@ export function createDesktopRequestHandlers(
           body,
         });
         return {
-          message: teamMessageDto(said.message),
+          // The user's own post, never a cloud session's.
+          message: teamMessageDto(said.message, undefined),
           warnings: said.warnings,
         };
       }),
@@ -707,7 +763,7 @@ export function createDesktopRequestHandlers(
       ),
     workspaceRemove: ({ reference, deleteFiles, force }) =>
       mutate(async () => {
-        const removed = await context.workspaces.remove(reference, {
+        const removed = await context.archive.removeWorkspace(reference, {
           deleteFiles,
           force,
         });
@@ -723,16 +779,58 @@ export function createDesktopRequestHandlers(
         ),
       ),
     workspaceArchive: ({ reference }) =>
-      mutate(async () =>
-        workspaceDto(await context.workspaces.archive(reference)),
-      ),
+      mutate(async () => {
+        const archived = await context.archive.archiveWorkspace({ reference });
+        return archived.status === "archived"
+          ? {
+              status: "archived" as const,
+              workspace: workspaceDto(archived.workspace),
+            }
+          : archived;
+      }),
+    workspaceMove: ({ reference, to, stopWorking }) =>
+      mutate(async () => {
+        const moved = await context.workspaceMoves.move({
+          workspace: reference,
+          to,
+          ...(stopWorking ? { stopWorking } : {}),
+        });
+        return moved.status === "moved"
+          ? {
+              status: "moved" as const,
+              workspace: workspaceDto(moved.workspace),
+              ...(moved.notice ? { notice: moved.notice } : {}),
+            }
+          : moved;
+      }),
+    workspaceMoveCancel: ({ reference }) =>
+      result(async () => {
+        context.workspaceMoves.cancel(
+          (await context.workspaces.get(reference)).id,
+        );
+        return null;
+      }),
+    workspaceMoveDismiss: ({ reference }) =>
+      result(async () => {
+        context.workspaceMoves.dismiss(
+          (await context.workspaces.get(reference)).id,
+        );
+        return null;
+      }),
+    workspaceNoticeDismiss: ({ reference }) =>
+      mutate(async () => {
+        context.repositories.dismissWorkspaceNotice(
+          (await context.workspaces.get(reference)).id,
+        );
+        return null;
+      }),
     workspaceRestore: ({ reference }) =>
       mutate(async () =>
         workspaceDto(await context.workspaces.restore(reference)),
       ),
     workspaceDelete: ({ reference }) =>
       mutate(async () =>
-        workspaceDto(await context.workspaces.deletePermanently(reference)),
+        workspaceDto(await context.archive.deleteWorkspace(reference)),
       ),
     workspaceContentGet: ({ workspace }) =>
       result(async () =>
@@ -824,6 +922,100 @@ export function createDesktopRequestHandlers(
       mutate(async () => {
         await context.workspaceContent.setInstructionFilesEnabled(enabled);
         return { enabled };
+      }),
+    cloudState: () =>
+      result(async () => cloudStateDto(await context.cloud.overview())),
+    cloudSignIn: ({ gatewayUrl, email }) =>
+      mutate(async () => {
+        await context.cloud.signIn(gatewayUrl.trim(), email.trim());
+        await context.gatewayInstall.checkForward();
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudMcpServers: () =>
+      result(async () => mcpDto(await cloudMcpChoices(context.config))),
+    cloudMcpServerSet: ({ name, on }) =>
+      mutate(async () => {
+        await setCloudMcpServer(context.config, name, on === true);
+        return mcpDto(await cloudMcpChoices(context.config));
+      }),
+    cloudSignOut: () =>
+      mutate(async () => {
+        await context.cloud.logout();
+        await context.gatewayInstall.checkForward();
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceCreate: ({ workspace }) =>
+      mutate(async () => {
+        await context.cloud.create(workspace);
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceSleep: ({ workspace }) =>
+      mutate(async () => {
+        await context.cloud.sleep(await context.cloud.linkedCloudId(workspace));
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceWake: ({ workspace }) =>
+      mutate(async () => {
+        await context.cloudSessions.wakeWorkspace(workspace);
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudWorkspaceDelete: ({ workspace, force }) =>
+      mutate(async () => {
+        if (force !== true)
+          throw new DaedalusError(
+            "VALIDATION",
+            "Deleting a cloud workspace removes its pod and its volume; confirm it",
+          );
+        await context.cloud.delete(
+          await context.cloud.linkedCloudId(workspace),
+        );
+        return cloudStateDto(await context.cloud.overview());
+      }),
+    cloudSessionWake: ({ sessionId }) =>
+      mutate(async () => agentDto(await context.cloudSessions.wake(sessionId))),
+    cloudSignInOpen: ({ requestId }) =>
+      result(async () => {
+        const page = await context.cloud.openSignIn(requestId);
+        if (!openExternal(page.url))
+          throw new DaedalusError(
+            "DEPENDENCY",
+            "The browser did not open; ask for the sign-in page again in the session",
+          );
+        return { host: page.host, paste: page.paste };
+      }),
+    cloudSignInDismiss: ({ requestId, sessionId }) =>
+      result(() => {
+        context.cloud.signIns.dismiss({
+          ...(requestId ? { requestId } : {}),
+          ...(sessionId ? { sessionId } : {}),
+        });
+        return null;
+      }),
+    gatewayInstallContexts: () => result(() => context.gatewayInstall.tools()),
+    gatewayInstallGuideOpen: () =>
+      result(async () => {
+        const guide = host.awsGuidePath;
+        if (!guide || !(await stat(guide).catch(() => undefined))?.isFile())
+          throw new DaedalusError(
+            "NOT_FOUND",
+            "This build does not carry the AWS guide",
+          );
+        return { opened: openPath(guide) };
+      }),
+    gatewayInstallPreflight: (params) =>
+      result(() => context.gatewayInstall.preflight(params)),
+    gatewayInstallDryRun: (params) =>
+      result(() => context.gatewayInstall.dryRun(params)),
+    gatewayInstallStart: (params) =>
+      mutate(() => context.gatewayInstall.start(params)),
+    gatewayInstallLocal: ({ email }) =>
+      mutate(() => context.gatewayInstall.local({ email })),
+    gatewayInstallAdminToken: () =>
+      result(() => context.gatewayInstall.adminToken()),
+    gatewayInstallDismiss: () =>
+      mutate(() => {
+        context.gatewayInstall.dismiss();
+        return null;
       }),
     remoteGet: () => result(() => remote.state()),
     remoteSetEnabled: ({ enabled }) => mutate(() => remote.setEnabled(enabled)),
@@ -1139,6 +1331,7 @@ export function createDesktopRequestHandlers(
     accountSignOut: ({ provider, account }) =>
       mutate(() => context.accounts.signOut(provider, account)),
     agentSpawn: ({ teamId, ...params }) =>
+      // A workspace in the cloud runs the session there; the workspace says.
       mutate(async () =>
         agentDto(
           teamId
@@ -1172,7 +1365,15 @@ export function createDesktopRequestHandlers(
         (await context.agents.reorder(workspace, sessionIds)).map(agentDto),
       ),
     agentArchive: ({ id, force }) =>
-      mutate(async () => agentDto(await context.agents.archive(id, force))),
+      mutate(async () => ({
+        status: "archived" as const,
+        session: agentDto(
+          await context.archive.archiveSession({
+            sessionId: id,
+            ...(force !== undefined ? { force } : {}),
+          }),
+        ),
+      })),
     agentRestore: ({ id }) =>
       mutate(async () => agentDto(await context.agents.restore(id))),
     agentRevive: ({ id }) =>

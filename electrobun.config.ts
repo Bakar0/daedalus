@@ -75,6 +75,12 @@ export default {
         "views/mainview/daedalus-app-icon.png",
       "apps/desktop/dist/cli.js": "cli/daedal.js",
       migrations: "migrations",
+      // The gateway install in Settings > Cloud runs helm on this chart and
+      // the kind scripts for Try it locally.
+      "deploy/helm/daedalus": "deploy/helm/daedalus",
+      "deploy/kind": "deploy/kind",
+      // The AWS guide Settings > Cloud opens, until it is on GitHub.
+      "deploy/eks": "deploy/eks",
     },
     watchIgnore: ["apps/desktop/dist/**"],
     mac: {

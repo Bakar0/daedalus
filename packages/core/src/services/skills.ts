@@ -263,6 +263,17 @@ function fillSkillValues(contents: string, daedal: string): string {
     .replaceAll("{{teamTargetKb}}", kb(TEAM_COMPACT_BYTES / 2));
 }
 
+/**
+ * The built-in skills that work from a cloud session: every `daedal` command
+ * they run is on the pod's allowlist (`ALLOWED` in cloud-calls.ts). Control,
+ * orchestration, routines, rebirth and handoff drive this Mac, so they stay.
+ */
+const CLOUD_SKILLS = new Set([
+  "daedalus-team",
+  "daedalus-refinement",
+  "unslop",
+]);
+
 const managedDefinition = (id: string): ManagedSkillDefinition | undefined =>
   MANAGED_SKILLS.find((definition) => definition.id === id);
 
@@ -841,17 +852,19 @@ export class SkillService {
    * Every install and removal site goes through this, so the name a link is
    * created under can never drift from the name it is removed under.
    */
-  private resolve(definition: ManagedSkillDefinition): {
+  private resolve(
+    definition: ManagedSkillDefinition,
+    // `{{daedal}}` in a built-in skill is this home's CLI, by full path. The
+    // skill cannot work it out from `DAEDALUS_HOME`: a Claude session moved
+    // into the background runs commands with another process's environment.
+    daedal = join(this.config.home, "bin", "daedal"),
+  ): {
     id: string;
     linkName: string;
     skillFiles: ManagedFile[];
     style?: { fileName: string; styleName: string; contents: string };
   } {
     const linkName = channelArtifactName(this.config, definition.id);
-    // `{{daedal}}` in a built-in skill is this home's CLI, by full path. The
-    // skill cannot work it out from `DAEDALUS_HOME`: a Claude session moved
-    // into the background runs commands with another process's environment.
-    const daedal = join(this.config.home, "bin", "daedal");
     const skillFiles = definition.skillFiles.map((file) => {
       const contents = fillSkillValues(file.contents, daedal);
       return file.path === "SKILL.md" && linkName !== definition.id
@@ -1530,6 +1543,33 @@ export class SkillService {
   /* ---------------------------------------------------------------------- */
   /* What the providers are told at launch                                   */
   /* ---------------------------------------------------------------------- */
+
+  /**
+   * The built-in skills a cloud session gets, under this channel's names,
+   * calling `daedal` at `daedal` (the pod's shim). Only those turned on here
+   * and whose commands the pod may run (`CLOUD_SKILLS`), with the style when
+   * this Mac's sessions use it.
+   */
+  cloudSkills(daedal: string): Array<{
+    name: string;
+    files: ManagedFile[];
+    style?: { fileName: string; styleName: string; contents: string };
+  }> {
+    return MANAGED_SKILLS.filter(
+      (definition) =>
+        CLOUD_SKILLS.has(definition.id) &&
+        this.settingFor(definition.id).enabled,
+    ).map((definition) => {
+      const resolved = this.resolve(definition, daedal);
+      return {
+        name: resolved.linkName,
+        files: resolved.skillFiles,
+        ...(resolved.style && this.styleWanted(definition)
+          ? { style: resolved.style }
+          : {}),
+      };
+    });
+  }
 
   /**
    * The settings Daedalus contributes to a Claude launch.

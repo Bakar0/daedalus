@@ -533,11 +533,6 @@ button:not(
 .workspace-session-create {
   font-size: 16px !important;
   line-height: 1;
-  opacity: 0.48;
-}
-.workspace-card:hover .workspace-session-create,
-.workspace-session-create:focus-visible {
-  opacity: 1;
 }
 
 /* A workspace and the sessions listed under it (#55). */
@@ -705,9 +700,10 @@ button:not(
   margin-top: 2px;
   padding-top: 0;
 }
+/* Only the workspace in focus shows its archived sessions; the others
+   keep no empty row for them. */
 .workspace-sessions .session-archive-list:not([data-in-focus]) {
-  pointer-events: none;
-  visibility: hidden;
+  display: none;
 }
 .workspace-sessions .session-grid {
   gap: 4px;
@@ -769,22 +765,22 @@ button:not(
   align-items: center;
   display: flex;
   min-width: 0;
-  /* Room for the +, the one action always showing. */
-  padding-right: 26px;
+  /* Room for the actions on show (counts set on the card): the few always
+     there, and every pinned one on hover or focus. */
+  padding-right: calc(var(--header-actions-shown, 2) * 23px + 4px);
 }
-/* A long name is cut short with an ellipsis. */
-.workspace-group .workspace-card-name > span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.workspace-group
+  > .workspace-card:is(:hover, :focus-within)
+  .workspace-card-name {
+  padding-right: calc(var(--header-actions, 2) * 23px + 4px);
 }
-/* Terminal, secrets, archive and settings come in on hover, to the left of
-   the +. */
+/* Pinned terminal, secrets, archive and an unlit cloud come in on hover or
+   focus, to the left of Settings and the +, which always show; so does a
+   cloud lit while the workspace is in the cloud or moving. */
 .workspace-group .workspace-terminal-action,
 .workspace-group .workspace-secrets-action,
 .workspace-group .workspace-card-archive,
-.workspace-group .workspace-card-menu {
+.workspace-group .workspace-cloud-action:not([data-cloud-lit], [data-moving]) {
   display: none !important;
 }
 .workspace-group
@@ -793,13 +789,20 @@ button:not(
     .workspace-terminal-action,
     .workspace-secrets-action,
     .workspace-card-archive,
-    .workspace-card-menu
+    .workspace-cloud-action
   ) {
   display: flex !important;
 }
 /* An open menu stays put while the pointer is over its popover. */
 .workspace-group .workspace-card-menu[open] {
   display: flex !important;
+}
+/* A long name is cut short with an ellipsis. */
+.workspace-group .workspace-card-name > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .workspace-group
   > .workspace-card:is(:hover, :focus-within)
@@ -815,15 +818,30 @@ button:not(
   gap: 7px;
   padding: 6px 8px !important;
 }
-.workspace-sessions .session-card-main strong {
-  /* Room for the … menu, the one action always showing. */
-  padding-right: 26px;
+/* The whole title row keeps clear of the card's actions on show, so a
+   badge after the name cannot run under them (counts set on the card). */
+.workspace-sessions .session-card-main .session-card-title {
+  padding-right: calc(var(--card-actions-shown, 1) * 23px + 3px);
 }
 .workspace-sessions
-  .session-card:has([aria-label^="Revive"])
+  .session-card:is(:hover, :focus-within)
   .session-card-main
-  strong {
-  padding-right: 50px;
+  .session-card-title {
+  padding-right: calc(var(--card-actions, 1) * 23px + 3px);
+}
+/* Rebirth, archive and a lead's + come in on hover or focus. A requested
+   rebirth stays visible until the successor takes over. */
+.workspace-sessions .session-card-hover-action {
+  display: none !important;
+}
+.workspace-sessions
+  .session-card:is(:hover, :focus-within)
+  .session-card-hover-action,
+.workspace-sessions .session-rebirth-action[data-rebirth-requested] {
+  display: flex !important;
+}
+.workspace-sessions .session-card-main .session-card-title > strong {
+  padding-right: 0;
 }
 /* Clear sits on the status row where its dot was: the dot, then "Clear",
    in one pill. The row's own dot steps aside and its text starts after. */
@@ -862,17 +880,6 @@ button:not(
 }
 .workspace-sessions .session-card-status[data-clearable] {
   padding-left: 50px;
-}
-/* Rebirth and archive come in on hover, over the end of the name. A
-   requested rebirth stays visible until the successor takes over. */
-.workspace-sessions .session-card-hover-action {
-  display: none !important;
-}
-.workspace-sessions
-  .session-card:is(:hover, :focus-within)
-  .session-card-hover-action,
-.workspace-sessions .session-rebirth-action[data-rebirth-requested] {
-  display: flex !important;
 }
 .workspace-sessions
   .session-card:is(:hover, :focus-within)
@@ -965,16 +972,6 @@ button:not(
 }
 .session-context-blocks > span[data-lit] {
   background: var(--context-fill);
-}
-.workspace-card-archive,
-.workspace-terminal-action {
-  opacity: 0.48;
-}
-.workspace-card:hover .workspace-card-archive,
-.workspace-card:hover .workspace-terminal-action,
-.workspace-card-archive:focus-visible,
-.workspace-terminal-action:focus-visible {
-  opacity: 1;
 }
 /* A requested rebirth stays visible on the button until the successor takes
    over and this card is archived. */
@@ -6451,6 +6448,9 @@ dd {
 .team-message-head small {
   margin-left: auto;
 }
+.team-message-cloud {
+  color: var(--accent);
+}
 .team-message p {
   color: var(--text);
   font-size: 12px;
@@ -8083,12 +8083,6 @@ dd {
 .workspace-disclosure {
   color: var(--muted);
   flex-basis: 12px;
-  opacity: 0;
-}
-.workspace-card:hover .workspace-disclosure,
-.workspace-disclosure:focus-visible,
-.workspace-disclosure[aria-expanded="false"] {
-  opacity: 1;
 }
 .workspace-sessions {
   margin: 1px 0 2px 6px;
@@ -8168,13 +8162,15 @@ dd {
   margin-top: 6px;
 }
 /* Plain outlined buttons, not the accent fill. */
-.center-empty-actions button {
+.center-empty-actions button,
+.workspace-list-empty button {
   background: transparent;
   border: 1px solid var(--line-strong);
   color: var(--text);
   font-weight: 500;
 }
-.center-empty-actions button:hover:not(:disabled) {
+.center-empty-actions button:hover:not(:disabled),
+.workspace-list-empty button:hover:not(:disabled) {
   background: var(--raised-hover);
 }
 .center-empty > span:not(.center-empty-actions) {
@@ -8453,14 +8449,17 @@ dd {
   object-fit: contain;
 }
 
-/* The workspace row keeps its count clear of the + in its corner; the
-   actions that come in on hover take the count's place. */
+/* The workspace row keeps its count clear of the actions in its corner,
+   all of them always showing. */
 .workspace-group > .workspace-card > .workspace-item {
-  padding-right: 28px;
+  padding-right: 6px;
 }
-.workspace-group > .workspace-card:hover .workspace-insight-copy,
-.workspace-group > .workspace-card:focus-within .workspace-insight-copy {
-  visibility: hidden;
+/* The name on its own line, up to the actions, which share only that line;
+   the count on a second, small and muted, the card's full width. */
+.workspace-group .workspace-card-content {
+  align-items: stretch;
+  display: grid;
+  gap: 1px;
 }
 .workspace-card-content {
   min-width: 0;
@@ -8584,4 +8583,643 @@ dd {
 .app[data-palette="midnight"] .terminal-status,
 .app[data-palette="midnight"] .agent-session-status {
   background: #111728;
+}
+.cloud-panel {
+  display: grid;
+  gap: 12px;
+}
+.cloud-panel .settings-note {
+  margin: 0;
+}
+.cloud-sign-in {
+  display: grid;
+  gap: 10px;
+}
+.cloud-sign-in .settings-choice > span {
+  display: grid;
+  gap: 2px;
+}
+.cloud-sign-in small,
+.cloud-actions small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.cloud-sign-in input {
+  font-size: 12px;
+  min-height: 28px;
+  padding: 4px 8px;
+  width: 260px;
+}
+.cloud-account {
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+}
+.cloud-account code {
+  color: var(--muted);
+  font-size: 11px;
+}
+.cloud-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+/* A session that runs in its workspace's cloud pod. */
+.session-card[data-cloud-state="sleeping"] .session-card-main,
+.session-card[data-cloud-state="waking"] .session-card-main {
+  opacity: 0.72;
+}
+.session-card[data-cloud-state="waking"] .session-status-label {
+  font-style: italic;
+}
+.cloud-sign-in-bar .routine-bar-text {
+  white-space: normal;
+}
+.session-cloud-signin {
+  background: var(--accent-soft, var(--raised-hover));
+  border: 1px solid var(--accent, var(--line));
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 10px;
+  font-style: normal;
+  padding: 0 6px;
+}
+/* A cloud session's sign-in, over its terminal. */
+.cloud-signin-panel {
+  align-items: center;
+  background: var(--center, var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: absolute;
+  text-align: center;
+  z-index: 5;
+}
+.cloud-signin-panel > span {
+  color: var(--secondary);
+  font-size: 13px;
+  max-width: 460px;
+}
+.cloud-signin-panel strong {
+  color: var(--text);
+}
+.cloud-signin-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+}
+.session-opening-steps {
+  display: grid;
+  gap: 4px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  text-align: left;
+}
+.session-opening-steps li {
+  color: var(--muted);
+  font-size: 12px;
+  padding-left: 18px;
+  position: relative;
+}
+.session-opening-steps li::before {
+  content: "○";
+  left: 0;
+  position: absolute;
+}
+.session-opening-steps li[data-state="done"] {
+  color: var(--secondary);
+}
+.session-opening-steps li[data-state="done"]::before {
+  color: var(--success);
+  content: "✓";
+}
+.session-opening-steps li[data-state="now"] {
+  color: var(--text);
+}
+.session-opening-steps li[data-state="now"]::before {
+  content: "●";
+}
+/* The new session dialog's first line: where the session runs. */
+.session-runs-on {
+  display: grid;
+  gap: 8px;
+}
+.session-runs-on-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+.session-runs-on-label {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.session-runs-on-value {
+  color: var(--text);
+  font-size: 12px;
+}
+.session-runs-on-setup {
+  font-size: 12px;
+  margin-left: auto;
+}
+.session-runs-on-signin {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.session-runs-on-signin input {
+  flex: 1 1 160px;
+  font-size: 12px;
+  height: 30px;
+  padding: 0 10px;
+}
+.session-runs-on-signin button {
+  height: 30px;
+}
+.session-runs-on-signin .accounts-error {
+  flex-basis: 100%;
+}
+.menu-cloud-reason {
+  color: var(--secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 0 10px 6px;
+  max-width: 260px;
+  white-space: normal;
+}
+.cloud-mcp {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 12px;
+}
+.cloud-mcp h3 {
+  margin: 0;
+}
+.cloud-mcp-left-out {
+  color: var(--muted);
+  display: grid;
+  font-size: 11px;
+  gap: 2px;
+}
+
+/* The workspace header's cloud action, lit while the workspace is in the
+   cloud. */
+.workspace-cloud-action[data-cloud-lit] {
+  color: var(--accent) !important;
+}
+.workspace-cloud-action[data-moving] svg {
+  animation: workspace-moving 1.4s ease-in-out infinite;
+}
+@keyframes workspace-moving {
+  50% {
+    opacity: 0.35;
+  }
+}
+/* A moving workspace, under its card. */
+.workspace-move,
+.workspace-notice {
+  border-top: 1px solid var(--line);
+  display: grid;
+  font-size: 11px;
+  gap: 4px;
+  padding: 6px 10px 7px 30px;
+}
+.workspace-move-row {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.workspace-move-label {
+  color: var(--text);
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-move[data-phase="failed"] .workspace-move-label {
+  color: var(--danger);
+}
+.workspace-move-cancel {
+  font-size: 11px !important;
+  padding: 1px 6px !important;
+}
+/* The Mac, the cloud and dots flowing between them, one loop in 1.5 s. */
+.workspace-move-scene {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  padding: 2px 0;
+}
+.workspace-move-end {
+  color: var(--secondary);
+  display: flex;
+  transition: color 0.4s ease;
+}
+.workspace-move-end svg {
+  height: 18px;
+  width: 18px;
+}
+.workspace-move-scene[data-to="cloud"] [data-end="cloud"],
+.workspace-move-scene[data-to="mac"] [data-end="mac"] {
+  color: var(--text);
+}
+.workspace-move-track {
+  height: 6px;
+  position: relative;
+  width: 64px;
+}
+.workspace-move-track i {
+  animation: workspace-move-flow 1.5s linear infinite;
+  background: var(--accent);
+  border-radius: 50%;
+  height: 4px;
+  left: 0;
+  opacity: 0;
+  position: absolute;
+  top: 1px;
+  width: 4px;
+}
+.workspace-move-track i:nth-child(2) {
+  animation-delay: 0.5s;
+}
+.workspace-move-track i:nth-child(3) {
+  animation-delay: 1s;
+}
+/* Coming home, the dots flow from the cloud back to the Mac. */
+.workspace-move-scene[data-to="mac"] .workspace-move-track i {
+  animation-direction: reverse;
+}
+@keyframes workspace-move-flow {
+  0% {
+    opacity: 0;
+    transform: translateX(0);
+  }
+  20%,
+  80% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(60px);
+  }
+}
+/* Arrived: the dots stop and the side it reached lights. */
+.workspace-move-scene[data-settled] .workspace-move-track i {
+  animation: none;
+  opacity: 0;
+}
+.workspace-move-scene[data-settled][data-to="cloud"] [data-end="cloud"],
+.workspace-move-scene[data-settled][data-to="mac"] [data-end="mac"] {
+  color: var(--accent);
+}
+.workspace-move-step {
+  color: var(--secondary);
+  text-align: center;
+}
+/* The plain progress line stands in for the animation under reduced
+   motion. */
+.workspace-move-steps {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-move-scene {
+    display: none;
+  }
+  .workspace-move-steps {
+    display: grid;
+  }
+}
+.workspace-move-steps {
+  gap: 3px;
+  grid-template-columns: repeat(4, 1fr);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.workspace-move-steps li {
+  background: var(--line);
+  border-radius: 2px;
+  height: 3px;
+}
+.workspace-move-steps li[data-state="done"] {
+  background: var(--accent);
+}
+.workspace-move-steps li[data-state="now"] {
+  animation: workspace-moving 1.4s ease-in-out infinite;
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-cloud-action[data-moving] svg,
+  .workspace-move-steps li[data-state="now"] {
+    animation: none;
+  }
+}
+.workspace-move-detail {
+  color: var(--secondary);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.workspace-notice {
+  align-items: start;
+  color: var(--secondary);
+  grid-template-columns: 1fr auto;
+  line-height: 1.4;
+}
+.workspace-notice > span {
+  overflow-wrap: anywhere;
+}
+.workspace-notice > button {
+  font-size: 11px !important;
+  padding: 1px 6px !important;
+}
+/* A card action in its menu: the action, and its pin to the card. */
+.menu-pin-row {
+  align-items: center;
+  display: flex;
+}
+.menu-pin-row > .menu-item {
+  flex: 1;
+}
+/* The action's card icon, so a pinned one is easy to tell on the card. */
+.menu-item-icon {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex: none;
+  height: 14px;
+  justify-content: center;
+  width: 14px;
+}
+.menu-item-icon svg {
+  height: 14px;
+  width: 14px;
+}
+.menu-pin {
+  align-items: center;
+  border-radius: 5px !important;
+  color: var(--muted) !important;
+  display: flex;
+  height: 24px;
+  justify-content: center;
+  margin-right: 4px;
+  opacity: 0.5;
+  padding: 0 !important;
+  width: 24px;
+}
+.menu-pin svg {
+  height: 13px;
+  width: 13px;
+}
+.menu-pin-row:hover .menu-pin,
+.menu-pin:focus-visible {
+  opacity: 1;
+}
+.menu-pin[aria-pressed="true"] {
+  color: var(--accent) !important;
+  opacity: 1;
+}
+/* A dialog's choices from outside this Mac: plain lines, cut short. */
+.app-dialog-lines {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  padding-left: 18px;
+}
+
+/* The explorer when its folder cannot be listed, such as a cloud workspace
+   that is asleep. */
+.file-tree-unavailable {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 10px 12px;
+  white-space: normal;
+}
+
+/* Settings › Cloud › Your own gateway. */
+.gateway-install {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+.gateway-install > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.gateway-install > summary::-webkit-details-marker {
+  display: none;
+}
+.gateway-install > summary h3 {
+  display: inline;
+  margin: 0;
+}
+.gateway-install > summary::after {
+  color: var(--muted);
+  content: " ›";
+}
+.gateway-install[open] > summary::after {
+  content: " ⌄";
+}
+.gateway-install-form,
+.gateway-install-target,
+.gateway-install-preflight,
+.gateway-install-dry-run,
+.gateway-install-progress {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.gateway-install-form input:not([type="radio"], [type="checkbox"]) {
+  font-size: 12px;
+  min-height: 28px;
+  padding: 4px 8px;
+  width: 260px;
+}
+.gateway-install-form .settings-choice > span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.gateway-install-form .settings-choice small {
+  color: var(--muted);
+  font-size: 11px;
+}
+/* The images take the line under their label: a registry is long. */
+.gateway-install-form .settings-choice:has(.gateway-install-images) {
+  align-items: stretch;
+  display: grid;
+  gap: 6px;
+}
+.gateway-install-images input:not([type="radio"], [type="checkbox"]) {
+  width: auto;
+}
+.gateway-install-contexts {
+  border: 0;
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+}
+.gateway-install-contexts legend {
+  color: var(--secondary);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.gateway-install-images {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 96px;
+}
+.gateway-install-tools,
+.gateway-install-checks,
+.gateway-install-objects {
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.gateway-install-tools code,
+.gateway-install-objects code {
+  color: var(--muted);
+  font-size: 11px;
+}
+.gateway-install-objects {
+  max-height: 180px;
+  overflow-y: auto;
+}
+.gateway-install-checks li {
+  align-items: start;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 14px minmax(0, 1fr);
+}
+.gateway-install-checks li > span:last-child {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.gateway-install-checks small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.gateway-install-mark {
+  font-weight: 700;
+  text-align: center;
+}
+.gateway-install-checks [data-status="pass"] .gateway-install-mark {
+  color: var(--success);
+}
+.gateway-install-checks [data-status="warn"] .gateway-install-mark,
+.gateway-install-checks [data-status="unknown"] .gateway-install-mark {
+  color: var(--secondary);
+}
+.gateway-install-checks [data-status="fail"] .gateway-install-mark {
+  color: var(--danger);
+}
+.gateway-install-notes pre,
+.gateway-install-log {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 11px;
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gateway-install-phase {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 8px;
+  margin: 0;
+}
+.gateway-install-phase span {
+  color: var(--muted);
+}
+.gateway-install-progress:not([data-phase="done"], [data-phase="failed"])
+  .gateway-install-phase
+  strong::after {
+  animation: workspace-moving 1.4s ease-in-out infinite;
+  content: " …";
+}
+@media (prefers-reduced-motion: reduce) {
+  .gateway-install-progress .gateway-install-phase strong::after {
+    animation: none;
+  }
+}
+.gateway-install-acknowledge span {
+  font-size: 12px;
+}
+.gateway-install-acknowledge small {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+}
+/* What happens beyond creating an object, such as the labels it gets. */
+.gateway-install-objects small {
+  color: var(--secondary);
+  display: block;
+  font-size: 11px;
+  padding-left: 12px;
+}
+.gateway-install-token code {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.gateway-install-token small {
+  display: block;
+}
+.gateway-install-local {
+  border-top: 1px dashed var(--line);
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+.gateway-install-notes > summary {
+  color: var(--secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* The sidebar with no workspace open: a way to make one, in the center
+   empty state's outlined button. */
+.workspace-list-empty svg {
+  fill: none;
+  height: 28px;
+  margin-bottom: 4px;
+  stroke: var(--muted);
+  stroke-linecap: round;
+  stroke-width: 1.5;
+  width: 28px;
+}
+.workspace-list-empty button {
+  margin-top: 6px;
 }

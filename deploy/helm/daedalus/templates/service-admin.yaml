@@ -1,0 +1,19 @@
+{{- if and .Values.admin.enabled .Values.admin.expose }}
+# The admin page, only when admin.expose is true. ClusterIP: put your own
+# Ingress or VPN in front, and list who may reach it in admin.allowFrom.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "daedalus.gatewayName" . }}-admin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "daedalus.selector" . | nindent 4 }}
+  ports:
+    - name: admin
+      port: {{ .Values.admin.port }}
+      targetPort: admin
+{{- end }}

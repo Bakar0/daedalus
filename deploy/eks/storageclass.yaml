@@ -1,0 +1,17 @@
+# gp3 volumes from the EBS CSI driver add-on, for the gateway's database and
+# every workspace's two volumes. deploy/eks/values.yaml names it explicitly,
+# so it does not need to be the cluster default.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+  # Lets teardown find leftover volumes by tag (README, Teardown).
+  tagSpecification_1: "daedalus.dev/cluster=daedalus"
+# The volume is made in the zone of the node the pod is scheduled to.
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete

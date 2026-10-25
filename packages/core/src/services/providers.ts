@@ -28,6 +28,14 @@ import {
   parseClaudeSettingsArgument,
   renderCodexHookBlock,
 } from "./hook-install";
+import { CLOUD_CLAUDE, CLOUD_CODEX, CLOUD_DAEDAL } from "./cloud-launch";
+
+/**
+ * Where a session runs: on this Mac, or in its workspace's pod. Every path a
+ * local launch puts in the arguments is a path on this Mac, which the pod
+ * does not have, so a cloud launch builds its own.
+ */
+export type LaunchTarget = "local" | "cloud";
 
 export interface LaunchInput {
   prompt?: string;
@@ -40,6 +48,8 @@ export interface LaunchInput {
   acceptPeerMessages?: boolean;
   /** Carry on an existing conversation rather than start a new one. */
   resume?: ResumeInput;
+  /** Where the session runs. A launch is local unless it says otherwise. */
+  target?: LaunchTarget;
   /** Where the session runs, whose project settings Claude reads. */
   workingDirectory?: string;
 }
@@ -59,6 +69,17 @@ export interface ResumeInput {
   workingDirectory: string;
   /** The account's environment for those commands. */
   env: Record<string, string>;
+  /**
+   * Claude only: the permission mode to resume in, for a session that moved
+   * between hosts. Otherwise left out, as `permissionModeArgs` explains.
+   */
+  permissionMode?: string;
+  /**
+   * Claude only: no conversation was ever written under `nativeId` (the
+   * session never had a turn), so `--resume` would exit at once. Claude
+   * starts one under that id instead.
+   */
+  fresh?: boolean;
 }
 
 export interface ProviderLaunch {
@@ -844,6 +865,7 @@ class ConfiguredProvider implements AgentProvider {
   }
 
   async buildLaunch(input: LaunchInput): Promise<ProviderLaunch> {
+    if (input.target === "cloud") return this.cloudLaunch(input);
     const args = [...this.definition.args];
     const env: Record<string, string> = {};
     let providerSessionId: string | undefined;
@@ -932,6 +954,67 @@ class ConfiguredProvider implements AgentProvider {
   }
 
   /**
+   * Claude or Codex in a workspace's pod. Nothing here reads this Mac's
+   * provider folders or writes a file for the session, and the configured
+   * arguments and executable are this Mac's: the pod runs the `claude` or
+   * `codex` on its PATH with the settings inline.
+   */
+  private cloudLaunch(input: LaunchInput): ProviderLaunch {
+    if (this.name === "codex" && this.promptArgument)
+      return codexCloudLaunch(input, this.definition.permissionMode);
+    if (this.name !== "claude" || !this.promptArgument)
+      throw new DaedalusError(
+        "VALIDATION",
+        "A cloud session runs Claude or Codex",
+      );
+    const model = input.model?.trim();
+    if (model && !isValidModelName(model))
+      throw new DaedalusError("VALIDATION", "Model name is invalid");
+    if (input.resume && !input.resume.nativeId)
+      throw new DaedalusError(
+        "CONFLICT",
+        "This session predates native resume support and cannot be resumed safely",
+      );
+    // The status line runs `daedal agent telemetry`, which reads files named
+    // in its input. Those names are paths in the pod, so it is left out, and
+    // no inbox hook either: the inbox is a pipe on this Mac.
+    const { statusLine: _statusLine, ...settings } = daedalusClaudeSettings(
+      CLOUD_DAEDAL,
+      input.sessionId,
+      { acceptPeerMessages: input.acceptPeerMessages },
+    );
+    const args = [
+      "--settings",
+      JSON.stringify({ ...settings, tui: CLAUDE_DEFAULT_RENDERER }),
+      "--append-system-prompt",
+      DAEDALUS_STATUS_INSTRUCTIONS,
+      // Never on a resume: see `permissionModeArgs`.
+      ...(input.resume
+        ? []
+        : permissionModeArgs(this.name, this.definition.permissionMode)),
+      ...(model ? ["--model", model] : []),
+    ];
+    if (input.resume?.permissionMode)
+      args.push("--permission-mode", input.resume.permissionMode);
+    if (input.resume)
+      args.push(
+        input.resume.fresh ? "--session-id" : "--resume",
+        input.resume.nativeId!,
+      );
+    else if (input.sessionId) {
+      args.push("--session-id", input.sessionId);
+      if (input.sessionName) args.push("--name", input.sessionName);
+    }
+    if (input.prompt && !input.resume) args.push(input.prompt);
+    return {
+      executable: CLOUD_CLAUDE,
+      args,
+      env: {},
+      providerSessionId: input.resume?.nativeId ?? input.sessionId,
+    };
+  }
+
+  /**
    * The arguments that carry on a conversation, or none when there is no
    * conversation to carry on and the session starts a new one.
    *
@@ -950,7 +1033,13 @@ class ConfiguredProvider implements AgentProvider {
           "CONFLICT",
           "This session predates native resume support and cannot be resumed safely",
         );
-      return ["--resume", id];
+      return [
+        ...(resume.permissionMode
+          ? ["--permission-mode", resume.permissionMode]
+          : []),
+        resume.fresh ? "--session-id" : "--resume",
+        id,
+      ];
     }
     // Codex from here: only Claude and Codex take a prompt argument, and
     // `buildLaunch` refuses a resume for any provider that does not.
@@ -980,6 +1069,47 @@ class ConfiguredProvider implements AgentProvider {
     }
     return ["resume", id];
   }
+}
+
+/**
+ * Codex in a workspace's pod (artifacts/cloud-sessions/codex-spike.md). The
+ * pod has no `ps`, which Codex's shared app server needs, so every session
+ * runs its own (`--no-daemon`), which also gives its hooks the session's
+ * environment. Codex's own sandbox cannot start under gVisor, so it runs
+ * with full access: the pod is the sandbox, as it is for Claude. The hooks
+ * come from the pod's `config.toml`, which the Mac writes before each launch.
+ * A conversation resumes only when the caller found its rollout in the pod.
+ */
+function codexCloudLaunch(
+  input: LaunchInput,
+  permissionMode: AgentPermissionMode | undefined,
+): ProviderLaunch {
+  const model = input.model?.trim();
+  if (model && !isValidModelName(model))
+    throw new DaedalusError("VALIDATION", "Model name is invalid");
+  const resume =
+    input.resume && !input.resume.fresh ? input.resume.nativeId : undefined;
+  const args = [
+    "--no-daemon",
+    ...CODEX_DAEDALUS_TUI_ARGS,
+    "-c",
+    'sandbox_mode="danger-full-access"',
+    "-c",
+    "features.hooks=true",
+    // Never on a resume: see `permissionModeArgs`.
+    ...(input.resume ? [] : permissionModeArgs("codex", permissionMode)),
+    ...(model ? ["--model", model] : []),
+    "-c",
+    `developer_instructions=${JSON.stringify(DAEDALUS_STATUS_INSTRUCTIONS)}`,
+  ];
+  if (resume) args.push("resume", resume);
+  else if (input.prompt && !input.resume) args.push(input.prompt);
+  return {
+    executable: CLOUD_CODEX,
+    args,
+    env: {},
+    ...(resume ? { providerSessionId: resume } : {}),
+  };
 }
 
 export function resolveProvider(

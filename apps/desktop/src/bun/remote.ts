@@ -59,7 +59,12 @@ import {
   RemoteStore,
   type SecretVault,
 } from "./remote-store";
-import { isTyping, TerminalConnection, type TerminalSocket } from "./terminal";
+import {
+  isTyping,
+  openedBridge,
+  TerminalConnection,
+  type TerminalSocket,
+} from "./terminal";
 
 export {
   type AuditEntry,
@@ -1171,13 +1176,24 @@ export function agentTerminalOpener(
       throw new Error(`Session is ${agent.status}`);
     const session = agent.tmuxSession;
     const initial = size ?? { cols: 80, rows: 24 };
+    // A cloud session's window is in its pod's tmux, not this Mac's, so
+    // only a local one is pinned to the phone's size.
+    const pin = agent.hostId ? undefined : sizes;
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
-      void sizes.release(session).catch(() => undefined);
+      void pin?.release(session).catch(() => undefined);
     };
-    await sizes.hold(session, initial);
+    await pin?.hold(session, initial);
+    const createBridge = await openedBridge((onOutput) =>
+      context.agents
+        .sessionHost(agent)
+        .openTerminal(session, initial, onOutput),
+    ).catch((error: unknown) => {
+      release();
+      throw error;
+    });
     const connection = new TerminalConnection({
       agentId: agent.id,
       socket: {
@@ -1189,8 +1205,7 @@ export function agentTerminalOpener(
         },
       },
       status: "reconnected",
-      createBridge: (onOutput) =>
-        context.tmux.openPty(session, initial, onOutput),
+      createBridge,
       onInput: (data) => {
         if (!isTyping(data)) return;
         context.deliveryGate.noteKeystroke(agent.id);
@@ -1210,12 +1225,12 @@ export function agentTerminalOpener(
         try {
           const parsed = JSON.parse(payload) as TerminalClientMessage;
           if (parsed.type === "resize")
-            await sizes.resize(session, {
+            await pin?.resize(session, {
               cols: parsed.cols,
               rows: parsed.rows,
             });
           else if (parsed.type === "input" && isTyping(parsed.data))
-            await sizes.reclaim(session);
+            await pin?.reclaim(session);
         } catch {
           // Not JSON; the connection already reported it.
         }

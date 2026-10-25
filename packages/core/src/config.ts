@@ -204,6 +204,12 @@ export interface DaedalusConfig {
    */
   claudeOverridesWritten: string[];
   /**
+   * The remote MCP servers the user turned on for cloud sessions: each name
+   * with the SHA-256 of the URL it had then. A server whose URL changed
+   * since is off again, since a URL can hold a key.
+   */
+  cloudMcpServers: Record<string, string>;
+  /**
    * The output style Daedalus last selected in the user's Claude settings.
    *
    * Same reason as the override list: it is how Daedalus tells its own
@@ -242,6 +248,7 @@ type StoredConfig = Partial<
   managedSkills?: Record<string, ManagedSkillSetting>;
   skillOverrides?: Record<string, SkillVisibility>;
   claudeOverridesWritten?: string[];
+  cloudMcpServers?: unknown;
   claudeOutputStyleWritten?: string;
   accounts?: AccountProfile[];
   defaultLogins?: { claude?: unknown };
@@ -353,11 +360,23 @@ export type SettingsPatch = Partial<
     | "managedSkills"
     | "skillOverrides"
     | "claudeOverridesWritten"
+    | "cloudMcpServers"
     | "claudeOutputStyleWritten"
     | "accounts"
     | "defaultLogins"
   >
 >;
+
+function storedCloudMcpServers(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[1] === "string" && /^[0-9a-f]{64}$/.test(entry[1]),
+    ),
+  );
+}
 
 /** The settings in a stored config, validated, with defaults for the rest. */
 function settingsFromStored(
@@ -385,6 +404,7 @@ function settingsFromStored(
     managedSkills: stored.managedSkills || {},
     skillOverrides: stored.skillOverrides || {},
     claudeOverridesWritten: stored.claudeOverridesWritten || [],
+    cloudMcpServers: storedCloudMcpServers(stored.cloudMcpServers),
     ...(stored.claudeOutputStyleWritten
       ? { claudeOutputStyleWritten: stored.claudeOutputStyleWritten }
       : {}),

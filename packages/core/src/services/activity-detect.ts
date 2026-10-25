@@ -242,14 +242,15 @@ export async function sweepProviderActivity(input: {
   /** Omitted by callers with no terminal to read; the pane tier is then off. */
   tmux?: TmuxClient;
 }): Promise<number> {
-  const live = input.repositories
-    .listAgents()
-    .filter(
-      (agent) =>
-        agent.kind === "agent" &&
-        (agent.provider === "codex" || agent.provider === "claude") &&
-        (agent.status === "running" || agent.status === "starting"),
-    );
+  const live = input.repositories.listAgents().filter(
+    (agent) =>
+      agent.kind === "agent" &&
+      // A cloud session's transcript and pane are in its pod; its hooks
+      // are the only reading it has.
+      !agent.hostId &&
+      (agent.provider === "codex" || agent.provider === "claude") &&
+      (agent.status === "running" || agent.status === "starting"),
+  );
   let applied = 0;
   await Promise.all(
     live.map(async (agent) => {

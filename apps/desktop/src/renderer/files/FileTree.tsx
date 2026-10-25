@@ -19,7 +19,7 @@ import {
   useState,
 } from "react";
 import type { DesktopClient } from "../client-types";
-import { askConfirm, askText } from "../dialogs";
+import { askConfirm, askText, plainLine } from "../dialogs";
 import { FileTypeIcon } from "./file-icons";
 import {
   planExplorerRefresh,
@@ -191,6 +191,9 @@ export function FileTree({
     removals.current = [];
   }, [workspaceId]);
   const [pending, setPending] = useState<PendingEntry>();
+  // Why the root could not be listed, in the host's words, such as a cloud
+  // workspace that is asleep. Shown in place of the tree.
+  const [rootError, setRootError] = useState<string>();
   const [menu, setMenu] = useState<{
     entry?: WorkspaceFileEntryDto;
     x: number;
@@ -256,13 +259,20 @@ export function FileTree({
     let cancelled = false;
     setExpandedState([]);
     setPending(undefined);
+    setRootError(undefined);
     void (async () => {
-      const root = await list("");
+      const response = await client.request.workspaceDirectoryList({
+        workspace: workspaceId,
+      });
       if (cancelled) return;
-      if (!root) {
-        onError("Could not list the workspace folder.");
+      if (!response.ok) {
+        setListings({});
+        setRootError(
+          response.error.message || "Could not list the workspace folder.",
+        );
         return;
       }
+      const root = response.data;
       const remembered = rememberedExpandedDirectories(workspaceId);
       const restored = await Promise.all(
         remembered.map(async (path) => [path, await list(path)] as const),
@@ -875,7 +885,16 @@ export function FileTree({
           setMenu({ x: event.clientX, y: event.clientY });
         }}
       >
-        {rows}
+        {rootError ? (
+          <p
+            className="file-tree-unavailable"
+            data-testid="file-tree-unavailable"
+          >
+            {plainLine(rootError, 200)}
+          </p>
+        ) : (
+          rows
+        )}
         <div className="file-tree-dragline" style={tree.getDragLineStyle()} />
       </div>
       {menu && (

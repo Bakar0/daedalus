@@ -1,0 +1,67 @@
+# Templates the gateway applies into each user namespace u-<userId>. They carry
+# no metadata.namespace; the controller sets it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: daedalus-tenant
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+data:
+  networkpolicy.yaml: |
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: workspace-isolation
+    spec:
+      podSelector: {}
+      policyTypes: [Ingress, Egress]
+      ingress: []
+      egress:
+        # The gateway's runner listener, through its in-cluster Service.
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: {{ .Release.Namespace }}
+              podSelector:
+                matchLabels:
+                  {{- include "daedalus.selector" . | nindent 18 }}
+          ports:
+            - protocol: TCP
+              port: {{ .Values.gateway.service.runnerPort }}
+        # Cluster DNS.
+        - to:
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: kube-system
+              podSelector:
+                matchLabels:
+                  k8s-app: kube-dns
+          ports:
+            - protocol: UDP
+              port: 53
+            - protocol: TCP
+              port: 53
+        # The internet, but not private ranges where other pods and nodes live.
+        - to:
+            - ipBlock:
+                cidr: 0.0.0.0/0
+                except:
+                  {{- toYaml .Values.tenant.blockedEgressCIDRs | nindent 18 }}
+  resourcequota.yaml: |
+    apiVersion: v1
+    kind: ResourceQuota
+    metadata:
+      name: workspaces
+    spec:
+      hard:
+        # Two PVCs (data and state) per workspace the gateway lets a user
+        # have, so the quota never refuses a workspace the limit allows.
+        persistentvolumeclaims: {{ mul 2 (int .Values.gateway.limits.workspacesPerUser) | quote }}
+        {{- toYaml (omit .Values.tenant.quota "persistentvolumeclaims") | nindent 8 }}
+  serviceaccount.yaml: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: runner
+    automountServiceAccountToken: false

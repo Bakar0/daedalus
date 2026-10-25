@@ -1,0 +1,14 @@
+{
+  "name": "@daedalus/runner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "build": "bun build src/main.ts --target bun --outfile dist/runner.js && bun build src/shim.ts --target bun --outfile dist/shim.js && bun build src/sessiond-main.ts --target bun --outfile dist/sessiond.js"
+  },
+  "dependencies": {
+    "@daedalus/platform": "workspace:*",
+    "@daedalus/protocol": "workspace:*",
+    "@daedalus/remote-protocol": "workspace:*"
+  }
+}

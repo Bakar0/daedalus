@@ -72,6 +72,7 @@ describe("SqliteRepositories", () => {
         teamId: null,
         teamHandle: null,
         spawnedBy: null,
+        hostId: null,
         autoRebirthPercent: null,
       });
       repositories.createIntegratedTerminal({
@@ -106,6 +107,48 @@ describe("SqliteRepositories", () => {
       ).toThrow("rollback");
       expect(repositories.findTask("task-id")).toBeDefined();
       repositories.close();
+    });
+  });
+
+  test("cloud links count only for the account they belong to", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const databasePath = join(home, "state.db");
+      await runMigrations(
+        databasePath,
+        join(import.meta.dir, "../../../../migrations"),
+      );
+      const repositories = new SqliteRepositories(databasePath);
+      const alice = { gatewayUrl: "https://a.test", userId: "alice" };
+      const bob = { gatewayUrl: "https://b.test", userId: "bob" };
+      // A link from before links had an account.
+      repositories.database
+        .query(
+          "INSERT INTO cloud_workspace_links VALUES ('pods', 'c-old', '', '')",
+        )
+        .run();
+      expect(repositories.cloudWorkspaceId("pods")).toBeUndefined();
+      expect(() => repositories.linkCloudWorkspace("pods", "c-a")).toThrow(
+        "not signed in",
+      );
+
+      repositories.setCloudOwner(alice);
+      expect(repositories.cloudWorkspaceId("pods")).toBeUndefined();
+      repositories.claimUnownedCloudLinks();
+      expect(repositories.cloudWorkspaceId("pods")).toBe("c-old");
+      expect(repositories.workspaceForCloud("c-old")).toBe("pods");
+
+      repositories.setCloudOwner(bob);
+      expect(repositories.cloudWorkspaceId("pods")).toBeUndefined();
+      expect(repositories.workspaceForCloud("c-old")).toBeUndefined();
+      repositories.linkCloudWorkspace("pods", "c-b");
+      expect(repositories.cloudWorkspaceId("pods")).toBe("c-b");
+
+      repositories.setCloudOwner(alice);
+      expect(repositories.cloudWorkspaceId("pods")).toBe("c-old");
+      repositories.setCloudOwner(undefined);
+      expect(repositories.cloudOwner()).toBeUndefined();
+      expect(repositories.cloudWorkspaceId("pods")).toBeUndefined();
+      repositories.database.close();
     });
   });
 });

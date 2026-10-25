@@ -162,6 +162,33 @@ describe("AgentService", () => {
     });
   });
 
+  test("finds a conversation that came home from the cloud, dated weeks before this start", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const id = "01a16fbf-b6aa-7f33-8df1-3d80160ed7bc";
+      const sessions = join(home, "codex", "sessions");
+      const directory = join(sessions, "2026", "09", "01");
+      await mkdir(directory, { recursive: true });
+      const startedAt = new Date().toISOString();
+      const check = () =>
+        hasPersistedCodexSession({
+          sessionsDirectory: sessions,
+          id,
+          startedAt,
+        });
+      await Bun.write(
+        join(directory, `rollout-2026-09-01T10-00-00-${id}.jsonl`),
+        "",
+      );
+      // Codex keeps nothing in an empty one.
+      await expect(check()).resolves.toBe(false);
+      await Bun.write(
+        join(directory, `rollout-2026-09-01T10-00-00-${id}.jsonl`),
+        "{}\n",
+      );
+      await expect(check()).resolves.toBe(true);
+    });
+  });
+
   test("a rollout in the session's folder outranks writer locks of other threads", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const startedAt = new Date().toISOString();

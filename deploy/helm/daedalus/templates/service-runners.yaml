@@ -1,0 +1,18 @@
+# The gateway's runner listener. ClusterIP only, and a Service of its own, so
+# a NodePort or LoadBalancer on the public Service never exposes it: a runner
+# token taken out of a pod does not work from outside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "daedalus.runnerServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "daedalus.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "daedalus.selector" . | nindent 4 }}
+  ports:
+    - name: runners
+      port: {{ .Values.gateway.service.runnerPort }}
+      targetPort: runners

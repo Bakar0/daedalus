@@ -539,6 +539,8 @@ export class SessionWorktrees {
       await this.closeTerminalsIn(worktree.path);
       await this.discardWorktree(repository, worktree);
     }
+    // A cloud session's folder is on its workspace volume, not here.
+    if (session.hostId) return;
     const workspace = await this.workspaces.get(session.workspaceId);
     const worktreesRoot = join(workspace.path, "worktrees");
     const folder = resolve(session.workingDirectory);
@@ -791,6 +793,11 @@ export class SessionWorktrees {
     session: string;
     repository: string;
     branch?: string;
+    /**
+     * The session folder to put it in, when the session's own is not on
+     * this Mac yet: a session coming home from the cloud.
+     */
+    folder?: string;
   }): Promise<SessionWorktree> {
     const session = this.repositories.findAgent(input.session);
     if (!session)
@@ -838,7 +845,10 @@ export class SessionWorktrees {
         "--branch <name> is required. Name the branch for the change, for example fix/login-timeout, and follow the repository's branch naming convention if its AGENTS.md or CLAUDE.md sets one.",
       );
     const workspace = await this.workspaces.getActive(session.workspaceId);
-    const path = join(session.workingDirectory, repository.name);
+    const path = join(
+      input.folder ?? session.workingDirectory,
+      repository.name,
+    );
     if (!isPathInside(workspace.path, path))
       throw new DaedalusError(
         "CONFLICT",

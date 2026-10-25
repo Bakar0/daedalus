@@ -206,11 +206,17 @@ export class RoutineDelivery {
         text: "routines are paused",
       });
     const session = this.repositories.findAgent(ability.sessionId);
-    if (!session || session.status !== "running" || session.archivedAt)
+    if (!session || session.status !== "running" || session.archivedAt) {
+      // Asleep with its cloud workspace and a run due: woken and resumed,
+      // and a later tick delivers. One that cannot resume says why on its
+      // card and is not woken again.
+      if (session && this.routines.waitingRuns(ability).length)
+        void this.agents.wakeIfAsleep(session).catch(() => undefined);
       return this.hold(ability, {
         reason: "stopped",
         text: "the session is not running",
       });
+    }
     if (typed.has(session.id) || ability.pendingNote) return;
     const delivered = this.routines.deliveredRuns(ability);
     const now = this.now().getTime();

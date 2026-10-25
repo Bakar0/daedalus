@@ -1324,7 +1324,9 @@ describe("desktop application shell", () => {
     );
     expect(html).toContain('data-attention="true"');
     expect(html).toContain("1 needs you");
-    expect(html).toContain('aria-label="Archive Demo workspace"');
+    // Archive is unpinned at first: it waits in the workspace's Settings.
+    expect(html).toContain('aria-label="Settings of Demo"');
+    expect(html).not.toContain('aria-label="Archive Demo workspace"');
     expect(html).toContain('class="archive-icon"');
     // A running task is not offered Start again; a second session is the
     // dispatcher's "second opinion", not a second click on the same button.
@@ -2200,7 +2202,8 @@ describe("desktop application shell", () => {
       'aria-label="Delete Archived conversation permanently"',
     );
     expect(html).toContain('aria-label="Delete Archived project permanently"');
-    expect(html).toContain('aria-label="Archive Active workspace"');
+    // Archive is unpinned at first: it waits in the workspace's Settings.
+    expect(html).toContain('aria-label="Settings of Active"');
   });
 
   test("renders persistent integrated terminal tabs separately from sessions", () => {
@@ -2262,7 +2265,8 @@ describe("desktop application shell", () => {
     expect(html).toContain("Terminal for Demo 55555555");
     expect(html).toContain('aria-label="New terminal in Daedalus home"');
     expect(html).toContain('title="New terminal in /tmp/daedalus-test"');
-    expect(html).toContain('aria-label="Open Demo in integrated terminal"');
+    // Unpinned at first, the workspace's terminal action is in its Settings.
+    expect(html).toContain('aria-label="Settings of Demo"');
     expect(html).not.toContain("Demo · archived");
   });
 

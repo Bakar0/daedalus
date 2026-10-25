@@ -52,6 +52,14 @@ export interface Workspace {
    */
   defaultClaudeAccount: string | null;
   defaultCodexAccount: string | null;
+  /**
+   * Where it lives: `cloud` while its cloud copy holds it and every session
+   * runs there; absent on this Mac. Changed only by a workspace move, by
+   * archive, and by the fallback to this Mac's backup.
+   */
+  place?: "cloud";
+  /** What the user is told about the last change of place, until dismissed. */
+  cloudNotice?: string;
 }
 
 /** `claude:default`, `claude:<profile id>`, `codex:default`, … */
@@ -174,6 +182,12 @@ export interface AgentSession {
    * spawn`, as a handoff does, or null when the user or the app did.
    */
   spawnedBy: UUID | null;
+  /**
+   * The cloud host it runs on (`ws:<workspaceId>`), or null for this Mac.
+   * Fixed at spawn. On a cloud host `workingDirectory` is relative to the
+   * workspace root there.
+   */
+  hostId: string | null;
 }
 
 export interface IntegratedTerminal {

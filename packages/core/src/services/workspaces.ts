@@ -257,11 +257,13 @@ export class WorkspaceService {
         `Workspace folder '${workspace.path}' or its identity marker is missing`,
         { workspaceId: workspace.id },
       );
-    await ensureWorkspaceContentFiles(
-      workspace.path,
-      this.daedalusHome,
-      this.instructionFilesEnabled(),
-    );
+    // A cloud workspace's folder here is a backup nothing writes.
+    if (workspace.place !== "cloud")
+      await ensureWorkspaceContentFiles(
+        workspace.path,
+        this.daedalusHome,
+        this.instructionFilesEnabled(),
+      );
     return workspace;
   }
 

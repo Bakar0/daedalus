@@ -19,6 +19,8 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
+  AccountDto,
+  CloudStateDto,
   TeamDetailDto,
   FileLinkTargetDto,
   AppUpdateDto,
@@ -54,6 +56,9 @@ import {
   type AutoRebirthDto,
 } from "@daedalus/protocol";
 import { LargeFileBar } from "./LargeFileBar";
+import { CloudPasteCodeBar, CloudSignInPanel } from "./CloudSignInBar";
+import { SessionOpening } from "./SessionOpening";
+import { usePins } from "./pins";
 import {
   changeReachesBeyondSnapshot,
   fetchSnapshot,
@@ -63,7 +68,11 @@ import type { DesktopClient } from "./client-types";
 import { SettingsModal, type SettingsSection } from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
-import { wholeLinkRows, type LinkRange } from "./terminal-links";
+import {
+  opensTerminalLink,
+  wholeLinkRows,
+  type LinkRange,
+} from "./terminal-links";
 import { WheelLines, wheelToReports } from "./terminal-wheel";
 import { findPathCandidates } from "./terminal-file-links";
 import { repositoryFuzzyScore } from "./repository-search";
@@ -83,7 +92,20 @@ import {
 } from "./cost-format";
 import { TaskActionBar } from "./TaskActionBar";
 import { ConfirmButton } from "./ConfirmButton";
-import { askConfirm, askText, DialogHost } from "./dialogs";
+import {
+  askChoice,
+  askConfirm,
+  askText,
+  DialogHost,
+  plainLine,
+} from "./dialogs";
+import {
+  cloudLimitMessage,
+  sessionLines,
+  tooBigLines,
+  WorkspaceMoveState,
+  WorkspaceNotice,
+} from "./workspace-move";
 import { TaskActionIcon } from "./task-action-icons";
 import {
   type FileOpenRequest,
@@ -109,7 +131,13 @@ import type { DiffTarget } from "./files/EditorArea";
 import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
-import { ColorSwatches, SessionMenu, WorkspaceMenu } from "./SessionMenu";
+import {
+  ColorSwatches,
+  SessionMenu,
+  WorkspaceMenu,
+  type MenuAction,
+} from "./SessionMenu";
+import { useCloudState } from "./CloudPanel";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPanel } from "./teams/TeamPanel";
 import { RoutinesPanel } from "./routines/RoutinesPanel";
@@ -183,6 +211,7 @@ export {
   planExplorerRefresh,
 } from "./files/explorer-state";
 import { sessionColorStyle } from "./session-color-style";
+import { TerminalClipboardGate } from "./terminal-clipboard";
 
 /** The handle a member name becomes, as the core makes it. */
 function teamHandlePreview(name: string): string {
@@ -345,6 +374,8 @@ export interface SessionLaunchState {
   taskId?: string;
   name: string;
   tool: "codex" | "claude" | "terminal";
+  /** Runs in the workspace's cloud pod, which may need preparing first. */
+  cloud?: boolean;
   startedAt: string;
   status: "starting" | "error";
   error?: string;
@@ -496,6 +527,30 @@ function RebirthIcon() {
       <path d="M19.5 4v4h-4" />
       <path d="M12 9.5v5" />
       <path d="M9.5 12h5" />
+    </svg>
+  );
+}
+
+/** A cloud with an arrow up: the session's move to the cloud and back. */
+/** A cloud with an arrow: up into it, or down out of it to this Mac. */
+function CloudActionIcon({ home = false }: { home?: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.7"
+      viewBox="0 0 24 24"
+    >
+      <path d="M7 18.5h10a4 4 0 0 0 .6-7.96A5.5 5.5 0 0 0 7 9.2 4.7 4.7 0 0 0 7 18.5Z" />
+      <path d="M12 15.5v-5" />
+      {home ? (
+        <path d="m9.8 13.3 2.2 2.2 2.2-2.2" />
+      ) : (
+        <path d="m9.8 12.6 2.2-2.2 2.2 2.2" />
+      )}
     </svg>
   );
 }
@@ -1269,6 +1324,9 @@ function TerminalSurface({
   const retheme = useRef<(theme: AppTheme) => void>(() => undefined);
   useEffect(() => retheme.current(appTheme), [appTheme]);
   const [connection, setConnection] = useState("connecting");
+  // A cloud session's output is untrusted; see `TerminalClipboardGate`.
+  const cloudRef = useRef(false);
+  cloudRef.current = Boolean(session?.hostId);
   const [now, setNow] = useState(Date.now());
   const connectionIssue = ["connected", "reconnected"].includes(connection)
     ? undefined
@@ -1333,6 +1391,18 @@ function TerminalSurface({
     let lastSentSize: string | undefined;
     const pending: Uint8Array[] = [];
     let pendingBytes = 0;
+    // The mouse gestures in this terminal that may copy; tmux copies a
+    // drag as the button comes up.
+    const clipboardGate = new TerminalClipboardGate();
+    const notePress = (event: MouseEvent) =>
+      clipboardGate.press(event.clientX, event.clientY);
+    const noteMove = (event: MouseEvent) =>
+      clipboardGate.move(event.clientX, event.clientY);
+    const noteRelease = () => clipboardGate.release(Date.now());
+    container.addEventListener("mousedown", notePress, true);
+    // A drag can end outside the terminal.
+    window.addEventListener("mousemove", noteMove, true);
+    window.addEventListener("mouseup", noteRelease, true);
     const drain = () => {
       frame = undefined;
       const chunks = pending.splice(0);
@@ -1452,7 +1522,7 @@ function TerminalSurface({
           allowNonHttpProtocols: true,
           activate: () => {},
           hover: (_event, url, range) => {
-            if (/^(https?|file):/i.test(url))
+            if (opensTerminalLink(url, { cloud: cloudRef.current }))
               hoverLink(url, range, () => onOpenLink(url));
           },
           leave: leaveLink,
@@ -1471,17 +1541,20 @@ function TerminalSurface({
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(
         new WebLinksAddon((event) => event.preventDefault(), {
-          hover: (_event, url, range) =>
-            hoverLink(url, range, () => onOpenLink(url)),
+          hover: (_event, url, range) => {
+            if (opensTerminalLink(url, { cloud: cloudRef.current }))
+              hoverLink(url, range, () => onOpenLink(url));
+          },
           leave: leaveLink,
         }),
       );
       // Paths an agent prints, like `src/a.ts:12:3`. Only the ones that name
       // a file in a workspace become links, which is what keeps ordinary
-      // words with a dot in them from lighting up.
+      // words with a dot in them from lighting up. A cloud session's paths
+      // are the pod's and never links: see `opensTerminalLink`.
       terminal.registerLinkProvider({
         provideLinks: (y, callback) => {
-          const links = fileLinksRef.current;
+          const links = cloudRef.current ? undefined : fileLinksRef.current;
           const text = terminal?.buffer.active
             .getLine(y - 1)
             ?.translateToString(true);
@@ -1525,6 +1598,14 @@ function TerminalSurface({
       // shell, and anything else that writes OSC 52. Only a write is honoured;
       // a `?` query would hand the clipboard to whatever runs in the pane.
       terminal.parser.registerOscHandler(52, (data) => {
+        if (
+          !clipboardGate.accepts({
+            cloud: cloudRef.current,
+            now: Date.now(),
+            hasSelection: terminal?.hasSelection() ?? false,
+          })
+        )
+          return true;
         const encoded = data.slice(data.indexOf(";") + 1);
         if (!encoded || encoded === "?") return true;
         try {
@@ -1721,6 +1802,9 @@ function TerminalSurface({
       // and the browser hands focus back to the body.
       heldCaretRef.current = holdsCaret(containerRef.current);
       disposed = true;
+      container.removeEventListener("mousedown", notePress, true);
+      window.removeEventListener("mousemove", noteMove, true);
+      window.removeEventListener("mouseup", noteRelease, true);
       fitRef.current = () => undefined;
       focusRef.current = () => undefined;
       retheme.current = () => undefined;
@@ -2092,7 +2176,45 @@ export function WorkspaceApp({
       await refresh();
     },
   });
+  // The cloud sign-in and the cloud workspaces, from the gateway. Asked on a
+  // timer rather than with every snapshot: each answer is a gateway request.
+  const cloudState = useCloudState(client, 10_000);
+  // Which card actions show on the cards; the rest live in their menus.
+  const { pins, pin } = usePins();
+  const cloudByWorkspace = useMemo(
+    () =>
+      new Map(
+        (cloudState.data?.workspaces ?? []).map((item) => [
+          item.workspaceId,
+          item,
+        ]),
+      ),
+    [cloudState.data],
+  );
+  const cloudByHost = useMemo(
+    () =>
+      new Map(
+        (cloudState.data?.workspaces ?? []).map((item) => [
+          `ws:${item.cloudId}`,
+          item,
+        ]),
+      ),
+    [cloudState.data],
+  );
   const [error, setError] = useState<string>();
+  // Workspace moves, by workspace id. A move can take minutes, and its
+  // progress comes with the snapshot; a call that failed before the host
+  // had an entry to show leaves its message here instead.
+  const workspaceMoveActions = useMutation({
+    // A failure is the workspace's to show, under its card.
+    onSettled: async () => {
+      await refresh();
+      await cloudState.refresh();
+    },
+  });
+  const [moveErrors, setMoveErrors] = useState<Record<string, string>>({});
+  const noteMoveError = (workspaceId: string, message: string) =>
+    setMoveErrors((current) => ({ ...current, [workspaceId]: message }));
   const [theme, setTheme] = useState<AppTheme>("dark");
   const [workspaceForm, setWorkspaceForm] = useState({
     name: "",
@@ -2967,15 +3089,224 @@ export function WorkspaceApp({
   const attentionById = new Map(
     (snapshot?.attention ?? []).map((item) => [item.sessionId, item]),
   );
+  // Workspaces on their way to or from the cloud, and ones just moved.
+  const moveByWorkspace = new Map(
+    (snapshot?.workspaceMoves ?? []).map((move) => [move.workspaceId, move]),
+  );
+  // The host's own failed entry says it now; the window's copy would come
+  // back once that entry goes.
+  const failedMoves = (snapshot?.workspaceMoves ?? [])
+    .filter((move) => move.phase === "failed")
+    .map((move) => move.workspaceId)
+    .join(" ");
+  useEffect(() => {
+    if (!failedMoves) return;
+    const failed = new Set(failedMoves.split(" "));
+    setMoveErrors((current) =>
+      Object.keys(current).some((id) => failed.has(id))
+        ? Object.fromEntries(
+            Object.entries(current).filter(([id]) => !failed.has(id)),
+          )
+        : current,
+    );
+  }, [failedMoves]);
+  const workspaceMoving = (item: WorkspaceDto) => {
+    const move = moveByWorkspace.get(item.id);
+    return (
+      (move !== undefined &&
+        move.phase !== "failed" &&
+        move.phase !== "moved") ||
+      workspaceMoveActions.pending(item.id)
+    );
+  };
+
+  /** How many actions a workspace header shows on hover or focus. */
+  const headerActionCount = (item: WorkspaceDto) =>
+    2 +
+    (["terminal", "secrets", "archive"] as const).filter((id) =>
+      pins.workspace.has(id),
+    ).length +
+    (workspaceCloudAction(item) ? 1 : 0);
+  /**
+   * How many it shows with the pointer away: Settings, the + and the cloud
+   * while it is lit.
+   */
+  const headerShownCount = (item: WorkspaceDto) =>
+    2 + (item.place === "cloud" || workspaceMoving(item) ? 1 : 0);
+
+  /**
+   * The workspace header's cloud action: a cloud that moves the workspace
+   * there when pinned, lit while it is there, where a click brings it home.
+   * Signed out, a workspace on this Mac has none.
+   */
+  const workspaceCloudAction = (item: WorkspaceDto) => {
+    const inCloud = item.place === "cloud";
+    const signedIn = Boolean(cloudState.data?.signedIn);
+    const moving = workspaceMoving(item);
+    // Lit while in the cloud or moving, whether pinned or not; otherwise on
+    // the header only when pinned, like the others.
+    if (!inCloud && !moving && !(signedIn && pins.workspace.has("cloud")))
+      return null;
+    const failure = cloudByWorkspace.get(item.id);
+    return (
+      <button
+        aria-label={
+          inCloud
+            ? `Move ${item.name} to this Mac`
+            : `Move ${item.name} to cloud`
+        }
+        className="session-card-action workspace-cloud-action"
+        data-cloud-lit={inCloud ? "true" : undefined}
+        data-moving={moving ? "true" : undefined}
+        data-testid="workspace-cloud-action"
+        disabled={moving || !signedIn || !item.available}
+        onClick={() => void moveWorkspace(item, inCloud ? "mac" : "cloud")}
+        title={
+          moving
+            ? "Moving…"
+            : !signedIn
+              ? "In the cloud. Sign in to its cloud account in Settings › Cloud to reach it or bring it home."
+              : inCloud
+                ? failure?.status === "failed"
+                  ? `In the cloud, where its pod failed: ${plainLine(failure.reason ?? "no reason given", 160)}. Click to bring it back to this Mac.`
+                  : "In the cloud: its sessions, terminals and files are in its pod. Click to bring it back to this Mac."
+                : "Move to cloud: its sessions stop, the workspace is copied to its cloud pod, and they resume there"
+        }
+        type="button"
+      >
+        <CloudActionIcon home={inCloud} />
+      </button>
+    );
+  };
   const telemetryById = new Map(
     (snapshot?.sessionTelemetry ?? []).map((item) => [item.sessionId, item]),
   );
-  const statusViewFor = (session: AgentSessionDto) =>
-    sessionStatusView(
+  /**
+   * Whether a cloud session is asleep with its workspace, or waking: opening
+   * one wakes the workspace and revives it.
+   */
+  const cloudSleep = (
+    session: AgentSessionDto,
+  ): "sleeping" | "waking" | "failed" | "unavailable" | undefined => {
+    if (!session.hostId || session.archivedAt || session.status === "exited")
+      return undefined;
+    if (sessionActions.pending(`wake:${session.id}`)) return "waking";
+    const cloud = cloudState.data;
+    const linked = cloudByHost.get(session.hostId);
+    if (linked)
+      return linked.status === "sleeping"
+        ? "sleeping"
+        : linked.status === "failed"
+          ? "failed"
+          : undefined;
+    // Signed out, or signed in to an account this workspace is not in. A
+    // gateway that did not answer says nothing about which.
+    return cloud && cloud.connection !== "error" ? "unavailable" : undefined;
+  };
+  const statusViewFor = (session: AgentSessionDto): SessionStatusView => {
+    const view = sessionStatusView(
       session,
       activityById.get(session.id),
       attentionById.get(session.id),
     );
+    const sleep = cloudSleep(session);
+    // Quiet, unlike a lost session: opening the session wakes it. Anything
+    // else about the cloud shows on the workspace, not on each card.
+    return sleep === "sleeping" || sleep === "waking"
+      ? {
+          ...view,
+          tone: "ended",
+          label: sleep === "sleeping" ? "cloud asleep" : "waking…",
+          detail:
+            sleep === "waking"
+              ? "Waking the cloud workspace, then resuming this session"
+              : "The cloud workspace is asleep. Open the session to wake it.",
+          attention: false,
+          reasons: [],
+        }
+      : view;
+  };
+
+  /** A session's card actions, for its menu with their pins. */
+  const sessionMenuActions = (
+    session: AgentSessionDto,
+    holdsRoutines: boolean,
+  ): MenuAction[] => {
+    const agent =
+      session.kind === "agent" &&
+      (session.provider === "claude" || session.provider === "codex");
+    return [
+      ...(agent
+        ? [
+            {
+              id: "rebirth",
+              icon: <RebirthIcon />,
+              label: "Rebirth",
+              pinned: pins.session.has("rebirth"),
+              onPin: (on: boolean) => pin("session", "rebirth", on),
+              disabled: sessionActions.pending(session.id),
+              run: () => void continueInNewAgent(session),
+            },
+          ]
+        : []),
+      {
+        id: "archive",
+        icon: <ArchiveIcon />,
+        label: "Archive",
+        pinned: pins.session.has("archive"),
+        onPin: (on: boolean) => pin("session", "archive", on),
+        confirm: holdsRoutines
+          ? "Running work stops and its routines pause. Restoring the session resumes both."
+          : "Running work stops. Its conversation can be restored and resumed later.",
+        run: () => void archiveSession(session),
+      },
+    ];
+  };
+
+  // Each cloud session's sign-in, by session.
+  const signInBySession = new Map(
+    (snapshot?.cloudSignIns ?? []).map((offer) => [offer.sessionId, offer]),
+  );
+
+  function openCloudSignIn(requestId: string, sessionId: string) {
+    void sessionActions.run(
+      client.request.cloudSignInOpen({ requestId }),
+      `signin:${sessionId}`,
+    );
+  }
+
+  function dismissCloudSignIn(sessionId: string) {
+    void sessionActions.run(
+      client.request.cloudSignInDismiss({ sessionId }),
+      `signin:${sessionId}`,
+    );
+  }
+
+  /**
+   * Whether opening a cloud session resumes it: asleep with its workspace,
+   * or lost with a workspace that is awake again (woken from its menu, or
+   * by another of its sessions).
+   */
+  const resumesOnOpen = (session: AgentSessionDto): boolean => {
+    const sleep = cloudSleep(session);
+    return (
+      sleep === "sleeping" ||
+      (sleep === undefined &&
+        Boolean(session.hostId) &&
+        session.status === "lost" &&
+        !session.archivedAt &&
+        !sessionActions.pending(session.id))
+    );
+  };
+
+  async function wakeCloudSession(session: AgentSessionDto) {
+    const revived = await sessionActions.run(
+      client.request.cloudSessionWake({ sessionId: session.id }),
+      `wake:${session.id}`,
+    );
+    await cloudState.refresh();
+    if (revived) openSession(revived.id);
+  }
 
   const activeWorkspaces = (snapshot?.workspaces ?? []).filter(
     (item) => !item.archivedAt && !archivingWorkspaceIds.has(item.id),
@@ -3197,6 +3528,8 @@ export function WorkspaceApp({
       : undefined) ??
     workspace;
   // Set when the dialog adds a member from its lead's card.
+  // A workspace in the cloud starts every session in its pod.
+  const sessionInCloud = sessionWorkspace?.place === "cloud";
   const memberTeam = sessionForm.teamId
     ? teamsById.get(sessionForm.teamId)
     : undefined;
@@ -3745,6 +4078,7 @@ export function WorkspaceApp({
     const isTerminal = sessionType === "terminal";
     const { color, routines, orchestration, teamId, instructions } =
       sessionForm;
+    const cloud = sessionInCloud;
     const abilities = [
       ...(routines ? (["routines"] as const) : []),
       ...(orchestration ? (["orchestration"] as const) : []),
@@ -3755,6 +4089,7 @@ export function WorkspaceApp({
       taskId: sessionForm.taskId,
       name: sessionForm.name,
       tool: isTerminal ? "terminal" : (sessionType as "codex" | "claude"),
+      ...(sessionInCloud ? { cloud: true } : {}),
       startedAt: new Date().toISOString(),
       status: "starting",
     };
@@ -3771,7 +4106,7 @@ export function WorkspaceApp({
       // Remembered before the spawn, so a session that fails to start still
       // leaves the default the user asked for. An empty model is a real
       // choice too: it records "this provider, its own default".
-      if (rememberSessionModel && !isTerminal)
+      if (rememberSessionModel && !isTerminal && !cloud)
         await perform(
           client.request.workspaceUpdate({
             reference: sessionWorkspace.id,
@@ -4052,9 +4387,12 @@ export function WorkspaceApp({
     archivingStartedAt.current = new Date().toISOString();
     setArchivingSessionIds((current) => new Set(current).add(session.id));
     if (wasActive) setActiveSessionId(undefined);
-    const archived = await sessionActions.run(
-      client.request.agentArchive({ id: session.id, force: false }),
-      session.id,
+    // A session archives where it runs, on this Mac or in the cloud.
+    const archived = Boolean(
+      await sessionActions.run(
+        client.request.agentArchive({ id: session.id, force: false }),
+        session.id,
+      ),
     );
     setArchivingSessionIds((current) => {
       const next = new Set(current);
@@ -4062,6 +4400,91 @@ export function WorkspaceApp({
       return next;
     });
     if (!archived && wasActive) setActiveSessionId(session.id);
+  }
+
+  /**
+   * Moves a whole workspace to the cloud or back to this Mac. No question
+   * first: the move's steps show on the workspace, and Cancel stops it
+   * while it waits for turns.
+   * The host may answer with a question (files that steer agents, sessions
+   * that wait on the user) and is asked again with the answer, or with why
+   * it cannot move (sessions the cloud cannot run, something too big),
+   * which the window shows and stops at.
+   */
+  async function moveWorkspace(item: WorkspaceDto, to: "cloud" | "mac") {
+    setMoveErrors(({ [item.id]: _gone, ...rest }) => rest);
+    let stopWorking = false;
+    for (let round = 0; round < 4; round++) {
+      const answer = await workspaceMoveActions.run(
+        client.request
+          .workspaceMove({
+            reference: item.id,
+            to,
+            ...(stopWorking ? { stopWorking } : {}),
+          })
+          .then(
+            (response) => {
+              if (!response.ok) noteMoveError(item.id, response.error.message);
+              return response;
+            },
+            (cause: unknown) => {
+              noteMoveError(
+                item.id,
+                cause instanceof Error ? cause.message : "The move failed",
+              );
+              throw cause;
+            },
+          ),
+        item.id,
+      );
+      if (!answer) return;
+      if (answer.status === "moved") return;
+      if (answer.status === "busy") {
+        const stop = await askChoice({
+          title: "Stop sessions that wait for you?",
+          message: `These sessions in ${item.name} wait for your answer, so their turns will not end. Stop them now? They resume after the move.`,
+          lines: sessionLines(answer.sessions),
+          choices: [{ id: "stop", label: "Stop them and move", danger: true }],
+        });
+        if (stop !== "stop") return;
+        stopWorking = true;
+        continue;
+      }
+      if (answer.status === "needsStopped") {
+        // Named for what they are, so an idle session the user does not
+        // think of as running still makes sense here.
+        const stop = await askChoice({
+          title: "Custom sessions can't run in the cloud",
+          message: `Stop them and move ${item.name}? They stay on this Mac and can be resumed after it moves home.`,
+          lines: sessionLines(answer.sessions),
+          choices: [{ id: "stop", label: "Stop them and move", danger: true }],
+        });
+        if (stop !== "stop") return;
+        for (const one of answer.sessions) {
+          const stopped = await workspaceMoveActions.run(
+            client.request
+              .agentStop({ id: one.id, force: false })
+              .then((response) => {
+                if (!response.ok)
+                  noteMoveError(item.id, response.error.message);
+                return response;
+              }),
+            item.id,
+          );
+          if (!stopped) return;
+        }
+        continue;
+      }
+      await askChoice({
+        title:
+          to === "cloud" ? "Too big for the cloud" : "Too big to come home",
+        message: `${item.name} did not move. This is over its cap:`,
+        lines: tooBigLines(answer.items),
+        choices: [],
+        cancelLabel: "OK",
+      });
+      return;
+    }
   }
 
   // The button runs the same thing as `/daedalus-rebirth`: a running agent
@@ -4292,9 +4715,16 @@ export function WorkspaceApp({
       setSelectedTaskId(undefined);
       setActiveSessionId(undefined);
     }
-    const archived = await perform(
+    // A workspace in the cloud comes home first; one that is too big to
+    // come home is not archived.
+    const answer = await perform(
       client.request.workspaceArchive({ reference: item.id }),
     );
+    const archived = answer?.status === "archived";
+    if (answer?.status === "needsSmaller")
+      setError(
+        `${item.name} is too big to come home from the cloud, so it is not archived. ${tooBigLines(answer.items).join("; ")}`,
+      );
     setArchivingWorkspaceIds((current) => {
       const next = new Set(current);
       next.delete(item.id);
@@ -4338,10 +4768,28 @@ export function WorkspaceApp({
     });
   }
 
+  /**
+   * A terminal for a workspace in the cloud: a terminal session in its pod,
+   * at the workspace's root there, opened like any session. This Mac's
+   * folder is its backup while it is in the cloud, so no shell runs in it.
+   */
+  async function createCloudTerminal(workspaceItem: WorkspaceDto) {
+    const created = await perform(
+      client.request.agentSpawn({
+        workspace: workspaceItem.id,
+        name: workspaceItem.name,
+        terminal: true,
+      }),
+    );
+    if (created) showSession(created.id, workspaceItem.id);
+  }
+
   async function createIntegratedTerminal(
     workspaceItem?: WorkspaceDto,
     location?: { name: string; workingDirectory: string },
   ) {
+    if (workspaceItem?.place === "cloud")
+      return createCloudTerminal(workspaceItem);
     setTerminalPanelOpen(true);
     const created = await perform(
       client.request.terminalCreate({
@@ -4353,8 +4801,13 @@ export function WorkspaceApp({
     if (created) setActiveTerminalId(created.id);
   }
 
-  /** A terminal in the workspace's folder, in a center tab of its own. */
+  /**
+   * A terminal in the workspace's folder, in a center tab of its own; in
+   * the pod while the workspace is in the cloud.
+   */
   async function createTerminalTab(workspaceItem: WorkspaceDto) {
+    if (workspaceItem.place === "cloud")
+      return createCloudTerminal(workspaceItem);
     const created = await perform(
       client.request.terminalCreate({
         workspace: workspaceItem.id,
@@ -4894,8 +5347,44 @@ export function WorkspaceApp({
           team?.role === "member" && !leadArchived ? "true" : undefined
         }
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
+        data-cloud={session.hostId ? "true" : undefined}
+        data-cloud-state={
+          cloudSleep(session) === "sleeping" || cloudSleep(session) === "waking"
+            ? cloudSleep(session)
+            : undefined
+        }
         data-color={session.color ?? undefined}
-        style={sessionColorStyle(session.color)}
+        style={
+          {
+            ...sessionColorStyle(session.color),
+            // The title keeps clear of the actions on show: the menu, a
+            // revive and a requested rebirth always, the rest on hover.
+            "--card-actions-shown":
+              1 +
+              Number(
+                session.status === "lost" &&
+                  cloudSleep(session) !== "unavailable",
+              ) +
+              Number(
+                pins.session.has("rebirth") &&
+                  Boolean(session.rebirthRequestedAt),
+              ),
+            "--card-actions":
+              1 +
+              Number(
+                session.status === "lost" &&
+                  cloudSleep(session) !== "unavailable",
+              ) +
+              Number(team?.role === "lead" && session.status === "running") +
+              Number(
+                pins.session.has("rebirth") &&
+                  session.kind === "agent" &&
+                  (session.provider === "claude" ||
+                    session.provider === "codex"),
+              ) +
+              Number(pins.session.has("archive")),
+          } as React.CSSProperties
+        }
         data-pinned={session.pinnedAt ? "true" : undefined}
         data-attention={statusView.attention ? "true" : undefined}
         data-dragging={reorder.draggingId === session.id ? "true" : undefined}
@@ -4907,7 +5396,10 @@ export function WorkspaceApp({
           className="session-card-main"
           data-provider={session.provider}
           data-session-id={session.id}
-          onClick={() => showSession(session.id, session.workspaceId)}
+          onClick={() => {
+            showSession(session.id, session.workspaceId);
+            if (resumesOnOpen(session)) void wakeCloudSession(session);
+          }}
           // What the three rows leave out, or cut short.
           title={[
             sessionName(session),
@@ -4940,6 +5432,15 @@ export function WorkspaceApp({
                 the live status. What the agent last said is in the tooltip. */}
             <span className="session-card-title">
               <strong>{sessionName(session)}</strong>
+              {signInBySession.get(session.id)?.phase === "waiting" && (
+                <span
+                  className="session-cloud-signin"
+                  data-testid="session-cloud-signin"
+                  title={`Wants to open a sign-in page on ${signInBySession.get(session.id)!.host}; open the session to allow it`}
+                >
+                  Sign-in
+                </span>
+              )}
               {session.account && (
                 // Only a non-default account is named; Default is the norm.
                 <span
@@ -5041,17 +5542,26 @@ export function WorkspaceApp({
           </button>
         )}
         <span className="workspace-card-actions" data-no-drag>
-          {session.status === "lost" && (
-            <button
-              aria-label={`Revive ${sessionName(session)} session`}
-              className="session-card-action"
-              disabled={sessionActions.pending(session.id)}
-              onClick={() => void reviveSession(session)}
-              title="Resume this conversation in a new terminal"
-            >
-              ↻
-            </button>
-          )}
+          {session.status === "lost" &&
+            cloudSleep(session) !== "unavailable" && (
+              <button
+                aria-label={`Revive ${sessionName(session)} session`}
+                className="session-card-action"
+                disabled={sessionActions.pending(session.id)}
+                onClick={() =>
+                  void (session.hostId
+                    ? wakeCloudSession(session)
+                    : reviveSession(session))
+                }
+                title={
+                  cloudSleep(session) === "sleeping"
+                    ? "Wake the cloud workspace and resume this conversation"
+                    : "Resume this conversation in a new terminal"
+                }
+              >
+                ↻
+              </button>
+            )}
           {team?.role === "lead" && session.status === "running" && (
             <button
               aria-label={`Add a member to ${team.team.name}`}
@@ -5063,7 +5573,8 @@ export function WorkspaceApp({
               +
             </button>
           )}
-          {session.kind === "agent" &&
+          {pins.session.has("rebirth") &&
+            session.kind === "agent" &&
             (session.provider === "claude" || session.provider === "codex") && (
               <button
                 aria-label={`Rebirth ${sessionName(session)}`}
@@ -5085,25 +5596,28 @@ export function WorkspaceApp({
                 <RebirthIcon />
               </button>
             )}
-          <ConfirmButton
-            aria-label={`Archive ${sessionName(session)} session`}
-            armedTitle={
-              holdsRoutines
-                ? "Running work stops and its routines pause. Restoring the session resumes both."
-                : "Running work stops. Its conversation can be restored and resumed later."
-            }
-            className="session-card-action session-card-hover-action"
-            onConfirm={() => void archiveSession(session)}
-            title={
-              holdsRoutines
-                ? "Archive session and pause its routines"
-                : "Archive session"
-            }
-          >
-            <ArchiveIcon />
-          </ConfirmButton>
+          {pins.session.has("archive") && (
+            <ConfirmButton
+              aria-label={`Archive ${sessionName(session)} session`}
+              armedTitle={
+                holdsRoutines
+                  ? "Running work stops and its routines pause. Restoring the session resumes both."
+                  : "Running work stops. Its conversation can be restored and resumed later."
+              }
+              className="session-card-action session-card-hover-action"
+              onConfirm={() => void archiveSession(session)}
+              title={
+                holdsRoutines
+                  ? "Archive session and pause its routines"
+                  : "Archive session"
+              }
+            >
+              <ArchiveIcon />
+            </ConfirmButton>
+          )}
           {/* Last, so rebirth and archive open to its left on hover. */}
           <SessionMenu
+            actions={sessionMenuActions(session, holdsRoutines)}
             autoRebirth={session.autoRebirthPercent}
             color={session.color}
             inheritedRebirth={inheritedRebirth}
@@ -5237,9 +5751,8 @@ export function WorkspaceApp({
         (session) => session.archivedAt && !deletingSessionIds.has(session.id),
       )
       .sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
-    // Offered only for the workspace in focus, but its row's space is kept
-    // under every workspace that has some, so focus moving never shifts the
-    // list (#55).
+    // Offered only for the workspace in focus; the others keep no empty row
+    // for it.
     const archiveInFocus = item.id === workspaceId;
     const launches = pendingSessionLaunches(
       sessionLaunches.filter((launch) => launch.workspaceId === item.id),
@@ -5725,10 +6238,32 @@ export function WorkspaceApp({
               onCopy={copyCommandText}
             />
           ))}
+      {activeSession &&
+        signInBySession.get(activeSession.id)?.phase === "pasting" && (
+          <CloudPasteCodeBar
+            color={activeSession.color}
+            host={signInBySession.get(activeSession.id)!.host ?? ""}
+            onDone={() => dismissCloudSignIn(activeSession.id)}
+          />
+        )}
       {activeSession ? (
         // The drawer sits over the terminal, below the routine bar, so
         // the bar's buttons stay in reach while it is open.
         <div className="terminal-stage">
+          {(() => {
+            const signIn = signInBySession.get(activeSession.id);
+            return signIn && signIn.phase !== "pasting" ? (
+              <CloudSignInPanel
+                busy={sessionActions.pending(`signin:${activeSession.id}`)}
+                onDismiss={() => dismissCloudSignIn(activeSession.id)}
+                onOpen={() =>
+                  signIn.requestId &&
+                  openCloudSignIn(signIn.requestId, activeSession.id)
+                }
+                signIn={signIn}
+              />
+            ) : null;
+          })()}
           {activeSessionRoutines &&
             routinesPanel?.sessionId === activeSession.id && (
               <RoutinesPanel
@@ -5832,11 +6367,12 @@ export function WorkspaceApp({
           />
         </div>
       ) : openingLaunch ? (
-        <div aria-busy="true" className="terminal-empty">
-          <span aria-hidden="true" className="session-launch-spinner" />
-          <strong>Starting {openingLaunch.tool}…</strong>
-          <span>The terminal opens here as soon as it is ready.</span>
-        </div>
+        <SessionOpening
+          launch={openingLaunch}
+          preparing={snapshot?.cloudPreparing?.find(
+            (item) => item.workspaceId === openingLaunch.workspaceId,
+          )}
+        />
       ) : (
         <div className="terminal-empty">
           <strong>Select a session</strong>
@@ -5895,7 +6431,16 @@ export function WorkspaceApp({
         >
           New session
         </button>
-        <button onClick={() => openRepositoryModal()} type="button">
+        {/* The Repositories tab comes to the front, so what is added shows
+          at once instead of behind the Files explorer. */}
+        <button
+          onClick={() => {
+            if (workspacePanelCollapsed) toggleBoardDetailPanel();
+            setPanelTab("git");
+            openRepositoryModal();
+          }}
+          type="button"
+        >
           Add repository
         </button>
       </span>
@@ -6049,13 +6594,22 @@ export function WorkspaceApp({
               {!snapshot && !error && (
                 <div className="empty">Loading workspaces…</div>
               )}
-              {activeWorkspaces.length === 0 &&
-                archivedWorkspaces.length === 0 && (
-                  <div className="empty large">
-                    <strong>No workspaces yet</strong>
-                    <span>Use + to create one.</span>
-                  </div>
-                )}
+              {snapshot && activeWorkspaces.length === 0 && (
+                <div className="empty large workspace-list-empty">
+                  <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <rect height="14" rx="2" width="18" x="3" y="5" />
+                    <path d="M3 9h18M12 12v4M10 14h4" />
+                  </svg>
+                  <span>
+                    {archivedWorkspaces.length > 0
+                      ? "No open workspaces."
+                      : "No workspaces yet."}
+                  </span>
+                  <button onClick={() => setModal("workspace")} type="button">
+                    Create workspace
+                  </button>
+                </div>
+              )}
               {orderedWorkspaces.map((item) => {
                 const itemSessions = agents.filter(
                   (session) =>
@@ -6090,6 +6644,14 @@ export function WorkspaceApp({
                   >
                     <div
                       className={`workspace-card ${item.id === workspaceId ? "selected" : ""}`}
+                      // The name keeps clear of the actions on show: the
+                      // few always there, all of them on hover or focus.
+                      style={
+                        {
+                          "--header-actions": headerActionCount(item),
+                          "--header-actions-shown": headerShownCount(item),
+                        } as React.CSSProperties
+                      }
                       data-dragging={
                         workspaceReorder.draggingId === item.id
                           ? "true"
@@ -6198,37 +6760,122 @@ export function WorkspaceApp({
                         </span>
                       </button>
                       <span className="workspace-card-actions" data-no-drag>
+                        {pins.workspace.has("terminal") && (
+                          <button
+                            aria-label={`Open ${item.name} in integrated terminal`}
+                            className="session-card-action workspace-terminal-action"
+                            disabled={!item.available || busy}
+                            onClick={() => void createIntegratedTerminal(item)}
+                            title="Open in integrated terminal"
+                            type="button"
+                          >
+                            <SessionLaunchIcon />
+                          </button>
+                        )}
+                        {pins.workspace.has("secrets") && (
+                          <button
+                            aria-label={`Secrets of ${item.name}`}
+                            className="session-card-action workspace-secrets-action"
+                            disabled={busy}
+                            onClick={() => setSecretsWorkspace(item)}
+                            title="Secrets"
+                            type="button"
+                          >
+                            <KeyIcon />
+                          </button>
+                        )}
+                        {pins.workspace.has("archive") && (
+                          <ConfirmButton
+                            aria-label={`Archive ${item.name} workspace`}
+                            armedTitle="All its sessions stop and move to their archived list. The workspace and its sessions can be restored later."
+                            className="session-card-action workspace-card-archive"
+                            disabled={busy}
+                            onConfirm={() => void archiveWorkspace(item)}
+                            title="Archive workspace"
+                          >
+                            <ArchiveIcon />
+                          </ConfirmButton>
+                        )}
+                        {workspaceCloudAction(item)}
+                        {/* Settings and the + always show, so the pinned
+                          ones that come in on hover open to their left. */}
                         <button
-                          aria-label={`Open ${item.name} in integrated terminal`}
-                          className="session-card-action workspace-terminal-action"
-                          disabled={!item.available || busy}
-                          onClick={() => void createIntegratedTerminal(item)}
-                          title="Open in integrated terminal"
+                          aria-label={`Create session in ${item.name}`}
+                          className="session-card-action workspace-session-create"
+                          disabled={
+                            !item.available ||
+                            !snapshot?.settings.tmuxAvailable ||
+                            workspaceMoving(item)
+                          }
+                          onClick={() => openSessionModal(undefined, item)}
+                          title="New session"
                           type="button"
                         >
-                          <SessionLaunchIcon />
+                          +
                         </button>
-                        <button
-                          aria-label={`Secrets of ${item.name}`}
-                          className="session-card-action workspace-secrets-action"
-                          disabled={busy}
-                          onClick={() => setSecretsWorkspace(item)}
-                          title="Secrets"
-                          type="button"
-                        >
-                          <KeyIcon />
-                        </button>
-                        <ConfirmButton
-                          aria-label={`Archive ${item.name} workspace`}
-                          armedTitle="All its sessions stop and move to their archived list. The workspace and its sessions can be restored later."
-                          className="session-card-action workspace-card-archive"
-                          disabled={busy}
-                          onConfirm={() => void archiveWorkspace(item)}
-                          title="Archive workspace"
-                        >
-                          <ArchiveIcon />
-                        </ConfirmButton>
                         <WorkspaceMenu
+                          actions={[
+                            {
+                              id: "terminal",
+                              icon: <SessionLaunchIcon />,
+                              label: "Open in terminal",
+                              pinned: pins.workspace.has("terminal"),
+                              onPin: (on) => pin("workspace", "terminal", on),
+                              disabled: !item.available || busy,
+                              run: () => void createIntegratedTerminal(item),
+                            },
+                            {
+                              id: "secrets",
+                              icon: <KeyIcon />,
+                              label: "Secrets",
+                              pinned: pins.workspace.has("secrets"),
+                              onPin: (on) => pin("workspace", "secrets", on),
+                              disabled: busy,
+                              run: () => setSecretsWorkspace(item),
+                            },
+                            ...(item.place === "cloud" ||
+                            cloudState.data?.signedIn
+                              ? [
+                                  {
+                                    id: "cloud",
+                                    icon: (
+                                      <CloudActionIcon
+                                        home={item.place === "cloud"}
+                                      />
+                                    ),
+                                    label:
+                                      item.place === "cloud"
+                                        ? "Move to this Mac"
+                                        : "Move to cloud",
+                                    pinned: pins.workspace.has("cloud"),
+                                    onPin: (on: boolean) =>
+                                      pin("workspace", "cloud", on),
+                                    disabled:
+                                      workspaceMoving(item) ||
+                                      !cloudState.data?.signedIn ||
+                                      !item.available,
+                                    run: () =>
+                                      void moveWorkspace(
+                                        item,
+                                        item.place === "cloud"
+                                          ? "mac"
+                                          : "cloud",
+                                      ),
+                                  },
+                                ]
+                              : []),
+                            {
+                              id: "archive",
+                              icon: <ArchiveIcon />,
+                              label: "Archive workspace",
+                              pinned: pins.workspace.has("archive"),
+                              onPin: (on) => pin("workspace", "archive", on),
+                              disabled: busy,
+                              confirm:
+                                "All its sessions stop and move to their archived list. The workspace and its sessions can be restored later.",
+                              run: () => void archiveWorkspace(item),
+                            },
+                          ]}
                           autoRebirth={item.autoRebirthPercent}
                           inheritedRebirth={
                             snapshot?.settings.autoRebirthPercent ?? null
@@ -6238,23 +6885,93 @@ export function WorkspaceApp({
                             void updateWorkspace(item, { autoRebirthPercent })
                           }
                           onRename={() => void renameWorkspace(item)}
-                        />
-                        {/* Last, so the ones that come in on hover open to its
-                          left and it never moves. */}
-                        <button
-                          aria-label={`Create session in ${item.name}`}
-                          className="session-card-action workspace-session-create"
-                          disabled={
-                            !item.available || !snapshot?.settings.tmuxAvailable
+                          cloud={
+                            cloudState.data?.signedIn &&
+                            cloudByWorkspace.get(item.id)
+                              ? { workspace: cloudByWorkspace.get(item.id)! }
+                              : undefined
                           }
-                          onClick={() => openSessionModal(undefined, item)}
-                          title="New session"
-                          type="button"
-                        >
-                          +
-                        </button>
+                        />
                       </span>
                     </div>
+                    {(() => {
+                      // The gateway's limit, said with this Mac's own names
+                      // of the workspaces that are in the cloud.
+                      const inCloud = activeWorkspaces
+                        .filter(
+                          (other) =>
+                            other.place === "cloud" && other.id !== item.id,
+                        )
+                        .map((other) => other.name);
+                      const entry = moveByWorkspace.get(item.id);
+                      const move = entry?.message
+                        ? {
+                            ...entry,
+                            message: cloudLimitMessage(entry.message, inCloud),
+                          }
+                        : entry;
+                      const moveError =
+                        moveErrors[item.id] &&
+                        cloudLimitMessage(moveErrors[item.id]!, inCloud);
+                      return (
+                        <>
+                          {move ? (
+                            <WorkspaceMoveState
+                              move={move}
+                              name={item.name}
+                              onCancel={() =>
+                                void workspaceMoveActions.run(
+                                  client.request.workspaceMoveCancel({
+                                    reference: item.id,
+                                  }),
+                                  `cancel:${item.id}`,
+                                )
+                              }
+                              onDismiss={() => undefined}
+                            />
+                          ) : !move && moveError ? (
+                            <WorkspaceMoveState
+                              error={moveError}
+                              name={item.name}
+                              onCancel={() => undefined}
+                              onDismiss={() =>
+                                setMoveErrors(
+                                  ({ [item.id]: _gone, ...rest }) => rest,
+                                )
+                              }
+                            />
+                          ) : null}
+                          {move?.phase === "moved" && move.notice && (
+                            <WorkspaceNotice
+                              onDismiss={() =>
+                                void workspaceMoveActions.run(
+                                  client.request.workspaceMoveDismiss({
+                                    reference: item.id,
+                                  }),
+                                  `notice:${item.id}`,
+                                )
+                              }
+                              testId="workspace-move-notice"
+                              text={move.notice}
+                            />
+                          )}
+                          {item.cloudNotice && (
+                            <WorkspaceNotice
+                              onDismiss={() =>
+                                void workspaceMoveActions.run(
+                                  client.request.workspaceNoticeDismiss({
+                                    reference: item.id,
+                                  }),
+                                  `notice:${item.id}`,
+                                )
+                              }
+                              testId="workspace-cloud-notice"
+                              text={item.cloudNotice}
+                            />
+                          )}
+                        </>
+                      );
+                    })()}
                     {expanded && sessionList && (
                       <div id={`workspace-sessions-${item.id}`}>
                         {sessionList}
@@ -7232,7 +7949,9 @@ export function WorkspaceApp({
                 />
               </label>
               {/* Claude or Codex; a member's picker starts on its lead's.
-                Plain terminals open as tabs from the center's +. */}
+                Plain terminals open as tabs from the center's +, in the pod
+                too while the workspace is in the cloud. A session there is
+                Claude in the pod. */}
               <fieldset className="session-tool-picker">
                 <legend>Choose a tool</legend>
                 <div
@@ -7246,15 +7965,19 @@ export function WorkspaceApp({
                       { id: "codex", label: "Codex" },
                     ] as const
                   ).map((tool) => {
-                    const available = Boolean(
-                      snapshot.settings.providers.find(
-                        (item) => item.name === tool.id,
-                      )?.available,
-                    );
+                    // The pod has its own Claude and Codex.
+                    const available =
+                      sessionInCloud ||
+                      Boolean(
+                        snapshot.settings.providers.find(
+                          (item) => item.name === tool.id,
+                        )?.available,
+                      );
                     return (
                       <button
                         aria-checked={sessionType === tool.id}
                         className={`session-tool ${sessionType === tool.id ? "selected" : ""}`}
+                        data-testid={`session-tool-${tool.id}`}
                         disabled={!available}
                         key={tool.id}
                         onClick={() => {
@@ -7274,7 +7997,9 @@ export function WorkspaceApp({
                         <small>
                           {!available
                             ? "Unavailable"
-                            : (toolAccountLabel(tool.id) ?? "Available")}
+                            : sessionInCloud
+                              ? "In the pod"
+                              : (toolAccountLabel(tool.id) ?? "Available")}
                         </small>
                       </button>
                     );
@@ -7323,18 +8048,20 @@ export function WorkspaceApp({
                       Model list unavailable: {modelCatalogError}
                     </small>
                   )}
-                  {!sessionChoiceIsWorkspaceDefault && !memberTeam && (
-                    <label className="session-model-remember">
-                      <input
-                        checked={rememberSessionModel}
-                        onChange={(event) =>
-                          setRememberSessionModel(event.target.checked)
-                        }
-                        type="checkbox"
-                      />
-                      <span>Remember for this workspace</span>
-                    </label>
-                  )}
+                  {!sessionChoiceIsWorkspaceDefault &&
+                    !memberTeam &&
+                    !sessionInCloud && (
+                      <label className="session-model-remember">
+                        <input
+                          checked={rememberSessionModel}
+                          onChange={(event) =>
+                            setRememberSessionModel(event.target.checked)
+                          }
+                          type="checkbox"
+                        />
+                        <span>Remember for this workspace</span>
+                      </label>
+                    )}
                 </div>
               )}
               {memberTeam && (
@@ -7532,6 +8259,7 @@ export function WorkspaceApp({
                 setTheme(value);
                 window.localStorage.setItem("daedalus.theme", value);
               }}
+              gatewayInstall={snapshot.gatewayInstall}
               perform={perform}
               section={settingsSection}
               settings={snapshot.settings}

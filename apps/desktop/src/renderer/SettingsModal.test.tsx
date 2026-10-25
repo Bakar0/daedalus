@@ -94,6 +94,15 @@ describe("SettingsModal", () => {
     expect(render("remote")).not.toContain("Phone access");
   });
 
+  test("Cloud signs in with a gateway and an email, and shows no token field", () => {
+    const cloud = render("cloud");
+    expect(cloud).toContain('data-testid="cloud-panel"');
+    expect(cloud).toContain('data-testid="cloud-gateway-url"');
+    expect(cloud).toContain('data-testid="cloud-email"');
+    expect(cloud).toContain('data-testid="cloud-sign-in"');
+    expect(cloud).not.toMatch(/token/i);
+  });
+
   test("read-only facts live in About, not in front of the controls", () => {
     const about = render("about");
     expect(about).toContain("state.db");
