@@ -2957,6 +2957,15 @@ dd {
 .workspace-worktree-row:hover {
   background: var(--raised);
 }
+/* The focused session's working trees, with their files and commits, sit on
+   the same wash as its selected card in the session list. */
+.workspace-worktree-group.focused {
+  background: var(--accent-wash);
+  border-radius: 6px;
+}
+.workspace-worktree-group.focused .workspace-worktree-row strong {
+  color: var(--accent);
+}
 .workspace-worktree-row.empty {
   color: var(--muted);
   font-size: 9px;
@@ -2980,10 +2989,16 @@ dd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The pull request and the git indicators sit on a line of their own under
+   the branch, lined up with its text, so a long branch name keeps its room
+   and the line wraps rather than pushing the row's buttons out. */
 .workspace-worktree-status {
+  align-items: center;
   display: flex;
-  flex-shrink: 0;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 3px 6px;
+  margin: -2px 0 2px 33px;
+  padding-bottom: 2px;
 }
 .workspace-worktree-status .git-part {
   font-size: 9px;
@@ -2997,7 +3012,7 @@ dd {
   color: var(--success);
 }
 .git-part.tone-behind {
-  color: var(--danger);
+  color: var(--muted);
 }
 .git-part.tone-clean {
   color: var(--muted);
@@ -6826,6 +6841,39 @@ dd {
 .pr-chip:hover {
   background: var(--raised-hover) !important;
 }
+.pr-chip.stale {
+  opacity: 0.55;
+  border-style: dashed !important;
+}
+.pr-chip-checks {
+  font-weight: 700;
+}
+.pr-chip-checks.checks-passing {
+  color: #3fb950;
+}
+.pr-chip-checks.checks-failing {
+  color: #f85149;
+}
+.pr-chip-checks.checks-pending {
+  color: #d29922;
+}
+.pr-chip-review.review-approved {
+  color: #3fb950;
+}
+.pr-chip-review.review-changes_requested {
+  color: #f85149;
+}
+.worktree-detached {
+  color: #d29922;
+}
+/* Merged, with nothing uncommitted or unpushed left: done, so quieter. */
+.workspace-worktree-group.settled {
+  opacity: 0.6;
+}
+.workspace-worktree-group.settled:hover,
+.workspace-worktree-group.settled.focused {
+  opacity: 1;
+}
 
 /* The commits a worktree made, folded behind a count under its files. */
 .worktree-commits {
@@ -7602,7 +7650,7 @@ dd {
   vertical-align: 1px;
 }
 
-/* Settings › Account's admin section: Pro keys and accounts. Each row is
+/* Settings › Account's admin section: invites and accounts. Each row is
    one line: what it is, a short description that gives way first, and a
    menu pinned to the right edge. */
 .admin-title {
@@ -7636,30 +7684,98 @@ dd {
   margin: 0;
   text-transform: none;
 }
-.admin-key-form {
-  align-items: center;
+.admin-invite-form,
+.admin-made {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
   display: grid;
-  gap: 6px;
-  grid-template-columns: 56px 96px minmax(0, 1fr) auto auto;
+  gap: 12px;
+  padding: 14px;
 }
-.admin-key-form input {
+.admin-field {
+  display: grid;
+  gap: 5px;
+}
+.admin-field > span {
+  color: var(--secondary);
   font-size: 12px;
+  font-weight: 500;
+}
+.admin-field input {
+  font-size: 13px;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 7px 9px;
   width: 100%;
 }
-.admin-key-form small {
-  color: var(--muted);
-  font-size: 11px;
-  grid-column: 1 / -1;
+.admin-field input.admin-uses {
+  width: 72px;
 }
-.admin-made {
-  align-items: center;
-  color: var(--secondary);
+.admin-choices {
   display: flex;
-  font-size: 12px;
+  flex-wrap: wrap;
   gap: 6px;
+}
+.admin-choices button {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--secondary);
+  font-size: 12px;
+  padding: 5px 12px;
+}
+.admin-choices button.is-current {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.admin-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
   margin: 0;
+}
+.admin-form-actions,
+.admin-made-actions {
+  display: flex;
+  gap: 8px;
+}
+.admin-made strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.admin-made-link {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.admin-made-link code {
+  background: var(--panel, rgb(0 0 0 / 0.2));
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+  overflow: hidden;
+  padding: 7px 9px;
+  text-overflow: ellipsis;
+  user-select: all;
+  white-space: nowrap;
+}
+.admin-made ol {
+  color: var(--secondary);
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+  line-height: 1.45;
+  margin: 0;
+  padding-left: 18px;
+}
+.admin-notice {
+  background: var(--accent-wash);
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 12px;
+  margin: 0;
+  padding: 7px 10px;
 }
 .admin-list {
   display: grid;

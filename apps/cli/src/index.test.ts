@@ -726,6 +726,28 @@ describe("daedal CLI contract", () => {
     });
   });
 
+  test("update beta reads and sets the beta updates switch", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const read = async () =>
+        JSON.parse((await cli(home, ["update", "beta", "--json"])).stdout) as {
+          data: { betaUpdates: boolean };
+        };
+      expect((await read()).data.betaUpdates).toBe(false);
+      const on = await cli(home, ["update", "beta", "on"]);
+      expect(on.exitCode).toBe(0);
+      expect(on.stdout).toContain("beta updates on");
+      expect(await Bun.file(join(home, "config.json")).json()).toMatchObject({
+        betaUpdatesEnabled: true,
+      });
+      expect((await read()).data.betaUpdates).toBe(true);
+      await cli(home, ["update", "beta", "off"]);
+      expect((await read()).data.betaUpdates).toBe(false);
+      const wrong = await cli(home, ["update", "beta", "yes"]);
+      expect(wrong.exitCode).toBe(2);
+      expect(wrong.stderr).toContain("Expected on or off");
+    });
+  }, 30_000);
+
   test("attention outside a session is a usage error, not a silent no-op", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       // Explicitly outside a session: the test process is itself running

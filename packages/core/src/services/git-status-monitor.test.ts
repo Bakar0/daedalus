@@ -1,10 +1,36 @@
 import { isAbsolute, join } from "node:path";
-import { readdir, stat, unlink, utimes } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readdir,
+  rm,
+  stat,
+  unlink,
+  utimes,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { describe, expect, test } from "vitest";
 import { runCommand } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext } from "../index";
-import { gitMeasure, type GitMeasure } from "./git-status-monitor";
+import {
+  gitMeasure,
+  gitMetadataFingerprint,
+  branchPullRequestQuery,
+  checksState,
+  choosePullRequest,
+  headRelation,
+  keptPullRequest,
+  parsePorcelainStatus,
+  parsePullRequestNode,
+  pullRequestHeadLanded,
+  queryBranchPullRequests,
+  parseGitHubRemote,
+  pullRequestDue,
+  upstreamState,
+  type PullRequestCandidate,
+  type GitMeasure,
+} from "./git-status-monitor";
 import { WorkspaceContentService } from "./workspace-content";
 import {
   contextWithStubbedAgent,
@@ -67,11 +93,15 @@ describe("GitStatusMonitor", () => {
         // service has finished; this test measures through a service of its
         // own, whose git calls it counts.
         await content.settleGitStatus();
-        const counts = { status: 0, changes: 0 };
+        const counts = { status: 0, changedFiles: 0, changes: 0 };
         const counting: GitMeasure = {
           status: (path, baseBranch) => {
             counts.status += 1;
             return gitMeasure.status(path, baseBranch);
+          },
+          changedFiles: (path) => {
+            counts.changedFiles += 1;
+            return gitMeasure.changedFiles(path);
           },
           changes: (path) => {
             counts.changes += 1;
@@ -116,6 +146,7 @@ describe("GitStatusMonitor", () => {
           await run();
           return {
             status: counts.status - before.status,
+            changedFiles: counts.changedFiles - before.changedFiles,
             changes: counts.changes - before.changes,
           };
         };
@@ -132,10 +163,14 @@ describe("GitStatusMonitor", () => {
 
         // Nothing moved: an ordinary pass and a changes listing run no git.
         await counted.worktreeChanges(workspace.id);
-        expect(await measured(ordinaryPass)).toEqual({ status: 0, changes: 0 });
+        expect(await measured(ordinaryPass)).toEqual({
+          status: 0,
+          changedFiles: 0,
+          changes: 0,
+        });
         expect(
           await measured(() => counted.worktreeChanges(workspace.id)),
-        ).toEqual({ status: 0, changes: 0 });
+        ).toEqual({ status: 0, changedFiles: 0, changes: 0 });
 
         // A commit moves HEAD, which the cheap check sees on its own.
         await runCommand("git", [
@@ -154,21 +189,32 @@ describe("GitStatusMonitor", () => {
         // Both are trees of one shared clone, whose refs live in a single
         // reftable; a commit rewrites it, and which branch moved is not
         // knowable without git. Commits come minutes apart, so this is cheap.
-        expect(await measured(ordinaryPass)).toEqual({ status: 2, changes: 0 });
+        expect(await measured(ordinaryPass)).toEqual({
+          status: 2,
+          changedFiles: 0,
+          changes: 0,
+        });
         expect(await status()).toMatchObject({ state: "ahead", ahead: 1 });
 
         // An edit moves no git metadata; the watcher's report is what says
-        // the tree changed, and its pass follows without being asked.
+        // the tree changed, and its pass follows without being asked. Only
+        // the changed paths are counted again: the branch and the distance
+        // from the base cannot have moved.
         await Bun.write(join(worktree.path, "SCRATCH.md"), "# Scratch\n");
-        counted.noteFilesChanged(
-          workspace.id,
-          [{ path: `${relativeRoot}/SCRATCH.md` }],
-          false,
-        );
-        expect(await statusBecomes(1)).toMatchObject({
-          state: "modified",
-          changedFiles: 1,
-        });
+        expect(
+          await measured(async () => {
+            counted.noteFilesChanged(
+              workspace.id,
+              [{ path: `${relativeRoot}/SCRATCH.md` }],
+              false,
+            );
+            expect(await statusBecomes(1)).toMatchObject({
+              state: "modified",
+              changedFiles: 1,
+              ahead: 1,
+            });
+          }),
+        ).toEqual({ status: 0, changedFiles: 1, changes: 0 });
         expect(
           (await counted.worktreeChanges(workspace.id))[0]?.files.map(
             (file) => file.repositoryPath,
@@ -179,7 +225,7 @@ describe("GitStatusMonitor", () => {
         counted.noteFilesChanged(workspace.id, [{ path: "BRIEF.md" }], false);
         expect(
           await measured(() => counted.worktreeChanges(workspace.id)),
-        ).toEqual({ status: 0, changes: 0 });
+        ).toEqual({ status: 0, changedFiles: 0, changes: 0 });
 
         // Fetch is the user saying something changed: everything is measured
         // again, whatever the cheap checks say.
@@ -190,10 +236,93 @@ describe("GitStatusMonitor", () => {
           state: "ahead",
           changedFiles: 0,
         });
+
+        // What git ignores never reaches git: a build writing under an
+        // ignored folder starts no pass at all once the tree's listing is in.
+        await Bun.write(join(worktree.path, ".gitignore"), "dist/\n");
+        counted.noteFilesChanged(
+          workspace.id,
+          [{ path: `${relativeRoot}/.gitignore` }],
+          false,
+        );
+        await statusBecomes(1);
+        // The first report asks git for the tree's ignored paths.
+        await Bun.write(join(worktree.path, "dist", "app.js"), "built\n");
+        counted.noteFilesChanged(
+          workspace.id,
+          [{ path: `${relativeRoot}/dist/app.js` }],
+          false,
+        );
+        await Bun.sleep(1_000);
+        await counted.settleGitStatus();
+        expect(
+          await measured(async () => {
+            counted.noteFilesChanged(
+              workspace.id,
+              [{ path: `${relativeRoot}/dist/app.js` }],
+              false,
+            );
+            await Bun.sleep(1_000);
+            await counted.settleGitStatus();
+          }),
+        ).toEqual({ status: 0, changedFiles: 0, changes: 0 });
         counted.close();
         context.close();
       });
       // It waits out the rate limit and the file-change settle on purpose.
+    }, 20_000);
+
+    test("an unmeasurable tree is never given a status from its count alone", async () => {
+      await withTemporaryDaedalusHome(async (home) => {
+        const { context, content, session, workspace, relativeRoot } =
+          await lazyFixture(home);
+        await content.settleGitStatus();
+        const counts = { status: 0, changedFiles: 0 };
+        // git answers the count but not the comparison, as when the base
+        // branch's remote ref is missing.
+        const unavailable: GitMeasure = {
+          status: async () => {
+            counts.status += 1;
+            return {
+              state: "unavailable",
+              changedFiles: 0,
+              ahead: 0,
+              behind: 0,
+            };
+          },
+          changedFiles: async () => {
+            counts.changedFiles += 1;
+            return 2;
+          },
+          changes: (path) => gitMeasure.changes(path),
+        };
+        const measured = new WorkspaceContentService(
+          context.repositories,
+          context.workspaces,
+          context.config,
+          () => {},
+          async () => {},
+          unavailable,
+        );
+        await context.agents.stop(session.id, true);
+        measured.remeasureWorkspace(workspace.id);
+        await measured.settleGitStatus();
+        const before = { ...counts };
+        measured.noteFilesChanged(
+          workspace.id,
+          [{ path: `${relativeRoot}/EDIT.md` }],
+          false,
+        );
+        await Bun.sleep(1_000);
+        await measured.settleGitStatus();
+        expect(counts.changedFiles - before.changedFiles).toBe(0);
+        expect(counts.status - before.status).toBe(1);
+        expect(
+          (await measured.get(workspace.id)).worktrees[0]?.gitStatus?.state,
+        ).toBe("unavailable");
+        measured.close();
+        context.close();
+      });
     }, 20_000);
 
     test("sees an edit nothing reports in a live session's worktree", async () => {
@@ -246,6 +375,9 @@ describe("GitStatusMonitor", () => {
           changedFiles: 0,
           ahead: 0,
           behind: 0,
+          unpushed: 0,
+          // Started from the base branch and never pushed under its own name.
+          upstream: "none",
         });
 
         // One commit on top, plus one uncommitted file.
@@ -284,6 +416,7 @@ describe("GitStatusMonitor", () => {
           filesAhead: 1,
           // Never pushed, so the one commit exists only here.
           unpushed: 1,
+          upstream: "none",
         });
 
         // The board reads the same measurement for every workspace at once,
@@ -577,6 +710,499 @@ describe("GitStatusMonitor", () => {
       ).toBe("clean");
       expect((await stat(resolvedIndex)).mtimeMs).toBe(before);
       context.close();
+    });
+  });
+});
+
+describe("pullRequestDue", () => {
+  const minute = 60_000;
+  test("asks about a branch never asked about, or asked about another branch", () => {
+    expect(pullRequestDue(undefined, "a")).toBe(true);
+    const cached = { checkedAt: 0, fingerprint: "a", branch: "one" };
+    expect(pullRequestDue(cached, "a", 1, { branch: "two" })).toBe(true);
+    expect(pullRequestDue(cached, "a", 1, { branch: "one" })).toBe(false);
+  });
+  test("follows an open pull request every minute", () => {
+    const cached = {
+      checkedAt: 0,
+      value: { state: "OPEN" as const },
+      fingerprint: "a",
+    };
+    expect(pullRequestDue(cached, "a", minute - 1)).toBe(false);
+    expect(pullRequestDue(cached, "a", minute)).toBe(true);
+  });
+  test("asks a live branch with no pull request every five minutes", () => {
+    const cached = { checkedAt: 0, fingerprint: "a" };
+    expect(pullRequestDue(cached, "a", 4 * minute)).toBe(false);
+    expect(pullRequestDue(cached, "a", 5 * minute)).toBe(true);
+  });
+  test("asks about merged, closed and ended branches only now and then", () => {
+    const merged = {
+      checkedAt: 0,
+      fingerprint: "a",
+      value: { state: "MERGED" as const },
+    };
+    expect(pullRequestDue(merged, "a", 29 * minute)).toBe(false);
+    expect(pullRequestDue(merged, "a", 30 * minute)).toBe(true);
+    const ended = { checkedAt: 0, fingerprint: "a" };
+    expect(pullRequestDue(ended, "a", 10 * minute, { live: false })).toBe(
+      false,
+    );
+  });
+  test("asks again within seconds once the refs move, as after a push", () => {
+    const cached = { checkedAt: 0, fingerprint: "a" };
+    expect(pullRequestDue(cached, "b", 14_000)).toBe(false);
+    expect(pullRequestDue(cached, "b", 15_000)).toBe(true);
+    expect(pullRequestDue(cached, undefined, 15_000)).toBe(true);
+  });
+  test("keeps asking for a while after the refs moved", () => {
+    // Checked right after a push, before `gh pr create` ran.
+    const pushed = { checkedAt: 0, fingerprint: "b", movedAt: 0 };
+    expect(pullRequestDue(pushed, "b", 20_000)).toBe(true);
+    expect(pullRequestDue(pushed, "b", 4 * minute)).toBe(true);
+    // Long after the move, back to the quiet cadence.
+    const settled = { checkedAt: 6 * minute, fingerprint: "b", movedAt: 0 };
+    expect(pullRequestDue(settled, "b", 7 * minute)).toBe(false);
+  });
+});
+
+describe("parsePorcelainStatus", () => {
+  const z = (...fields: string[]) =>
+    fields.map((field) => `${field}\0`).join("");
+  test("counts each change once, a rename included, and reads the branch", () => {
+    const status = parsePorcelainStatus(
+      z(
+        "# branch.oid abc",
+        "# branch.head topic",
+        "# branch.upstream origin/topic",
+        "# branch.ab +2 -1",
+        "1 .M N... 100644 100644 100644 a a src/edit.ts",
+        "2 R. N... 100644 100644 100644 a a R100 src/new.ts",
+        "src/old.ts",
+        "? notes/one.md",
+        "? notes/two.md",
+      ),
+    );
+    expect(status).toEqual({
+      changedFiles: 4,
+      branch: "topic",
+      upstream: "origin/topic",
+      upstreamAhead: 2,
+      upstreamBehind: 1,
+    });
+  });
+  test("reads a detached HEAD and a branch whose upstream is gone", () => {
+    expect(parsePorcelainStatus(z("# branch.head (detached)")).branch).toBe(
+      null,
+    );
+    const gone = parsePorcelainStatus(
+      z("# branch.head topic", "# branch.upstream origin/topic"),
+    );
+    expect(upstreamState(gone, "main")).toBe("gone");
+  });
+  test("calls the base branch an upstream of no branch but itself", () => {
+    const started = parsePorcelainStatus(
+      z(
+        "# branch.head topic",
+        "# branch.upstream origin/main",
+        "# branch.ab +3 -0",
+      ),
+    );
+    expect(upstreamState(started, "main")).toBe("none");
+    const base = parsePorcelainStatus(
+      z(
+        "# branch.head main",
+        "# branch.upstream origin/main",
+        "# branch.ab +0 -2",
+      ),
+    );
+    expect(upstreamState(base, "main")).toBe("tracking");
+    expect(
+      upstreamState(parsePorcelainStatus(z("# branch.head topic")), "main"),
+    ).toBe("none");
+  });
+});
+
+describe("parsePullRequestNode", () => {
+  const node = {
+    number: 9,
+    url: "https://github.com/o/r/pull/9",
+    state: "OPEN",
+    isDraft: false,
+    title: "Fix it",
+    headRefOid: "a".repeat(40),
+    reviewDecision: "CHANGES_REQUESTED",
+    headRepositoryOwner: { login: "o" },
+  };
+  test("reads GraphQL's rollup and gh pr list's checks the same way", () => {
+    expect(
+      parsePullRequestNode({
+        ...node,
+        commits: {
+          nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }],
+        },
+      }),
+    ).toEqual({
+      ref: {
+        number: 9,
+        url: "https://github.com/o/r/pull/9",
+        state: "OPEN",
+        isDraft: false,
+        title: "Fix it",
+        checks: "failing",
+        review: "changes_requested",
+      },
+      headRefOid: "a".repeat(40),
+      owner: "o",
+    });
+    expect(
+      parsePullRequestNode({
+        ...node,
+        statusCheckRollup: [
+          { status: "COMPLETED", conclusion: "SUCCESS" },
+          { status: "IN_PROGRESS", conclusion: "" },
+        ],
+      })?.ref.checks,
+    ).toBe("pending");
+  });
+  test("drops checks and review once the pull request is not open", () => {
+    const merged = parsePullRequestNode({
+      ...node,
+      state: "MERGED",
+      mergedAt: "2026-10-22T10:00:00Z",
+      statusCheckRollup: [{ status: "COMPLETED", conclusion: "FAILURE" }],
+    });
+    expect(merged?.ref.checks).toBeUndefined();
+    expect(merged?.ref.review).toBeUndefined();
+    expect(merged?.ref.mergedAt).toBe("2026-10-22T10:00:00Z");
+  });
+  test("refuses an incomplete answer", () => {
+    expect(parsePullRequestNode({ number: 1, state: "OPEN" })).toBeUndefined();
+  });
+});
+
+describe("checksState", () => {
+  test("combines checks into one state", () => {
+    expect(checksState([])).toBeUndefined();
+    expect(checksState([{ state: "SUCCESS" }])).toBe("passing");
+    expect(checksState([{ state: "PENDING" }, { state: "SUCCESS" }])).toBe(
+      "pending",
+    );
+    expect(
+      checksState([
+        { status: "IN_PROGRESS", conclusion: "" },
+        { status: "COMPLETED", conclusion: "TIMED_OUT" },
+      ]),
+    ).toBe("failing");
+    expect(checksState({ state: "SUCCESS" })).toBe("passing");
+    expect(checksState(null)).toBeUndefined();
+  });
+});
+
+describe("parseGitHubRemote", () => {
+  test("reads the clone URLs GitHub hands out", () => {
+    const expected = { host: "github.com", owner: "Bakar0", name: "daedalus" };
+    expect(parseGitHubRemote("https://github.com/Bakar0/daedalus.git")).toEqual(
+      expected,
+    );
+    expect(parseGitHubRemote("https://github.com/Bakar0/daedalus")).toEqual(
+      expected,
+    );
+    expect(parseGitHubRemote("git@github.com:Bakar0/daedalus.git")).toEqual(
+      expected,
+    );
+    expect(
+      parseGitHubRemote("ssh://git@github.com/Bakar0/daedalus.git"),
+    ).toEqual(expected);
+    expect(parseGitHubRemote("https://ghe.example.com/team/app.git")).toEqual({
+      host: "ghe.example.com",
+      owner: "team",
+      name: "app",
+    });
+  });
+  test("leaves anything else to gh pr list", () => {
+    expect(parseGitHubRemote("/tmp/source/product")).toBeUndefined();
+    expect(parseGitHubRemote("file:///tmp/source/product")).toBeUndefined();
+  });
+});
+
+describe("branchPullRequestQuery", () => {
+  test("asks about every branch through its own variable", () => {
+    const query = branchPullRequestQuery(3);
+    expect(query).toContain("$b2: String!");
+    expect(query).toContain("b2: pullRequests(headRefName: $b2");
+    expect(query).not.toContain("$b3");
+  });
+});
+
+describe("choosePullRequest", () => {
+  const pull = (
+    number: number,
+    state: "OPEN" | "CLOSED" | "MERGED",
+    owner: string,
+    relation: "related" | "unrelated" | "unknown",
+    byOwnName = true,
+  ) => ({
+    ref: { number, url: `https://x/${number}`, state, isDraft: false },
+    owner,
+    relation,
+    byOwnName,
+  });
+  test("prefers this repository's own branch, then a related head, then open", () => {
+    expect(
+      choosePullRequest(
+        [
+          pull(3, "CLOSED", "me", "related"),
+          pull(2, "OPEN", "me", "related"),
+          pull(1, "MERGED", "me", "related"),
+        ],
+        "Me",
+      )?.ref.number,
+    ).toBe(2);
+    expect(
+      choosePullRequest(
+        [
+          pull(4, "OPEN", "fork", "related"),
+          pull(3, "MERGED", "me", "related"),
+        ],
+        "me",
+      )?.ref.number,
+    ).toBe(3);
+    expect(
+      choosePullRequest(
+        [pull(6, "OPEN", "me", "unknown"), pull(5, "MERGED", "me", "related")],
+        "me",
+      )?.ref.number,
+    ).toBe(5);
+    expect(choosePullRequest([], "me")).toBeUndefined();
+  });
+  test("never shows an older pull request that reused the branch name", () => {
+    expect(
+      choosePullRequest([pull(7, "MERGED", "me", "unrelated")], "me"),
+    ).toBeUndefined();
+  });
+  test("takes an unchecked head only under the branch's own name", () => {
+    // A branch tracking a parent feature branch: the parent's pull request
+    // is listed under the upstream's name, and its head is not here.
+    expect(
+      choosePullRequest([pull(8, "MERGED", "me", "unknown", false)], "me"),
+    ).toBeUndefined();
+    expect(
+      choosePullRequest([pull(8, "MERGED", "me", "unknown", true)], "me")?.ref
+        .number,
+    ).toBe(8);
+  });
+});
+
+describe("keptPullRequest", () => {
+  test("keeps a link through a failed answer, moving only the time", () => {
+    const cached = {
+      checkedAt: 1,
+      fingerprint: "a",
+      value: {
+        number: 7,
+        url: "https://github.com/o/r/pull/7",
+        state: "OPEN" as const,
+        isDraft: false,
+      },
+    };
+    expect(keptPullRequest(cached, 99)).toEqual({
+      ...cached,
+      checkedAt: 99,
+      stale: true,
+    });
+    expect(keptPullRequest(undefined, 99)).toEqual({
+      checkedAt: 99,
+      stale: true,
+    });
+  });
+});
+
+describe("queryBranchPullRequests", () => {
+  const remote = { host: "github.com", owner: "o", name: "r" };
+  const withFakeGh = async (
+    output: string,
+    exitCode: number,
+    run: (gh: string) => Promise<void>,
+  ) => {
+    const folder = await mkdtemp(join(tmpdir(), "daedalus-fake-gh-"));
+    try {
+      const gh = join(folder, "gh");
+      await Bun.write(join(folder, "out.json"), output);
+      await Bun.write(
+        gh,
+        `#!/bin/sh\ncat "${join(folder, "out.json")}"\nexit ${exitCode}\n`,
+      );
+      await chmod(gh, 0o755);
+      await run(gh);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  };
+  const pull = {
+    number: 3,
+    state: "OPEN",
+    headRepositoryOwner: { login: "o" },
+  };
+  test("lists each branch's pull requests, empty where there are none", async () => {
+    await withFakeGh(
+      JSON.stringify({
+        data: {
+          repository: {
+            isFork: false,
+            b0: { nodes: [pull] },
+            b1: { nodes: [] },
+          },
+        },
+      }),
+      0,
+      async (gh) => {
+        const answers = await queryBranchPullRequests(
+          gh,
+          remote,
+          ["one", "two"],
+          tmpdir(),
+        );
+        expect(answers?.[0]?.[0]?.number).toBe(3);
+        expect(answers?.[1]).toEqual([]);
+      },
+    );
+  });
+  test("gives up on a fork, a failure or a partial answer, so gh pr list is asked", async () => {
+    const cases: Array<[unknown, number]> = [
+      [{ data: { repository: { isFork: true, b0: { nodes: [pull] } } } }, 0],
+      [{ errors: [{ message: "rate limited" }] }, 1],
+      [{ data: { repository: { isFork: false, b0: null } } }, 0],
+    ];
+    for (const [output, exitCode] of cases)
+      await withFakeGh(JSON.stringify(output), exitCode, async (gh) => {
+        expect(
+          await queryBranchPullRequests(gh, remote, ["one"], tmpdir()),
+        ).toBeUndefined();
+      });
+  });
+});
+
+describe("gitMetadataFingerprint", () => {
+  test("moves when the branch's remote-tracking ref does, as a push moves it", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "daedalus-fingerprint-"));
+    try {
+      const git = (...args: string[]) =>
+        runCommand("git", [
+          "-C",
+          repo,
+          "-c",
+          "user.name=t",
+          "-c",
+          "user.email=t@t",
+          ...args,
+        ]);
+      await git("init", "-q", "-b", "work", "--ref-format=files");
+      await git("commit", "-q", "--allow-empty", "-m", "one");
+      await git("update-ref", "refs/remotes/origin/main", "HEAD");
+      const before = await gitMetadataFingerprint(repo, "main");
+      // `git push` records where origin's copy of the branch now is.
+      await git("update-ref", "refs/remotes/origin/work", "HEAD");
+      expect(await gitMetadataFingerprint(repo, "main")).not.toBe(before);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("pull request heads against real history", () => {
+  const git = async (path: string, ...args: string[]) => {
+    const result = await runCommand("git", [
+      "-C",
+      path,
+      "-c",
+      "user.name=Daedalus Test",
+      "-c",
+      "user.email=test@daedalus.local",
+      ...args,
+    ]);
+    expect(result.exitCode).toBe(0);
+    return result.stdout.trim();
+  };
+  const commit = async (path: string, file: string) => {
+    await Bun.write(join(path, file), `${file}\n`);
+    await git(path, "add", file);
+    await git(path, "commit", "-qm", file);
+    return git(path, "rev-parse", "HEAD");
+  };
+  const merged = (head: string): PullRequestCandidate => ({
+    ref: { number: 1, url: "https://x/1", state: "MERGED", isDraft: false },
+    headRefOid: head,
+  });
+  // main: A. topic: B, C (the pull request's head). Then a squash merge
+  // lands S on main, which is where `origin/main` points.
+  const fixture = async (
+    run: (path: string, head: string) => Promise<void>,
+  ) => {
+    const path = await mkdtemp(join(tmpdir(), "daedalus-landed-"));
+    try {
+      await createRepository(path);
+      await git(path, "checkout", "-qb", "topic");
+      await commit(path, "b.txt");
+      const head = await commit(path, "c.txt");
+      await git(path, "checkout", "-q", "main");
+      await commit(path, "squash.txt");
+      await git(path, "update-ref", "refs/remotes/origin/main", "HEAD");
+      await git(path, "checkout", "-q", "topic");
+      await run(path, head);
+    } finally {
+      await rm(path, { recursive: true, force: true });
+    }
+  };
+
+  test("a squash-merged head, or HEAD behind it, has landed", async () => {
+    await fixture(async (path, head) => {
+      expect(
+        await pullRequestHeadLanded("git", path, merged(head), "main"),
+      ).toBe(true);
+      await git(path, "checkout", "-q", "HEAD~1");
+      expect(
+        await pullRequestHeadLanded("git", path, merged(head), "main"),
+      ).toBe(true);
+    });
+  });
+  test("the base merged in after the merge still has landed", async () => {
+    await fixture(async (path, head) => {
+      await git(path, "merge", "-q", "--no-edit", "main");
+      expect(
+        await pullRequestHeadLanded("git", path, merged(head), "main"),
+      ).toBe(true);
+    });
+  });
+  test("work committed after the merge has not landed", async () => {
+    await fixture(async (path, head) => {
+      await commit(path, "d.txt");
+      expect(
+        await pullRequestHeadLanded("git", path, merged(head), "main"),
+      ).toBe(false);
+      expect(
+        await pullRequestHeadLanded(
+          "git",
+          path,
+          { ...merged(head), ref: { ...merged(head).ref, state: "OPEN" } },
+          "main",
+        ),
+      ).toBe(false);
+    });
+  });
+  test("tells a head this work holds from an older branch's and a missing one", async () => {
+    await fixture(async (path, head) => {
+      expect(await headRelation("git", path, merged(head))).toBe("related");
+      await git(path, "checkout", "-q", "--orphan", "other");
+      const unrelated = await commit(path, "other.txt");
+      await git(path, "checkout", "-q", "topic");
+      expect(await headRelation("git", path, merged(unrelated))).toBe(
+        "unrelated",
+      );
+      // Not in this clone, and no `origin` to fetch it from.
+      expect(await headRelation("git", path, merged("f".repeat(40)))).toBe(
+        "unknown",
+      );
     });
   });
 });

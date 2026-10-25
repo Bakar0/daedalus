@@ -4,7 +4,7 @@ Verified on 2026-09-12 on macOS 26.6.2 arm64.
 
 ## Product decisions
 
-- MVP platform: macOS first. Electrobun 2.0.1 officially supports macOS 14+.
+- MVP platform: macOS first. Electrobun 2.0.4 officially supports macOS 14+.
 - Workspace model: plain directories under a configurable root, not Git worktrees.
 - Terminal owner: the Bun-side desktop main process attaches to a tmux-owned shell; the renderer only handles terminal bytes, input, and dimensions.
 - Terminal transport: token-gated loopback WebSocket for sustained byte traffic; typed Electrobun RPC for low-volume product operations.
@@ -13,9 +13,9 @@ Verified on 2026-09-12 on macOS 26.6.2 arm64.
 
 | Dependency                      | Exact version | Stable source checked                                                     |
 | ------------------------------- | ------------: | ------------------------------------------------------------------------- |
-| Bun                             |         1.4.2 | <https://bun.sh/>                                                         |
+| Bun                             |         1.4.3 | <https://bun.sh/>                                                         |
 | tmux                            |          3.7c | <https://github.com/tmux/tmux/wiki> and Homebrew stable bottle            |
-| Electrobun                      |         2.0.1 | <https://www.npmjs.com/package/electrobun> and stable initializer catalog |
+| Electrobun                      |         2.0.4 | <https://www.npmjs.com/package/electrobun> and stable initializer catalog |
 | xterm.js                        |         6.0.0 | <https://www.npmjs.com/package/@xterm/xterm>                              |
 | React / React DOM               |        19.3.0 | npm `latest`                                                              |
 | Vite                            |         8.3.0 | npm `latest`                                                              |
@@ -23,10 +23,10 @@ Verified on 2026-09-12 on macOS 26.6.2 arm64.
 | Vitest                          |         5.0.0 | npm `latest`                                                              |
 | Prettier                        |         3.9.6 | npm `latest`                                                              |
 | @vitejs/plugin-react            |         6.1.1 | npm `latest`                                                              |
-| @types/bun                      |         1.4.2 | npm `latest`                                                              |
+| @types/bun                      |         1.4.3 | npm `latest`                                                              |
 | @types/react / @types/react-dom |        19.3.0 | npm `latest`                                                              |
 
-All are exact direct pins. `bun.lock` records the full resolution. Electrobun's `hutch.config.ts` separately pins the native SDK/toolchain to 2.0.1.
+All are exact direct pins. `bun.lock` records the full resolution. Electrobun's `hutch.config.ts` separately pins the native SDK/toolchain to 2.0.4.
 
 ## Transport evidence
 
@@ -40,7 +40,7 @@ The automated real-tmux spike (its script, `terminal-spike-check.ts`, has since 
 4. Pane history remained capturable after the first PTY client disconnected.
 5. A second PTY client received a correct redraw and new live output from the same tmux session.
 
-Vite successfully bundles xterm.js 6.0.0 into the Electrobun view. The packaged macOS build completes with Electrobun 2.0.1.
+Vite successfully bundles xterm.js 6.0.0 into the Electrobun view. The packaged macOS build completes with Electrobun 2.0.4.
 
 ## Why WebSocket, not RPC, for terminal bytes
 

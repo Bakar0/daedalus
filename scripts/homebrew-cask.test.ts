@@ -1,16 +1,17 @@
 import { describe, expect, test } from "vitest";
 import { caskSource } from "./homebrew-cask";
 
-const sha256 = { arm64: "a".repeat(64), x64: "b".repeat(64) };
+const sha256 = { arm64: "a".repeat(64) };
 
 describe("caskSource", () => {
-  test("describes both architectures of one release", () => {
+  test("describes the Apple silicon build of one release", () => {
     const cask = caskSource({ version: "0.9.0", sha256, notarized: true });
     expect(cask).toContain('version "0.9.0"');
-    expect(cask).toContain(`arm:   "${sha256.arm64}"`);
-    expect(cask).toContain(`intel: "${sha256.x64}"`);
+    expect(cask).toContain(`sha256 "${sha256.arm64}"`);
+    expect(cask).toContain("depends_on arch: :arm64");
+    expect(cask).not.toContain("intel");
     expect(cask).toContain(
-      "releases/download/v#{version}/stable-macos-#{arch}-Daedalus.dmg",
+      "releases/download/v#{version}/stable-macos-arm64-Daedalus.dmg",
     );
     expect(cask).toContain("auto_updates true");
     // Linked from inside the app, so `daedal` is on PATH after install.
@@ -40,9 +41,9 @@ describe("caskSource", () => {
     expect(() =>
       caskSource({
         version: "0.9.0",
-        sha256: { ...sha256, x64: "abc" },
+        sha256: { arm64: "abc" },
         notarized: true,
       }),
-    ).toThrow("Not a SHA-256 for x64");
+    ).toThrow("Not a SHA-256 for arm64");
   });
 });

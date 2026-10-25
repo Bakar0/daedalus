@@ -5,6 +5,7 @@ import {
   readFile,
   unlink,
 } from "node:fs/promises";
+import type { PartialReadModelSource } from "./read-model";
 import { join } from "node:path";
 import {
   ensureDirectory,
@@ -422,7 +423,9 @@ export class WorkspaceContentService {
      * this the desktop would show "preparing" until something else happened to
      * refresh it.
      */
-    onRepositoriesChanged: () => void = () => {},
+    onRepositoriesChanged: (
+      parts?: PartialReadModelSource[],
+    ) => void = () => {},
     /**
      * Closes the integrated terminals opened at or inside a folder, before
      * Daedalus deletes it. A shell left in a deleted folder cannot be moved
@@ -432,10 +435,14 @@ export class WorkspaceContentService {
     measure: GitMeasure = gitMeasure,
   ) {
     this.files = new WorkspaceFiles(repositories, workspaces, config);
+    // The monitor's measurements move only the worktrees and the merged pull
+    // requests remembered in `shipped`. A repository finishing its
+    // preparation moves the workspace and library rows too, so the library
+    // names no parts and the window reloads everything.
     this.gitStatus = new GitStatusMonitor(
       repositories,
       workspaces,
-      onRepositoriesChanged,
+      () => onRepositoriesChanged(["worktrees", "shipped"]),
       measure,
     );
     this.library = new RepositoryLibrary(
@@ -443,7 +450,7 @@ export class WorkspaceContentService {
       workspaces,
       config,
       this.gitStatus,
-      onRepositoriesChanged,
+      () => onRepositoriesChanged(),
     );
     this.worktrees = new SessionWorktrees(
       repositories,
@@ -695,6 +702,22 @@ export class WorkspaceContentService {
 
   close(...args: Parameters<GitStatusMonitor["close"]>) {
     return this.gitStatus.close(...args);
+  }
+
+  /** Looks at every working tree now, measuring the ones that moved. */
+  refreshGitStatusNow() {
+    return this.gitStatus.scheduleRefresh(null, false, true);
+  }
+
+  /** Starts the git status clock; for the desktop app, never the CLI. */
+  startGitStatusClock() {
+    return this.gitStatus.start();
+  }
+
+  fetchBaseBranches(
+    ...args: Parameters<RepositoryLibrary["fetchBaseBranches"]>
+  ) {
+    return this.library.fetchBaseBranches(...args);
   }
 
   // RepositoryLibrary

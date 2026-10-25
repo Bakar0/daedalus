@@ -1,5 +1,6 @@
 import { accessSync, constants } from "node:fs";
 import { isAbsolute, join } from "node:path";
+import type { CommandRunner } from "./command-worker";
 
 export interface CommandResult {
   exitCode: number;
@@ -31,11 +32,34 @@ export interface CommandOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Where `runCommand` sends a child whose output it collects, once a host has
+ * installed one; see `startCommandWorker`. Unset, every child is launched
+ * from the calling thread.
+ */
+let offThread: { run: CommandRunner; available: () => boolean } | undefined;
+
+/** Installs, or with `undefined` removes, the runner `runCommand` uses. */
+export function runCommandsOn(
+  runner: { run: CommandRunner; available: () => boolean } | undefined,
+): void {
+  offThread = runner;
+}
+
 export async function runCommand(
   executable: string,
   args: string[],
   options: CommandOptions = {},
 ): Promise<CommandResult> {
+  // A child that writes to this process's own terminal, or reads from it,
+  // stays here: only collected output can travel back from a worker.
+  if (
+    offThread?.available() &&
+    (options.stdout ?? "pipe") === "pipe" &&
+    (options.stderr ?? "pipe") === "pipe" &&
+    options.stdin !== "inherit"
+  )
+    return offThread.run(executable, args, options);
   const process = Bun.spawn([executable, ...args], {
     cwd: options.cwd,
     env: options.env

@@ -3,7 +3,7 @@
  *
  * `window.confirm` and `window.prompt` do nothing in the app. WKWebView only
  * shows them when its UI delegate implements the matching panel methods, and
- * Electrobun 1.18.1's delegate implements neither, so `confirm` answers
+ * Electrobun 2.0.4's delegate implements neither, so `confirm` answers
  * `false` and `prompt` answers `null` at once, with nothing on screen. Every
  * delete that asked first was therefore a button that did nothing (#40). The
  * browser checks never saw it: Chrome shows the native dialog and CDP accepts

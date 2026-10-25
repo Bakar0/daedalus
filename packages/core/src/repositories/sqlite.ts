@@ -350,6 +350,15 @@ interface AttentionHistoryRow {
   cleared_at: string;
 }
 
+/** One row of `worktree_pull_requests`; the pull request is JSON. */
+export interface WorktreePullRequestRecord {
+  path: string;
+  branchName: string;
+  pullRequest: string | null;
+  landedHead: string | null;
+  checkedAt: string;
+}
+
 interface ShippedPullRequestRow {
   url: string;
   workspace_id: string;
@@ -1485,6 +1494,57 @@ export class SqliteRepositories {
         raisedAt: row.raised_at,
         clearedAt: row.cleared_at,
       }));
+  }
+
+  /** What GitHub last said about each worktree's branch, keyed by path. */
+  listWorktreePullRequests(): WorktreePullRequestRecord[] {
+    return this.database
+      .query<
+        {
+          path: string;
+          branch_name: string;
+          pull_request: string | null;
+          landed_head: string | null;
+          checked_at: string;
+        },
+        []
+      >("SELECT * FROM worktree_pull_requests")
+      .all()
+      .map((row) => ({
+        path: row.path,
+        branchName: row.branch_name,
+        pullRequest: row.pull_request,
+        landedHead: row.landed_head,
+        checkedAt: row.checked_at,
+      }));
+  }
+
+  /**
+   * Keeps the latest answer for a worktree. A path with no registered
+   * worktree is skipped rather than failing, since the tree may have been
+   * removed while `gh` was being asked.
+   */
+  saveWorktreePullRequest(record: WorktreePullRequestRecord): void {
+    this.database
+      .query(
+        `INSERT INTO worktree_pull_requests
+         (path, branch_name, pull_request, landed_head, checked_at)
+         SELECT ?, ?, ?, ?, ? WHERE EXISTS
+           (SELECT 1 FROM session_worktrees WHERE path = ?)
+         ON CONFLICT(path) DO UPDATE SET
+           branch_name = excluded.branch_name,
+           pull_request = excluded.pull_request,
+           landed_head = excluded.landed_head,
+           checked_at = excluded.checked_at`,
+      )
+      .run(
+        record.path,
+        record.branchName,
+        record.pullRequest,
+        record.landedHead,
+        record.checkedAt,
+        record.path,
+      );
   }
 
   /** Files a merged pull request once; a second sighting changes nothing. */

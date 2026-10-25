@@ -80,6 +80,10 @@ const CODEX_ROLLOUT_FILE =
   /([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
 const CODEX_WRITER_LOCK =
   /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.lock$/i;
+// How long a rebirth request may go unanswered before it is made again, and
+// how many times it is, each wait twice the last, before the user is told.
+const REBIRTH_RETRY_MS = 15 * 60_000;
+const REBIRTH_RETRIES = 3;
 const SESSION_RECOVERY_WINDOW_MS = 60_000;
 const SESSION_RECOVERY_UNIQUENESS_MS = 2_000;
 const PROVIDER_STARTUP_TIMEOUT_MS = 30_000;
@@ -470,8 +474,11 @@ export class AgentService {
      * at exactly the moment a reboot gave them a whole board of them.
      */
     private readonly onSessionEnded: (sessionId: string) => void = () => {},
-    /** Puts a session's startup question on its Needs me badge. */
-    private readonly onStartupQuestion: (
+    /**
+     * Puts a reason on a session's Needs me badge: a question at startup, or
+     * a rebirth that keeps not happening.
+     */
+    private readonly raiseAttention: (
       sessionId: string,
       reason: string,
     ) => unknown = () => undefined,
@@ -554,7 +561,7 @@ export class AgentService {
 
   /** Raises the badge for a session that stopped on a question at startup. */
   private askedAtStartup(session: AgentSession): void {
-    void this.onStartupQuestion(session.id, startupQuestionReason(session));
+    void this.raiseAttention(session.id, startupQuestionReason(session));
   }
 
   private async readyAtStartup(session: AgentSession): Promise<void> {
@@ -1454,6 +1461,7 @@ export class AgentService {
           model,
           acceptPeerMessages:
             Boolean(team) || abilities.includes("orchestration"),
+          workingDirectory: prepared.workingDirectory,
           additionalDirectories: sessionDirectories(
             workspace.path,
             prepared.references.map(
@@ -1681,9 +1689,19 @@ export class AgentService {
 
   /**
    * Asks every running session whose context has passed its threshold (see
-   * `autoRebirthThreshold`) to be reborn. Once per session: a request already made stands
+   * `autoRebirthThreshold`) to be reborn. A request already made stands
    * until the successor archives it, so the agent is not nagged every tick
    * while it writes the note.
+   *
+   * A request can still go nowhere: the line was lost, or the agent ran
+   * `daedal agent continue` and it failed. The session then sits at its
+   * prompt with a full context and the mark set, and nothing would ever ask
+   * again. So a request older than `REBIRTH_RETRY_MS` is made again, but only
+   * while the session waits at its prompt; one that is working may be writing
+   * its note, and one asking the user something is the user's. Each retry
+   * waits twice as long as the one before. After `REBIRTH_RETRIES` of them
+   * something keeps failing that asking again will not fix, so the session
+   * goes on the user's Needs me badge instead.
    */
   async sweepAutoRebirths(
     telemetry: ReadonlyArray<{
@@ -1700,6 +1718,7 @@ export class AgentService {
       telemetry.map((item) => [item.sessionId, item.context?.usedPercent]),
     );
     const requested: AgentSession[] = [];
+    const now = Date.now();
     for (const agent of this.repositories.listAgents()) {
       const threshold = resolveAutoRebirth(
         agent.autoRebirthPercent,
@@ -1714,13 +1733,29 @@ export class AgentService {
         agent.kind !== "agent" ||
         agent.status !== "running" ||
         agent.archivedAt ||
-        agent.rebirthRequestedAt ||
         (agent.provider !== "claude" && agent.provider !== "codex") ||
         // A session running routines drains its runs first, and is reborn
         // under the delivery rule; the routine clock decides.
         this.abilities.held(agent.id, "routines")?.paused === false
       )
         continue;
+      if (!agent.rebirthRequestedAt) this.rebirthRetries.delete(agent.id);
+      else {
+        // Its successor is running; the predecessor only waits to be archived.
+        if (this.continued.has(agent.id)) continue;
+        const retries = this.rebirthRetries.get(agent.id) ?? 0;
+        if (!this.rebirthUnanswered(agent, now, retries)) continue;
+        if (retries >= REBIRTH_RETRIES) {
+          if (this.rebirthGivenUp.has(agent.id)) continue;
+          this.rebirthGivenUp.add(agent.id);
+          await this.raiseAttention(
+            agent.id,
+            `Daedalus asked this session to continue in a fresh one ${retries + 1} times and it has not. Its context is ${Math.round(percent)}% full. Check its terminal.`,
+          );
+          continue;
+        }
+        this.rebirthRetries.set(agent.id, retries + 1);
+      }
       try {
         requested.push(await this.requestRebirth(agent.id));
       } catch {
@@ -1729,6 +1764,28 @@ export class AgentService {
       }
     }
     return requested;
+  }
+
+  /**
+   * The sweep's memory of the requests it repeated, by session. It lives in
+   * the app, so a restart gives a stuck session a fresh set of tries.
+   */
+  private readonly rebirthRetries = new Map<string, number>();
+  /** Sessions whose stuck rebirth is already on the user's badge. */
+  private readonly rebirthGivenUp = new Set<string>();
+  /** Predecessors whose successor started; they only wait to be archived. */
+  private readonly continued = new Set<string>();
+
+  /** A rebirth request that has had its time and left the agent idle. */
+  private rebirthUnanswered(
+    agent: AgentSession,
+    now: number,
+    retries: number,
+  ): boolean {
+    const requestedAt = Date.parse(agent.rebirthRequestedAt ?? "");
+    if (!(now - requestedAt >= REBIRTH_RETRY_MS * 2 ** retries)) return false;
+    const activity = this.repositories.findAgentActivity(agent.id)?.activity;
+    return activity === "idle" || activity === "done" || activity === "error";
   }
 
   /**
@@ -1768,55 +1825,73 @@ export class AgentService {
       );
     // Marked whether the request came from Daedalus or the agent decided on
     // its own, so the app can follow this session to its successor either way.
-    if (!predecessor.rebirthRequestedAt)
-      this.repositories.updateAgent({
-        ...predecessor,
-        rebirthRequestedAt: new Date().toISOString(),
-      });
-    const note = input.note?.trim();
-    if (note && predecessor.hostId) {
-      const pod = this.hosts.get(predecessor.hostId);
-      if (!isPodAccess(pod))
-        throw new DaedalusError(
-          "DEPENDENCY",
-          "The cloud workspace cannot take files from this Mac",
-        );
-      await pod.writeFiles([
-        {
-          path: posix.join(predecessor.workingDirectory, REBIRTH_FILE),
-          contents: new TextEncoder().encode(`${note}\n`),
-        },
-      ]);
-    } else if (note)
-      await writeFile(
-        join(predecessor.workingDirectory, REBIRTH_FILE),
-        `${note}\n`,
-        "utf8",
-      );
-    // A session holding routines keeps its name: it is one agent over time,
-    // and the name is how its routines' tasks and notifications are signed.
-    // A team's lead is numbered like any session; its team keeps one name.
-    const holdsRoutines = Boolean(
-      this.abilities.held(predecessor.id, "routines"),
-    );
-    const session = await this.spawn({
-      workspace: predecessor.workspaceId,
-      taskId: predecessor.taskId ?? undefined,
-      name: holdsRoutines
-        ? predecessor.name
-        : rebirthSessionName(predecessor.name),
-      provider,
-      // A different provider would not understand the old one's model name.
-      model:
-        input.model ??
-        (provider === predecessor.provider
-          ? sessionLaunchModel(predecessor.args)
-          : undefined),
-      ...(input.account !== undefined ? { account: input.account } : {}),
-      message: input.message,
-      continueFrom: predecessor,
-      note: Boolean(note),
+    // Stamped afresh, so the sweep's retry clock runs from this continue and
+    // not from a request made long before it.
+    const requestedBefore = predecessor.rebirthRequestedAt;
+    this.repositories.updateAgent({
+      ...predecessor,
+      rebirthRequestedAt: new Date().toISOString(),
     });
+    let session: AgentSession;
+    try {
+      const note = input.note?.trim();
+      if (note && predecessor.hostId) {
+        const pod = this.hosts.get(predecessor.hostId);
+        if (!isPodAccess(pod))
+          throw new DaedalusError(
+            "DEPENDENCY",
+            "The cloud workspace cannot take files from this Mac",
+          );
+        await pod.writeFiles([
+          {
+            path: posix.join(predecessor.workingDirectory, REBIRTH_FILE),
+            contents: new TextEncoder().encode(`${note}\n`),
+          },
+        ]);
+      } else if (note)
+        await writeFile(
+          join(predecessor.workingDirectory, REBIRTH_FILE),
+          `${note}\n`,
+          "utf8",
+        );
+      // A session holding routines keeps its name: it is one agent over time,
+      // and the name is how its routines' tasks and notifications are signed.
+      // A team's lead is numbered like any session; its team keeps one name.
+      const holdsRoutines = Boolean(
+        this.abilities.held(predecessor.id, "routines"),
+      );
+      session = await this.spawn({
+        workspace: predecessor.workspaceId,
+        taskId: predecessor.taskId ?? undefined,
+        name: holdsRoutines
+          ? predecessor.name
+          : rebirthSessionName(predecessor.name),
+        provider,
+        // A different provider would not understand the old one's model name.
+        model:
+          input.model ??
+          (provider === predecessor.provider
+            ? sessionLaunchModel(predecessor.args)
+            : undefined),
+        ...(input.account !== undefined ? { account: input.account } : {}),
+        message: input.message,
+        continueFrom: predecessor,
+        note: Boolean(note),
+      });
+    } catch (error) {
+      // No successor, so the mark would claim a rebirth that is not
+      // happening, and the delivery gate would hold every line for it. A
+      // request Daedalus made keeps its own time, and the sweep asks again
+      // once that has passed.
+      this.repositories.updateAgent({
+        ...(await this.get(predecessor.id)),
+        rebirthRequestedAt: requestedBefore,
+      });
+      throw error;
+    }
+    // Until it is archived the predecessor sits at its prompt with the mark
+    // set, which is what the sweep's retry looks for.
+    this.continued.add(predecessor.id);
     // Abilities move with the work, so the routine clock follows the
     // successor, and archiving the predecessor below does not pause them. A
     // lead's team is its orchestration ability, so it moves too. A member's
@@ -1826,7 +1901,8 @@ export class AgentService {
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });
-    if (input.archive === "later") return { session, predecessor };
+    if (input.archive === "later")
+      return { session, predecessor: await this.get(predecessor.id) };
     try {
       return {
         session,
@@ -2494,6 +2570,7 @@ export class AgentService {
         acceptPeerMessages:
           Boolean(agent.teamId) ||
           Boolean(this.abilities.held(agent.id, "orchestration")),
+        workingDirectory: agent.workingDirectory,
         additionalDirectories: sessionDirectories(
           workspace.path,
           this.repositories

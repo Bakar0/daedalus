@@ -5,6 +5,10 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      "electrobun/view": new URL(
+        "../../.hutch/devkit/api/browser/index.ts",
+        import.meta.url,
+      ).pathname,
       "electrobun/browser": new URL(
         "../../.hutch/devkit/api/browser/index.ts",
         import.meta.url,

@@ -40,6 +40,7 @@ export interface AppLock {
 const KEY = "daedalus.phone.v1";
 const PENDING_PAIR = "daedalus.phone.pending-pair";
 const SIGN_IN = "daedalus.phone.signin";
+const PENDING_INVITE = "daedalus.phone.pending-invite";
 let memory: Stored = {};
 /** While unlocked: the passkey's secret, to seal changes again. */
 let lockSecret: Uint8Array | undefined;
@@ -188,6 +189,28 @@ export function setPendingPair(code: string | undefined): void {
   } catch {
     // Without storage the code is lost on the sign-in round trip; the user
     // scans it again.
+  }
+}
+
+/**
+ * An invite code from an invite link (`/?invite=…`) waits here while the
+ * user signs in; the sign-in carries it to the relay.
+ */
+export function pendingInvite(): string | undefined {
+  try {
+    return sessionStorage.getItem(PENDING_INVITE) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function setPendingInvite(code: string | undefined): void {
+  try {
+    if (code) sessionStorage.setItem(PENDING_INVITE, code);
+    else sessionStorage.removeItem(PENDING_INVITE);
+  } catch {
+    // Without storage the code is lost on the sign-in round trip; the user
+    // types it on the Pro screen.
   }
 }
 

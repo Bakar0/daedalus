@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatInviteCode, inviteCodeComplete } from "./index";
+import { formatInviteCode, inviteCodeComplete, inviteLink } from "./index";
 
 describe("formatInviteCode", () => {
   test("adds the dash after the fifth character as the user types", () => {
@@ -23,5 +23,19 @@ describe("formatInviteCode", () => {
     expect(inviteCodeComplete("6M7QP-SFV8E")).toBe(true);
     expect(inviteCodeComplete("6M7QP-SFV8")).toBe(false);
     expect(inviteCodeComplete("6M7QPSFV8E")).toBe(false);
+  });
+});
+
+describe("inviteLink", () => {
+  test("points at the phone page on the relay, over https", () => {
+    expect(
+      inviteLink("wss://relay.example.com/v1/connect", "6M7QP-SFV8E"),
+    ).toBe("https://relay.example.com/?invite=6M7QP-SFV8E");
+    expect(inviteLink("ws://localhost:8787", "6M7QP-SFV8E")).toBe(
+      "http://localhost:8787/?invite=6M7QP-SFV8E",
+    );
+    expect(inviteLink("https://relay.example.com", "6M7QP-SFV8E")).toBe(
+      "https://relay.example.com/?invite=6M7QP-SFV8E",
+    );
   });
 });

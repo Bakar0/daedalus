@@ -4,6 +4,14 @@ name: Release
 # for both Mac architectures, publishes a GitHub release with the DMGs and the
 # update feed the app reads, and updates the Homebrew cask.
 #
+# A version with a prerelease suffix, such as v0.32.0-beta.1, is a beta. It
+# builds the same app and publishes a GitHub prerelease, which
+# releases/latest never points at, so the stable feed and the cask stay as
+# they are. The beta-feed job then copies the highest beta's update files to
+# the rolling `beta` prerelease, the fixed feed that apps with "Get beta
+# updates" on read (BETA_FEED_URL in packages/core/src/services/app-updates.ts).
+# See docs/releasing.md.
+#
 # Optional repository secrets:
 #   MACOS_CERTIFICATE_P12, MACOS_CERTIFICATE_PASSWORD, MACOS_DEVELOPER_ID
 #     A "Developer ID Application" certificate (base64 .p12), its password and
@@ -30,8 +38,6 @@ jobs:
         include:
           - runner: macos-15
             arch: arm64
-          - runner: macos-15-intel
-            arch: x64
     runs-on: ${{ matrix.runner }}
     outputs:
       notarized: ${{ steps.signing.outputs.notarized }}
@@ -39,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
 
       - name: Check the tag matches package.json
         run: |
@@ -129,29 +135,62 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.3
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
+      - name: Tell a beta from a stable release
+        id: kind
+        run: |
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The cask follows stable releases only; a beta leaves it alone.
       - name: Write the Homebrew cask
+        if: steps.kind.outputs.prerelease == 'false'
         run: |
           bun run scripts/homebrew-cask.ts \
             --version "${GITHUB_REF_NAME#v}" \
             --arm64 artifacts/stable-macos-arm64-Daedalus.dmg \
-            --x64 artifacts/stable-macos-x64-Daedalus.dmg \
             ${{ needs.build.outputs.notarized == 'true' && '--notarized' || '' }} \
             --out artifacts/daedalus.rb
+
+      # 0.31.0 was the last Intel build. Those apps still ask the feed for
+      # stable-macos-x64-update.json, and the feed is whatever the newest
+      # release holds, so a release without it answers them with a 404 every
+      # time they check. 0.31.0's own file names a version no newer than the
+      # one they run, so re-attaching it keeps them quiet.
+      # releases/latest never serves a beta, so a beta does not need it.
+      - name: Keep the Intel update feed answering
+        if: steps.kind.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.31.0 \
+            --pattern stable-macos-x64-update.json --dir artifacts
 
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.kind.outputs.prerelease }}
         run: |
+          # A beta is a prerelease and never latest, so releases/latest and
+          # the stable feed keep serving the last stable release. A stable
+          # release leaves latest to GitHub, which picks the highest version.
+          kind=()
+          if [ "$PRERELEASE" = "true" ]; then
+            kind=(--prerelease --latest=false)
+          fi
           gh release create "$GITHUB_REF_NAME" artifacts/* \
             --title "Daedalus ${GITHUB_REF_NAME#v}" \
             --generate-notes \
-            --verify-tag
+            --verify-tag \
+            ${kind[@]+"${kind[@]}"}
 
       # The same GitHub App the servant release uses: a token that lasts an
       # hour and can write only to the tap.
@@ -159,8 +198,12 @@ jobs:
         id: gate
         env:
           APP_ID: ${{ secrets.APP_ID }}
+          PRERELEASE: ${{ steps.kind.outputs.prerelease }}
         run: |
-          if [ -n "$APP_ID" ]; then
+          if [ "$PRERELEASE" = "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "A beta does not touch the Homebrew tap."
+          elif [ -n "$APP_ID" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -204,3 +247,75 @@ jobs:
             git commit -m "daedalus ${GITHUB_REF_NAME}"
             git push
           fi
+
+  # The beta feed is one prerelease tagged `beta` whose assets are replaced,
+  # so its download URL never changes. It always carries the highest beta
+  # published, not the tag that started this run: GitHub keeps only the
+  # newest queued run of a concurrency group and cancels the others, and
+  # tags can finish out of order, but whichever run comes last still leaves
+  # the highest beta in place.
+  beta-feed:
+    needs: publish
+    if: contains(github.ref_name, '-')
+    runs-on: macos-15
+    concurrency:
+      group: beta-feed
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Pick the highest beta
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list --exclude-drafts --limit 200 \
+            --json tagName,isPrerelease | bun run scripts/beta-feed.ts)
+          if [ -z "$tag" ]; then
+            echo "No beta release found" >&2
+            exit 1
+          fi
+          echo "Feed carries $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The old update.json files go first, then the bundles and patches,
+      # then the new update.json. An app that checks in between gets a 404,
+      # which it treats as no beta, rather than an old manifest that names a
+      # bundle already replaced. Assets an older beta left, such as its
+      # patches, are removed last.
+      - name: Replace the feed's files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: |
+          mkdir -p feed
+          # Apple silicon only: Intel builds stopped at 0.31.0.
+          gh release download "$TAG" --dir feed --pattern 'stable-macos-arm64-*'
+          if ! gh release view beta >/dev/null 2>&1; then
+            gh release create beta \
+              --title "Daedalus beta feed" \
+              --notes "The update feed for Daedalus with Get beta updates on." \
+              --prerelease --latest=false \
+              --target "$GITHUB_SHA"
+          fi
+          shopt -s nullglob
+          bundles=(feed/*.dmg feed/*.tar.zst feed/*.patch)
+          manifests=(feed/*-update.json)
+          current=$(gh release view beta --json assets --jq '.assets[].name')
+          for name in $current; do
+            case "$name" in
+              *-update.json) gh release delete-asset beta "$name" --yes ;;
+            esac
+          done
+          gh release upload beta "${bundles[@]}" --clobber
+          gh release upload beta "${manifests[@]}" --clobber
+          keep=$(for file in "${bundles[@]}" "${manifests[@]}"; do basename "$file"; done)
+          for name in $current; do
+            if ! grep -qxF "$name" <<<"$keep"; then
+              gh release delete-asset beta "$name" --yes 2>/dev/null || true
+            fi
+          done
+          gh release edit beta --notes "The update feed for Daedalus with Get beta updates on. It carries ${TAG}; see that release for its notes."

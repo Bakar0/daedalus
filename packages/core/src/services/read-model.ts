@@ -197,13 +197,80 @@ export class ReadModel {
   }
 
   async version(): Promise<string> {
-    const parts: Record<string, unknown> = {};
+    return JSON.stringify(await this.versions());
+  }
+
+  /**
+   * The version of each watched source on its own, so a host can say which
+   * parts changed and a window reload only those.
+   */
+  async versions(): Promise<Record<string, string>> {
+    const parts: Record<string, string> = {};
     for (const [name, part] of Object.entries(this.sources))
       if (typeof part.version === "function")
-        parts[name] = await part.version();
-    return JSON.stringify(parts);
+        parts[name] = JSON.stringify(await part.version());
+    return parts;
+  }
+
+  /**
+   * Only the named parts. Each is safe to read on its own: none of them is
+   * an input to the reconciliation that a `live` agents or terminals read
+   * runs first, so it reads the same here as inside a whole snapshot.
+   */
+  async snapshotParts<Name extends PartialReadModelSource>(
+    names: readonly Name[],
+  ): Promise<Pick<ReadModelView, Name>> {
+    const view: Partial<Record<Name, unknown>> = {};
+    for (const name of names) view[name] = await this.sources[name].read();
+    return view as Pick<ReadModelView, Name>;
   }
 }
+
+/**
+ * The sources a window may reload on their own. They are the ones that move
+ * while agents work, a turn's activity and token counts above all, and none
+ * of them changes what the rest of the snapshot says.
+ */
+export const PARTIAL_READ_MODEL_SOURCES = [
+  "sessionActivity",
+  "attention",
+  "telemetry",
+  "toasts",
+  "worktrees",
+  "shipped",
+  "largeFiles",
+] as const satisfies readonly (keyof Sources)[];
+
+export type PartialReadModelSource =
+  (typeof PARTIAL_READ_MODEL_SOURCES)[number];
+
+/**
+ * The versions a host should compare its next tick against after announcing
+ * a change. A whole reload takes every current version. A partial one takes
+ * only its own parts', so a change to any other part that has not been
+ * announced still shows as a difference.
+ */
+export function versionsAfterAnnouncing(
+  previous: Record<string, string>,
+  current: Record<string, string>,
+  parts?: readonly string[],
+): Record<string, string> {
+  if (!parts) return current;
+  const next = { ...previous };
+  for (const part of parts)
+    if (part in current) next[part] = current[part]!;
+    else delete next[part];
+  return next;
+}
+
+/** Whether every changed part can be reloaded without the rest. */
+export const isPartialReload = (
+  names: readonly string[],
+): names is PartialReadModelSource[] =>
+  names.length > 0 &&
+  names.every((name) =>
+    (PARTIAL_READ_MODEL_SOURCES as readonly string[]).includes(name),
+  );
 
 /**
  * A routines status as the version sees it. Every keystroke moves the quiet

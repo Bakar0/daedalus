@@ -255,8 +255,10 @@ export interface GitStatusDto {
   behind: number;
   /** Files the commits ahead of base touch; present only when `ahead > 0`. */
   filesAhead?: number;
-  /** Commits no branch on `origin` holds; present only when `ahead > 0`. */
+  /** Commits not on the branch's upstream, or on no branch of `origin`. */
   unpushed?: number;
+  upstream?: "tracking" | "none" | "gone";
+  detached?: boolean;
 }
 
 /** What one fetch did to one workspace checkout. */
@@ -282,6 +284,8 @@ export interface PullRequestRefDto {
   title?: string;
   /** GitHub's merge time, present once merged. */
   mergedAt?: string;
+  checks?: "passing" | "failing" | "pending";
+  review?: "approved" | "changes_requested" | "review_required";
 }
 
 /** A merged pull request, remembered after its worktree is gone. */
@@ -306,8 +310,10 @@ export interface SessionWorktreeDto {
   gitStatus?: GitStatusDto;
   /** Absent when `gh` is missing, signed out, or found nothing. */
   pullRequest?: PullRequestRefDto;
-  /** The merged pull request holds this tree's HEAD: nothing here to push. */
+  /** The merged pull request holds this tree's work: nothing here to push. */
   landed?: boolean;
+  /** GitHub could not be asked last time; `pullRequest` is the last answer. */
+  pullRequestStale?: boolean;
 }
 
 export interface ChangedFileDto {
@@ -577,6 +583,8 @@ export interface DesktopSettingsDto {
   /** The global rebirth threshold, 10 to 100, or null for off. */
   autoRebirthPercent: number | null;
   focusMode: boolean;
+  /** "Get beta updates": the updater also reads the beta feed. */
+  betaUpdatesEnabled: boolean;
   providers: ProviderAvailabilityDto[];
   /** Every account, default ones first. Sign-in state is `accountStatus`. */
   accounts: AccountDto[];
@@ -1349,6 +1357,35 @@ type Request<Params, Response> = {
   response: RpcResult<Response>;
 };
 
+/**
+ * The parts of a snapshot a window can reload on their own when only they
+ * changed: the host's read-model sources of the same names, where
+ * `telemetry` is `providerUsage` and `sessionTelemetry`.
+ */
+export type DesktopSnapshotPart =
+  | "sessionActivity"
+  | "attention"
+  | "telemetry"
+  | "toasts"
+  | "worktrees"
+  | "shipped"
+  | "largeFiles";
+
+/** What `snapshotParts` answers: only the fields of the parts asked for. */
+export type DesktopSnapshotPartsDto = Partial<
+  Pick<
+    DesktopSnapshotDto,
+    | "sessionActivity"
+    | "attention"
+    | "providerUsage"
+    | "sessionTelemetry"
+    | "toasts"
+    | "worktrees"
+    | "shipped"
+    | "largeFiles"
+  >
+>;
+
 /** The app's own window, or the World opened in a window of its own. */
 export type DesktopWindowRole = "main" | "world";
 
@@ -1357,6 +1394,11 @@ export interface DesktopRpcSchema {
   bun: {
     requests: {
       snapshot: Request<Record<string, never>, DesktopSnapshotDto>;
+      /** Only the named parts, for a `dataChanged` that names them. */
+      snapshotParts: Request<
+        { parts: DesktopSnapshotPart[] },
+        DesktopSnapshotPartsDto
+      >;
       /** Name, pin, color and rebirth threshold, any of them. */
       sessionUpdate: Request<
         {
@@ -1759,6 +1801,8 @@ export interface DesktopRpcSchema {
         { percent: number | null }
       >;
       focusModeSet: Request<{ enabled: boolean }, { enabled: boolean }>;
+      /** "Get beta updates". Turning it on checks for an update at once. */
+      betaUpdatesSet: Request<{ enabled: boolean }, { enabled: boolean }>;
       /**
        * The skill system. Global, so none of these takes a workspace: a skill
        * is installed once and applies to every session on the machine.
@@ -1866,6 +1910,12 @@ export interface DesktopRpcSchema {
         WorkspaceRepositoryDto
       >;
       workspaceRepositorySync: Request<{ id: string }, WorkspaceRepositoryDto>;
+      /**
+       * The window came to the front: base branches not fetched in the last
+       * two minutes are fetched in the background, and every working tree is
+       * looked at again. Answers at once.
+       */
+      repositoriesRefresh: Request<Record<string, never>, null>;
       /** Fetches, and moves the workspace checkout to the fetched tip. */
       workspaceRepositoryFetch: Request<{ id: string }, WorkspaceRepositoryDto>;
       /**
@@ -2149,7 +2199,15 @@ export interface DesktopRpcSchema {
       };
     };
     messages: {
-      dataChanged: { revision: number; source: "desktop" | "external" };
+      dataChanged: {
+        revision: number;
+        source: "desktop" | "external";
+        /**
+         * Set when only these parts changed, so the window may reload them
+         * alone. Absent means reload everything.
+         */
+        parts?: DesktopSnapshotPart[];
+      };
       /**
        * A workspace's files changed on disk. Already coalesced and debounced
        * by the host; `overflow` means the batch was too large to describe and
@@ -2254,3 +2312,18 @@ export function formatInviteCode(text: string): string {
 /** Whether a formatted invite code has all its characters. */
 export const inviteCodeComplete = (code: string): boolean =>
   /^[A-Z0-9]{5}-[A-Z0-9]{5}$/.test(code);
+
+/**
+ * A link that gives Pro with an invite code: the phone page on the relay,
+ * which keeps the code through the Google sign-in and the relay redeems it
+ * on the way. `relay` is the relay's address as the Mac has it (wss: or
+ * https:).
+ */
+export function inviteLink(relay: string, code: string): string {
+  const url = new URL(relay);
+  if (url.protocol === "wss:") url.protocol = "https:";
+  else if (url.protocol === "ws:") url.protocol = "http:";
+  const link = new URL("/", url.origin);
+  link.searchParams.set("invite", code);
+  return link.toString();
+}

@@ -242,10 +242,19 @@ export interface GitStatus {
   filesAhead?: number;
   /**
    * Commits here that no branch on `origin` holds: work that exists only on
-   * this machine. Measured only when `ahead` is non-zero. A pushed branch has
-   * none, however far ahead of the base branch it is.
+   * this machine. Against the branch's own upstream when it tracks one,
+   * otherwise against every branch on `origin`. A pushed branch has none,
+   * however far ahead of the base branch it is.
    */
   unpushed?: number;
+  /**
+   * Whether the branch publishes under its own name on `origin`: it tracks
+   * one, it never did (no upstream, or only the base branch it started
+   * from), or the one it tracked is gone, as after a merge deletes it.
+   */
+  upstream?: "tracking" | "none" | "gone";
+  /** HEAD is not on a branch. */
+  detached?: boolean;
 }
 
 /**
@@ -279,6 +288,10 @@ export interface PullRequestRef {
   title?: string;
   /** GitHub's merge time, present once merged. */
   mergedAt?: string;
+  /** The combined state of the head commit's checks, when it has any. */
+  checks?: "passing" | "failing" | "pending";
+  /** GitHub's review decision, when the repository asks for reviews. */
+  review?: "approved" | "changes_requested" | "review_required";
 }
 
 /**
@@ -323,11 +336,17 @@ export interface SessionWorktree {
   /** Absent when `gh` is missing, signed out, or found nothing. */
   pullRequest?: PullRequestRef;
   /**
-   * The branch's pull request is merged and its head holds this tree's HEAD,
-   * so the work is on the base branch even when a squash merge left none of
-   * these commits there.
+   * The branch's pull request is merged and every commit here is in it or on
+   * the base branch, so the work is on the base branch even when a squash
+   * merge left none of these commits there.
    */
   landed?: boolean;
+  /**
+   * The last time GitHub was asked about this branch it could not answer
+   * (offline, signed out, rate limited, no `gh`), so `pullRequest` is the
+   * last answer it gave.
+   */
+  pullRequestStale?: boolean;
 }
 
 /** One file with uncommitted changes in a session's worktree. */

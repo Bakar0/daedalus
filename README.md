@@ -31,7 +31,7 @@
 
 ## Installation
 
-Requires macOS 14 or newer and `git`.
+Requires an Apple silicon Mac on macOS 14 or newer, and `git`. 0.31.0 was the last release with an Intel build.
 
 ```sh
 brew install --cask bakar0/tap/daedalus
@@ -43,7 +43,7 @@ Verify the install:
 
 ```console
 $ daedal doctor
-✓ bun: 1.3.13
+✓ bun: 1.4.0
   runtime bundled with Daedalus.app
 ✓ tmux: tmux 3.7c
   /Applications/Daedalus.app/Contents/MacOS/tmux (verified minimum 3.7c)

@@ -5,7 +5,7 @@ import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
   accountDirectory,
   autoRebirthPercent,
-  channelName,
+  buildChannel,
   cloudHostWorkspace,
   cloudMcpChoices,
   setCloudMcpServer,
@@ -36,8 +36,11 @@ import {
   type Workspace,
   type WorkspaceContent,
   type WorkspaceRepository,
+  isPartialReload,
 } from "@daedalus/core";
 import type {
+  DesktopSnapshotPart,
+  DesktopSnapshotPartsDto,
   AccountDto,
   AgentActivityDto,
   AppUpdateDto,
@@ -234,6 +237,34 @@ const workspaceContentDto = (
 });
 
 /** The read model's view, as the window and the phone receive it. */
+/** The named parts of `desktopSnapshot`, mapped the same way. */
+export async function desktopSnapshotParts(
+  readModel: ReadModel,
+  parts: readonly DesktopSnapshotPart[],
+): Promise<DesktopSnapshotPartsDto> {
+  const wanted = parts.filter((part) => isPartialReload([part]));
+  const view = await readModel.snapshotParts(wanted);
+  return {
+    ...(view.sessionActivity
+      ? { sessionActivity: view.sessionActivity.map(agentActivityDto) }
+      : {}),
+    ...(view.attention
+      ? { attention: view.attention.map(sessionAttentionDto) }
+      : {}),
+    ...(view.telemetry ?? {}),
+    ...(view.toasts ? { toasts: view.toasts.map(toastDto) } : {}),
+    ...(view.worktrees
+      ? { worktrees: view.worktrees.map((worktree) => ({ ...worktree })) }
+      : {}),
+    ...(view.shipped
+      ? { shipped: view.shipped.map((item) => ({ ...item })) }
+      : {}),
+    ...(view.largeFiles
+      ? { largeFiles: view.largeFiles.map((file) => ({ ...file })) }
+      : {}),
+  };
+}
+
 export async function desktopSnapshot(
   readModel: ReadModel,
 ): Promise<DesktopSnapshotDto> {
@@ -263,7 +294,7 @@ export async function desktopSnapshot(
     routineReports: view.routineReports.map((report) => ({ ...report })),
     settings: {
       version: packageJson.version,
-      channel: channelName(config.home),
+      channel: buildChannel(config.home),
       home: config.home,
       workspaceRoot: config.workspaceRoot,
       databasePath: config.databasePath,
@@ -273,6 +304,7 @@ export async function desktopSnapshot(
       trustSessionFoldersEnabled: config.trustSessionFoldersEnabled,
       autoRebirthPercent: config.autoRebirthPercent,
       focusMode: config.focusMode,
+      betaUpdatesEnabled: config.betaUpdatesEnabled,
       ...view.capabilities,
       accounts: accounts.map((item) => ({ ...item })),
     },
@@ -561,6 +593,8 @@ export function createDesktopRequestHandlers(
   };
 
   return {
+    // The cloud's parts change only with an announcement that names no
+    // parts, so they come with the whole snapshot and never with a part.
     snapshot: () =>
       result(async () => ({
         ...(await desktopSnapshot(readModel)),
@@ -569,6 +603,8 @@ export function createDesktopRequestHandlers(
         cloudPreparing: context.cloud.preparing(),
         gatewayInstall: context.gatewayInstall.current(),
       })),
+    snapshotParts: ({ parts }) =>
+      result(() => desktopSnapshotParts(readModel, parts)),
     sessionUpdate: ({ sessionId, name, pinned, color, autoRebirthPercent }) =>
       mutate(async () => {
         if (name !== undefined) await context.agents.rename(sessionId, name);
@@ -1048,6 +1084,16 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         enabled: await context.presence.setFocusMode(enabled),
       })),
+    betaUpdatesSet: ({ enabled }) =>
+      mutate(async () => {
+        await context.appUpdates.setBetaUpdates(enabled);
+        // The switch sits beside the update row in About, so the check
+        // answers there: a beta already out shows up now rather than at the
+        // next six-hourly check. Off needs no check, since it can only
+        // narrow what is offered.
+        if (enabled) void updates.check();
+        return { enabled };
+      }),
     // Reading is a plain result. Everything that writes goes through `mutate`,
     // because a skill toggle changes what every future session sees and the
     // rest of the app should redraw around it.
@@ -1106,6 +1152,15 @@ export function createDesktopRequestHandlers(
           await context.workspaceContent.attachRepository(params),
         ),
       ),
+    // Nothing stored changes here; the measurements announce themselves.
+    repositoriesRefresh: () =>
+      result(async () => {
+        void context.workspaceContent
+          .fetchBaseBranches(2 * 60_000)
+          .catch(() => undefined);
+        context.workspaceContent.refreshGitStatusNow();
+        return null;
+      }),
     workspaceRepositoryFetch: ({ id }) =>
       mutate(async () =>
         workspaceRepositoryDto(

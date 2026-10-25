@@ -391,6 +391,20 @@ export function SettingsModal({
             {settings.channel !== "dev" && updates ? (
               <SettingsUpdateRow {...updates} />
             ) : undefined}
+            {settings.channel !== "dev" ? (
+              <>
+                <h3>Updates</h3>
+                <SettingRow
+                  checked={settings.betaUpdatesEnabled}
+                  disabled={busy}
+                  description="Also offer beta releases, which come before each stable one and may have rough edges. Daedalus installs whichever of the newest beta and the newest stable release is higher. Turning this off keeps the beta you have until a stable release passes it."
+                  onChange={(enabled) =>
+                    void perform(client.request.betaUpdatesSet({ enabled }))
+                  }
+                  title="Get beta updates"
+                />
+              </>
+            ) : undefined}
           </section>
         ) : undefined}
       </div>

@@ -4,7 +4,7 @@ import {
   withoutProviderClis,
   withTemporaryDaedalusHome,
 } from "@daedalus/test-utils";
-import { createApplicationContext, ReadModel } from "../index";
+import { createApplicationContext, isPartialReload, ReadModel } from "../index";
 
 class FakeTmux implements TmuxClient {
   openPty() {
@@ -113,6 +113,29 @@ describe("ReadModel", () => {
       const withTask = await model.version();
       expect(withTask).not.toBe(withWorkspace);
       expect(await model.version()).toBe(withTask);
+    });
+  });
+
+  test("each part has a version of its own, and a part reads alone", async () => {
+    await withContext(async (context) => {
+      const model = new ReadModel(context);
+      const before = await model.versions();
+      const workspace = await context.workspaces.create({ name: "Parts" });
+      await context.tasks.create({ workspace: workspace.id, title: "Ship" });
+      const after = await model.versions();
+      const changed = Object.keys(after).filter(
+        (name) => after[name] !== before[name],
+      );
+      expect(changed.sort()).toEqual(["tasks", "workspaces"]);
+      expect(isPartialReload(changed)).toBe(false);
+      expect(isPartialReload(["sessionActivity", "telemetry"])).toBe(true);
+      expect(isPartialReload([])).toBe(false);
+
+      const parts = await model.snapshotParts(["sessionActivity", "toasts"]);
+      expect(Object.keys(parts).sort()).toEqual(["sessionActivity", "toasts"]);
+      const whole = await model.snapshot();
+      expect(parts.sessionActivity).toEqual(whole.sessionActivity);
+      expect(parts.toasts).toEqual(whole.toasts);
     });
   });
 

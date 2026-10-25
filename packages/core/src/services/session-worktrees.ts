@@ -20,6 +20,7 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
   checkedOutBranch,
+  parsePorcelainStatus,
   parseChangedFiles,
   publishedBranchName,
   pullRequestAnswerHoldsHead,
@@ -59,9 +60,9 @@ async function worktreeHeldWork(
     runCommand(git, ["--no-optional-locks", "-C", worktree.path, ...args]);
   const status = await run([
     "status",
-    "--porcelain=v1",
+    "--porcelain=v2",
     "-z",
-    "--untracked-files=normal",
+    "--untracked-files=all",
   ]);
   if (status.exitCode !== 0)
     return { uncommittedFiles: 0, unreachableCommits: 0 };
@@ -84,7 +85,7 @@ async function worktreeHeldWork(
     const resolved = await run(["rev-parse", "--verify", "--quiet", reference]);
     if (resolved.exitCode === 0) elsewhere.push(reference);
   }
-  const uncommittedFiles = status.stdout.split("\0").filter(Boolean).length;
+  const uncommittedFiles = parsePorcelainStatus(status.stdout).changedFiles;
   // With nothing to compare against there is nothing to call unique. Counting
   // `HEAD` alone would report the repository's whole history, which would make
   // an untouched working tree permanently unremovable.
@@ -107,7 +108,12 @@ async function worktreeHeldWork(
   // counts as the work being elsewhere.
   if (
     unreachableCommits > 0 &&
-    (await mergedPullRequestHolds(git, worktree.path, published ?? branch))
+    (await mergedPullRequestHolds(
+      git,
+      worktree.path,
+      published ?? branch,
+      repository.baseBranch,
+    ))
   )
     return { uncommittedFiles, unreachableCommits: 0 };
   return { uncommittedFiles, unreachableCommits };
@@ -120,16 +126,17 @@ async function mergedPullRequestHolds(
   git: string,
   path: string,
   branch: string,
+  baseBranch: string | null,
 ): Promise<boolean> {
   const gh = findExecutable("gh", GH_EXECUTABLE_FALLBACKS);
   if (!gh) return false;
   const response = await runCommand(
     gh,
-    ["pr", "view", branch, "--json", "state,headRefOid"],
+    ["pr", "view", branch, "--json", "number,state,headRefOid"],
     { cwd: path, env: { GH_PROMPT_DISABLED: "1" } },
   ).catch(() => undefined);
   if (!response || response.exitCode !== 0) return false;
-  return pullRequestAnswerHoldsHead(git, path, response.stdout);
+  return pullRequestAnswerHoldsHead(git, path, response.stdout, baseBranch);
 }
 
 /** A commit, or its parent, as a diff may ask for one. */
