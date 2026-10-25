@@ -64,6 +64,22 @@ describe("listenForSignIn", () => {
     expect(await listener.done).toBe("forwarded");
   });
 
+  test("says Signed in only when the pod says the tool signed in", async () => {
+    const port = freePort();
+    const listener = listenForSignIn(
+      { port, path: "/auth/callback", state: "s" },
+      // Codex's error page is a 200 too.
+      async () => ({ status: 200, ok: false }),
+      { timeoutMs: 10_000 },
+    )!;
+    const reply = await fetch(
+      `http://127.0.0.1:${port}/auth/callback?code=c&state=s`,
+    );
+    expect(reply.status).toBe(502);
+    expect(await reply.text()).not.toContain("Signed in");
+    expect(await listener.done).toBe("failed");
+  });
+
   test("a pod that cannot be reached gets an error page", async () => {
     const port = freePort();
     const listener = listenForSignIn(

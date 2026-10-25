@@ -1133,6 +1133,14 @@ export class CloudService {
       cloudId && this.options.repositories.workspaceForCloud(cloudId)
         ? checkSignInUrl(url, this.options.repositories.cloudSsoHosts(cloudId))
         : "an unknown host";
+    this.options.log?.(
+      typeof checked === "string"
+        ? "cloud_signin_refused"
+        : "cloud_signin_offered",
+      typeof checked === "string"
+        ? { hostId, sessionId, reason: checked }
+        : { hostId, sessionId, kind: checked.kind, host: checked.host },
+    );
     if (typeof checked === "string")
       return {
         exitCode: REFUSED_EXIT_CODE,
@@ -1168,12 +1176,38 @@ export class CloudService {
         host instanceof RemoteSessionHost
           ? listenForSignIn(
               callback,
-              (query) =>
-                host.authCallback({
-                  port: callback.port,
+              async (query) => {
+                const reply = await host
+                  .authCallback({
+                    port: callback.port,
+                    path: callback.path,
+                    query,
+                  })
+                  .catch((error: unknown) => {
+                    this.options.log?.("cloud_signin_forward_failed", {
+                      sessionId: stored.sessionId,
+                      kind: stored.kind,
+                      message:
+                        error instanceof Error ? error.message : String(error),
+                    });
+                    throw error;
+                  });
+                // Codex answers a failed sign-in with 200 too; it saved its
+                // sign-in only when it took the code.
+                const ok =
+                  stored.kind === "codex"
+                    ? reply.status === 200 &&
+                      (await host.exists(POD_CODEX_AUTH).catch(() => false))
+                    : reply.status < 400;
+                this.options.log?.("cloud_signin_forwarded", {
+                  sessionId: stored.sessionId,
+                  kind: stored.kind,
                   path: callback.path,
-                  query,
-                }),
+                  status: reply.status,
+                  ok,
+                });
+                return { ...reply, ok };
+              },
               { timeoutMs: SIGN_IN_OFFER_MS },
             )
           : undefined;
@@ -1194,6 +1228,14 @@ export class CloudService {
       );
     }
     const opened = listener as SignInListener | undefined;
+    this.options.log?.("cloud_signin_opened", {
+      sessionId: offer.sessionId,
+      kind: offer.kind,
+      host: offer.host ?? offer.checked.host,
+      ...(offer.checked.callback
+        ? { port: offer.checked.callback.port, listening: Boolean(opened) }
+        : {}),
+    });
     // Codex has no page to paste a code from: the port is the only way back.
     if (offer.kind === "codex" && !opened) {
       this.signIns.fail(
@@ -1214,6 +1256,11 @@ export class CloudService {
       this.#signInListeners.add(opened);
       void opened.done.then((result) => {
         this.#signInListeners.delete(opened);
+        this.options.log?.("cloud_signin_listener_done", {
+          sessionId: session.id,
+          kind: offer.kind,
+          result,
+        });
         if (result === "forwarded")
           void this.#followSignIn(session, offer.kind);
         else

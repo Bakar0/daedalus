@@ -38,6 +38,32 @@ const QUERY = /^[\x21\x22\x24-\x7e]*$/;
  * is dropped, and the Mac checks the `Location` again. Neither the query
  * nor the `Location` is logged.
  */
+/**
+ * Codex's listener answers a good callback with a redirect to its own
+ * `/success` page and finishes the sign-in only once that page is asked for,
+ * so the runner asks for it, in the pod: same listener, that path, nothing
+ * else. The query of that page carries an ID token and stays here.
+ */
+function ownSuccessPage(
+  location: string | null,
+  port: number,
+): string | undefined {
+  if (!location || location.length > MAX_LOCATION) return undefined;
+  try {
+    const url = new URL(location);
+    return url.protocol === "http:" &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1") &&
+      Number(url.port) === port &&
+      !url.username &&
+      !url.password &&
+      url.pathname === "/success"
+      ? `http://127.0.0.1:${port}/success${url.search}`
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function authCallback(
   params: unknown,
   fetchImpl: typeof fetch = fetch,
@@ -64,6 +90,23 @@ export async function authCallback(
     throw new RunnerError("FAILED", "Nothing answered the sign-in callback");
   }
   await response.body?.cancel().catch(() => undefined);
+  const success =
+    path === "/auth/callback" && response.status >= 300 && response.status < 400
+      ? ownSuccessPage(response.headers.get("location"), port!)
+      : undefined;
+  if (success) {
+    let page: Response;
+    try {
+      page = await fetchImpl(success, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch {
+      throw new RunnerError("FAILED", "Nothing answered the sign-in callback");
+    }
+    await page.body?.cancel().catch(() => undefined);
+    return { status: page.status };
+  }
   const location = onwardLocation(response.headers.get("location"));
   return { status: response.status, ...(location ? { location } : {}) };
 }

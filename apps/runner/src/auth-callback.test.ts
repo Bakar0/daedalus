@@ -85,6 +85,45 @@ test("serves Codex's path, and keeps its success page, which carries a token, in
   expect(JSON.stringify(result)).not.toContain("eyJsecret");
 });
 
+test("asks for Codex's own success page in the pod, which finishes its sign-in", async () => {
+  const seen: string[] = [];
+  const port = listen((request) => {
+    const url = new URL(request.url);
+    seen.push(url.pathname);
+    return url.pathname === "/auth/callback"
+      ? new Response(null, {
+          status: 302,
+          headers: {
+            location: `http://localhost:${server!.port}/success?id_token=eyJsecret`,
+          },
+        })
+      : new Response("<html>signed in</html>", { status: 200 });
+  });
+  const result = await authCallback({
+    port,
+    path: "/auth/callback",
+    query: "code=1&state=2",
+  });
+  expect(seen).toEqual(["/auth/callback", "/success"]);
+  expect(result).toEqual({ status: 200 });
+  expect(JSON.stringify(result)).not.toContain("eyJsecret");
+});
+
+test("follows no redirect but Codex's own page on its own port", async () => {
+  const seen: string[] = [];
+  const port = listen((request) => {
+    seen.push(new URL(request.url).pathname);
+    return new Response(null, {
+      status: 302,
+      headers: { location: "http://localhost:1/success?x=1" },
+    });
+  });
+  expect(
+    await authCallback({ port, path: "/auth/callback", query: "code=1" }),
+  ).toEqual({ status: 302 });
+  expect(seen).toEqual(["/auth/callback"]);
+});
+
 test("refuses other paths, ports and queries before connecting", async () => {
   let hits = 0;
   const port = listen(() => {
