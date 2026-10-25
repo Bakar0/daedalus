@@ -753,7 +753,7 @@ try {
   // clicks, in place) forgets it.
   const headerBadge = () =>
     evaluate<string>(
-      "document.querySelector('.topbar .pro-badge')?.textContent.trim() ?? ''",
+      "document.querySelector('.workspace-column-brand .pro-badge')?.textContent.trim() ?? ''",
     );
   const openSection = (label: string) =>
     evaluate(`(() => {
@@ -895,13 +895,13 @@ try {
   await waitFor("the locked admin section", async () =>
     (await accountText()).includes("Admin is locked"),
   );
-  if ((await accountText()).includes("Pro keys"))
-    throw new Error("Admin shows keys while locked");
+  if ((await accountText()).includes("Invite someone"))
+    throw new Error("Admin shows invites while locked");
   await clickAt(
     "[...document.querySelectorAll('.admin-locked button')].find((one) => one.textContent.trim() === 'Unlock with Google')",
   );
   await waitFor("the admin section", async () =>
-    (await accountText()).includes("Pro keys"),
+    (await accountText()).includes("Invite someone"),
   );
   if (
     !(await evaluate<string[]>("window.opened ?? []")).some((url) =>
@@ -919,21 +919,25 @@ try {
     })()`);
   const buttonIn = (scope: string, text: string) =>
     `[...document.querySelectorAll(${JSON.stringify(`${scope} button`)})].find((one) => one.textContent.trim() === ${JSON.stringify(text)})`;
-  await clickAt(buttonIn(".admin-heading", "New key"));
-  await waitFor("the key form", async () =>
-    evaluate<boolean>("Boolean(document.querySelector('.admin-key-form'))"),
+  await clickAt(buttonIn(".admin-heading", "Invite someone"));
+  await waitFor("the invite form", async () =>
+    evaluate<boolean>("Boolean(document.querySelector('.admin-invite-form'))"),
   );
-  await fill(".admin-key-form .admin-uses", "3");
-  await fill(".admin-key-form .admin-trial", "14");
-  await fill(".admin-key-form input[aria-label='Name']", "For Dana");
-  await clickAt(buttonIn(".admin-key-form", "Create"));
-  await waitFor("the new key", async () =>
-    (
-      await evaluate<string>(
-        "document.querySelector('.admin-made')?.textContent ?? ''",
-      )
-    ).includes("KEY1A-B2C3D"),
-  );
+  await fill(".admin-invite-form .admin-uses", "3");
+  await clickAt(buttonIn(".admin-choices", "7 days"));
+  await fill(".admin-invite-form .admin-field:first-child input", "For Dana");
+  await clickAt(buttonIn(".admin-invite-form", "Create invite"));
+  // The invite comes back as a link to send, with the steps it takes.
+  await waitFor("the new invite", async () => {
+    const made = await evaluate<string>(
+      "document.querySelector('.admin-made')?.textContent ?? ''",
+    );
+    return (
+      made.includes("Invite for For Dana is ready") &&
+      made.includes("/?invite=KEY1A-B2C3D") &&
+      made.includes("Pro for 7 days (up to 3 people)")
+    );
+  });
   const keyLine = await evaluate<string>(
     "document.querySelector('.admin-keys li small')?.textContent ?? ''",
   );
@@ -941,7 +945,7 @@ try {
     "document.querySelector('.admin-keys li .admin-key-name')?.textContent ?? ''",
   );
   if (
-    keyLine !== "0/3 used · 14-day Pro · until Nov 10" ||
+    keyLine !== "0/3 used · 7-day Pro · until Nov 10" ||
     keyName !== "For DanaKEY1A-B2C3D"
   )
     throw new Error(`Admin: the key reads ${keyName} | ${keyLine}`);
@@ -974,7 +978,7 @@ try {
       accounts: [...document.querySelectorAll('.admin-accounts li strong')].map((one) => one.textContent),
     }))()`);
     return (
-      shown.keys === "No keys match." &&
+      shown.keys === "No invites match." &&
       shown.accounts.join() === "friend@example.com"
     );
   });
@@ -993,9 +997,13 @@ try {
   await clickAt(
     "[...document.querySelectorAll('.admin-accounts li')].find((one) => one.textContent.includes('friend@example.com')).querySelector('[role=menuitem]:nth-of-type(4)')",
   );
-  await waitFor("the friend's plan ended", async () =>
-    (await accountText()).includes("friend@example.comPro · ended"),
-  );
+  await waitFor("the friend's plan ended", async () => {
+    const text = await accountText();
+    return (
+      text.includes("friend@example.comPro · ended") &&
+      text.includes("friend@example.com no longer has Pro.")
+    );
+  });
   // Activity: every change, newest first.
   await clickAt("document.querySelector('.admin-activity summary')");
   await waitFor("the admin log", async () => {
@@ -1005,7 +1013,7 @@ try {
     return (
       lines[0] === "Ended friend@example.com's plan" &&
       lines.includes("Renamed KEY1A-B2C3D to Dana's trial") &&
-      lines.includes("Created For Dana (3 uses, 14-day Pro)")
+      lines.includes("Created For Dana (3 uses, 7-day Pro)")
     );
   });
   const rows = await evaluate<{
@@ -1157,7 +1165,7 @@ try {
   );
   if (left !== 0) throw new Error("Remote: Remove did not forget the phone");
   console.log(
-    "Pro: signed out or without a plan nothing shows (no badge, no Remote, no phone menu, no plan), only the sign-in; for an admin the header says Get Pro and Remote (tagged Pro) only leads to Account, which shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account unlocks admin with Google (locked before), makes a named Pro key (uses, trial, name), sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, shows each change under Activity, and ends an account's plan from its menu, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
+    "Pro: signed out or without a plan nothing shows (no badge, no Remote, no phone menu, no plan), only the sign-in; for an admin the header says Get Pro and Remote (tagged Pro) only leads to Account, which shows Free as current, formats an invite code as it is typed (wrong12345 reads WRONG-12345), refuses a wrong one and takes a good one; then the header says Pro; an admin account unlocks admin with Google (locked before), makes a named invite (who, Pro length, uses) and gets its link with the steps to use it, sees it as one short line, renames it in place, filters keys and accounts with the fuzzy matcher, shows each change under Activity, and ends an account's plan from its menu with a line saying so, every row's menu on one edge and nothing past the pane; Remote is on with Keep the Mac awake (off); the pairing code is a QR code with a countdown; a phone asking to pair shows its name and six digits with Allow; once allowed it is listed with the account, its Pro plan and recent activity; Remove forgets it",
   );
   // And General, where a switch sits beside a two-line description and the
   // alignment either reads or does not.
@@ -1317,8 +1325,8 @@ try {
     height: number;
     badge: string;
   }>(`(() => {
-    const box = document.querySelector('.topbar .brand').getBoundingClientRect();
-    return { x: box.x, y: box.y, width: box.width, height: box.height, badge: document.querySelector('.topbar .pro-badge')?.textContent.trim() ?? '' };
+    const box = document.querySelector('.workspace-column-brand').getBoundingClientRect();
+    return { x: box.x, y: box.y, width: box.width, height: box.height, badge: document.querySelector('.workspace-column-brand .pro-badge')?.textContent.trim() ?? '' };
   })()`);
   if (brand.badge !== "Pro")
     throw new Error(`The header badge says "${brand.badge}"`);

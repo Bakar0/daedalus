@@ -343,6 +343,39 @@ function logLine(entry: AdminLogEntryDto): string {
 }
 
 /** "Pro until Oct 19", "Admin", "Pro · ended" or "No plan". */
+/** A new invite's fields: one person, 30 days of Pro, no name yet. */
+const NEW_INVITE = { note: "", days: 30 as number | null, uses: "1" };
+
+/** How long the Pro an invite gives lasts; null for no end. */
+const INVITE_DAYS: Array<{ label: string; days: number | null }> = [
+  { label: "7 days", days: 7 },
+  { label: "30 days", days: 30 },
+  { label: "90 days", days: 90 },
+  { label: "No end", days: null },
+];
+
+/** The invite just made, shown with its link until Done. */
+interface MadeInvite {
+  code: string;
+  note: string;
+  grantDays: number | null;
+  maxUses: number;
+}
+
+/** "dana@example.com has Pro for 30 days.", after a plan change. */
+function planNotice(
+  email: string,
+  status: "active" | "expired" | "revoked",
+  days: number,
+): string {
+  if (status === "revoked")
+    return `${email} is revoked: no Pro, signed out everywhere.`;
+  if (status === "expired") return `${email} no longer has Pro.`;
+  return days
+    ? `${email} has Pro for ${days} days. Their Mac shows it the next time Settings › Account opens.`
+    : `${email} has Pro with no end. Their Mac shows it the next time Settings › Account opens.`;
+}
+
 function accountLine(account: AdminAccountDto): string {
   if (!account.plan) return "No plan";
   const name = `${account.plan.slice(0, 1).toUpperCase()}${account.plan.slice(1)}`;
@@ -486,10 +519,12 @@ function AdminSection({
   const activity = logQuery.data;
   const [mutationError, setError] = useState<string>();
   const error = mutationError ?? keyQuery.error ?? accountQuery.error;
-  const [made, setMade] = useState<string>();
+  const [made, setMade] = useState<MadeInvite>();
   const [copied, setCopied] = useState<string>();
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ uses: "1", trial: "", note: "" });
+  const [form, setForm] = useState(NEW_INVITE);
+  /** What the last plan change did, so a click on the menu shows a result. */
+  const [notice, setNotice] = useState<string>();
   const [renaming, setRenaming] = useState<{ code: string; name: string }>();
   const [filter, setFilter] = useState("");
 
@@ -545,128 +580,193 @@ function AdminSection({
     });
     if (result.ok) setCopied(link ? `link:${code}` : code);
   };
-  const setPlan = (
+  const setPlan = async (
     email: string,
     status: "active" | "expired" | "revoked",
     days = 0,
-  ) =>
-    void run(
+  ) => {
+    setNotice(undefined);
+    const done = await run(
       client.request.remoteAdminSetPlan({
         email,
         status,
         ...(status === "active" ? { days } : {}),
       }),
     );
+    if (done !== undefined) setNotice(planNotice(email, status, days));
+  };
 
   return (
     <div className="admin-section">
       <input
-        aria-label="Filter keys and accounts"
+        aria-label="Filter invites and accounts"
         className="admin-filter"
         onChange={(event) => setFilter(event.target.value)}
-        placeholder="Filter keys and accounts"
+        placeholder="Filter invites and accounts"
         type="search"
         value={filter}
       />
       <div className="admin-heading">
-        <h3>Pro keys</h3>
+        <h3>Invites</h3>
         {creating ? undefined : (
           <button
             className="quiet"
             disabled={busy}
-            onClick={() => setCreating(true)}
+            onClick={() => {
+              setMade(undefined);
+              setCreating(true);
+            }}
             type="button"
           >
-            New key
+            Invite someone
           </button>
         )}
       </div>
       {creating ? (
         <form
-          className="admin-key-form"
+          className="admin-invite-form"
           onSubmit={async (event) => {
             event.preventDefault();
-            const trial = wholeNumber(form.trial);
+            const input = {
+              maxUses: wholeNumber(form.uses) ?? 1,
+              ...(form.days ? { grantDays: form.days } : {}),
+              days: 30,
+              note: form.note.trim(),
+            };
             const created = await run(
-              client.request.remoteAdminCreateKey({
-                maxUses: wholeNumber(form.uses) ?? 1,
-                ...(trial ? { grantDays: trial } : {}),
-                days: 30,
-                note: form.note.trim(),
-              }),
+              client.request.remoteAdminCreateKey(input),
             );
             if (created) {
-              setMade(created.code);
+              setMade({
+                code: created.code,
+                note: input.note,
+                grantDays: form.days,
+                maxUses: input.maxUses,
+              });
               setCopied(undefined);
               setCreating(false);
-              setForm({ uses: "1", trial: "", note: "" });
+              setForm(NEW_INVITE);
             }
           }}
         >
-          <input
-            aria-label="Uses"
-            className="admin-uses"
-            inputMode="numeric"
-            onChange={(event) => setForm({ ...form, uses: event.target.value })}
-            title="How many accounts can use it"
-            value={form.uses}
-          />
-          <input
-            aria-label="Pro for how many days"
-            className="admin-trial"
-            inputMode="numeric"
-            onChange={(event) =>
-              setForm({ ...form, trial: event.target.value })
-            }
-            placeholder="Days of Pro"
-            title="How long the Pro it gives lasts; empty for no end"
-            value={form.trial}
-          />
-          <input
-            aria-label="Name"
-            onChange={(event) => setForm({ ...form, note: event.target.value })}
-            placeholder="Name, e.g. Dana's trial"
-            value={form.note}
-          />
-          <button disabled={busy} type="submit">
-            Create
-          </button>
-          <button
-            className="quiet"
-            onClick={() => setCreating(false)}
-            type="button"
-          >
-            Cancel
-          </button>
-          <small>
-            Uses, days of Pro (empty for no end), a name. A key works for 30
-            days.
-          </small>
+          <label className="admin-field">
+            <span>Who is it for</span>
+            <input
+              autoFocus
+              onChange={(event) =>
+                setForm({ ...form, note: event.target.value })
+              }
+              placeholder="Dana, or Design team"
+              value={form.note}
+            />
+          </label>
+          <div className="admin-field">
+            <span id="admin-invite-days">Pro lasts</span>
+            <div
+              aria-labelledby="admin-invite-days"
+              className="admin-choices"
+              role="radiogroup"
+            >
+              {INVITE_DAYS.map((choice) => (
+                <button
+                  aria-checked={form.days === choice.days}
+                  className={form.days === choice.days ? "is-current" : ""}
+                  key={choice.label}
+                  onClick={() => setForm({ ...form, days: choice.days })}
+                  role="radio"
+                  type="button"
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="admin-field">
+            <span>People who can use it</span>
+            <input
+              className="admin-uses"
+              inputMode="numeric"
+              onChange={(event) =>
+                setForm({ ...form, uses: event.target.value })
+              }
+              value={form.uses}
+            />
+          </label>
+          <p className="admin-hint">
+            You get a link to send. The link stops working after 30 days, or
+            once{" "}
+            {wholeNumber(form.uses) === 1
+              ? "it is used"
+              : "all its uses are taken"}
+            .
+          </p>
+          <div className="admin-form-actions">
+            <button
+              disabled={busy || wholeNumber(form.uses) === undefined}
+              type="submit"
+            >
+              Create invite
+            </button>
+            <button
+              className="quiet"
+              onClick={() => setCreating(false)}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
         </form>
       ) : undefined}
       {made ? (
-        <p className="admin-made">
-          Created <code>{made}</code>
-          <button
-            className="quiet"
-            onClick={() => void copy(made)}
-            type="button"
-          >
-            {copied === made ? "Copied" : "Copy"}
-          </button>
-          <button
-            className="quiet"
-            onClick={() => void copy(made, true)}
-            title="A link that signs the person in and gives them Pro"
-            type="button"
-          >
-            {copied === `link:${made}` ? "Link copied" : "Copy invite link"}
-          </button>
-        </p>
+        <div className="admin-made">
+          <strong>
+            {made.note ? `Invite for ${made.note} is ready` : "Invite is ready"}
+          </strong>
+          <div className="admin-made-link">
+            <code title={inviteLink(relay, made.code)}>
+              {inviteLink(relay, made.code)}
+            </code>
+            <button onClick={() => void copy(made.code, true)} type="button">
+              {copied === `link:${made.code}` ? "Copied" : "Copy link"}
+            </button>
+          </div>
+          <ol>
+            <li>Send them the link.</li>
+            <li>
+              They open it and sign in with Google. That account gets{" "}
+              {made.grantDays
+                ? `Pro for ${made.grantDays} days`
+                : "Pro with no end"}
+              {made.maxUses > 1 ? ` (up to ${made.maxUses} people)` : ""}.
+            </li>
+            <li>
+              In Daedalus on their Mac, they sign in with the same Google
+              account in Settings › Account.
+            </li>
+          </ol>
+          <div className="admin-made-actions">
+            <button
+              className="quiet"
+              onClick={() => void copy(made.code)}
+              type="button"
+            >
+              {copied === made.code ? "Code copied" : `Copy code ${made.code}`}
+            </button>
+            <button
+              className="quiet"
+              onClick={() => setMade(undefined)}
+              type="button"
+            >
+              Done
+            </button>
+          </div>
+        </div>
       ) : undefined}
       {keys === undefined ? undefined : shownKeys.length === 0 ? (
         <p className="remote-empty">
-          {keys.length === 0 ? "No keys yet." : "No keys match."}
+          {keys.length === 0
+            ? "No open invites. Invite someone to give them Pro."
+            : "No invites match."}
         </p>
       ) : (
         <ul className="admin-list admin-keys">
@@ -784,6 +884,15 @@ function AdminSection({
       <div className="admin-heading">
         <h3>Accounts</h3>
       </div>
+      <p className="admin-hint">
+        Everyone who has signed in. Use … on a row to give or end Pro directly,
+        without an invite.
+      </p>
+      {notice ? (
+        <p className="admin-notice" role="status">
+          {notice}
+        </p>
+      ) : undefined}
       {accounts === undefined ? undefined : shownAccounts.length === 0 ? (
         <p className="remote-empty">No accounts match.</p>
       ) : (
@@ -801,45 +910,45 @@ function AdminSection({
               >
                 <button
                   className="quiet menu-item"
-                  onClick={() => setPlan(account.email, "active")}
+                  onClick={() => void setPlan(account.email, "active")}
                   role="menuitem"
                   type="button"
                 >
-                  <span className="menu-item-label">Pro, no end</span>
+                  <span className="menu-item-label">Give Pro, no end</span>
                 </button>
                 <button
                   className="quiet menu-item"
-                  onClick={() => setPlan(account.email, "active", 30)}
+                  onClick={() => void setPlan(account.email, "active", 30)}
                   role="menuitem"
                   type="button"
                 >
-                  <span className="menu-item-label">Pro for 30 days</span>
+                  <span className="menu-item-label">Give Pro for 30 days</span>
                 </button>
                 <button
                   className="quiet menu-item"
-                  onClick={() => setPlan(account.email, "active", 7)}
+                  onClick={() => void setPlan(account.email, "active", 7)}
                   role="menuitem"
                   type="button"
                 >
-                  <span className="menu-item-label">Pro for 7 days</span>
+                  <span className="menu-item-label">Give Pro for 7 days</span>
                 </button>
                 <hr className="menu-separator" />
                 <button
                   className="quiet menu-item"
-                  onClick={() => setPlan(account.email, "expired")}
+                  onClick={() => void setPlan(account.email, "expired")}
                   role="menuitem"
                   type="button"
                 >
-                  <span className="menu-item-label">End plan</span>
+                  <span className="menu-item-label">End Pro now</span>
                 </button>
                 <button
                   className="quiet menu-item menu-item-danger"
-                  onClick={() => setPlan(account.email, "revoked")}
+                  onClick={() => void setPlan(account.email, "revoked")}
                   role="menuitem"
-                  title="Ends the plan and every sign-in; invite codes stop working for it"
+                  title="Ends Pro and every sign-in; invites stop working for this account"
                   type="button"
                 >
-                  <span className="menu-item-label">Revoke</span>
+                  <span className="menu-item-label">Revoke and sign out</span>
                 </button>
               </Menu>
             </li>
