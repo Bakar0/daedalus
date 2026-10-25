@@ -4,6 +4,7 @@
  * (artifacts/cloud-sessions/codex-spike.md):
  *
  *   bun run scripts/cloud-codex-try.ts run       # Codex to the cloud and home again
+ *   bun run scripts/cloud-codex-try.ts signin    # the ChatGPT sign-in up to the forward
  *   bun run scripts/cloud-codex-try.ts cleanup   # deletes what a run left
  *
  * It runs from a home of its own (~/.daedalus-codex-try-dev, file vault),
@@ -34,8 +35,8 @@ const FAKE_KEY = "sk-codex-try-not-a-key";
 const POD_SESSIONS = ".home/.codex/sessions";
 
 const mode = process.argv[2];
-if (mode !== "run" && mode !== "cleanup") {
-  console.error("Usage: cloud-codex-try.ts run|cleanup");
+if (mode !== "run" && mode !== "signin" && mode !== "cleanup") {
+  console.error("Usage: cloud-codex-try.ts run|signin|cleanup");
   process.exit(2);
 }
 
@@ -66,6 +67,7 @@ if (
 )
   fail("codex login on this Mac");
 
+const logged: { event: string; fields?: Record<string, unknown> }[] = [];
 const context = await createApplicationContext({
   env: {
     ...process.env,
@@ -74,10 +76,16 @@ const context = await createApplicationContext({
     CODEX_SQLITE_HOME: CODEX_HOME,
   },
   cloud: {
-    log: (event, fields) =>
-      event.startsWith("cloud_codex") || event === "cloud_seed_failed"
-        ? say(`log ${event} ${JSON.stringify(fields)}`)
-        : undefined,
+    log: (event, fields) => {
+      if (
+        event.startsWith("cloud_codex") ||
+        event.startsWith("cloud_signin") ||
+        event === "cloud_seed_failed"
+      ) {
+        logged.push({ event, fields });
+        say(`log ${event} ${JSON.stringify(fields)}`);
+      }
+    },
   },
 });
 const { cloud, agents, repositories } = context;
@@ -148,6 +156,128 @@ try {
     name: `codex-${Date.now().toString(36)}`,
   });
   const word = `HERON${Math.floor(Math.random() * 9000 + 1000)}`;
+
+  if (mode === "signin") {
+    // A real Codex in the pod, signed out: its page, opened as the click
+    // would, and the browser's return to this Mac played by this script.
+    await move(workspace.id, "cloud");
+    const hostId = cloudHostId(repositories.cloudWorkspaceId(workspace.id)!);
+    const host = context.hosts.get(hostId) as RemoteSessionHost;
+    const spawned = await rpc.agentSpawn({
+      workspace: workspace.id,
+      provider: "codex",
+      name: "sign-in try",
+    });
+    if (!spawned.ok) throw new Error(`spawn: ${spawned.error.message}`);
+    const sessionId = spawned.data.id;
+    const offer = await until("the ChatGPT page is offered", async () => {
+      const signIn = cloud.signIns.get(sessionId);
+      return signIn?.phase === "waiting" ? signIn : undefined;
+    });
+    const opened = await cloud.openSignIn(offer.requestId!);
+    const page = new URL(opened.url);
+    const redirect = new URL(page.searchParams.get("redirect_uri")!);
+    check(
+      page.host === "auth.openai.com" && !opened.paste,
+      `the page opens on ${page.host}, with this Mac listening on ${redirect.port}`,
+    );
+    const state = page.searchParams.get("state")!;
+    // The browser's return with a code OpenAI never issued: Codex in the pod
+    // takes the state, tries the code, and fails.
+    const back = await fetch(
+      `http://127.0.0.1:${redirect.port}${redirect.pathname}?code=not-a-real-code&state=${state}`,
+    );
+    const text = await back.text();
+    check(
+      back.status === 502 && !text.includes("Signed in"),
+      `the browser is told the session did not accept it (${back.status})`,
+    );
+    const forwarded = logged.find(
+      (entry) => entry.event === "cloud_signin_forwarded",
+    );
+    check(
+      forwarded?.fields?.status === 200 && forwarded.fields.ok === false,
+      `the forward reached Codex, which answered ${String(forwarded?.fields?.status)} without signing in`,
+    );
+    check(
+      !JSON.stringify(logged).includes("not-a-real-code") &&
+        !JSON.stringify(logged).includes(state),
+      "no log line holds the code or the state",
+    );
+    check(
+      !(await host.exists(".home/.codex/auth.json")),
+      "Codex in the pod is still signed out",
+    );
+
+    // Codex's success shape, from a stand-in on the pod's network: a 302 to
+    // its own /success, which must be asked for before Codex is done.
+    const port = 1456;
+    const standIn = [
+      'const fs = require("node:fs");',
+      `Bun.serve({ hostname: "127.0.0.1", port: ${port}, fetch(request) {`,
+      "  const url = new URL(request.url);",
+      '  fs.appendFileSync("/tmp/standin.log", url.pathname + "\\n");',
+      '  if (url.pathname === "/auth/callback") {',
+      '    fs.mkdirSync("/workspace/.home/.codex", { recursive: true });',
+      '    fs.writeFileSync("/workspace/.home/.codex/auth.json", "{}");',
+      `    return new Response(null, { status: 302, headers: { location: "http://localhost:${port}/success?id_token=eyJstandin" } });`,
+      "  }",
+      '  return new Response("ok");',
+      "} });",
+    ].join("\n");
+    await host.writeText([{ path: ".daedalus-standin.js", text: standIn }]);
+    await host.run({
+      cwd: ".",
+      executable: "sh",
+      args: [
+        "-c",
+        "rm -f /tmp/standin.log; nohup bun .daedalus-standin.js >/tmp/standin.out 2>&1 &",
+      ],
+    });
+    await Bun.sleep(2_000);
+    const stand = "standin-state";
+    cloud.offerSignIn(
+      hostId,
+      sessionId,
+      `https://auth.openai.com/oauth/authorize?response_type=code&redirect_uri=${encodeURIComponent(`http://127.0.0.1:${port}/auth/callback`)}&state=${stand}`,
+    );
+    const second = cloud.signIns.get(sessionId)!;
+    await cloud.openSignIn(second.requestId!);
+    const good = await fetch(
+      `http://127.0.0.1:${port}/auth/callback?code=c&state=${stand}`,
+    );
+    check(
+      good.status === 200 && (await good.text()).includes("Signed in"),
+      "a sign-in the pod took says Signed in",
+    );
+    const seen = (
+      await host.run({
+        cwd: ".",
+        executable: "cat",
+        args: ["/tmp/standin.log"],
+      })
+    ).stdout.trim();
+    check(
+      seen === "/auth/callback\n/success",
+      `the runner asked for the success page in the pod: ${seen.replace("\n", ", ")}`,
+    );
+    check(
+      !JSON.stringify(logged).includes("eyJstandin"),
+      "the success page's token never reached this Mac",
+    );
+    await host.run({
+      cwd: ".",
+      executable: "sh",
+      args: [
+        "-c",
+        "pkill -f daedalus-standin; rm -f .daedalus-standin.js /workspace/.home/.codex/auth.json",
+      ],
+    });
+    say(
+      "PASS: the sign-in reached Codex in the pod, and only a real one says Signed in",
+    );
+    process.exit(0);
+  }
 
   // A Codex conversation on this Mac.
   const spawned = await agents.spawn({

@@ -19,9 +19,14 @@ const ONWARD_HOSTS = new Set([
   "claude.ai",
 ]);
 
+/**
+ * What the pod answered. `ok` says whether the tool there signed in, when
+ * the status alone cannot tell (Codex answers a failed sign-in with 200);
+ * without it, any status under 400 is a sign-in.
+ */
 export type ForwardCallback = (
   query: string,
-) => Promise<{ status: number; location?: string }>;
+) => Promise<{ status: number; location?: string; ok?: boolean }>;
 
 const page = (status: number, text: string) =>
   new Response(
@@ -88,12 +93,13 @@ export function listenForSignIn(
     used = true;
     try {
       const reply = await forward(url.search.slice(1));
+      const ok = reply.ok ?? reply.status < 400;
       const next = onward(reply.location);
       // Answered before the listener goes, so the browser gets the page.
-      setTimeout(() => stop("forwarded"), 0);
-      if (next && reply.status >= 300 && reply.status < 400)
+      setTimeout(() => stop(ok ? "forwarded" : "failed"), 0);
+      if (ok && next && reply.status >= 300 && reply.status < 400)
         return Response.redirect(next, 302);
-      return reply.status < 400
+      return ok
         ? page(200, "Signed in. You can close this tab and return to Daedalus.")
         : page(
             502,
