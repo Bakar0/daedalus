@@ -96,6 +96,10 @@ const CODEX_HOOK_REVIEW = /Hooks need review/;
 const CODEX_READY = /Ask Codex to do anything|esc to interrupt/;
 const CODEX_RESUMING = /Resuming session/;
 const CODEX_CONTINUE = /Press Enter to continue/i;
+/** The screen after a ChatGPT sign-in, which waits for Enter. */
+const CODEX_SIGNED_IN = /Signed in with your ChatGPT account/i;
+/** How long Codex has to draw that screen after the forward. */
+const CODEX_CONTINUE_MS = 30_000;
 /** How long Claude has to ask for its page after /login. */
 const SIGN_IN_START_MS = 45_000;
 
@@ -1449,19 +1453,29 @@ export class CloudService {
     }
   }
 
+  /**
+   * Runs only once this Mac's forward reported the pod signed in (Codex
+   * took the code and saved its sign-in). The panel and the card's chip
+   * clear at once; then Codex's "Signed in with your ChatGPT account …
+   * Press Enter to continue" gets one Enter, in this session only. The
+   * method screen also says "Press enter to continue", so only the
+   * signed-in screen counts.
+   */
   async #followCodexSignIn(host: RemoteSessionHost, session: AgentSession) {
-    const deadline = Date.now() + SIGN_IN_OFFER_MS;
+    this.signIns.finish(session.id);
+    const deadline = Date.now() + CODEX_CONTINUE_MS;
     while (Date.now() < deadline) {
-      const phase = this.signIns.get(session.id)?.phase;
-      if (phase !== "browser") return;
-      if (await host.exists(POD_CODEX_AUTH).catch(() => false)) {
-        const screen = await host.capture(session.tmuxSession).catch(() => "");
-        if (CODEX_CONTINUE.test(screen))
-          await host.sendKeys(session.tmuxSession, ["Enter"]).catch(() => {});
-        this.signIns.finish(session.id);
+      const screen = await host.capture(session.tmuxSession).catch(() => "");
+      const bottom = screen.trimEnd().split("\n").slice(-12).join("\n");
+      if (CODEX_SIGNED_IN.test(bottom) && CODEX_CONTINUE.test(bottom)) {
+        await host.sendKeys(session.tmuxSession, ["Enter"]).catch(() => {});
+        this.options.log?.("cloud_codex_signin_continued", {
+          sessionId: session.id,
+        });
         return;
       }
-      await Bun.sleep(1_500);
+      if (CODEX_READY.test(bottom)) return;
+      await Bun.sleep(500);
     }
   }
 

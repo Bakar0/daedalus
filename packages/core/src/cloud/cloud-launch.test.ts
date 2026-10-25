@@ -51,6 +51,10 @@ class FakePod {
   readonly signingIn = new Set<string>();
   readonly typed: string[] = [];
   readonly keys: string[][] = [];
+  /** The session each `keys` entry went to. */
+  readonly keyTargets: string[] = [];
+  /** What `auth.callback` answers; a 200 also saves Codex's sign-in. */
+  callbackStatus = 200;
   readonly commands: string[][] = [];
   /** Runs at every capture, as a pod acting on its own would. */
   onCapture?: () => void;
@@ -83,7 +87,12 @@ class FakePod {
           return null;
         case "host.sendKeys":
           this.keys.push(p.keys as string[]);
+          this.keyTargets.push(p.session as string);
           return null;
+        case "auth.callback":
+          if (this.callbackStatus === 200)
+            this.files.set(".home/.codex/auth.json", "{}");
+          return { status: this.callbackStatus };
         case "host.stop":
           return null;
         case "host.run": {
@@ -637,6 +646,117 @@ describe("cloud Codex", () => {
         phase: "waiting",
         host: "auth.openai.com",
       });
+      context.close();
+    });
+  });
+
+  /** Port 1455 is Codex's; a Codex signing in on this Mac may hold it. */
+  const port1455Free = () => {
+    try {
+      Bun.serve({
+        hostname: "127.0.0.1",
+        port: 1455,
+        fetch: () => new Response(),
+      }).stop(true);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  test("after the forward signs the pod in, the chip clears and Codex's continue screen gets one Enter", async () => {
+    if (!port1455Free()) {
+      console.warn("skipped: port 1455 is in use on this Mac");
+      return;
+    }
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      pod.screen =
+        "Welcome to Codex\n> 1. Sign in with ChatGPT\n  2. Sign in with Device Code\n  Press enter to continue";
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      await keysSent(pod);
+      // Codex is on its browser wait now.
+      pod.screen =
+        "Finish signing in via your browser\n  http://127.0.0.1:1455/auth/callback";
+      context.cloud.offerSignIn(
+        hostId,
+        session.id,
+        "https://auth.openai.com/oauth/authorize?response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&state=s",
+      );
+      const requestId = context.cloud.signIns.get(session.id)!.requestId!;
+      await context.cloud.openSignIn(requestId);
+      const before = pod.keys.length;
+      const answer = await fetch(
+        "http://127.0.0.1:1455/auth/callback?code=c&state=s",
+      );
+      expect(answer.status).toBe(200);
+      for (
+        let tries = 0;
+        tries < 100 && context.cloud.signIns.get(session.id);
+        tries++
+      )
+        await Bun.sleep(20);
+      expect(context.cloud.signIns.get(session.id)).toBeUndefined();
+      // Nothing for the screen before Codex shows that it is signed in.
+      await Bun.sleep(700);
+      expect(pod.keys.length).toBe(before);
+      pod.screen =
+        "✓ Signed in with your ChatGPT account\n\n  Press Enter to continue";
+      for (let tries = 0; tries < 100 && pod.keys.length === before; tries++)
+        await Bun.sleep(20);
+      expect(pod.keys.slice(before)).toEqual([["Enter"]]);
+      expect(pod.keyTargets.at(-1)).toBe(session.tmuxSession);
+      // Once: the screen staying does not get a second one.
+      await Bun.sleep(1_200);
+      expect(pod.keys.length).toBe(before + 1);
+      context.close();
+    });
+  });
+
+  test("a forward Codex refused leaves the screen alone and the sign-in failed", async () => {
+    if (!port1455Free()) {
+      console.warn("skipped: port 1455 is in use on this Mac");
+      return;
+    }
+    await withTemporaryDaedalusHome(async (home) => {
+      const { context, workspace, pod, hostId } = await setUp(home);
+      pod.files.set(".home/.codex/auth.json", "{}");
+      pod.screen = "Ask Codex to do anything";
+      const session = await context.agents.spawn({
+        workspace: workspace.id,
+        provider: "codex",
+      });
+      pod.files.delete(".home/.codex/auth.json");
+      pod.callbackStatus = 500;
+      context.cloud.signIns.begin(hostId, session.id, "codex");
+      context.cloud.offerSignIn(
+        hostId,
+        session.id,
+        "https://auth.openai.com/oauth/authorize?response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&state=s",
+      );
+      await context.cloud.openSignIn(
+        context.cloud.signIns.get(session.id)!.requestId!,
+      );
+      pod.screen =
+        "✓ Signed in with your ChatGPT account\n\n  Press Enter to continue";
+      const before = pod.keys.length;
+      const answer = await fetch(
+        "http://127.0.0.1:1455/auth/callback?code=c&state=s",
+      );
+      expect(answer.status).toBe(502);
+      for (
+        let tries = 0;
+        tries < 100 &&
+        context.cloud.signIns.get(session.id)?.phase !== "failed";
+        tries++
+      )
+        await Bun.sleep(20);
+      expect(context.cloud.signIns.get(session.id)?.phase).toBe("failed");
+      await Bun.sleep(1_000);
+      expect(pod.keys.length).toBe(before);
       context.close();
     });
   });
