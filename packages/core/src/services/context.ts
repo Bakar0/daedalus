@@ -27,7 +27,12 @@ import { SessionChannel } from "./session-channel";
 import { RoutineReportService } from "./routine-reports";
 import { RoutineService } from "./routines";
 import { SecretService } from "./secrets";
-import { SkillService, workflowsEnabled } from "./skills";
+import {
+  customInstructionsPath,
+  SkillService,
+  workflowsEnabled,
+} from "./skills";
+import { InstructionService } from "./instruction-files";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
@@ -58,7 +63,10 @@ import { TeamService } from "./teams";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkflowService } from "./workflows";
-import { WorkspaceContentService } from "./workspace-content";
+import {
+  instructionFileOptions,
+  WorkspaceContentService,
+} from "./workspace-content";
 import {
   WORKSPACE_FILES_CHANGED,
   WorkspaceWatchService,
@@ -99,6 +107,8 @@ export interface ApplicationContext {
   teams: TeamService;
   /** Workflow runs: which workflow each piece of work follows, and where. */
   workflows: WorkflowService;
+  /** The user's custom instructions, as the Custom instructions tab edits them. */
+  instructions: InstructionService;
   /** The routine clock; only the desktop host ticks it. */
   routineDelivery: RoutineDelivery;
   /** How Daedalus hands a line to a running session it did not get from the user. */
@@ -214,8 +224,7 @@ export async function createApplicationContext(
     (workspaceId) => agents.hasLiveWorkspaceAgents(workspaceId),
     (workspaceId) => agents.archiveWorkspaceSessions(workspaceId),
     config.home,
-    () => config.workspaceInstructionFilesEnabled,
-    () => workflowsEnabled(config),
+    () => instructionFileOptions(config),
     async (workspaceId) => {
       // Every session folder lives under the workspace folder, so this drops
       // their provider trust records with it.
@@ -238,7 +247,12 @@ export async function createApplicationContext(
     (parts) => options.onRepositoriesChanged?.(parts),
     (folder) => terminals.closeInside(folder),
   );
-  const skills = new SkillService(config);
+  // The workflows switch also adds or removes step 8 of every workspace's
+  // instruction files.
+  const skills = new SkillService(config, async (id) => {
+    if (id === "daedalus-workflows")
+      await workspaceContent.syncInstructionFiles();
+  });
   const accounts = new AccountService(config, repositories, undefined, (id) =>
     agents.archive(id, true),
   );
@@ -465,13 +479,14 @@ export async function createApplicationContext(
     routines,
     routineReports,
     teams: teams!,
+    instructions: new InstructionService(customInstructionsPath(config.home)),
     workflows: new WorkflowService(
       repositories,
       config.home,
       activity,
+      () => workflowsEnabled(config),
       sessionChannel,
       options.now,
-      () => skills.settingFor("daedalus-workflows").enabled,
     ),
     routineDelivery,
     sessionChannel,

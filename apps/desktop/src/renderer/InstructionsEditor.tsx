@@ -4,13 +4,20 @@
  * topic keeps its line in the index in step.
  */
 import { useEffect, useRef, useState } from "react";
-import type { WorkflowFilesDto } from "@daedalus/protocol";
+import type { InstructionFilesDto } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { askConfirm } from "./dialogs";
 import { INSTRUCTIONS_CHANGED } from "./InstructionsPane";
-import { DOCS_URL, Group, PlainRow, TabIntro } from "./WorkflowsEditor";
+import {
+  confirmDiscard,
+  DOCS_URL,
+  FileDetail,
+  Group,
+  PlainRow,
+  TabIntro,
+} from "./FileEditorParts";
 
-type Instructions = WorkflowFilesDto["instructions"];
+type Instructions = InstructionFilesDto;
 
 /** What is open on the right. A null name is a new topic not saved yet. */
 type Selection = { kind: "index" } | { kind: "topic"; name: string | null };
@@ -54,24 +61,24 @@ export function InstructionsEditor({
   latest.current = { instructions, selection, draft };
 
   useEffect(() => {
-    void client.request.workflowFiles({}).then((response) => {
+    void client.request.instructionFiles({}).then((response) => {
       if (!response.ok) {
         onError(response.error.message);
         return;
       }
-      setInstructions(response.data.instructions);
-      setDraft(response.data.instructions.index.text);
+      setInstructions(response.data);
+      setDraft(response.data.index.text);
     });
     // Agents change these files too. Coming back to the window reads them
     // again, and shows the new text unless this file has unsaved changes.
     const reread = () =>
-      void client.request.workflowFiles({}).then((response) => {
+      void client.request.instructionFiles({}).then((response) => {
         const before = latest.current;
         if (!response.ok || !before.instructions) return;
         if (before.draft !== textOf(before.instructions, before.selection))
           return;
-        setInstructions(response.data.instructions);
-        setDraft(textOf(response.data.instructions, before.selection));
+        setInstructions(response.data);
+        setDraft(textOf(response.data, before.selection));
       });
     window.addEventListener("focus", reread);
     return () => window.removeEventListener("focus", reread);
@@ -92,16 +99,7 @@ export function InstructionsEditor({
           ?.path ?? "Saved under the name its heading gives");
 
   const select = async (next: Selection) => {
-    if (
-      draft !== saved &&
-      !(await askConfirm({
-        title: "Discard changes?",
-        message: "This file has changes that are not saved.",
-        confirmLabel: "Discard",
-        danger: true,
-      }))
-    )
-      return;
+    if (draft !== saved && !(await confirmDiscard())) return;
     setSelection(next);
     setDraft(textOf(instructions, next));
     setRefusal(undefined);
@@ -112,7 +110,7 @@ export function InstructionsEditor({
     setRefusal(undefined);
     const previousName =
       selection.kind === "topic" && selection.name ? selection.name : undefined;
-    const response = await client.request.workflowFileSave({
+    const response = await client.request.instructionFileSave({
       kind: selection.kind,
       text: draft,
       ...(previousName ? { previousName } : {}),
@@ -122,7 +120,7 @@ export function InstructionsEditor({
       setRefusal(response.error.message);
       return;
     }
-    const next = response.data.instructions;
+    const next = response.data;
     setInstructions(next);
     window.dispatchEvent(new Event(INSTRUCTIONS_CHANGED));
     // A topic is named after its heading, which the save may have changed,
@@ -146,18 +144,17 @@ export function InstructionsEditor({
       }))
     )
       return;
-    const response = await client.request.workflowFileDelete({
-      kind: "topic",
+    const response = await client.request.instructionFileDelete({
       name: selection.name,
     });
     if (!response.ok) {
       setRefusal(response.error.message);
       return;
     }
-    setInstructions(response.data.instructions);
+    setInstructions(response.data);
     window.dispatchEvent(new Event(INSTRUCTIONS_CHANGED));
     setSelection({ kind: "index" });
-    setDraft(response.data.instructions.index.text);
+    setDraft(response.data.index.text);
     setRefusal(undefined);
   };
 
@@ -200,67 +197,30 @@ export function InstructionsEditor({
             ))}
           </Group>
         </nav>
-        <section aria-label="Instruction file" className="workflows-detail">
-          <header className="workflows-detail-heading">
-            <div>
-              <h2>
-                {selection.kind === "index"
-                  ? "Custom instructions"
-                  : (selection.name ?? "New topic")}
-              </h2>
-              <small>{path}</small>
-            </div>
-            <div className="workflows-detail-actions">
-              {selection.kind === "topic" && selection.name && (
-                <button
-                  className="danger-link"
-                  onClick={() => void remove()}
-                  type="button"
-                >
-                  Delete
-                </button>
-              )}
-              <button
-                className="quiet"
-                disabled={draft === saved || saving}
-                onClick={() => {
-                  setDraft(saved);
-                  setRefusal(undefined);
-                }}
-                type="button"
-              >
-                Revert
-              </button>
-              <button
-                className="primary"
-                disabled={!dirty || saving}
-                onClick={() => void save()}
-                type="button"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-            </div>
-          </header>
-          {refusal && (
-            <p className="workflows-refusal" role="alert">
-              {refusal}
-            </p>
-          )}
-          <textarea
-            aria-label="File text"
-            className="workflows-text"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "s") {
-                event.preventDefault();
-                if (dirty && !saving) void save();
-              }
-            }}
-            spellCheck={false}
-            value={draft}
-          />
-          <p className="workflows-hint">{HINTS[selection.kind]}</p>
-        </section>
+        <FileDetail
+          alert={refusal}
+          dirty={dirty}
+          draft={draft}
+          hint={HINTS[selection.kind]}
+          label="Instruction file"
+          onDraft={setDraft}
+          onRevert={() => {
+            setDraft(saved);
+            setRefusal(undefined);
+          }}
+          onSave={() => void save()}
+          path={path}
+          saved={saved}
+          saving={saving}
+          title={
+            selection.kind === "index"
+              ? "Custom instructions"
+              : (selection.name ?? "New topic")
+          }
+          {...(selection.kind === "topic" && selection.name
+            ? { onDelete: () => void remove() }
+            : {})}
+        />
       </div>
     </div>
   );

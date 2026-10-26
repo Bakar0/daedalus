@@ -76,9 +76,7 @@ describe("workflow pane", () => {
     expect(open).toMatch(
       /Workflow<\/span>.*workflow-pane-run.*feature.*#12 Version prints the name/s,
     );
-    expect(open).toContain(
-      "Workflows, steps and examples",
-    );
+    expect(open).toContain("Workflows, steps and examples");
     expect(open).toContain("Resize workflow pane");
     const empty = renderToStaticMarkup(
       <WorkflowPane

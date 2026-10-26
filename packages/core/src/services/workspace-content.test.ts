@@ -14,6 +14,10 @@ import {
   sessionTaskDirectoryName,
 } from "./workspace-content";
 
+const ON = { enabled: true, workflows: false };
+const OFF = { enabled: false, workflows: false };
+const WITH_WORKFLOWS = { enabled: true, workflows: true };
+
 describe("session folder names", () => {
   test("uses the task number and the first words of the title", () => {
     expect(
@@ -288,6 +292,28 @@ Before working in this workspace:
       expect(await Bun.file(join(generated.path, "AGENTS.md")).exists()).toBe(
         true,
       );
+
+      // The workflows switch adds step 8 to the generated file at once and
+      // leaves the user's own file alone; turning instruction files off and
+      // on again keeps it.
+      await context.skills.setEnabled("daedalus-workflows", true);
+      const withStep = await readFile(
+        join(generated.path, "AGENTS.md"),
+        "utf8",
+      );
+      expect(withStep).toContain("8. Workflows are on.");
+      expect(await readFile(join(customized.path, "AGENTS.md"), "utf8")).toBe(
+        "# My rules\n",
+      );
+      await context.workspaceContent.setInstructionFilesEnabled(false);
+      await context.workspaceContent.setInstructionFilesEnabled(true);
+      expect(await readFile(join(generated.path, "AGENTS.md"), "utf8")).toBe(
+        withStep,
+      );
+      await context.skills.setEnabled("daedalus-workflows", false);
+      expect(
+        await readFile(join(generated.path, "AGENTS.md"), "utf8"),
+      ).not.toContain("8. Workflows are on.");
       expect(await Bun.file(join(generated.path, "CLAUDE.md")).exists()).toBe(
         true,
       );
@@ -357,7 +383,7 @@ test("every instruction file points at the custom instructions index, which Daed
     const index = join(home, "instructions", "INDEX.md");
 
     await ensureWorkspaceContentFiles(workspacePath, home);
-    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, ON);
     for (const agents of [workspacePath, sessionPath])
       expect(await readFile(join(agents, "AGENTS.md"), "utf8")).toContain(
         `7. \`${index}\` holds the user's own instructions`,
@@ -384,7 +410,7 @@ test("every instruction file points at the custom instructions index, which Daed
       );
     }
     await ensureWorkspaceContentFiles(workspacePath, home);
-    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, ON);
     for (const agents of [workspacePath, sessionPath])
       expect(await readFile(join(agents, "AGENTS.md"), "utf8")).toContain(
         'under "Always"',
@@ -401,7 +427,7 @@ test("the workflows folder is made even with instruction files turned off", asyn
   await withTemporaryDaedalusHome(async (home) => {
     const workspacePath = join(home, "workspace");
     await mkdir(workspacePath, { recursive: true });
-    await ensureWorkspaceContentFiles(workspacePath, home, false);
+    await ensureWorkspaceContentFiles(workspacePath, home, OFF);
     expect(await pathExists(join(home, "instructions"))).toBe(false);
     expect(await pathExists(join(home, "workflows", "CHOOSING.md"))).toBe(true);
     // The user's workflows are their own: none is written for them.
@@ -431,17 +457,12 @@ test("instruction files from before the custom instructions folder are upgraded,
     );
     await Bun.write(sessionAgents, withoutCustomInstructions(sessionCurrent));
     await ensureWorkspaceContentFiles(workspacePath, home);
-    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, ON);
     expect(await readFile(workspaceAgents, "utf8")).toBe(workspaceCurrent);
     expect(await readFile(sessionAgents, "utf8")).toBe(sessionCurrent);
 
-    await ensureWorkspaceContentFiles(workspacePath, home, false);
-    await ensureSessionInstructionFiles(
-      sessionPath,
-      workspacePath,
-      home,
-      false,
-    );
+    await ensureWorkspaceContentFiles(workspacePath, home, OFF);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, OFF);
     expect(await pathExists(workspaceAgents)).toBe(false);
     expect(await pathExists(sessionAgents)).toBe(false);
   });
@@ -463,7 +484,7 @@ test("a session's instructions from before journal entries had a size are upgrad
     expect(previous).not.toBe(current);
 
     await Bun.write(agentsPath, previous);
-    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, ON);
     expect(await readFile(agentsPath, "utf8")).toBe(current);
   });
 });
@@ -502,16 +523,11 @@ test("a session's instructions from before --branch was required are upgraded, a
     expect(previous).not.toContain("--branch");
 
     await Bun.write(agentsPath, previous);
-    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, ON);
     expect(await readFile(agentsPath, "utf8")).toBe(current);
 
     await Bun.write(agentsPath, previous);
-    await ensureSessionInstructionFiles(
-      sessionPath,
-      workspacePath,
-      home,
-      false,
-    );
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, OFF);
     expect(await pathExists(agentsPath)).toBe(false);
   });
 });
@@ -577,27 +593,20 @@ test("the workflows switch adds step 8 to the instruction files and takes it awa
     const workspaceAgents = join(workspacePath, "AGENTS.md");
     const sessionAgents = join(sessionPath, "AGENTS.md");
 
-    await ensureWorkspaceContentFiles(workspacePath, home, true, true);
+    await ensureWorkspaceContentFiles(workspacePath, home, WITH_WORKFLOWS);
     await ensureSessionInstructionFiles(
       sessionPath,
       workspacePath,
       home,
-      true,
-      true,
+      WITH_WORKFLOWS,
     );
     for (const path of [workspaceAgents, sessionAgents])
       expect(await readFile(path, "utf8")).toContain(
         "8. Workflows are on. Before the first command of every request",
       );
 
-    await ensureWorkspaceContentFiles(workspacePath, home, true, false);
-    await ensureSessionInstructionFiles(
-      sessionPath,
-      workspacePath,
-      home,
-      true,
-      false,
-    );
+    await ensureWorkspaceContentFiles(workspacePath, home, ON);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, ON);
     expect(await readFile(workspaceAgents, "utf8")).toBe(agentsTemplate(home));
     expect(await readFile(sessionAgents, "utf8")).toBe(
       sessionInstructionsTemplate(workspacePath, home),

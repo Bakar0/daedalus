@@ -154,13 +154,8 @@ export async function workflowCommand(
   }
   if (action === "show") {
     expectPositionals(parsed.positionals, 1, "daedal workflow show <workflow>");
-    const name = parsed.positionals[0]!;
-    const catalog = await context.workflows.catalog();
-    const workflow = catalog.workflows.find((item) => item.name === name);
-    if (!workflow)
-      throw new DaedalusError("NOT_FOUND", `No workflow '${name}'`);
-    const steps = workflow.steps.map(
-      (step) => catalog.steps.find((item) => item.name === step) ?? null,
+    const { workflow, steps } = await context.workflows.show(
+      parsed.positionals[0]!,
     );
     printResult({ workflow, steps }, json, () => {
       console.log(`# ${workflow.name}`);
@@ -216,21 +211,15 @@ export async function workflowCommand(
     });
     // Every step's instructions come back with the start, so no second call
     // is needed before the first step.
-    const catalog = await context.workflows.catalog();
-    const notes = catalog.workflows.find(
-      (item) => item.name === run.workflow,
-    )?.body;
+    const { notes, steps: bodies } = await context.workflows.instructions(run);
     printResult({ run }, json, () => {
       printRun(run);
-      if (notes?.trim()) console.log(`\n${notes.trim()}`);
-      run.steps.forEach((step, index) => {
-        const body =
-          catalog.steps.find((item) => item.name === step.name)?.body ??
-          step.description;
+      if (notes.trim()) console.log(`\n${notes.trim()}`);
+      bodies.forEach((step, index) => {
         // A step the agent named itself has no instructions to repeat.
-        if (!body.trim()) return;
+        if (!step.body.trim()) return;
         console.log(
-          `\n## ${index + 1}. ${step.name}${step.gate ? " [gate: user]" : ""}\n${body}`,
+          `\n## ${index + 1}. ${step.name}${step.gate ? " [gate: user]" : ""}\n${step.body}`,
         );
       });
     });

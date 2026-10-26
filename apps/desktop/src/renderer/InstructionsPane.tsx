@@ -47,9 +47,9 @@ export function useInstructionsSummary(
   useEffect(() => {
     let live = true;
     const read = () =>
-      void client.request.workflowFiles({}).then((response) => {
+      void client.request.instructionFiles({}).then((response) => {
         if (!live || !response.ok) return;
-        const { index, topics } = response.data.instructions;
+        const { index, topics } = response.data;
         setSummary({
           always: alwaysRuleCount(index.text),
           topics: topics.length,

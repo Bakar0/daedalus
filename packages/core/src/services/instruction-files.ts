@@ -9,8 +9,8 @@ import {
 import { DaedalusError } from "../errors";
 
 /**
- * The user's custom instructions as files, for the Workflows tab: `INDEX.md`
- * and one markdown file per topic. Agents keep them with the
+ * The user's custom instructions as files, for the Custom instructions tab:
+ * `INDEX.md` and one markdown file per topic. Agents keep them with the
  * daedalus-instructions skill; the tab lets the user read and edit them.
  */
 
@@ -28,9 +28,13 @@ export interface InstructionFiles {
 
 const INDEX = "INDEX.md";
 
+/** A topic's `# Heading`, or undefined when it has none. */
+const topicHeading = (text: string): string | undefined =>
+  /^#\s+(.+)$/m.exec(text)?.[1]?.trim();
+
 /** A topic file is named after its heading: `# Code review` → `code-review`. */
 export function topicName(text: string): string {
-  const heading = /^#\s+(.+)$/m.exec(text)?.[1]?.trim();
+  const heading = topicHeading(text);
   if (!heading)
     throw new DaedalusError(
       "VALIDATION",
@@ -49,34 +53,60 @@ export function topicName(text: string): string {
 }
 
 const linkTo = (name: string) => `](${name}.md)`;
+const topicLine = (name: string, heading: string) =>
+  `- [${name}.md](${name}.md): ${heading}`;
 
 /**
- * Keeps `INDEX.md` listing the topic files: a new topic gets a line under
- * "## Topics" (the end of the index) naming its heading, a renamed one has its link follow, and a
- * deleted one loses its line. The rest of the index is left as written.
+ * Keeps `INDEX.md` listing the topic files. A topic gets a line under
+ * "## Topics" naming its heading when it has none, wherever the section ends.
+ * A renamed topic's line follows it, and takes the new heading when it still
+ * showed the old one; a description someone wrote stays. A deleted topic
+ * loses its line. The rest of the index is left as written.
  */
 async function updateIndex(
   root: string,
   change:
-    | { add: string; heading: string }
-    | { rename: string; to: string }
+    | {
+        name: string;
+        heading: string;
+        previous?: { name: string; heading?: string };
+      }
     | { remove: string },
 ): Promise<void> {
   const path = join(root, INDEX);
   if (!(await pathExists(path))) return;
   const text = await readTextFile(path);
-  let next = text;
+  let lines = text.split("\n");
   if ("remove" in change)
-    next = text
-      .split("\n")
-      .filter((line) => !line.includes(linkTo(change.remove)))
-      .join("\n");
-  else if ("rename" in change)
-    next = text
-      .replaceAll(`[${change.rename}.md]`, `[${change.to}.md]`)
-      .replaceAll(linkTo(change.rename), linkTo(change.to));
-  else if (!text.includes(linkTo(change.add)))
-    next = `${text.trimEnd()}\n- [${change.add}.md](${change.add}.md): ${change.heading}\n`;
+    lines = lines.filter((line) => !line.includes(linkTo(change.remove)));
+  else {
+    const { name, heading, previous } = change;
+    if (previous && previous.name !== name)
+      lines = lines.map((line) => {
+        if (!line.includes(linkTo(previous.name))) return line;
+        const renamed = line
+          .replaceAll(`[${previous.name}.md]`, `[${name}.md]`)
+          .replaceAll(linkTo(previous.name), linkTo(name));
+        return previous.heading && renamed.endsWith(`: ${previous.heading}`)
+          ? `${renamed.slice(0, -previous.heading.length)}${heading}`
+          : renamed;
+      });
+    if (!lines.some((line) => line.includes(linkTo(name)))) {
+      const topics = lines.findIndex((line) => /^##\s+Topics\s*$/i.test(line));
+      if (topics === -1)
+        lines.push("", "## Topics", "", topicLine(name, heading));
+      else {
+        // After the section's last non-blank line, before the next heading.
+        const next = lines.findIndex(
+          (line, index) => index > topics && /^#{1,2}\s/.test(line),
+        );
+        let at = (next === -1 ? lines.length : next) - 1;
+        while (at > topics && !lines[at]!.trim()) at -= 1;
+        lines.splice(at + 1, 0, topicLine(name, heading));
+      }
+    }
+  }
+  const next = lines.join("\n");
   if (next !== text) await writeFileAtomic(path, next);
 }
 
@@ -119,20 +149,25 @@ export async function saveInstructionFile(
     return;
   }
   const name = topicName(input.text);
+  const heading = topicHeading(input.text)!;
   const path = join(root, `${name}.md`);
-  if (input.previousName !== name && (await pathExists(path)))
+  const previousName = input.previousName && basename(input.previousName);
+  if (previousName !== name && (await pathExists(path)))
     throw new DaedalusError("CONFLICT", `A topic named '${name}' exists`);
+  const previousPath = previousName && join(root, `${previousName}.md`);
+  const previous = previousName
+    ? {
+        name: previousName,
+        heading:
+          previousPath && (await pathExists(previousPath))
+            ? topicHeading(await readTextFile(previousPath))
+            : undefined,
+      }
+    : undefined;
   await writeFileAtomic(path, input.text);
-  if (input.previousName && input.previousName !== name) {
-    await unlink(join(root, `${basename(input.previousName)}.md`)).catch(
-      () => undefined,
-    );
-    await updateIndex(root, { rename: input.previousName, to: name });
-  } else if (!input.previousName)
-    await updateIndex(root, {
-      add: name,
-      heading: /^#\s+(.+)$/m.exec(input.text)![1]!.trim(),
-    });
+  if (previousPath && previousName !== name)
+    await unlink(previousPath).catch(() => undefined);
+  await updateIndex(root, { name, heading, ...(previous ? { previous } : {}) });
 }
 
 /** Deletes a topic file and its line in `INDEX.md`. */
@@ -146,4 +181,30 @@ export async function deleteInstructionFile(
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   });
   await updateIndex(root, { remove: name });
+}
+
+/**
+ * The custom instructions tab's view of the folder: read everything, save or
+ * delete one file, and get everything back.
+ */
+export class InstructionService {
+  constructor(private readonly root: string) {}
+
+  files(): Promise<InstructionFiles> {
+    return readInstructionFiles(this.root);
+  }
+
+  async save(input: {
+    kind: "index" | "topic";
+    text: string;
+    previousName?: string;
+  }): Promise<InstructionFiles> {
+    await saveInstructionFile(this.root, input);
+    return this.files();
+  }
+
+  async delete(name: string): Promise<InstructionFiles> {
+    await deleteInstructionFile(this.root, name);
+    return this.files();
+  }
 }

@@ -869,7 +869,11 @@ export async function discoverSkills(
 /* -------------------------------------------------------------------------- */
 
 export class SkillService {
-  constructor(private readonly config: DaedalusConfig) {}
+  constructor(
+    private readonly config: DaedalusConfig,
+    /** Told after a capability is turned on or off, once the files are in step. */
+    private readonly onChanged: (id: string) => Promise<void> = async () => {},
+  ) {}
 
   /** A capability's state, falling back to its own default. */
   settingFor(id: string): ManagedSkillSetting {
@@ -1254,6 +1258,7 @@ export class SkillService {
       },
     }));
     await this.sync();
+    await this.onChanged(id);
     const status = (await this.managedStatus()).find((one) => one.id === id);
     if (!status)
       throw new DaedalusError(

@@ -93,6 +93,7 @@ daedal agent spawn --workspace <workspace> --command <configured-name> [--task <
 daedal agent spawn --workspace <workspace> --provider <codex|claude> --task <task-ref> --refine
 daedal agent spawn ... [--ability routines|orchestration] [--color <color>] [--pin]
 daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--provider claude|codex] [--model <model>] [--account <account>] [--user]
+daedal agent spawn ... [--workflow <name>]
 daedal agent list [--workspace <workspace>] [--running]
 daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
 daedal agent get <agent-id>
@@ -210,6 +211,24 @@ daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--t
 ```
 
 A team is a session holding the orchestration ability, its lead, and the members it or the user adds. Inside the lead or a member, `--team` defaults to its own team and a post is signed with its handle; another session's post is refused. Outside a session the author is `user`, and `--team <lead>` is needed when more than one team exists. `--user` posts as the user from inside a session's folder. `agent spawn --team` with no value adds a member to the calling lead's team; with a lead it adds one for the user and tells the lead in the chat. A member runs on the lead's provider unless `--provider` picks the other, so a team can mix Claude and Codex. `team say` prints, per tagged session, whether the message reached it; `team list --json` returns each member's `undelivered` count and `lastError`. Delivery and tags are in [abilities.md](abilities.md#the-chat).
+
+## Workflow
+
+```text
+daedal workflow list
+daedal workflow show <workflow>
+daedal workflow start <workflow> [--steps <a,b,...>] [--replace]
+daedal workflow start --steps <a,b,...> [--name <label>] [--loop <step>] [--until "<text>"] [--replace]
+daedal workflow step <step> start|done|skip --note "<line>"
+daedal workflow add <step> [--after <step>] [--description "<text>"] [--gate]
+daedal workflow remove <step>
+daedal workflow approve [--note "<text>"]
+daedal workflow end [--note "<text>"]
+daedal workflow save <name> [--when "<text>"] [--description "<text>"]
+daedal workflow status
+```
+
+Every command but `list` and `show` takes `[--session <agent-id>]` and works on that session's run. `start` and `agent spawn --workflow` refuse while workflows are off in Settings › Sessions. `start` refuses while the session has an open run, unless `--replace` ends it first. `step … start` prints one line so it can be chained onto the command the step runs. A step with `gate: user` does not start: it waits for the user's approval, raises attention, and exits 4. Marking a gated step `done` before the user approved it is refused; `skip` is not. `agent spawn --workflow <name>` checks the workflow can run before the session starts, then starts the session with the run open; with `--team` the member starts in it. The files, their fields and examples are in [workflows.md](workflows.md); `daedal workflow --help` has the details of each command.
 
 ## Shutdown
 

@@ -1241,6 +1241,11 @@ export function createDesktopRequestHandlers(
     taskSetStatus: ({ id, status }) =>
       mutate(() => taskDto(context.tasks.setStatus(id, status))),
     workflowFiles: () => result(() => context.workflows.files()),
+    instructionFiles: () => result(() => context.instructions.files()),
+    instructionFileSave: (input) =>
+      mutate(() => context.instructions.save(input)),
+    instructionFileDelete: ({ name }) =>
+      mutate(() => context.instructions.delete(name)),
     workflowFileSave: (input) =>
       mutate(() => context.workflows.saveFile(input)),
     workflowFileDelete: (input) =>
@@ -1353,35 +1358,41 @@ export function createDesktopRequestHandlers(
       mutate(() => context.accounts.signOut(provider, account)),
     agentSpawn: ({ teamId, workflow, ...params }) =>
       // A workspace in the cloud runs the session there; the workspace says.
-      mutate(async () =>
-        agentDto(
-          workflow && !teamId
+      mutate(async () => {
+        // A team member or a plain session, either one started in a
+        // workflow when one is named.
+        const spawn = async (message: string | undefined) =>
+          teamId
+            ? (
+                await context.teams.spawnMember({
+                  team: teamId,
+                  addedBy: "user",
+                  instructions: message ?? "",
+                  ...(params.name ? { name: params.name } : {}),
+                  ...(params.taskId ? { taskId: params.taskId } : {}),
+                  ...(params.provider ? { provider: params.provider } : {}),
+                  ...(params.model ? { model: params.model } : {}),
+                  ...(params.account !== undefined
+                    ? { account: params.account }
+                    : {}),
+                })
+              ).session
+            : await context.agents.spawn({
+                ...params,
+                ...(message !== undefined ? { message } : {}),
+              });
+        return agentDto(
+          workflow
             ? (
                 await context.workflows.spawnWith({
                   workflow,
                   ...(params.message ? { message: params.message } : {}),
-                  spawn: (message) =>
-                    context.agents.spawn({ ...params, message }),
+                  spawn,
                 })
               ).session
-            : teamId
-              ? (
-                  await context.teams.spawnMember({
-                    team: teamId,
-                    addedBy: "user",
-                    instructions: params.message ?? "",
-                    ...(params.name ? { name: params.name } : {}),
-                    ...(params.taskId ? { taskId: params.taskId } : {}),
-                    ...(params.provider ? { provider: params.provider } : {}),
-                    ...(params.model ? { model: params.model } : {}),
-                    ...(params.account !== undefined
-                      ? { account: params.account }
-                      : {}),
-                  })
-                ).session
-              : await context.agents.spawn(params),
-        ),
-      ),
+            : await spawn(params.message),
+        );
+      }),
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
     agentStop: ({ id, force }) =>

@@ -351,18 +351,31 @@ export async function spawnTeamMember(
   const taskId = input.values.task
     ? await input.resolveTask(input.values.task, team.lead.workspaceId)
     : undefined;
-  const result = await context.teams.spawnMember({
-    team: team.id,
-    addedBy: callerRole ? "lead" : "user",
-    ...(instructions ? { instructions } : {}),
-    ...(input.values.name ? { name: input.values.name } : {}),
-    ...(taskId ? { taskId } : {}),
-    ...(input.values.provider ? { provider: input.values.provider } : {}),
-    ...(input.values.model ? { model: input.values.model } : {}),
-    ...(input.values.account !== undefined
-      ? { account: input.values.account }
-      : {}),
-  });
+  const spawn = (message: string | undefined) =>
+    context.teams.spawnMember({
+      team: team.id,
+      addedBy: callerRole ? "lead" : "user",
+      ...(message ? { instructions: message } : {}),
+      ...(input.values.name ? { name: input.values.name } : {}),
+      ...(taskId ? { taskId } : {}),
+      ...(input.values.provider ? { provider: input.values.provider } : {}),
+      ...(input.values.model ? { model: input.values.model } : {}),
+      ...(input.values.account !== undefined
+        ? { account: input.values.account }
+        : {}),
+    });
+  // A member can start in a workflow like any session.
+  let spawned: Awaited<ReturnType<typeof spawn>> | undefined;
+  const workflow = input.values.workflow;
+  if (workflow)
+    await context.workflows.spawnWith({
+      workflow,
+      ...(instructions ? { message: instructions } : {}),
+      spawn: async (message) => (spawned = await spawn(message)).session,
+    });
+  else spawned = await spawn(instructions);
+  if (!spawned) throw new DaedalusError("INTERNAL", "The member did not start");
+  const result = spawned;
   printResult(
     {
       ...result.session,

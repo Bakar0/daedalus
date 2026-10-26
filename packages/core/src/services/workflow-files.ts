@@ -204,25 +204,41 @@ export interface WorkflowCatalog {
   choosing: string;
 }
 
+/** The markdown files in a folder, in name order, each named after its file. */
+async function markdownFiles(
+  folder: string,
+): Promise<{ name: string; path: string; text: string }[]> {
+  if (!(await pathExists(folder))) return [];
+  const files = (await readdir(folder))
+    .filter((file) => file.endsWith(".md"))
+    .sort();
+  return Promise.all(
+    files.map(async (file) => {
+      const path = join(folder, file);
+      return {
+        name: basename(file, ".md"),
+        path,
+        text: await readTextFile(path),
+      };
+    }),
+  );
+}
+
+const message = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
+/** What each file in a folder parses to; one that does not is a problem. */
 async function readFolder<T>(
   folder: string,
   parse: (text: string, fallbackName: string) => T,
   problems: WorkflowFileProblem[],
 ): Promise<T[]> {
-  if (!(await pathExists(folder))) return [];
-  const files = (await readdir(folder))
-    .filter((file) => file.endsWith(".md"))
-    .sort();
   const found: T[] = [];
-  for (const file of files) {
-    const path = join(folder, file);
+  for (const { name, path, text } of await markdownFiles(folder)) {
     try {
-      found.push(parse(await readTextFile(path), basename(file, ".md")));
+      found.push(parse(text, name));
     } catch (error) {
-      problems.push({
-        path,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      problems.push({ path, message: message(error) });
     }
   }
   return found;
@@ -288,9 +304,6 @@ export interface WorkflowFiles {
   choosing: { path: string; text: string };
 }
 
-const message = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
-
 async function readFiles(
   folder: string,
   read: (
@@ -298,28 +311,13 @@ async function readFiles(
     name: string,
   ) => Omit<WorkflowFile, "path" | "text" | "problem">,
 ): Promise<WorkflowFile[]> {
-  if (!(await pathExists(folder))) return [];
-  const files = (await readdir(folder))
-    .filter((file) => file.endsWith(".md"))
-    .sort();
-  const found: WorkflowFile[] = [];
-  for (const file of files) {
-    const path = join(folder, file);
-    const text = await readTextFile(path);
-    const name = basename(file, ".md");
+  return (await markdownFiles(folder)).map(({ name, path, text }) => {
     try {
-      found.push({ ...read(text, name), path, text, problem: null });
+      return { ...read(text, name), path, text, problem: null };
     } catch (error) {
-      found.push({
-        name,
-        path,
-        text,
-        description: "",
-        problem: message(error),
-      });
+      return { name, path, text, description: "", problem: message(error) };
     }
-  }
-  return found;
+  });
 }
 
 /** Every workflow and step file as written, for the editor. */
@@ -376,22 +374,27 @@ export async function saveWorkflowFile(
   }
   const folder =
     input.kind === "flow" ? workflowsPath(root) : workflowStepsPath(root);
+  // Checked before anything is written, so a bad name changes no file.
+  const previous = input.previousName
+    ? workflowName(
+        input.previousName,
+        input.kind === "flow" ? "workflow" : "step",
+      )
+    : undefined;
   const name =
     input.kind === "flow"
-      ? parseWorkflowFile(input.text, input.previousName).name
-      : parseStepFile(input.text, input.previousName).name;
+      ? parseWorkflowFile(input.text, previous).name
+      : parseStepFile(input.text, previous).name;
   const path = join(folder, `${name}.md`);
-  if (input.previousName !== name && (await pathExists(path)))
+  if (previous !== name && (await pathExists(path)))
     throw new DaedalusError(
       "CONFLICT",
       `A ${input.kind === "flow" ? "workflow" : "step"} named '${name}' exists`,
     );
   await ensureDirectory(folder);
   await writeFileAtomic(path, input.text);
-  if (input.previousName && input.previousName !== name)
-    await unlink(join(folder, `${workflowName(input.previousName)}.md`)).catch(
-      () => undefined,
-    );
+  if (previous && previous !== name)
+    await unlink(join(folder, `${previous}.md`)).catch(() => undefined);
 }
 
 /** Deletes a workflow, or a step no workflow uses. */

@@ -137,6 +137,7 @@ const withWorkflows = (run: (setup: Setup) => Promise<void>) =>
             return { cleared: 1 };
           },
         },
+        () => true,
         {
           deliver: async (session, line) => {
             delivered.push({ sessionId: session.id, line: String(line) });
@@ -290,6 +291,15 @@ describe("WorkflowService", () => {
           sessionId: agent.id,
           workflow: "feature",
         });
+        // Marking it done without starting it would skip the approval.
+        await expect(
+          workflows.step({
+            note: "n",
+            sessionId: agent.id,
+            step: "deploy",
+            action: "done",
+          }),
+        ).rejects.toThrow("needs the user's approval");
         const gated = await workflows.step({
           sessionId: agent.id,
           step: "deploy",
@@ -510,6 +520,23 @@ describe("WorkflowService", () => {
         (item) => item.name === "quick",
       );
       expect(quick?.steps).toEqual(["do", "check"]);
+
+      // Removing a circular run's loop step, with the rest finished, ends it.
+      const looping = session();
+      await workflows.start({ sessionId: looping.id, workflow: "iterate" });
+      for (const step of ["review", "feedback"])
+        await workflows.step({
+          note: "n",
+          sessionId: looping.id,
+          step,
+          action: "done",
+        });
+      const ended = workflows.remove({
+        sessionId: looping.id,
+        step: "prototype",
+      });
+      expect(ended.loopTo).toBeNull();
+      expect(ended.endedAt).not.toBeNull();
     });
   });
 
@@ -646,13 +673,30 @@ describe("WorkflowService", () => {
   });
 
   test("a session can start in a workflow: one launch line and the run open", async () => {
-    await withWorkflows(async ({ workflows, session }) => {
+    await withWorkflows(async ({ context, workflows, session }) => {
       await expect(
         workflows.spawnWith({
           workflow: "nope",
           spawn: async () => session(),
         }),
       ).rejects.toThrow("Workflows: feature, iterate, quick");
+
+      // A workflow that cannot run is refused before any session exists.
+      await writeFile(
+        join(workflowsHomePath(context.config.home), "flows", "broken.md"),
+        "---\nname: broken\nwhen: Tests.\nsteps: [do, missing]\n---\n",
+      );
+      let spawned = 0;
+      await expect(
+        workflows.spawnWith({
+          workflow: "broken",
+          spawn: async () => {
+            spawned += 1;
+            return session();
+          },
+        }),
+      ).rejects.toThrow("broken");
+      expect(spawned).toBe(0);
 
       let message = "";
       const { session: agent, run } = await workflows.spawnWith({
@@ -717,8 +761,6 @@ describe("WorkflowService", () => {
         context.repositories,
         context.config.home,
         { raise: async () => ({}), clear: () => ({ cleared: 0 }) },
-        undefined,
-        undefined,
         () => on,
       );
       const agent = session();

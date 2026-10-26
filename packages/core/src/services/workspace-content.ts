@@ -383,11 +383,32 @@ async function removeLegacyWorkspaceSkillLinks(
   ]);
 }
 
+/**
+ * Which generated instruction files Daedalus writes: none when they are
+ * turned off, and step 8 while workflows are on.
+ */
+export interface InstructionFileOptions {
+  enabled: boolean;
+  workflows: boolean;
+}
+
+/** The options as the user's settings have them. */
+export const instructionFileOptions = (
+  config: DaedalusConfig,
+): InstructionFileOptions => ({
+  enabled: config.workspaceInstructionFilesEnabled,
+  workflows: workflowsEnabled(config),
+});
+
+const DEFAULT_INSTRUCTION_FILES: InstructionFileOptions = {
+  enabled: true,
+  workflows: false,
+};
+
 export async function syncWorkspaceInstructionFiles(
   path: string,
-  enabled: boolean,
   daedalusHome: string,
-  workflows = false,
+  { enabled, workflows }: InstructionFileOptions,
 ): Promise<void> {
   const agentsPath = join(path, "AGENTS.md");
   const claudePath = join(path, "CLAUDE.md");
@@ -439,8 +460,7 @@ export async function ensureSessionInstructionFiles(
   sessionPath: string,
   workspacePath: string,
   daedalusHome: string,
-  enabled: boolean,
-  workflows = false,
+  { enabled, workflows }: InstructionFileOptions,
 ): Promise<void> {
   const agentsPath = join(sessionPath, "AGENTS.md");
   const template = sessionInstructionsTemplate(
@@ -474,8 +494,7 @@ export async function ensureSessionInstructionFiles(
 export async function ensureWorkspaceContentFiles(
   path: string,
   daedalusHome: string,
-  instructionFilesEnabled = true,
-  workflows = false,
+  options: InstructionFileOptions = DEFAULT_INSTRUCTION_FILES,
 ): Promise<void> {
   await Promise.all([
     ensureDirectory(join(path, "artifacts")),
@@ -487,12 +506,7 @@ export async function ensureWorkspaceContentFiles(
     // their folder is made whether or not those are turned on.
     ensureWorkflowsFolder(workflowsHomePath(daedalusHome)),
   ]);
-  await syncWorkspaceInstructionFiles(
-    path,
-    instructionFilesEnabled,
-    daedalusHome,
-    workflows,
-  );
+  await syncWorkspaceInstructionFiles(path, daedalusHome, options);
 }
 
 /**
@@ -566,8 +580,7 @@ export class WorkspaceContentService {
       await ensureWorkspaceContentFiles(
         workspace.path,
         this.config.home,
-        this.config.workspaceInstructionFilesEnabled,
-        workflowsEnabled(this.config),
+        instructionFileOptions(this.config),
       );
     const repositories = this.repositories.listWorkspaceRepositories(
       workspace.id,
@@ -627,6 +640,18 @@ export class WorkspaceContentService {
   }
 
   async setInstructionFilesEnabled(enabled: boolean): Promise<void> {
+    await updateSettings(this.config, () => ({
+      workspaceInstructionFilesEnabled: enabled,
+    }));
+    await this.syncInstructionFiles();
+  }
+
+  /**
+   * Rewrites every workspace's generated instruction files from the current
+   * settings, after one of them changed: the files themselves, and step 8
+   * while workflows are on. Sessions already running keep what they read.
+   */
+  async syncInstructionFiles(): Promise<void> {
     const workspaces = await this.workspaces.listWithHealth();
     await Promise.all(
       workspaces
@@ -634,14 +659,11 @@ export class WorkspaceContentService {
         .map((item) =>
           syncWorkspaceInstructionFiles(
             item.workspace.path,
-            enabled,
             this.config.home,
+            instructionFileOptions(this.config),
           ),
         ),
     );
-    await updateSettings(this.config, () => ({
-      workspaceInstructionFilesEnabled: enabled,
-    }));
   }
 
   async appendJournal(input: {
@@ -666,8 +688,7 @@ export class WorkspaceContentService {
     await ensureWorkspaceContentFiles(
       workspace.path,
       this.config.home,
-      this.config.workspaceInstructionFilesEnabled,
-      workflowsEnabled(this.config),
+      instructionFileOptions(this.config),
     );
     await appendFile(
       join(workspace.path, "JOURNAL.md"),
@@ -697,8 +718,7 @@ export class WorkspaceContentService {
     await ensureWorkspaceContentFiles(
       input.workspace.path,
       this.config.home,
-      this.config.workspaceInstructionFilesEnabled,
-      workflowsEnabled(this.config),
+      instructionFileOptions(this.config),
     );
     const references = this.repositories.listWorkspaceRepositories(
       input.workspace.id,
@@ -719,8 +739,7 @@ export class WorkspaceContentService {
       workingDirectory,
       input.workspace.path,
       this.config.home,
-      this.config.workspaceInstructionFilesEnabled,
-      workflowsEnabled(this.config),
+      instructionFileOptions(this.config),
     );
     return {
       workingDirectory,

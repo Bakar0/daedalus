@@ -74,4 +74,54 @@ describe("custom instruction files", () => {
       );
     });
   });
+
+  test("a topic's line sits in its section, follows a rename, and appears for a topic an agent left unlisted", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const root = join(home, "instructions");
+      await mkdir(root, { recursive: true });
+      await writeFile(
+        join(root, "INDEX.md"),
+        `${INDEX}\n## Notes\n\nKept as written.\n`,
+      );
+      const index = () => readFile(join(root, "INDEX.md"), "utf8");
+
+      // A new line goes under Topics, not after the section that follows.
+      await saveInstructionFile(root, {
+        kind: "topic",
+        text: "# Code review\n\n- Ask for one.\n",
+      });
+      expect(await index()).toContain(
+        "- [git.md](git.md): branch names, commit messages\n- [code-review.md](code-review.md): Code review\n\n## Notes",
+      );
+
+      // A rename takes the new heading where the line showed the old one.
+      await saveInstructionFile(root, {
+        kind: "topic",
+        previousName: "code-review",
+        text: "# Reviews\n\n- Ask for one.\n",
+      });
+      expect(await index()).toContain("- [reviews.md](reviews.md): Reviews\n");
+
+      // A description someone wrote stays through a rename.
+      await writeFile(join(root, "git.md"), "# Git\n\n- Branch first.\n");
+      await saveInstructionFile(root, {
+        kind: "topic",
+        previousName: "git",
+        text: "# Version control\n\n- Branch first.\n",
+      });
+      expect(await index()).toContain(
+        "- [version-control.md](version-control.md): branch names, commit messages",
+      );
+
+      // A topic file with no line gets one when it is next saved.
+      await writeFile(join(root, "style.md"), "# Style\n\n- Short.\n");
+      await saveInstructionFile(root, {
+        kind: "topic",
+        previousName: "style",
+        text: "# Style\n\n- Short sentences.\n",
+      });
+      expect(await index()).toContain("- [style.md](style.md): Style\n");
+      expect(await index()).toContain("## Notes\n\nKept as written.");
+    });
+  });
 });

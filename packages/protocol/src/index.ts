@@ -1360,8 +1360,7 @@ export interface WorkflowStepRecordDto {
 }
 
 /** `index` and `topic` are the user's custom instruction files. */
-export type WorkflowFileKindDto =
-  "flow" | "step" | "choosing" | "index" | "topic";
+export type WorkflowFileKindDto = "flow" | "step" | "choosing";
 
 /** One workflow or step file, as written and as Daedalus reads it. */
 export interface WorkflowFileDto {
@@ -1384,12 +1383,13 @@ export interface WorkflowFilesDto {
   flows: WorkflowFileDto[];
   steps: WorkflowFileDto[];
   choosing: { path: string; text: string };
-  /** The user's custom instructions: the index and one file per topic. */
-  instructions: {
-    root: string;
-    index: { path: string; text: string };
-    topics: { name: string; path: string; text: string }[];
-  };
+}
+
+/** The user's custom instructions: the index and one file per topic. */
+export interface InstructionFilesDto {
+  root: string;
+  index: { path: string; text: string };
+  topics: { name: string; path: string; text: string }[];
 }
 
 /** A piece of work going through a workflow, and where it is. */
@@ -2126,10 +2126,7 @@ export interface DesktopRpcSchema {
         },
         AgentSessionDto
       >;
-      /**
-       * Every workflow and step, the choosing rules and the custom
-       * instructions: what the Workflows and Custom instructions tabs show.
-       */
+      /** Every workflow and step and the choosing rules: the Workflows tab. */
       workflowFiles: Request<Record<string, never>, WorkflowFilesDto>;
       /**
        * Writes one workflow, step or the choosing rules. The text is checked
@@ -2145,9 +2142,21 @@ export interface DesktopRpcSchema {
         WorkflowFilesDto
       >;
       workflowFileDelete: Request<
-        { kind: "flow" | "step" | "topic"; name: string },
+        { kind: "flow" | "step"; name: string },
         WorkflowFilesDto
       >;
+      /** The custom instructions: the Custom instructions tab and pane. */
+      instructionFiles: Request<Record<string, never>, InstructionFilesDto>;
+      /**
+       * Writes the index, or a topic under the name its heading gives, and
+       * keeps the topic's line in the index in step.
+       */
+      instructionFileSave: Request<
+        { kind: "index" | "topic"; text: string; previousName?: string },
+        InstructionFilesDto
+      >;
+      /** Deletes a topic and its line in the index. */
+      instructionFileDelete: Request<{ name: string }, InstructionFilesDto>;
       agentModels: Request<
         { provider: "codex" | "claude"; account?: string },
         ProviderModelCatalogDto

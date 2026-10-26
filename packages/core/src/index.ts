@@ -60,6 +60,7 @@ export * from "./services/team-transport";
 export * from "./services/teams";
 export * from "./services/workflow-files";
 export * from "./services/workflows";
+export { InstructionService } from "./services/instruction-files";
 export * from "./services/context-files";
 export * from "./services/read-model";
 export * from "./services/session-inbox";

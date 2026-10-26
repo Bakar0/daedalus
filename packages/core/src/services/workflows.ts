@@ -12,13 +12,6 @@ import type { SqliteRepositories } from "../repositories";
 import type { ActivityService } from "./activity";
 import type { SessionChannel } from "./session-channel";
 import {
-  deleteInstructionFile,
-  readInstructionFiles,
-  saveInstructionFile,
-  type InstructionFiles,
-} from "./instruction-files";
-import { customInstructionsPath } from "./skills";
-import {
   deleteWorkflowFile,
   ensureWorkflowsFolder,
   readWorkflowCatalog,
@@ -38,6 +31,13 @@ import {
 export type WorkflowStepAction = "start" | "done" | "skip";
 
 const FINISHED: ReadonlySet<WorkflowStepState> = new Set(["done", "skipped"]);
+
+/** A step the run is in: active, or waiting for the user's approval. */
+const isLive = (step: { state: WorkflowStepState }) =>
+  step.state === "active" || step.state === "waiting";
+
+const noWorkflow = (name: string, catalog: WorkflowCatalog) =>
+  `No workflow '${name}'. Workflows: ${catalog.workflows.map((item) => item.name).join(", ") || "none"}`;
 
 /** The label of a dynamic run started without a name. */
 const DYNAMIC = "dynamic";
@@ -80,20 +80,15 @@ const runStep = (
  * removing steps in a running one, never writes a workflow file; `save` is
  * the one way a run's shape becomes a maintained workflow.
  */
-/** What the Workflows tab reads in one call. */
-export type EditorFiles = WorkflowFiles & {
-  instructions: InstructionFiles;
-};
-
 export class WorkflowService {
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly home: string,
     private readonly activity: Pick<ActivityService, "raise" | "clear">,
+    /** The user's switch for workflows, in Settings › Sessions. */
+    private readonly enabled: () => boolean,
     private readonly channel?: Pick<SessionChannel, "deliver">,
     private readonly now: () => Date = () => new Date(),
-    /** The user's switch for workflows, in Settings; off by default. */
-    private readonly enabled: () => boolean = () => true,
   ) {}
 
   /** Off, no run starts: an agent told to use workflows is told why not. */
@@ -115,44 +110,64 @@ export class WorkflowService {
     return readWorkflowCatalog(this.root);
   }
 
-  /**
-   * Everything the Workflows and Custom instructions tabs show: the user's
-   * workflows, steps and choosing rules, and their custom instructions.
-   */
-  async files(): Promise<EditorFiles> {
-    await ensureWorkflowsFolder(this.root);
+  /** One workflow with each of its steps' files; null for a step with none. */
+  async show(name: string) {
+    const catalog = await this.catalog();
+    const workflow = catalog.workflows.find((item) => item.name === name);
+    if (!workflow)
+      throw new DaedalusError("NOT_FOUND", noWorkflow(name, catalog));
     return {
-      ...(await readWorkflowFiles(this.root)),
-      instructions: await readInstructionFiles(
-        customInstructionsPath(this.home),
+      workflow,
+      steps: workflow.steps.map(
+        (step) => catalog.steps.find((item) => item.name === step) ?? null,
       ),
     };
   }
 
+  /**
+   * What an agent reads when its run starts: the workflow's own notes, and
+   * each step's instructions, from its file or, for a step the agent named,
+   * its description.
+   */
+  async instructions(run: WorkflowRun): Promise<{
+    notes: string;
+    steps: { name: string; gate: boolean; body: string }[];
+  }> {
+    const catalog = await this.catalog();
+    return {
+      notes:
+        catalog.workflows.find((item) => item.name === run.workflow)?.body ??
+        "",
+      steps: run.steps.map((step) => ({
+        name: step.name,
+        gate: step.gate === "user",
+        body:
+          catalog.steps.find((item) => item.name === step.name)?.body ??
+          step.description,
+      })),
+    };
+  }
+
+  /** Everything the Workflows tab shows: workflows, steps and choosing rules. */
+  async files(): Promise<WorkflowFiles> {
+    await ensureWorkflowsFolder(this.root);
+    return readWorkflowFiles(this.root);
+  }
+
   async saveFile(input: {
-    kind: WorkflowFileKind | "index" | "topic";
+    kind: WorkflowFileKind;
     text: string;
     previousName?: string;
-  }): Promise<EditorFiles> {
-    if (input.kind === "index" || input.kind === "topic")
-      await saveInstructionFile(customInstructionsPath(this.home), {
-        ...input,
-        kind: input.kind,
-      });
-    else await saveWorkflowFile(this.root, { ...input, kind: input.kind });
+  }): Promise<WorkflowFiles> {
+    await saveWorkflowFile(this.root, input);
     return this.files();
   }
 
   async deleteFile(input: {
-    kind: "flow" | "step" | "topic";
+    kind: "flow" | "step";
     name: string;
-  }): Promise<EditorFiles> {
-    if (input.kind === "topic")
-      await deleteInstructionFile(
-        customInstructionsPath(this.home),
-        input.name,
-      );
-    else await deleteWorkflowFile(this.root, { ...input, kind: input.kind });
+  }): Promise<WorkflowFiles> {
+    await deleteWorkflowFile(this.root, input);
     return this.files();
   }
 
@@ -235,18 +250,7 @@ export class WorkflowService {
         );
       until = input.until?.trim() ?? "";
     } else {
-      const workflow = catalog.workflows.find((item) => item.name === label);
-      if (!workflow) {
-        const problem = catalog.problems.find((item) =>
-          item.path.endsWith(`/${label}.md`),
-        );
-        throw new DaedalusError(
-          problem ? "VALIDATION" : "NOT_FOUND",
-          problem
-            ? `Workflow '${label}' cannot be read: ${problem.message}`
-            : `No workflow '${label}'. Workflows: ${catalog.workflows.map((item) => item.name).join(", ") || "none"}. For work none of them fits, start a dynamic workflow with --steps.`,
-        );
-      }
+      const workflow = this.runnable(catalog, label);
       if (!workflow.dynamic && input.steps)
         throw new DaedalusError(
           "VALIDATION",
@@ -255,15 +259,7 @@ export class WorkflowService {
       dynamic = workflow.dynamic;
       steps = workflow.dynamic
         ? ownSteps(input.steps ?? [])
-        : workflow.steps.map((name) => {
-            const step = catalog.steps.find((item) => item.name === name);
-            if (!step)
-              throw new DaedalusError(
-                "VALIDATION",
-                `Workflow '${label}' names step '${name}', which has no file`,
-              );
-            return runStep(step, false);
-          });
+        : this.fileSteps(catalog, workflow);
       loopTo = workflow.loop;
       until = workflow.until;
     }
@@ -287,6 +283,37 @@ export class WorkflowService {
     });
   }
 
+  /** A workflow file a run can start from, or why there is none. */
+  private runnable(catalog: WorkflowCatalog, name: string) {
+    const workflow = catalog.workflows.find((item) => item.name === name);
+    if (workflow) return workflow;
+    const problem = catalog.problems.find((item) =>
+      item.path.endsWith(`/${name}.md`),
+    );
+    throw new DaedalusError(
+      problem ? "VALIDATION" : "NOT_FOUND",
+      problem
+        ? `Workflow '${name}' cannot be read: ${problem.message}`
+        : `${noWorkflow(name, catalog)}. For work none of them fits, start a dynamic workflow with --steps.`,
+    );
+  }
+
+  /** A maintained workflow's steps, each from its file. */
+  private fileSteps(
+    catalog: WorkflowCatalog,
+    workflow: WorkflowCatalog["workflows"][number],
+  ): WorkflowRunStep[] {
+    return workflow.steps.map((name) => {
+      const step = catalog.steps.find((item) => item.name === name);
+      if (!step)
+        throw new DaedalusError(
+          "VALIDATION",
+          `Workflow '${workflow.name}' names step '${name}', which has no file`,
+        );
+      return runStep(step, false);
+    });
+  }
+
   /**
    * Starts a session already in a workflow, so the agent spends nothing
    * choosing one: the workflow is checked, the session spawned with one line
@@ -299,14 +326,10 @@ export class WorkflowService {
   }): Promise<{ session: AgentSession; run: WorkflowRun }> {
     this.requireEnabled();
     const catalog = await this.catalog();
-    const workflow = catalog.workflows.find(
-      (item) => item.name === input.workflow,
-    );
-    if (!workflow)
-      throw new DaedalusError(
-        "NOT_FOUND",
-        `No workflow '${input.workflow}'. Workflows: ${catalog.workflows.map((item) => item.name).join(", ") || "none"}`,
-      );
+    // Everything `start` checks is checked before the session exists, so a
+    // workflow that cannot run never leaves a session told it is in one.
+    const workflow = this.runnable(catalog, input.workflow);
+    if (!workflow.dynamic) this.fileSteps(catalog, workflow);
     const line = workflow.dynamic
       ? `Daedalus started workflow '${input.workflow}' for this session. It has no steps yet: add the ones you will take with \`daedal workflow add <step>\`, then report them as the daedalus-workflows skill says.`
       : `Daedalus started workflow '${input.workflow}' for this session. Run \`daedal workflow status\` for its steps and report them as the daedalus-workflows skill says.`;
@@ -380,16 +403,12 @@ export class WorkflowService {
         `Step '${step.name}' is ${step.state}; only a step not yet started can be removed. Skip it with a note instead.`,
       );
     const steps = run.steps.filter((item) => item !== step);
+    const loopTo = run.loopTo === step.name ? null : run.loopTo;
     const finished =
       steps.length > 0 && steps.every((item) => FINISHED.has(item.state));
     return this.save(
-      {
-        ...run,
-        steps,
-        modified: !run.dynamic,
-        loopTo: run.loopTo === step.name ? null : run.loopTo,
-      },
-      finished && !run.loopTo,
+      { ...run, steps, modified: !run.dynamic, loopTo },
+      finished && !loopTo,
     );
   }
 
@@ -400,14 +419,12 @@ export class WorkflowService {
     // Ending in the middle of a step finishes it, and what the agent says
     // then is that step's outcome; the run keeps a note of its own only
     // when it ends between steps.
-    const open = run.steps.some(
-      (step) => step.state === "active" || step.state === "waiting",
-    );
+    const open = run.steps.some(isLive);
     return this.save(
       {
         ...run,
         steps: run.steps.map((step) =>
-          step.state === "active" || step.state === "waiting"
+          isLive(step)
             ? {
                 ...step,
                 state: "done",
@@ -473,6 +490,17 @@ export class WorkflowService {
         throw new DaedalusError(
           "CONFLICT",
           `Step '${target.name}' waits for the user's approval`,
+        );
+      // A gated step is done only after the user approved it. Skipping it
+      // stays possible: that does not do what the gate guards.
+      if (
+        input.action === "done" &&
+        target.gate === "user" &&
+        !target.approvedAt
+      )
+        throw new DaedalusError(
+          "CONFLICT",
+          `Step '${target.name}' needs the user's approval; start it so they are asked`,
         );
       target.state = input.action === "done" ? "done" : "skipped";
       target.startedAt ??= now;
@@ -676,9 +704,7 @@ export function describePosition(run: WorkflowRun): string {
  * last finished step, else -1 before anything started.
  */
 export function currentStepIndex(run: WorkflowRun): number {
-  const live = run.steps.findIndex(
-    (step) => step.state === "active" || step.state === "waiting",
-  );
+  const live = run.steps.findIndex(isLive);
   if (live !== -1) return live;
   const last = run.steps.findLastIndex((step) => FINISHED.has(step.state));
   return last === -1 ? -1 : Math.min(last + 1, run.steps.length - 1);

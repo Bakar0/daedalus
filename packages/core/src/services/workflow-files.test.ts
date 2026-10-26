@@ -226,6 +226,15 @@ describe("step and workflow files", () => {
         }),
       ).rejects.toThrow();
       expect(await readdir(join(folder, "flows"))).toHaveLength(2);
+      // A previous name that is not a name is refused before any write.
+      await expect(
+        saveWorkflowFile(folder, {
+          kind: "step",
+          previousName: "Not A Name",
+          text: "---\nname: fresh\ndescription: New\n---\nBody.\n",
+        }),
+      ).rejects.toThrow("lowercase");
+      expect(await readdir(join(folder, "steps"))).not.toContain("fresh.md");
 
       await saveWorkflowFile(folder, { kind: "choosing", text: "Mine.\n" });
       expect((await readWorkflowFiles(folder)).choosing.text).toBe("Mine.\n");

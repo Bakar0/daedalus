@@ -4,7 +4,7 @@
  * run reads it and refuses to save one a run could not use, with the reason.
  * Examples to copy are in the docs the header links to.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import type {
   WorkflowFileDto,
   WorkflowFileKindDto,
@@ -12,6 +12,14 @@ import type {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { askConfirm } from "./dialogs";
+import {
+  confirmDiscard,
+  DOCS_URL,
+  FileDetail,
+  Group,
+  PlainRow,
+  TabIntro,
+} from "./FileEditorParts";
 
 /** What is open on the right. A null name is a new file not saved yet. */
 type Selection =
@@ -32,9 +40,6 @@ description: What this step is for
 
 What to do in this step, or one line naming a command or skill.
 `;
-
-/** The repository's docs, which the tabs' headers link to. */
-export const DOCS_URL = "https://github.com/Bakar0/daedalus/blob/main/docs";
 
 const listOf = (files: WorkflowFilesDto, kind: "flow" | "step") =>
   kind === "flow" ? files.flows : files.steps;
@@ -112,77 +117,6 @@ function FileRow({
   );
 }
 
-export function PlainRow({
-  label,
-  note,
-  onSelect,
-  selected,
-}: {
-  label: string;
-  note?: string;
-  onSelect: () => void;
-  selected: boolean;
-}) {
-  return (
-    <li>
-      <button
-        aria-current={selected ? "true" : undefined}
-        className={`workflows-file${selected ? " selected" : ""}`}
-        onClick={onSelect}
-        type="button"
-      >
-        <span className="workflows-file-name">{label}</span>
-        {note && <small>{note}</small>}
-      </button>
-    </li>
-  );
-}
-
-export function Group({
-  children,
-  onNew,
-  title,
-}: {
-  children: ReactNode;
-  onNew?: () => void;
-  title: string;
-}) {
-  return (
-    <section>
-      <header>
-        <h3>{title}</h3>
-        {onNew && (
-          <button className="quiet" onClick={onNew} type="button">
-            + New
-          </button>
-        )}
-      </header>
-      <ul>{children}</ul>
-    </section>
-  );
-}
-
-/**
- * The line at the top of the Workflows and Custom instructions tabs: what the
- * tab is for, and a link to the docs with examples.
- */
-export function TabIntro({
-  children,
-  onReadMore,
-}: {
-  children: ReactNode;
-  onReadMore: () => void;
-}) {
-  return (
-    <p className="workflows-intro">
-      {children}{" "}
-      <button className="workflow-pane-link" onClick={onReadMore} type="button">
-        Read more and examples <span aria-hidden="true">↗</span>
-      </button>
-    </p>
-  );
-}
-
 export function WorkflowsEditor({
   client,
   onError,
@@ -232,16 +166,7 @@ export function WorkflowsEditor({
       : (current?.path ?? "Saved under the name in its frontmatter");
 
   const select = async (next: Selection) => {
-    if (
-      draft !== saved &&
-      !(await askConfirm({
-        title: "Discard changes?",
-        message: "This file has changes that are not saved.",
-        confirmLabel: "Discard",
-        danger: true,
-      }))
-    )
-      return;
+    if (draft !== saved && !(await confirmDiscard())) return;
     setSelection(next);
     setDraft(textOf(files, next));
     setRefusal(undefined);
@@ -361,43 +286,26 @@ export function WorkflowsEditor({
             ))}
           </Group>
         </nav>
-        <section aria-label="Workflow file" className="workflows-detail">
-          <header className="workflows-detail-heading">
-            <div>
-              <h2>{titleOf(selection)}</h2>
-              <small>{path}</small>
-            </div>
-            <div className="workflows-detail-actions">
-              {"name" in selection && selection.name && (
-                <button
-                  className="danger-link"
-                  onClick={() => void remove()}
-                  type="button"
-                >
-                  Delete
-                </button>
-              )}
-              <button
-                className="quiet"
-                disabled={draft === saved || saving}
-                onClick={() => {
-                  setDraft(saved);
-                  setRefusal(undefined);
-                }}
-                type="button"
-              >
-                Revert
-              </button>
-              <button
-                className="primary"
-                disabled={!dirty || saving}
-                onClick={() => void save()}
-                type="button"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-            </div>
-          </header>
+        <FileDetail
+          alert={refusal ?? current?.problem}
+          dirty={dirty}
+          draft={draft}
+          hint={HINTS[selection.kind]}
+          label="Workflow file"
+          onDraft={setDraft}
+          onRevert={() => {
+            setDraft(saved);
+            setRefusal(undefined);
+          }}
+          onSave={() => void save()}
+          path={path}
+          saved={saved}
+          saving={saving}
+          title={titleOf(selection)}
+          {...("name" in selection && selection.name
+            ? { onDelete: () => void remove() }
+            : {})}
+        >
           {current?.steps && current.steps.length > 0 && (
             <div aria-label="Steps" className="workflows-chain">
               {current.steps.map((step, index) => (
@@ -417,26 +325,7 @@ export function WorkflowsEditor({
               )}
             </div>
           )}
-          {(refusal ?? current?.problem) && (
-            <p className="workflows-refusal" role="alert">
-              {refusal ?? current?.problem}
-            </p>
-          )}
-          <textarea
-            aria-label="File text"
-            className="workflows-text"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.metaKey || event.ctrlKey) && event.key === "s") {
-                event.preventDefault();
-                if (dirty && !saving) void save();
-              }
-            }}
-            spellCheck={false}
-            value={draft}
-          />
-          <p className="workflows-hint">{HINTS[selection.kind]}</p>
-        </section>
+        </FileDetail>
       </div>
     </div>
   );

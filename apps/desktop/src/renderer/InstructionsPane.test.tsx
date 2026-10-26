@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import { alwaysRuleCount, InstructionsPane } from "./InstructionsPane";
-import { TabIntro } from "./WorkflowsEditor";
+import { TabIntro } from "./FileEditorParts";
 
 describe("InstructionsPane", () => {
   test("names what there is under its own Open", () => {
