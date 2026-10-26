@@ -144,6 +144,12 @@ function sources(context: ApplicationContext) {
       () => repositories.routines.listReportsWithTasks(),
       unwatched("covered by abilities: a report's task moves with the report"),
     ),
+    // An agent reports a step a few times an hour at most, so a change
+    // reloads the whole window rather than earning a partial part.
+    workflowRuns: rows(
+      () => context.workflows.list(),
+      () => repositories.workflows.versions(),
+    ),
     // A journal or team file crossing its compact size changes a header. To
     // the kilobyte, so each line a session appends does not reload the window.
     largeFiles: rows(currentLargeFiles, () =>

@@ -118,6 +118,43 @@ const ALLOWED: Record<string, Spec> = {
     flags: ["self"],
     positionals: { min: 0, max: 1 },
   },
+  // Its place in its workflow, kept on this Mac with the workflow files.
+  "workflow list": { positionals: { min: 0, max: 0 } },
+  "workflow show": { positionals: { min: 1, max: 1 } },
+  "workflow start": {
+    values: [SESSION_FLAG, "steps", "name", "loop", "until"],
+    flags: ["replace"],
+    positionals: { min: 0, max: 1 },
+  },
+  "workflow step": {
+    values: [SESSION_FLAG, "note"],
+    positionals: { min: 2, max: 2 },
+  },
+  "workflow add": {
+    values: [SESSION_FLAG, "after", "description"],
+    flags: ["gate"],
+    positionals: { min: 1, max: 1 },
+  },
+  "workflow remove": {
+    values: [SESSION_FLAG],
+    positionals: { min: 1, max: 1 },
+  },
+  "workflow end": {
+    values: [SESSION_FLAG, "note"],
+    positionals: { min: 0, max: 0 },
+  },
+  "workflow save": {
+    values: [SESSION_FLAG, "when", "description"],
+    positionals: { min: 1, max: 1 },
+  },
+  "workflow approve": {
+    values: [SESSION_FLAG, "note"],
+    positionals: { min: 0, max: 0 },
+  },
+  "workflow status": {
+    values: [SESSION_FLAG],
+    positionals: { min: 0, max: 0 },
+  },
   // The pod's BROWSER. Never run as a command: see `CloudCallOptions.openUrl`.
   "open-url": { positionals: { min: 1, max: 1 } },
 };

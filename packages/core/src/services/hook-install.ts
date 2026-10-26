@@ -51,6 +51,27 @@ export interface ClaudeHookEntry {
 /** Events the inbox waiter starts on: the session is at its prompt. */
 const INBOX_EVENTS = new Set(["Stop", "SessionStart"]);
 
+/**
+ * Said to the agent with every prompt while workflows are on. Step 8 of the
+ * instruction files says the same once, at the start. In a test of 16
+ * follow-up requests, 2 did work outside a workflow with step 8 alone and
+ * none with this reminder.
+ */
+export const WORKFLOW_REMINDER =
+  "Workflows are on: before the first command of this request, start a workflow with the daedalus-workflows skill, or continue the run this session already has.";
+
+/**
+ * The reminder as a hook. Unlike the activity hooks it runs in the turn,
+ * since its output is what the agent reads; `echo` keeps that to a few
+ * milliseconds where starting the CLI would take a few hundred.
+ */
+const workflowReminderHook: ClaudeHookEntry["hooks"][number] = {
+  type: "command",
+  command: "/bin/echo",
+  args: [WORKFLOW_REMINDER],
+  timeout: 5,
+};
+
 export interface ClaudeSettings {
   statusLine?: unknown;
   hooks?: Record<string, ClaudeHookEntry[]>;
@@ -90,6 +111,8 @@ export function daedalusClaudeSettings(
     acceptPeerMessages?: boolean;
     /** The session's inbox waiter; see `session-inbox.ts`. */
     inboxHook?: ClaudeHookEntry["hooks"][number];
+    /** Workflows are on: remind the agent with every prompt. */
+    workflowReminder?: boolean;
   } = {},
 ): ClaudeSettings {
   // The session rides on the command, not only in the environment: Claude
@@ -110,6 +133,9 @@ export function daedalusClaudeSettings(
           },
           ...(options.inboxHook && INBOX_EVENTS.has(event)
             ? [options.inboxHook]
+            : []),
+          ...(options.workflowReminder && event === "UserPromptSubmit"
+            ? [workflowReminderHook]
             : []),
         ],
       },

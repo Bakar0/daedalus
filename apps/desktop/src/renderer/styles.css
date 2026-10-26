@@ -9243,3 +9243,479 @@ dd {
 .workspace-list-empty button {
   margin-top: 6px;
 }
+
+/* The focused session's workflow, under the side panel's tabs. */
+.workflow-pane {
+  border-top: 1px solid var(--line);
+  box-sizing: border-box;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+.workflow-pane-edge {
+  cursor: row-resize;
+  height: 7px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: -4px;
+  z-index: 2;
+}
+.workflow-pane-edge:hover {
+  background: var(--accent-wash);
+}
+.workflow-pane-heading {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  color: var(--muted);
+  display: flex;
+  flex: none;
+  gap: 6px;
+  height: 30px;
+  min-width: 0;
+  padding: 0 12px !important;
+  text-align: left;
+}
+.workflow-pane-heading:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.workflow-pane-title {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 6px;
+}
+.workflow-pane-empty {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+  margin: 0;
+  padding: 2px 12px 10px;
+  text-align: center;
+}
+.workflow-icon {
+  height: 14px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.3;
+  width: 14px;
+}
+.workflow-pane-name {
+  color: var(--secondary);
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-pane-current {
+  font-size: 11px;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 12px 12px;
+}
+.workflow-tag {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--secondary);
+  flex: none;
+  font-size: 10px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.workflow-steps {
+  display: grid;
+  gap: 1px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.workflow-step {
+  align-items: center;
+  border-radius: 6px;
+  column-gap: 8px;
+  display: grid;
+  font-size: 12px;
+  grid-template-columns: 16px minmax(0, 1fr) auto auto;
+  padding: 4px 6px;
+}
+.workflow-step.state-active {
+  background: var(--accent-wash);
+}
+.workflow-step.state-waiting {
+  background: rgb(255 130 130 / 10%);
+}
+.workflow-step.state-pending .workflow-step-name,
+.workflow-step.state-skipped .workflow-step-name {
+  color: var(--muted);
+}
+.workflow-step.state-skipped .workflow-step-name {
+  text-decoration: line-through;
+}
+.workflow-step-name {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  font-weight: 500;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-step-when {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Cut to two lines, one for a finished step; clicking the row opens it. */
+.workflow-step-note,
+.workflow-footnote {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  display: -webkit-box;
+  overflow: hidden;
+}
+.has-note {
+  cursor: pointer;
+}
+.workflow-step.open .workflow-step-note,
+.workflow-footnote.open {
+  -webkit-line-clamp: unset;
+  display: block;
+}
+.workflow-step-note {
+  color: var(--muted);
+  font-size: 11px;
+  grid-column: 2 / -1;
+  line-height: 1.35;
+  margin-top: 1px;
+  min-width: 0;
+}
+.workflow-mark {
+  align-items: center;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  box-sizing: border-box;
+  display: inline-flex;
+  font-size: 9px;
+  font-weight: 700;
+  height: 14px;
+  justify-content: center;
+  line-height: 1;
+  width: 14px;
+}
+.workflow-mark.state-done {
+  background: var(--success);
+  border-color: var(--success);
+  color: var(--panel);
+}
+.workflow-mark.state-skipped {
+  color: var(--muted);
+}
+.workflow-mark.state-waiting {
+  border-color: #ff8282;
+  color: #ff8282;
+}
+.workflow-mark.spinning {
+  animation: repository-progress-spin 800ms linear infinite;
+  border-color: var(--line-strong);
+  border-top-color: var(--accent);
+}
+.workflow-gate {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  padding: 0 4px;
+  text-transform: uppercase;
+}
+.workflow-approve {
+  font-size: 11px;
+  padding: 1px 8px;
+}
+/* A finished step keeps one line of what came out; the rest is on hover. */
+.workflow-step.state-done:not(.open) .workflow-step-note,
+.workflow-step.state-skipped:not(.open) .workflow-step-note {
+  -webkit-line-clamp: 1;
+}
+.workflow-footnote {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  margin: 8px 6px 0;
+}
+/* The run's own row under the header: which workflow, its tags, its task. */
+.workflow-pane-run {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 12px 6px;
+}
+.workflow-pane-task {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflow-history {
+  margin: 8px 0 0;
+}
+.workflow-history > summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 6px;
+}
+.workflow-pane-header {
+  align-items: center;
+  display: flex;
+  flex: none;
+  min-width: 0;
+}
+.workflow-pane-header .workflow-pane-heading {
+  flex: 1;
+}
+.workflow-pane-link {
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--secondary);
+  font-size: inherit;
+  font-style: normal;
+  padding: 0 !important;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.workflow-pane-link:hover {
+  color: var(--text);
+}
+.workflow-pane-open {
+  flex: none;
+  margin-right: 6px;
+  padding: 3px 7px;
+}
+
+/* The workflows editor, a center tab: files on the left, one file's text on the right. */
+.workflows-panel {
+  overflow: hidden;
+}
+.workflows-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.workflows-tab > .workflows-editor {
+  flex: 1;
+  height: auto;
+}
+/* What the tab is for, in one line over the files, with a link to the docs. */
+.workflows-intro {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  flex: none;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 8px 14px;
+}
+.workflows-intro .workflow-pane-link {
+  color: inherit;
+  text-decoration-color: var(--line);
+}
+.workflows-intro .workflow-pane-link:hover {
+  color: var(--secondary);
+}
+.workflows-editor {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+.workflows-list {
+  border-right: 1px solid var(--line);
+  overflow: auto;
+  padding: 10px 8px;
+}
+.workflows-list section + section {
+  margin-top: 14px;
+}
+.workflows-list header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px 4px;
+}
+.workflows-list h3 {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.workflows-list header button {
+  padding: 2px 6px;
+}
+.workflows-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.workflows-file {
+  background: transparent !important;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  font-weight: 400;
+  gap: 2px;
+  padding: 6px 8px;
+  text-align: left;
+  width: 100%;
+}
+.workflows-file:hover {
+  background: var(--raised) !important;
+}
+.workflows-file.selected {
+  background: var(--accent-wash) !important;
+}
+.workflows-file small {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workflows-file-name {
+  align-items: center;
+  display: flex;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 6px;
+}
+.workflows-problem-mark {
+  background: var(--danger);
+  border-radius: 50%;
+  color: white;
+  font-size: 10px;
+  height: 14px;
+  line-height: 14px;
+  text-align: center;
+  width: 14px;
+}
+.workflows-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  min-width: 0;
+  padding: 14px 18px;
+}
+.workflows-detail-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+.workflows-detail-heading h2 {
+  color: var(--text);
+  font-size: 15px;
+  margin: 0 0 2px;
+}
+.workflows-detail-heading small {
+  color: var(--muted);
+  font-size: 11px;
+  word-break: break-all;
+}
+.workflows-detail-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+.workflows-chain {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 4px;
+}
+.workflows-chip {
+  background: var(--raised) !important;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--secondary);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 9px;
+}
+.workflows-chip:hover {
+  color: var(--accent);
+}
+.workflows-refusal {
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 12px;
+  margin: 0;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+}
+.workflows-text {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: var(--text);
+  flex: 1;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 0;
+  padding: 10px 12px;
+  resize: none;
+  width: 100%;
+}
+.workflows-text[readonly] {
+  color: var(--secondary);
+}
+.workflows-none {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+  padding: 4px 8px;
+}
+.workflows-text:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.workflows-hint {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+}

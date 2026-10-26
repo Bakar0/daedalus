@@ -32,6 +32,8 @@ const INVOCATION_LABEL: Record<string, string> = {
   "model-only": "only the agent",
 };
 
+/** The built-in skill that is workflows; Settings › Sessions switches it. */
+export const WORKFLOWS_SKILL = "daedalus-workflows";
 /** "selection" is the one that is not a file Daedalus put somewhere. */
 const ARTIFACT_LABEL: Record<string, string> = {
   skill: "skill",
@@ -262,25 +264,28 @@ export function SkillsPanel({
         Installed under your home directory, so they apply to every session on
         this machine, not only the ones Daedalus starts.
       </p>
-      {(listing?.managed ?? []).map((skill) => (
-        <ManagedRow
-          key={skill.id}
-          disabled={disabled}
-          skill={skill}
-          onRemove={() =>
-            void run(client.request.skillRemove({ name: skill.id }))
-          }
-          onSet={(enabled, mode) =>
-            void run(
-              client.request.skillSet({
-                id: skill.id,
-                enabled,
-                ...(mode ? { mode } : {}),
-              }),
-            )
-          }
-        />
-      ))}
+      {(listing?.managed ?? [])
+        // Workflows are switched under Settings › Sessions, not here.
+        .filter((skill) => skill.id !== WORKFLOWS_SKILL)
+        .map((skill) => (
+          <ManagedRow
+            key={skill.id}
+            disabled={disabled}
+            skill={skill}
+            onRemove={() =>
+              void run(client.request.skillRemove({ name: skill.id }))
+            }
+            onSet={(enabled, mode) =>
+              void run(
+                client.request.skillSet({
+                  id: skill.id,
+                  enabled,
+                  ...(mode ? { mode } : {}),
+                }),
+              )
+            }
+          />
+        ))}
 
       <h3>Found on this machine</h3>
       <p className="skills-note">

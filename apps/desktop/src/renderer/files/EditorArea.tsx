@@ -23,6 +23,7 @@ import type { DesktopClient } from "../client-types";
 import { type AppTheme, appearanceOf } from "../theme";
 import { askConfirm } from "../dialogs";
 import { MarkdownPreview } from "../markdown-preview";
+import { INSTRUCTIONS_ICON_PATH, WORKFLOW_ICON_PATH } from "../WorkflowPane";
 import {
   closeDocument,
   documentsIn,
@@ -80,10 +81,21 @@ export interface EditorAreaHandle {
   openTerminal(terminalId: string, name: string): void;
   /** Closes a terminal's tab, once the terminal itself is gone. */
   closeTerminal(terminalId: string): void;
+  /** Shows the Workflows tab, adding it first if it is not open. */
+  openWorkflows(): void;
+  /** Shows the Custom instructions tab, adding it first if it is not open. */
+  openInstructions(): void;
 }
 
 /** What a center tab holds, for the app to follow which one is in front. */
-export type CenterPanelKind = "session" | "task" | "file" | "web" | "terminal";
+export type CenterPanelKind =
+  | "session"
+  | "task"
+  | "file"
+  | "web"
+  | "terminal"
+  | "workflows"
+  | "instructions";
 
 export interface EditorAreaProps {
   client: DesktopClient;
@@ -105,6 +117,10 @@ export interface EditorAreaProps {
   sessionIcon?: React.ReactNode;
   /** A terminal tab's content, drawn by the app. */
   renderTerminal?(terminalId: string): React.ReactNode;
+  /** The Workflows tab's content, drawn by the app. */
+  renderWorkflows?(): React.ReactNode;
+  /** The Custom instructions tab's content, drawn by the app. */
+  renderInstructions?(): React.ReactNode;
   /** The + in the tab strip: a new terminal in a tab. */
   onNewTerminal?(): void;
   /** A terminal tab was closed by the user, so its shell should end. */
@@ -123,7 +139,7 @@ interface FilePanelParams {
   /** Empty on the session, task and web tabs. */
   path: string;
   /** Set on the session, task, web and terminal tabs. */
-  kind?: "session" | "task" | "web" | "terminal";
+  kind?: "session" | "task" | "web" | "terminal" | "workflows" | "instructions";
   /** The page a web tab shows. */
   url?: string;
   /** The integrated terminal a terminal tab shows, and its name. */
@@ -168,6 +184,8 @@ interface EditorContextValue {
   renderEmpty?(): React.ReactNode;
   sessionIcon?: React.ReactNode;
   renderTerminal?(terminalId: string): React.ReactNode;
+  renderWorkflows?(): React.ReactNode;
+  renderInstructions?(): React.ReactNode;
   onNewTerminal?(): void;
   onOpenExternal?(url: string): void;
   load(path: string): Promise<OpenDocument | undefined>;
@@ -258,6 +276,8 @@ export default function EditorArea({
   renderEmpty,
   sessionIcon,
   renderTerminal,
+  renderWorkflows,
+  renderInstructions,
   onNewTerminal,
   onTerminalTabClosed,
   onOpenExternal,
@@ -596,6 +616,18 @@ export default function EditorArea({
             name,
           ),
         ),
+      openWorkflows: () =>
+        whenReady(() =>
+          placeApp("workflows", { path: "", kind: "workflows" }, "Workflows"),
+        ),
+      openInstructions: () =>
+        whenReady(() =>
+          placeApp(
+            "instructions",
+            { path: "", kind: "instructions" },
+            "Custom instructions",
+          ),
+        ),
       closeTerminal: (terminalId) =>
         whenReady(() =>
           apiRef.current?.getPanel(`terminal:${terminalId}`)?.api.close(),
@@ -761,6 +793,8 @@ export default function EditorArea({
     renderEmpty,
     sessionIcon,
     renderTerminal,
+    renderWorkflows,
+    renderInstructions,
     onNewTerminal,
     onOpenExternal,
     load,
@@ -790,6 +824,8 @@ export default function EditorArea({
             task: TaskPanel,
             web: WebPanel,
             terminal: TerminalPanel,
+            workflows: WorkflowsPanel,
+            instructions: InstructionsPanel,
           }}
           dndStrategy="pointer"
           getTabContextMenuItems={({ panel, group, api }) =>
@@ -1001,7 +1037,11 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
         ? (context.taskTitle ?? "Task")
         : params.kind === "terminal"
           ? (params.title ?? "Terminal")
-          : (params.url ?? "Web");
+          : params.kind === "workflows"
+            ? "Workflows"
+            : params.kind === "instructions"
+              ? "Custom instructions"
+              : (params.url ?? "Web");
   return (
     <div
       className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
@@ -1039,7 +1079,7 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
 function AppTabIcon({
   kind,
 }: {
-  kind: "session" | "task" | "web" | "terminal";
+  kind: "session" | "task" | "web" | "terminal" | "workflows" | "instructions";
 }) {
   return (
     <svg
@@ -1052,6 +1092,10 @@ function AppTabIcon({
         <path d="M2.5 3.5h11v9h-11zM4.5 6.5l2 1.5-2 1.5M8 10h3" />
       ) : kind === "task" ? (
         <path d="M3 3.5l1 1 2-2M3 8l1 1 2-2M3 12.5l1 1 2-2M8 3.5h5M8 8h5M8 12.5h5" />
+      ) : kind === "workflows" ? (
+        <path d={WORKFLOW_ICON_PATH} />
+      ) : kind === "instructions" ? (
+        <path d={INSTRUCTIONS_ICON_PATH} />
       ) : (
         <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM1.5 8h13M8 1.5c2 2 2 11 0 13M8 1.5c-2 2-2 11 0 13" />
       )}
@@ -1071,6 +1115,24 @@ function TerminalPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
   return (
     <div className="app-panel terminal-panel">
       {params.terminalId && context.renderTerminal?.(params.terminalId)}
+    </div>
+  );
+}
+
+function InstructionsPanel() {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel workflows-panel">
+      {context.renderInstructions?.()}
+    </div>
+  );
+}
+
+function WorkflowsPanel() {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel workflows-panel">
+      {context.renderWorkflows?.()}
     </div>
   );
 }

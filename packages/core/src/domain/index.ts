@@ -581,6 +581,7 @@ export interface PresenceState {
 }
 
 export * from "./abilities";
+export * from "./workflows";
 
 /**
  * One level of the automatic rebirth setting: a context percent from 10 to

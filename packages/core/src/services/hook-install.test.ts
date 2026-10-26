@@ -10,6 +10,7 @@ import {
   mergeClaudeSettings,
   mergeCodexConfigToml,
   renderCodexHookBlock,
+  WORKFLOW_REMINDER,
 } from "./hook-install";
 
 describe("codexSupportsHooks", () => {
@@ -259,6 +260,25 @@ describe("Claude settings merging", () => {
     expect(named.statusLine).toMatchObject({
       command: "/home/.daedalus/bin/daedal agent telemetry --session s-1",
     });
+  });
+
+  test("with workflows on, each prompt carries the reminder, in the turn", () => {
+    const on = daedalusClaudeSettings("/home/.daedalus/bin/daedal", "s-1", {
+      workflowReminder: true,
+    });
+    const prompt = on.hooks!.UserPromptSubmit![0]!.hooks;
+    expect(prompt[1]).toMatchObject({
+      command: "/bin/echo",
+      args: [WORKFLOW_REMINDER],
+    });
+    expect(prompt[1]!.async).toBeUndefined();
+    expect(on.hooks!.Stop![0]!.hooks).toHaveLength(1);
+    // Off, there is no reminder, and a relaunch drops one left from before.
+    expect(ours.hooks!.UserPromptSubmit![0]!.hooks).toHaveLength(1);
+    const relaunched = mergeClaudeSettings(mergeClaudeSettings({}, on), ours);
+    expect(relaunched.hooks!.UserPromptSubmit).toEqual(
+      ours.hooks!.UserPromptSubmit,
+    );
   });
 
   test("a relaunch strips the previous Daedalus entries instead of stacking them", () => {

@@ -18,7 +18,7 @@ import {
 } from "../config";
 import { DaedalusError } from "../errors";
 import { hasPersistedCodexSession } from "./codex-sessions";
-import { claudeSettingsPath, SkillService } from "./skills";
+import { claudeSettingsPath, SkillService, workflowsEnabled } from "./skills";
 import {
   codexSupportsHooks,
   daedalusClaudeSettings,
@@ -186,6 +186,7 @@ export async function claudeDaedalusSettingsArgs(
     ...daedalusClaudeSettings(daedalExecutable(config), sessionId, {
       ...options,
       ...(inbox ? { inboxHook: inbox } : {}),
+      workflowReminder: workflowsEnabled(config),
     }),
     ...new SkillService(config).claudeSkillSettings(),
   };

@@ -27,7 +27,10 @@ import { DaedalusError } from "../errors";
 import { isValidModelName } from "./providers";
 import type { SqliteRepositories } from "../repositories";
 import { applyManualOrder } from "./ordering";
-import { ensureWorkspaceContentFiles } from "./workspace-content";
+import {
+  ensureWorkspaceContentFiles,
+  type InstructionFileOptions,
+} from "./workspace-content";
 
 const MARKER_DIRECTORY = ".daedalus";
 const MARKER_FILE = "workspace.json";
@@ -99,7 +102,11 @@ export class WorkspaceService {
     private readonly hasLiveAgents: (workspaceId: string) => Promise<boolean>,
     private readonly archiveAgents: (workspaceId: string) => Promise<void>,
     private readonly daedalusHome: string,
-    private readonly instructionFilesEnabled: () => boolean = () => true,
+    /** Which generated instruction files new and opened workspaces get. */
+    private readonly instructionFiles: () => InstructionFileOptions = () => ({
+      enabled: true,
+      workflows: false,
+    }),
     private readonly discardCheckouts: (
       workspaceId: string,
     ) => Promise<void> = async () => {},
@@ -188,7 +195,7 @@ export class WorkspaceService {
       await ensureWorkspaceContentFiles(
         path,
         this.daedalusHome,
-        this.instructionFilesEnabled(),
+        this.instructionFiles(),
       );
       this.repositories.createWorkspace(workspace);
       return workspace;
@@ -259,7 +266,7 @@ export class WorkspaceService {
       await ensureWorkspaceContentFiles(
         workspace.path,
         this.daedalusHome,
-        this.instructionFilesEnabled(),
+        this.instructionFiles(),
       );
     return workspace;
   }

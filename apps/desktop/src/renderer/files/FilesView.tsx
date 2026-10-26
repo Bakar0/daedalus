@@ -201,6 +201,8 @@ export interface FilesEditorProps {
   renderEmpty?(): React.ReactNode;
   sessionIcon?: React.ReactNode;
   renderTerminal?(terminalId: string): React.ReactNode;
+  renderWorkflows?(): React.ReactNode;
+  renderInstructions?(): React.ReactNode;
   onNewTerminal?(): void;
   onTerminalTabClosed?(terminalId: string): void;
   onOpenExternal?(url: string): void;

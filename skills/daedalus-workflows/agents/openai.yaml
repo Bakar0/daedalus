@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workflows"
+  short_description: "Run work in your workflows and report each step"
+  default_prompt: "Use $daedalus-workflows to pick a workflow for this work and report each step."

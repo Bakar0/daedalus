@@ -29,7 +29,7 @@ import { CloudPanel } from "./CloudPanel";
 import type { DesktopClient } from "./client-types";
 import { AccountPanel, showsPro, useRemoteState } from "./ProPlan";
 import { RemotePanel } from "./RemotePanel";
-import { SkillsPanel } from "./SkillsPanel";
+import { SkillsPanel, WORKFLOWS_SKILL } from "./SkillsPanel";
 import { updateMessage } from "./UpdateBanner";
 import { APP_THEMES, type AppTheme } from "./theme";
 
@@ -75,6 +75,47 @@ export function SettingRow({
         <small>{description}</small>
       </span>
     </label>
+  );
+}
+
+/**
+ * Workflows on or off. They are the daedalus-workflows skill underneath, but
+ * the user thinks of them as how sessions work, so the switch is here.
+ */
+function WorkflowsSetting({
+  busy,
+  client,
+  perform,
+}: {
+  busy: boolean;
+  client: DesktopClient;
+  perform: <T>(request: Promise<RpcResult<T>>) => Promise<T | undefined>;
+}) {
+  const [enabled, setEnabled] = React.useState<boolean>();
+  React.useEffect(() => {
+    void client.request.skillList({}).then((response) => {
+      if (response.ok)
+        setEnabled(
+          response.data.managed.some(
+            (skill) => skill.id === WORKFLOWS_SKILL && skill.enabled,
+          ),
+        );
+    });
+  }, [client]);
+  return (
+    <SettingRow
+      checked={enabled ?? false}
+      disabled={busy || enabled === undefined}
+      description="Agents pick one of your workflows for each piece of work and report its steps in the session's Workflow pane, waiting at steps you gate. Off, they work as before and the pane says so."
+      onChange={(next) =>
+        void perform(
+          client.request.skillSet({ id: WORKFLOWS_SKILL, enabled: next }),
+        ).then((result) => {
+          if (result !== undefined) setEnabled(next);
+        })
+      }
+      title="Run work in workflows"
+    />
   );
 }
 
@@ -323,6 +364,8 @@ export function SettingsModal({
                 of the context window
               </div>
             )}
+            <h3>Workflows</h3>
+            <WorkflowsSetting busy={busy} client={client} perform={perform} />
           </section>
         ) : undefined}
 
