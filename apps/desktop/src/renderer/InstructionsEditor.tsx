@@ -7,13 +7,20 @@ import { useEffect, useRef, useState } from "react";
 import type { InstructionFilesDto } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import { askConfirm } from "./dialogs";
+import {
+  alwaysRules,
+  InstructionsIndexView,
+  plural,
+  topicFacts,
+  TopicView,
+} from "./FileViews";
 import { INSTRUCTIONS_CHANGED } from "./InstructionsPane";
 import {
   confirmDiscard,
   DOCS_URL,
   FileDetail,
+  FileRow,
   Group,
-  PlainRow,
   TabIntro,
 } from "./FileEditorParts";
 
@@ -53,6 +60,8 @@ export function InstructionsEditor({
   const [instructions, setInstructions] = useState<Instructions>();
   const [selection, setSelection] = useState<Selection>({ kind: "index" });
   const [draft, setDraft] = useState("");
+  // A file opens on its read view; Edit shows its markdown.
+  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refusal, setRefusal] = useState<string>();
 
@@ -99,10 +108,20 @@ export function InstructionsEditor({
           ?.path ?? "Saved under the name its heading gives");
 
   const select = async (next: Selection) => {
-    if (draft !== saved && !(await confirmDiscard())) return;
+    if (editing && draft !== saved && !(await confirmDiscard())) return;
     setSelection(next);
     setDraft(textOf(instructions, next));
     setRefusal(undefined);
+    setEditing(next.kind === "topic" && next.name === null);
+  };
+
+  const cancel = () => {
+    setRefusal(undefined);
+    setEditing(false);
+    // A new topic that was never saved has nothing to show.
+    const next: Selection = isNew ? { kind: "index" } : selection;
+    setSelection(next);
+    setDraft(textOf(instructions, next));
   };
 
   const save = async () => {
@@ -122,6 +141,7 @@ export function InstructionsEditor({
     }
     const next = response.data;
     setInstructions(next);
+    setEditing(false);
     window.dispatchEvent(new Event(INSTRUCTIONS_CHANGED));
     // A topic is named after its heading, which the save may have changed,
     // so find it again by what was written.
@@ -156,6 +176,7 @@ export function InstructionsEditor({
     setSelection({ kind: "index" });
     setDraft(response.data.index.text);
     setRefusal(undefined);
+    setEditing(false);
   };
 
   const isTopic = (name: string) =>
@@ -179,20 +200,23 @@ export function InstructionsEditor({
             onNew={() => void select({ kind: "topic", name: null })}
             title="Custom instructions"
           >
-            <PlainRow
-              label="Index"
-              note="Always rules and the topic list"
+            <FileRow
+              meta={plural(alwaysRules(instructions.index.text).length, "rule")}
+              name="Always"
               onSelect={() => void select({ kind: "index" })}
               selected={selection.kind === "index"}
+              summary="Every request, and the list of topics"
             />
-            {instructions.topics.map((topic) => (
-              <PlainRow
+            {topicFacts(instructions).map((topic) => (
+              <FileRow
                 key={topic.name}
-                label={topic.name}
+                meta={plural(topic.rules, "rule")}
+                name={topic.heading}
                 onSelect={() =>
                   void select({ kind: "topic", name: topic.name })
                 }
                 selected={isTopic(topic.name)}
+                summary={topic.covers ?? topic.name}
               />
             ))}
           </Group>
@@ -201,25 +225,45 @@ export function InstructionsEditor({
           alert={refusal}
           dirty={dirty}
           draft={draft}
+          editing={editing}
           hint={HINTS[selection.kind]}
           label="Instruction file"
+          onCancel={cancel}
           onDraft={setDraft}
-          onRevert={() => {
-            setDraft(saved);
-            setRefusal(undefined);
-          }}
+          onEdit={() => setEditing(true)}
           onSave={() => void save()}
           path={path}
-          saved={saved}
           saving={saving}
           title={
             selection.kind === "index"
               ? "Custom instructions"
-              : (selection.name ?? "New topic")
+              : selection.name === null
+                ? "New topic"
+                : (topicFacts(instructions).find(
+                    (topic) => topic.name === selection.name,
+                  )?.heading ?? selection.name)
           }
           {...(selection.kind === "topic" && selection.name
             ? { onDelete: () => void remove() }
             : {})}
+          view={
+            selection.kind === "index" ? (
+              <InstructionsIndexView
+                instructions={instructions}
+                onTopic={(name) => void select({ kind: "topic", name })}
+              />
+            ) : selection.name === null ? undefined : (
+              <TopicView
+                text={saved}
+                {...(() => {
+                  const covers = topicFacts(instructions).find(
+                    (topic) => topic.name === selection.name,
+                  )?.covers;
+                  return covers ? { covers } : {};
+                })()}
+              />
+            )
+          }
         />
       </div>
     </div>

@@ -1368,6 +1368,11 @@ export interface WorkflowFileDto {
   path: string;
   text: string;
   description: string;
+  /** For a workflow: the work it fits, and when a circular one stops. */
+  when?: string;
+  until?: string;
+  /** What follows the frontmatter: a step's instructions, a workflow's notes. */
+  body?: string;
   /** For a workflow: its steps; for a step: whether it is gated. */
   steps?: string[];
   /** A workflow with `steps: dynamic`: each run names its own steps. */

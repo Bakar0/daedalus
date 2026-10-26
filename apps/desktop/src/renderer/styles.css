@@ -9566,7 +9566,7 @@ dd {
 }
 .workflows-editor {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 290px) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
 }
@@ -9603,15 +9603,29 @@ dd {
 .workflows-file {
   background: transparent !important;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   color: var(--text);
   display: flex;
   flex-direction: column;
   font-weight: 400;
-  gap: 2px;
-  padding: 6px 8px;
+  gap: 3px;
+  padding: 8px 10px;
   text-align: left;
   width: 100%;
+}
+/* A row's name and its counts, on one line. */
+.workflows-file-line {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 0;
+}
+.workflows-file-meta {
+  color: var(--muted);
+  flex: none;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
 }
 .workflows-file:hover {
   background: var(--raised) !important;
@@ -9622,6 +9636,7 @@ dd {
 .workflows-file small {
   color: var(--muted);
   font-size: 11px;
+  font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -9733,4 +9748,195 @@ dd {
   color: var(--muted);
   font-size: 11px;
   margin: 0;
+}
+
+/* A file read as the agent takes it in, before its markdown is opened. */
+.file-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 24px 0;
+}
+.file-view > * {
+  max-width: 740px;
+}
+.file-view-lede {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+  margin: 2px 0 14px;
+}
+.file-view-fields {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.file-view-field {
+  color: var(--secondary);
+  display: grid;
+  font-size: 12.5px;
+  gap: 12px;
+  grid-template-columns: 64px minmax(0, 1fr);
+  line-height: 1.5;
+}
+.file-view-label,
+.file-view-heading {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.file-view-label {
+  padding-top: 3px;
+}
+.file-view-heading {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  margin: 22px 0 10px;
+}
+.file-view-heading small {
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.file-view-notes {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.file-view-empty {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  margin: 0;
+}
+.file-view-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.file-view-chips .workflows-chip {
+  padding: 1px 10px !important;
+}
+/* A workflow's steps: numbered, joined by a line, each a card to open. */
+.step-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.step-timeline li {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 26px minmax(0, 1fr);
+  padding-bottom: 10px;
+  position: relative;
+}
+.step-timeline li:not(:last-child)::before {
+  background: var(--line);
+  bottom: 0;
+  content: "";
+  left: 12px;
+  position: absolute;
+  top: 28px;
+  width: 1.5px;
+}
+.step-timeline-number {
+  align-items: center;
+  background: var(--panel);
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  box-sizing: border-box;
+  color: var(--secondary);
+  display: flex;
+  font-size: 11px;
+  font-weight: 650;
+  height: 26px;
+  justify-content: center;
+  margin-top: 6px;
+  width: 26px;
+}
+.step-timeline-card,
+.topic-card {
+  background: var(--raised) !important;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  font-weight: 400;
+  gap: 3px;
+  padding: 9px 12px;
+  text-align: left;
+  width: 100%;
+}
+.step-timeline-card:hover,
+.topic-card:hover {
+  border-color: var(--accent);
+}
+.step-timeline-name,
+.topic-card-name {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 6px;
+}
+.step-timeline-description,
+.topic-card-covers {
+  color: var(--secondary);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+.step-timeline-preview {
+  -webkit-box-orient: vertical;
+  font-weight: 400;
+  -webkit-line-clamp: 2;
+  color: var(--muted);
+  display: -webkit-box;
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow: hidden;
+  white-space: pre-line;
+}
+.step-timeline-missing {
+  color: var(--danger);
+  font-size: 12px;
+}
+/* Custom instructions: each rule a card, each topic a tile. */
+.rule-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.rule-list li {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 9px 12px;
+}
+.rule-list .markdown-body {
+  color: var(--text);
+}
+.topic-cards {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.topic-card {
+  padding: 12px 14px;
+}
+.topic-card-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  margin-top: 4px;
 }
