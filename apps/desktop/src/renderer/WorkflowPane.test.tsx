@@ -77,7 +77,8 @@ describe("workflow pane", () => {
       /Workflow<\/span>.*workflow-pane-run.*feature.*#12 Version prints the name/s,
     );
     expect(open).toContain("Workflows, steps and examples");
-    expect(open).toContain("Resize workflow pane");
+    // The dock around the pane resizes it, not the pane itself.
+    expect(open).not.toContain("Resize");
     const empty = renderToStaticMarkup(
       <WorkflowPane
         busy={false}
@@ -88,7 +89,6 @@ describe("workflow pane", () => {
       />,
     );
     expect(empty).toContain("No workflow in this session");
-    expect(empty).not.toContain("Resize workflow pane");
   });
 
   test("a circular run shows its iteration and earlier rounds", () => {

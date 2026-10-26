@@ -9256,7 +9256,18 @@ dd {
   position: relative;
   width: 100%;
 }
-.workflow-pane-edge {
+/* The bottom of the side panel: the Workflow and Custom instructions panes.
+   margin-top: auto keeps it at the bottom when the tab above is short. */
+.side-panel-dock {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  margin-top: auto;
+  max-height: 75%;
+  min-height: 0;
+  position: relative;
+}
+.side-panel-dock-edge {
   cursor: row-resize;
   height: 7px;
   left: 0;
@@ -9265,8 +9276,12 @@ dd {
   top: -4px;
   z-index: 2;
 }
-.workflow-pane-edge:hover {
+.side-panel-dock-edge:hover {
   background: var(--accent-wash);
+}
+/* The workflow takes the room the dock has; its steps scroll inside. */
+.side-panel-dock > .workflow-pane:first-of-type {
+  flex: 1 1 auto;
 }
 .workflow-pane-heading {
   align-items: center;

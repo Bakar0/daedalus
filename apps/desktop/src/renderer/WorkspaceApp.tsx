@@ -85,6 +85,7 @@ import { laneFor } from "./board-lanes";
 import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { WorkflowPane } from "./WorkflowPane";
+import { SidePanelDock } from "./SidePanelDock";
 import { WORKFLOWS_SKILL } from "./SkillsPanel";
 import { WorkflowsEditor } from "./WorkflowsEditor";
 import { InstructionsEditor } from "./InstructionsEditor";
@@ -7449,37 +7450,38 @@ export function WorkspaceApp({
               ) : (
                 <div className="side-panel-board">{boardView}</div>
               )}
-              {/* The shown session's workflow, under whichever tab is open. */}
+              {/* The shown session's workflow and the custom instructions,
+                  docked at the bottom under whichever tab is open. */}
               {!workspacePanelCollapsed && activeSession?.kind === "agent" && (
-                <WorkflowPane
-                  busy={busy}
-                  enabled={workflowsOn}
-                  key={activeSession.id}
-                  onApprove={approveWorkflowStep}
-                  onOpenSettings={() => {
-                    setSettingsSection("sessions");
-                    setModal("settings");
-                  }}
-                  onOpenEditor={() =>
-                    files.withEditor((handle) => handle.openWorkflows())
-                  }
-                  run={workflowRunsBySession.get(activeSession.id)}
-                  task={
-                    activeSession.taskId
-                      ? snapshot?.tasks.find(
-                          (task) => task.id === activeSession.taskId,
-                        )
-                      : undefined
-                  }
-                />
-              )}
-              {!workspacePanelCollapsed && activeSession?.kind === "agent" && (
-                <InstructionsPane
-                  onOpen={() =>
-                    files.withEditor((handle) => handle.openInstructions())
-                  }
-                  summary={instructionsSummary}
-                />
+                <SidePanelDock>
+                  <WorkflowPane
+                    busy={busy}
+                    enabled={workflowsOn}
+                    key={activeSession.id}
+                    onApprove={approveWorkflowStep}
+                    onOpenSettings={() => {
+                      setSettingsSection("sessions");
+                      setModal("settings");
+                    }}
+                    onOpenEditor={() =>
+                      files.withEditor((handle) => handle.openWorkflows())
+                    }
+                    run={workflowRunsBySession.get(activeSession.id)}
+                    task={
+                      activeSession.taskId
+                        ? snapshot?.tasks.find(
+                            (task) => task.id === activeSession.taskId,
+                          )
+                        : undefined
+                    }
+                  />
+                  <InstructionsPane
+                    onOpen={() =>
+                      files.withEditor((handle) => handle.openInstructions())
+                    }
+                    summary={instructionsSummary}
+                  />
+                </SidePanelDock>
               )}
             </aside>
           )}

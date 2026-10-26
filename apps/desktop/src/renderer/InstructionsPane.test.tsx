@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import { alwaysRuleCount, InstructionsPane } from "./InstructionsPane";
 import { TabIntro } from "./FileEditorParts";
+import { SidePanelDock } from "./SidePanelDock";
 
 describe("InstructionsPane", () => {
   test("names what there is under its own Open", () => {
@@ -50,5 +51,21 @@ describe("InstructionsPane", () => {
     );
     expect(html).toContain("Rules every session follows.");
     expect(html).toContain("Read more and examples");
+  });
+});
+
+describe("SidePanelDock", () => {
+  test("holds both panes under one resize edge, fitted until dragged", () => {
+    const html = renderToStaticMarkup(
+      <SidePanelDock>
+        <InstructionsPane onOpen={() => {}} />
+      </SidePanelDock>,
+    );
+    expect(html).toContain('class="side-panel-dock"');
+    expect(html).toContain(
+      'aria-label="Resize workflow and custom instructions"',
+    );
+    // No height until the user drags: the dock fits its panes.
+    expect(html).not.toContain("height:");
   });
 });

@@ -2,9 +2,9 @@
  * The focused session's workflow, under the side panel's tabs: one row per
  * step, a check when it is done and a spinner on the step the agent is in.
  * The agent reports the steps; the user only approves a gated one, and
- * resizes or folds the pane.
+ * folds the pane. The dock it sits in (SidePanelDock) resizes it.
  */
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent } from "react";
 import type { WorkflowRunDto, WorkflowStepStateDto } from "@daedalus/protocol";
 import { timelineWhen } from "./TaskTimeline";
 
@@ -38,12 +38,9 @@ export function WorkflowIcon() {
   );
 }
 
-const HEIGHT_KEY = "daedalus.workflowPane.height";
 const FOLDED_KEY = "daedalus.workflowPane.folded";
-const MIN_HEIGHT = 96;
-const DEFAULT_HEIGHT = 260;
 
-const remembered = (key: string): string | null => {
+export const remembered = (key: string): string | null => {
   try {
     return window.localStorage.getItem(key);
   } catch {
@@ -51,7 +48,7 @@ const remembered = (key: string): string | null => {
   }
 };
 
-const remember = (key: string, value: string) => {
+export const remember = (key: string, value: string) => {
   try {
     window.localStorage.setItem(key, value);
   } catch {
@@ -270,8 +267,7 @@ export function WorkflowSteps({
 }
 
 /**
- * The pane itself: a header that folds it, a top edge that resizes it, and
- * the steps. With workflows off it says so and links to Settings. Without a run it says so in one dim line.
+ * The pane itself: a header that folds it, and the steps. With workflows off it says so and links to Settings. Without a run it says so in one dim line.
  */
 export function WorkflowPane({
   busy,
@@ -295,10 +291,6 @@ export function WorkflowPane({
   task?: { number: number; title: string };
 }) {
   const [folded, setFolded] = useState(() => remembered(FOLDED_KEY) === "1");
-  const [height, setHeight] = useState(
-    () => Number(remembered(HEIGHT_KEY)) || DEFAULT_HEIGHT,
-  );
-  const drag = useRef<{ startY: number; startHeight: number } | null>(null);
   const open = enabled && !folded;
   const current = run?.steps.find(
     (step) => step.state === "active" || step.state === "waiting",
@@ -307,38 +299,7 @@ export function WorkflowPane({
     <section
       aria-label="Workflow"
       className={`workflow-pane${open ? "" : " folded"}`}
-      style={open && run ? { height } : undefined}
     >
-      {open && run && (
-        <div
-          aria-label="Resize workflow pane"
-          aria-orientation="horizontal"
-          className="workflow-pane-edge"
-          onPointerDown={(event) => {
-            event.currentTarget.setPointerCapture(event.pointerId);
-            drag.current = { startY: event.clientY, startHeight: height };
-          }}
-          onPointerMove={(event) => {
-            if (!drag.current) return;
-            const limit = Math.max(MIN_HEIGHT, window.innerHeight * 0.75);
-            setHeight(
-              Math.min(
-                limit,
-                Math.max(
-                  MIN_HEIGHT,
-                  drag.current.startHeight +
-                    (drag.current.startY - event.clientY),
-                ),
-              ),
-            );
-          }}
-          onPointerUp={() => {
-            drag.current = null;
-            remember(HEIGHT_KEY, String(Math.round(height)));
-          }}
-          role="separator"
-        />
-      )}
       <div className="workflow-pane-header">
         <button
           aria-expanded={open}
