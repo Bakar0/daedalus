@@ -69,6 +69,7 @@ import {
   unpackFromPod,
   unpackInPod,
 } from "./workspace-move-files";
+import { workflowsEnabled } from "./skills";
 import { sessionInstructionsTemplate } from "./workspace-content";
 import type { WorkspaceService } from "./workspaces";
 
@@ -465,13 +466,20 @@ export class WorkspaceMoves {
       await unpackInPod(pod, skip, podArchive);
       // Daedalus's own session instructions name the folder's paths: the
       // pod gets them for its own.
-      const macInstructions = sessionInstructionsTemplate(workspace.path);
+      // Either way the workflows switch was when the file was written.
+      const macInstructions = [false, true].map((workflows) =>
+        sessionInstructionsTemplate(
+          workspace.path,
+          this.options.config.home,
+          workflows,
+        ),
+      );
       for (const { path } of files)
         if (
           SESSION_INSTRUCTIONS.test(path) &&
-          (await readFile(join(workspace.path, path), "utf8").catch(
-            () => undefined,
-          )) === macInstructions
+          macInstructions.includes(
+            await readFile(join(workspace.path, path), "utf8").catch(() => ""),
+          )
         )
           await pod.writeFile(
             path,
@@ -786,7 +794,11 @@ export class WorkspaceMoves {
       });
       // Daedalus's own session instructions come home naming this Mac's
       // paths.
-      const macInstructions = sessionInstructionsTemplate(workspace.path);
+      const macInstructions = sessionInstructionsTemplate(
+        workspace.path,
+        this.options.config.home,
+        workflowsEnabled(this.options.config),
+      );
       for (const path of arrived)
         if (
           SESSION_INSTRUCTIONS.test(path) &&

@@ -29,6 +29,7 @@ import { DaedalusError } from "../errors";
 import { AbilityRepository, RoutineRepository } from "./abilities";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
+import { WorkflowRepository } from "./workflows";
 
 /** A gateway account: the gateway's origin and the user's id on it. */
 export interface CloudOwner {
@@ -424,6 +425,7 @@ export class SqliteRepositories {
   readonly routines: RoutineRepository;
   readonly teams: TeamRepository;
   readonly secrets: SecretRepository;
+  readonly workflows: WorkflowRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -434,6 +436,7 @@ export class SqliteRepositories {
     this.routines = new RoutineRepository(this.database);
     this.teams = new TeamRepository(this.database);
     this.secrets = new SecretRepository(this.database);
+    this.workflows = new WorkflowRepository(this.database);
   }
 
   /**

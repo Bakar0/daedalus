@@ -66,14 +66,16 @@ The same workspace, task and session appear in the app as they are created. Run 
 
 ## Documentation
 
-| Guide                                          | Covers                                                     |
-| ---------------------------------------------- | ---------------------------------------------------------- |
-| [Desktop](docs/desktop.md)                     | the board, sessions, terminals, notifications and quitting |
-| [CLI](docs/cli.md)                             | every `daedal` command                                     |
-| [Workspace content](docs/workspace-content.md) | workspaces, the repository library and worktrees           |
-| [Skills](docs/skills.md)                       | the agent skills Daedalus installs                         |
-| [Architecture](docs/architecture.md)           | package boundaries, persistence, sessions and terminals    |
-| [Releasing](docs/releasing.md)                 | releases, updates, signing and the Homebrew cask           |
+| Guide                                              | Covers                                                     |
+| -------------------------------------------------- | ---------------------------------------------------------- |
+| [Desktop](docs/desktop.md)                         | the board, sessions, terminals, notifications and quitting |
+| [CLI](docs/cli.md)                                 | every `daedal` command                                     |
+| [Workspace content](docs/workspace-content.md)     | workspaces, the repository library and worktrees           |
+| [Skills](docs/skills.md)                           | the agent skills Daedalus installs                         |
+| [Workflows](docs/workflows.md)                     | how agents order their work, with example workflows        |
+| [Custom instructions](docs/custom-instructions.md) | rules every session follows, with examples                 |
+| [Architecture](docs/architecture.md)               | package boundaries, persistence, sessions and terminals    |
+| [Releasing](docs/releasing.md)                     | releases, updates, signing and the Homebrew cask           |
 
 ## Developing
 

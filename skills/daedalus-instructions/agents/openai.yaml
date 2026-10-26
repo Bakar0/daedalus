@@ -1,0 +1,4 @@
+interface:
+  display_name: "Custom instructions"
+  short_description: "Save how you like things done, for every workspace"
+  default_prompt: "Use $daedalus-instructions to remember this for every workspace."

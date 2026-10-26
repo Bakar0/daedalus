@@ -298,9 +298,9 @@ export function nextRunTime(
 /* Files                                                                       */
 /* -------------------------------------------------------------------------- */
 
-const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+export const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
-const stringValue = (value: unknown): string | undefined => {
+export const stringValue = (value: unknown): string | undefined => {
   if (value === undefined || value === null) return undefined;
   if (value instanceof Date) return value.toISOString();
   if (typeof value === "string") return value;

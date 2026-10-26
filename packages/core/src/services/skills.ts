@@ -54,6 +54,7 @@ import {
 } from "../config";
 import { DaedalusError } from "../errors";
 import { accountConfig } from "./account-homes";
+import { workflowsHomePath } from "./workflow-files";
 
 import daedalusControlSkillTemplate from "../../../../skills/daedalus-control/SKILL.md" with { type: "text" };
 import daedalusControlCliReference from "../../../../skills/daedalus-control/references/cli.md" with { type: "text" };
@@ -70,6 +71,10 @@ import routinesSkillTemplate from "../../../../skills/daedalus-routines/SKILL.md
 import routineRunSkillTemplate from "../../../../skills/daedalus-routine/SKILL.md" with { type: "text" };
 import orchestrationSkillTemplate from "../../../../skills/daedalus-orchestration/SKILL.md" with { type: "text" };
 import teamSkillTemplate from "../../../../skills/daedalus-team/SKILL.md" with { type: "text" };
+import instructionsSkillTemplate from "../../../../skills/daedalus-instructions/SKILL.md" with { type: "text" };
+import instructionsOpenAiMetadata from "../../../../skills/daedalus-instructions/agents/openai.yaml" with { type: "text" };
+import workflowsSkillTemplate from "../../../../skills/daedalus-workflows/SKILL.md" with { type: "text" };
+import workflowsOpenAiMetadata from "../../../../skills/daedalus-workflows/agents/openai.yaml" with { type: "text" };
 import compactWorkspaceSkillTemplate from "../../../../skills/daedalus-compact-workspace/SKILL.md" with { type: "text" };
 
 import { JOURNAL_COMPACT_BYTES, TEAM_COMPACT_BYTES } from "./context-files";
@@ -229,6 +234,34 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     skillFiles: [{ path: "SKILL.md", contents: compactWorkspaceSkillTemplate }],
   },
   {
+    id: "daedalus-instructions",
+    title: "Custom instructions",
+    summary:
+      "Lets an agent save how you like things done when you ask it to, as topic files listed in instructions/INDEX.md in the Daedalus home. Every session reads that index.",
+    supportsAlways: false,
+    defaultEnabled: true,
+    defaultMode: "on-demand",
+    skillFiles: [
+      { path: "SKILL.md", contents: instructionsSkillTemplate },
+      { path: "agents/openai.yaml", contents: instructionsOpenAiMetadata },
+    ],
+  },
+  {
+    id: "daedalus-workflows",
+    title: "Workflows",
+    summary:
+      "Agents run work in your workflows: they pick one, report each step in the session's Workflow pane, wait at steps you gate, and edit workflows and steps when you ask. Off until you turn it on in Settings, under Sessions.",
+    supportsAlways: false,
+    // Off by default: reporting steps changes how every agent works, which
+    // the user should choose to have.
+    defaultEnabled: false,
+    defaultMode: "on-demand",
+    skillFiles: [
+      { path: "SKILL.md", contents: workflowsSkillTemplate },
+      { path: "agents/openai.yaml", contents: workflowsOpenAiMetadata },
+    ],
+  },
+  {
     id: "unslop",
     title: "Unslop",
     summary:
@@ -248,15 +281,35 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
   },
 ] as const;
 
+/** Whether agents run work in workflows: the switch in Settings › Sessions. */
+export const workflowsEnabled = (config: DaedalusConfig): boolean =>
+  config.managedSkills?.["daedalus-workflows"]?.enabled ??
+  managedDefinition("daedalus-workflows")?.defaultEnabled ??
+  false;
+
 /**
- * The values a built-in skill names in `{{...}}`: the CLI by full path, and
- * the sizes past which the session header suggests compacting a file, so the
+ * The user's own instructions for every workspace: `INDEX.md` and one file
+ * per topic. The generated AGENTS.md only points at the index, so it never
+ * changes when an agent adds an instruction.
+ */
+export const customInstructionsPath = (daedalusHome: string): string =>
+  join(daedalusHome, "instructions");
+
+/**
+ * The values a built-in skill names in `{{...}}`: the CLI, the custom
+ * instructions folder and the workflows folder by full path, and the sizes past which the session header suggests compacting a file, so the
  * compact skill aims at the same numbers the header measures.
  */
-function fillSkillValues(contents: string, daedal: string): string {
+function fillSkillValues(
+  contents: string,
+  daedal: string,
+  home: string,
+): string {
   const kb = (bytes: number) => String(Math.round(bytes / 1000));
   return contents
     .replaceAll("{{daedal}}", daedal)
+    .replaceAll("{{instructions}}", customInstructionsPath(home))
+    .replaceAll("{{workflows}}", workflowsHomePath(home))
     .replaceAll("{{journalLimitKb}}", kb(JOURNAL_COMPACT_BYTES))
     .replaceAll("{{journalTargetKb}}", kb(JOURNAL_COMPACT_BYTES / 2))
     .replaceAll("{{teamLimitKb}}", kb(TEAM_COMPACT_BYTES))
@@ -866,7 +919,7 @@ export class SkillService {
   } {
     const linkName = channelArtifactName(this.config, definition.id);
     const skillFiles = definition.skillFiles.map((file) => {
-      const contents = fillSkillValues(file.contents, daedal);
+      const contents = fillSkillValues(file.contents, daedal, this.config.home);
       return file.path === "SKILL.md" && linkName !== definition.id
         ? { ...file, contents: withFrontmatterName(contents, linkName) }
         : { ...file, contents };

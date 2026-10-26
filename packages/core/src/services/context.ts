@@ -27,7 +27,7 @@ import { SessionChannel } from "./session-channel";
 import { RoutineReportService } from "./routine-reports";
 import { RoutineService } from "./routines";
 import { SecretService } from "./secrets";
-import { SkillService } from "./skills";
+import { SkillService, workflowsEnabled } from "./skills";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
@@ -57,6 +57,7 @@ import {
 import { TeamService } from "./teams";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
+import { WorkflowService } from "./workflows";
 import { WorkspaceContentService } from "./workspace-content";
 import {
   WORKSPACE_FILES_CHANGED,
@@ -96,6 +97,8 @@ export interface ApplicationContext {
   routineReports: RoutineReportService;
   /** Teams: a lead, its members, and their chat. */
   teams: TeamService;
+  /** Workflow runs: which workflow each piece of work follows, and where. */
+  workflows: WorkflowService;
   /** The routine clock; only the desktop host ticks it. */
   routineDelivery: RoutineDelivery;
   /** How Daedalus hands a line to a running session it did not get from the user. */
@@ -212,6 +215,7 @@ export async function createApplicationContext(
     (workspaceId) => agents.archiveWorkspaceSessions(workspaceId),
     config.home,
     () => config.workspaceInstructionFilesEnabled,
+    () => workflowsEnabled(config),
     async (workspaceId) => {
       // Every session folder lives under the workspace folder, so this drops
       // their provider trust records with it.
@@ -234,6 +238,7 @@ export async function createApplicationContext(
     (parts) => options.onRepositoriesChanged?.(parts),
     (folder) => terminals.closeInside(folder),
   );
+  const skills = new SkillService(config);
   const accounts = new AccountService(config, repositories, undefined, (id) =>
     agents.archive(id, true),
   );
@@ -453,13 +458,21 @@ export async function createApplicationContext(
     appUpdates: new AppUpdateService(config),
     notifications,
     activity,
-    skills: new SkillService(config),
+    skills,
     accounts,
     secrets,
     abilities,
     routines,
     routineReports,
     teams: teams!,
+    workflows: new WorkflowService(
+      repositories,
+      config.home,
+      activity,
+      sessionChannel,
+      options.now,
+      () => skills.settingFor("daedalus-workflows").enabled,
+    ),
     routineDelivery,
     sessionChannel,
     deliveryGate,

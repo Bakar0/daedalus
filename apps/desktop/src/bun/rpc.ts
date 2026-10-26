@@ -37,6 +37,7 @@ import {
   type WorkspaceContent,
   type WorkspaceRepository,
   isPartialReload,
+  type WorkflowRun,
 } from "@daedalus/core";
 import type {
   DesktopSnapshotPart,
@@ -70,6 +71,7 @@ import type {
   WorkspaceDto,
   WorkspaceRepositoryDto,
   SecretDto,
+  WorkflowRunDto,
 } from "@daedalus/protocol";
 
 import type { DesktopRemoteHost } from "./remote";
@@ -131,6 +133,11 @@ const workspaceDto = (
   available = true,
 ): WorkspaceDto => ({ ...workspace, available });
 const taskDto = (task: Task): TaskDto => ({ ...task });
+
+const workflowRunDto = (run: WorkflowRun): WorkflowRunDto => ({
+  ...run,
+  steps: run.steps.map(({ waitingSessionId: _, ...step }) => step),
+});
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
   args: [...agent.args],
@@ -290,6 +297,7 @@ export async function desktopSnapshot(
     abilities: view.abilities.map(sessionAbilityDto),
     teams: view.teams.map(teamDto),
     largeFiles: view.largeFiles.map((file) => ({ ...file })),
+    workflowRuns: view.workflowRuns.map(workflowRunDto),
     routines: view.routines.map(routinesStatusDto),
     routineReports: view.routineReports.map((report) => ({ ...report })),
     settings: {
@@ -1232,6 +1240,19 @@ export function createDesktopRequestHandlers(
       mutate(() => taskDto(context.tasks.update(id, changes))),
     taskSetStatus: ({ id, status }) =>
       mutate(() => taskDto(context.tasks.setStatus(id, status))),
+    workflowFiles: () => result(() => context.workflows.files()),
+    workflowFileSave: (input) =>
+      mutate(() => context.workflows.saveFile(input)),
+    workflowFileDelete: (input) =>
+      mutate(() => context.workflows.deleteFile(input)),
+    workflowApprove: ({ runId, note }) =>
+      mutate(async () => {
+        const outcome = await context.workflows.approve({
+          runId,
+          ...(note ? { note } : {}),
+        });
+        return { run: workflowRunDto(outcome.run), told: outcome.told };
+      }),
     taskTimeline: ({ id }) =>
       result(async () => {
         const report = await context.taskHistory.report(id);
@@ -1330,26 +1351,35 @@ export function createDesktopRequestHandlers(
       ),
     accountSignOut: ({ provider, account }) =>
       mutate(() => context.accounts.signOut(provider, account)),
-    agentSpawn: ({ teamId, ...params }) =>
+    agentSpawn: ({ teamId, workflow, ...params }) =>
       // A workspace in the cloud runs the session there; the workspace says.
       mutate(async () =>
         agentDto(
-          teamId
+          workflow && !teamId
             ? (
-                await context.teams.spawnMember({
-                  team: teamId,
-                  addedBy: "user",
-                  instructions: params.message ?? "",
-                  ...(params.name ? { name: params.name } : {}),
-                  ...(params.taskId ? { taskId: params.taskId } : {}),
-                  ...(params.provider ? { provider: params.provider } : {}),
-                  ...(params.model ? { model: params.model } : {}),
-                  ...(params.account !== undefined
-                    ? { account: params.account }
-                    : {}),
+                await context.workflows.spawnWith({
+                  workflow,
+                  ...(params.message ? { message: params.message } : {}),
+                  spawn: (message) =>
+                    context.agents.spawn({ ...params, message }),
                 })
               ).session
-            : await context.agents.spawn(params),
+            : teamId
+              ? (
+                  await context.teams.spawnMember({
+                    team: teamId,
+                    addedBy: "user",
+                    instructions: params.message ?? "",
+                    ...(params.name ? { name: params.name } : {}),
+                    ...(params.taskId ? { taskId: params.taskId } : {}),
+                    ...(params.provider ? { provider: params.provider } : {}),
+                    ...(params.model ? { model: params.model } : {}),
+                    ...(params.account !== undefined
+                      ? { account: params.account }
+                      : {}),
+                  })
+                ).session
+              : await context.agents.spawn(params),
         ),
       ),
     agentSend: ({ id, text }) =>

@@ -27,6 +27,7 @@ import {
 import { callerSession } from "./caller";
 import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp, sessionCommand } from "./routines";
+import { workflowCommand, workflowHelp } from "./workflows";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
 import { workspaceArchivedOrExplain } from "./archive";
@@ -97,6 +98,7 @@ Usage:
   daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
   daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
   daedal team <say|chat|list|goal> ... [--json]
+  daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
   daedal exec [--secret <NAME>]... -- <command> [<args>...]
@@ -111,6 +113,7 @@ Run 'daedal <command> --help' for command details.`;
 const commandHelp: Record<string, string> = {
   ...routineHelp,
   team: teamHelp,
+  workflow: workflowHelp,
   account: accountHelp,
   secret: secretHelp,
   exec: secretHelp,
@@ -195,7 +198,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
   daedal agent models <codex|claude> [--account <account>]
-  daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine]
+  daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--workflow <name>]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
   daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--provider claude|codex] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
@@ -234,6 +237,9 @@ instead of doing the task, and leaves the status alone.
 ability: the user asks it for routines and Daedalus types their runs into
 it. --color and --pin mark the session's card. See 'daedal session --help'
 and 'daedal routine --help'.
+
+'agent spawn --workflow <name>' starts the session with that workflow's run
+already open, so the agent spends nothing choosing one.
 
 'agent spawn --team' adds a member to a team: with no value, the team of the
 lead running it; with a lead, that lead's team, and the lead is told in the
@@ -1047,6 +1053,7 @@ async function agentCommand(
         "message",
         "ability",
         "color",
+        "workflow",
       ],
       ["refine", "pin", "user"],
     );
@@ -1074,33 +1081,45 @@ async function agentCommand(
     const task = parsed.values.task
       ? await resolveTaskReference(context, parsed.values.task, workspace)
       : undefined;
-    const result = await context.agents.spawn({
-      workspace,
-      provider: parsed.values.provider,
-      command: parsed.values.command,
-      taskId: task?.id,
-      name: parsed.values.name,
-      model: parsed.values.model,
-      ...(parsed.values.account !== undefined
-        ? { account: parsed.values.account }
-        : {}),
-      message: parsed.values.message,
-      draftBrief: parsed.flags.has("refine") || undefined,
-      // An agent starting a session from inside its own, as a handoff does.
-      spawnedBy: (await callerSession(context).catch(() => undefined))?.id,
-      ...(parsed.values.ability
-        ? {
-            abilities: parsed.values.ability
-              .split(",")
-              .map((item) => item.trim())
-              .filter(Boolean),
-          }
-        : {}),
-      ...(parsed.values.color
-        ? { color: sessionColor(parsed.values.color) }
-        : {}),
-      ...(parsed.flags.has("pin") ? { pinned: true } : {}),
-    });
+    const spawn = async (message: string | undefined) =>
+      context.agents.spawn({
+        workspace,
+        provider: parsed.values.provider,
+        command: parsed.values.command,
+        taskId: task?.id,
+        name: parsed.values.name,
+        model: parsed.values.model,
+        ...(parsed.values.account !== undefined
+          ? { account: parsed.values.account }
+          : {}),
+        message,
+        draftBrief: parsed.flags.has("refine") || undefined,
+        // An agent starting a session from inside its own, as a handoff does.
+        spawnedBy: (await callerSession(context).catch(() => undefined))?.id,
+        ...(parsed.values.ability
+          ? {
+              abilities: parsed.values.ability
+                .split(",")
+                .map((item) => item.trim())
+                .filter(Boolean),
+            }
+          : {}),
+        ...(parsed.values.color
+          ? { color: sessionColor(parsed.values.color) }
+          : {}),
+        ...(parsed.flags.has("pin") ? { pinned: true } : {}),
+      });
+    const result = parsed.values.workflow
+      ? (
+          await context.workflows.spawnWith({
+            workflow: parsed.values.workflow,
+            ...(parsed.values.message
+              ? { message: parsed.values.message }
+              : {}),
+            spawn,
+          })
+        ).session
+      : await spawn(parsed.values.message);
     printResult(result, json, () =>
       console.log(
         `Spawned ${result.name} (${result.provider}) in ${result.tmuxSession}`,
@@ -2528,6 +2547,7 @@ export async function runCli(
       "team",
       "secret",
       "cloud",
+      "workflow",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2564,6 +2584,10 @@ export async function runCli(
       return await secretCommand(context, args.slice(1), json);
     if (args[0] === "cloud")
       return await cloudCommand(context, args.slice(1), json);
+    if (args[0] === "workflow")
+      return await workflowCommand(context, args.slice(1), json, (explicit) =>
+        currentSessionId(context, explicit),
+      );
     if (args[0] === "routine")
       return await routineCommand(context, args.slice(1), json, (reference) =>
         resolveTaskReference(context, reference),

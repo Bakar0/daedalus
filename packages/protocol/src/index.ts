@@ -1317,6 +1317,8 @@ export interface DesktopSnapshotDto {
   routineReports: RoutineReportDto[];
   /** Workspace journals and team files grown past their compact size. */
   largeFiles?: LargeFileDto[];
+  /** The newest workflow run of each session. */
+  workflowRuns?: WorkflowRunDto[];
   /** Sign-in pages cloud sessions asked to open; absent outside the app. */
   cloudSignIns?: CloudSignInDto[];
   /** Workspaces whose cloud copy a new session waits for. */
@@ -1326,6 +1328,90 @@ export interface DesktopSnapshotDto {
   /** The gateway install from Settings > Cloud, while one runs or ended. */
   gatewayInstall?: GatewayInstallDto;
   settings: DesktopSettingsDto;
+}
+
+export type WorkflowStepStateDto =
+  "pending" | "waiting" | "active" | "done" | "skipped";
+
+export interface WorkflowRunStepDto {
+  name: string;
+  description: string;
+  gate: "user" | null;
+  state: WorkflowStepStateDto;
+  startedAt: string | null;
+  endedAt: string | null;
+  approvedAt: string | null;
+  /** What the agent said it would do in the step, when it started it. */
+  plan: string | null;
+  /** What came out, when the step was done or skipped. */
+  note: string | null;
+  /** Added for this run only, with no step file. */
+  dynamic: boolean;
+}
+
+/** A step as one finished iteration of a circular run left it. */
+export interface WorkflowStepRecordDto {
+  iteration: number;
+  name: string;
+  state: WorkflowStepStateDto;
+  startedAt: string | null;
+  endedAt: string | null;
+  note: string | null;
+}
+
+/** `index` and `topic` are the user's custom instruction files. */
+export type WorkflowFileKindDto =
+  "flow" | "step" | "choosing" | "index" | "topic";
+
+/** One workflow or step file, as written and as Daedalus reads it. */
+export interface WorkflowFileDto {
+  name: string;
+  path: string;
+  text: string;
+  description: string;
+  /** For a workflow: its steps; for a step: whether it is gated. */
+  steps?: string[];
+  /** A workflow with `steps: dynamic`: each run names its own steps. */
+  dynamic?: boolean;
+  loop?: string | null;
+  gate?: "user" | null;
+  /** Why the file cannot be used, when it cannot. */
+  problem: string | null;
+}
+
+export interface WorkflowFilesDto {
+  root: string;
+  flows: WorkflowFileDto[];
+  steps: WorkflowFileDto[];
+  choosing: { path: string; text: string };
+  /** The user's custom instructions: the index and one file per topic. */
+  instructions: {
+    root: string;
+    index: { path: string; text: string };
+    topics: { name: string; path: string; text: string }[];
+  };
+}
+
+/** A piece of work going through a workflow, and where it is. */
+export interface WorkflowRunDto {
+  id: string;
+  workspaceId: string;
+  sessionId: string | null;
+  workflow: string;
+  steps: WorkflowRunStepDto[];
+  /** Built for this run alone, with no workflow file. */
+  dynamic: boolean;
+  /** Steps were added or removed after a maintained workflow started. */
+  modified: boolean;
+  /** The step a circular run goes back to; null for none. */
+  loopTo: string | null;
+  until: string;
+  iteration: number;
+  history: WorkflowStepRecordDto[];
+  endNote: string | null;
+  startedAt: string;
+  updatedAt: string;
+  endedAt: string | null;
 }
 
 /**
@@ -2002,6 +2088,11 @@ export interface DesktopRpcSchema {
         TaskDto
       >;
       taskSetStatus: Request<{ id: string; status: TaskStatus }, TaskDto>;
+      /** The user's approval of the gated step a run waits on. */
+      workflowApprove: Request<
+        { runId: string; note?: string },
+        { run: WorkflowRunDto; told: boolean }
+      >;
       /**
        * Assembled on demand, so it is a request rather than a snapshot field:
        * it reads `JOURNAL.md` and would otherwise ride along on every tick.
@@ -2030,8 +2121,32 @@ export interface DesktopRpcSchema {
            * are the lead's.
            */
           teamId?: string;
+          /** Starts the session with this workflow's run already open. */
+          workflow?: string;
         },
         AgentSessionDto
+      >;
+      /**
+       * Every workflow and step, the choosing rules and the custom
+       * instructions: what the Workflows and Custom instructions tabs show.
+       */
+      workflowFiles: Request<Record<string, never>, WorkflowFilesDto>;
+      /**
+       * Writes one workflow, step or the choosing rules. The text is checked
+       * the way a run would read it, and refused with the reason if not.
+       * `previousName` renames: the old file goes once the new one is saved.
+       */
+      workflowFileSave: Request<
+        {
+          kind: WorkflowFileKindDto;
+          text: string;
+          previousName?: string;
+        },
+        WorkflowFilesDto
+      >;
+      workflowFileDelete: Request<
+        { kind: "flow" | "step" | "topic"; name: string },
+        WorkflowFilesDto
       >;
       agentModels: Request<
         { provider: "codex" | "claude"; account?: string },

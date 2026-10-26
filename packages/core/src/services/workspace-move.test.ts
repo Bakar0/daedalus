@@ -203,9 +203,10 @@ async function setup() {
     codexSessionsDirectory: () => macCodexSessions,
   } as unknown as AgentService;
   const deleted: string[] = [];
+  const home = join(base, "home");
   const moves = new WorkspaceMoves({
     config: {
-      home: join(base, "home"),
+      home,
       agents: {},
     } as unknown as DaedalusConfig,
     repositories: {
@@ -257,6 +258,7 @@ async function setup() {
     deleted,
     place: () => place,
     workspacePath,
+    home,
     podRoot,
     macTree,
     macFolder,
@@ -514,7 +516,7 @@ describe("moving a workspace", () => {
     const s = await setup();
     await writeFile(
       join(s.macFolder, "AGENTS.md"),
-      sessionInstructionsTemplate(s.workspacePath),
+      sessionInstructionsTemplate(s.workspacePath, s.home),
     );
     await s.moves.move({ workspace: "w1", to: "cloud" });
     expect(await readFile(join(s.podRoot, FOLDER, "AGENTS.md"), "utf8")).toBe(
@@ -526,7 +528,7 @@ describe("moving a workspace", () => {
     const home = await s.moves.move({ workspace: "w1", to: "mac" });
     expect(home.status).toBe("moved");
     expect(await readFile(join(s.macFolder, "AGENTS.md"), "utf8")).toBe(
-      sessionInstructionsTemplate(s.workspacePath),
+      sessionInstructionsTemplate(s.workspacePath, s.home),
     );
   });
 
@@ -543,7 +545,7 @@ describe("moving a workspace", () => {
     expect(home.status).toBe("moved");
     expect(
       await readFile(join(s.workspacePath, born, "AGENTS.md"), "utf8"),
-    ).toBe(sessionInstructionsTemplate(s.workspacePath));
+    ).toBe(sessionInstructionsTemplate(s.workspacePath, s.home));
   });
 
   test("files that steer agents come home like any other, unasked", async () => {

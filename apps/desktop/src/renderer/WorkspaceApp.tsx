@@ -84,6 +84,11 @@ import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
 import { laneFor } from "./board-lanes";
 import { taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
+import { WorkflowPane } from "./WorkflowPane";
+import { WORKFLOWS_SKILL } from "./SkillsPanel";
+import { WorkflowsEditor } from "./WorkflowsEditor";
+import { InstructionsEditor } from "./InstructionsEditor";
+import { InstructionsPane, useInstructionsSummary } from "./InstructionsPane";
 import { accountModelKey } from "./account-models";
 import {
   accountCostLabel,
@@ -2293,7 +2298,11 @@ export function WorkspaceApp({
     teamId?: string;
     /** A member's instructions, which it needs. */
     instructions?: string;
+    /** The workflow its run starts in; none when empty. */
+    workflow?: string;
   }>({ name: "" });
+  /** The workflows the session dialog offers, read when it opens. */
+  const [workflowNames, setWorkflowNames] = useState<string[]>([]);
   // The Routines drawer on the selected session, and what it last read.
   const [routinesPanel, setRoutinesPanel] = useState<{
     sessionId: string;
@@ -2405,6 +2414,7 @@ export function WorkspaceApp({
     [setWorkspaceCollapsed],
   );
   const files = useFilesController();
+  const instructionsSummary = useInstructionsSummary(client);
   // The tab in front of the center decides which view the rest of the app
   // sees: a session's, a task's, or the files'. No tab at all is the board's
   // empty center.
@@ -3136,6 +3146,27 @@ export function WorkspaceApp({
   const attentionById = new Map(
     (snapshot?.attention ?? []).map((item) => [item.sessionId, item]),
   );
+  const workflowRunsBySession = new Map(
+    (snapshot?.workflowRuns ?? []).flatMap((run) =>
+      run.sessionId ? [[run.sessionId, run] as const] : [],
+    ),
+  );
+  const approveWorkflowStep = (run: { id: string }) =>
+    void perform(client.request.workflowApprove({ runId: run.id }));
+  // Workflows are the daedalus-workflows skill, off until the user turns it
+  // on. Read again whenever a dialog closes, since Settings can change it.
+  const [workflowsOn, setWorkflowsOn] = useState(false);
+  useEffect(() => {
+    if (modal) return;
+    void client.request.skillList({}).then((response) => {
+      if (!response.ok) return;
+      setWorkflowsOn(
+        response.data.managed.some(
+          (skill) => skill.id === WORKFLOWS_SKILL && skill.enabled,
+        ),
+      );
+    });
+  }, [client, modal]);
   // Workspaces on their way to or from the cloud, and ones just moved.
   const moveByWorkspace = new Map(
     (snapshot?.workspaceMoves ?? []).map((move) => [move.workspaceId, move]),
@@ -4027,6 +4058,14 @@ export function WorkspaceApp({
     setRememberSessionModel(false);
     setModelCatalogError(undefined);
     setModal("session");
+    void client.request.workflowFiles({}).then((response) => {
+      if (response.ok)
+        setWorkflowNames(
+          response.data.flows
+            .filter((flow) => !flow.problem)
+            .map((flow) => flow.name),
+        );
+    });
   }
 
   /** The lead's + : the dialog, set up for a member of its team. */
@@ -4130,7 +4169,7 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
-    const { color, routines, orchestration, teamId, instructions } =
+    const { color, routines, orchestration, teamId, instructions, workflow } =
       sessionForm;
     const cloud = sessionInCloud;
     const abilities = [
@@ -4206,6 +4245,7 @@ export function WorkspaceApp({
           : abilities.length && !isTerminal
             ? { abilities }
             : {}),
+        ...(workflow && !isTerminal && !teamId ? { workflow } : {}),
       });
       if (response.ok) {
         // The launch stays until the refreshed list holds its session, so the
@@ -7178,6 +7218,12 @@ export function WorkspaceApp({
                     </span>
                   ) : undefined
                 }
+                renderWorkflows={() => (
+                  <WorkflowsEditor client={client} onError={setError} />
+                )}
+                renderInstructions={() => (
+                  <InstructionsEditor client={client} onError={setError} />
+                )}
                 renderTerminal={(terminalId) => {
                   const terminal = integratedTerminals.find(
                     (item) => item.id === terminalId,
@@ -7402,6 +7448,38 @@ export function WorkspaceApp({
                 </>
               ) : (
                 <div className="side-panel-board">{boardView}</div>
+              )}
+              {/* The shown session's workflow, under whichever tab is open. */}
+              {!workspacePanelCollapsed && activeSession?.kind === "agent" && (
+                <WorkflowPane
+                  busy={busy}
+                  enabled={workflowsOn}
+                  key={activeSession.id}
+                  onApprove={approveWorkflowStep}
+                  onOpenSettings={() => {
+                    setSettingsSection("sessions");
+                    setModal("settings");
+                  }}
+                  onOpenEditor={() =>
+                    files.withEditor((handle) => handle.openWorkflows())
+                  }
+                  run={workflowRunsBySession.get(activeSession.id)}
+                  task={
+                    activeSession.taskId
+                      ? snapshot?.tasks.find(
+                          (task) => task.id === activeSession.taskId,
+                        )
+                      : undefined
+                  }
+                />
+              )}
+              {!workspacePanelCollapsed && activeSession?.kind === "agent" && (
+                <InstructionsPane
+                  onOpen={() =>
+                    files.withEditor((handle) => handle.openInstructions())
+                  }
+                  summary={instructionsSummary}
+                />
               )}
             </aside>
           )}
@@ -8178,6 +8256,31 @@ export function WorkspaceApp({
                   />
                 </label>
               )}
+              {sessionType !== "terminal" &&
+                !memberTeam &&
+                workflowsOn &&
+                workflowNames.length > 0 && (
+                  <label>
+                    Workflow
+                    <select
+                      aria-label="Workflow"
+                      onChange={(event) =>
+                        setSessionForm({
+                          ...sessionForm,
+                          workflow: event.target.value || undefined,
+                        })
+                      }
+                      value={sessionForm.workflow ?? ""}
+                    >
+                      <option value="">None: the agent decides</option>
+                      {workflowNames.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               {/* What most sessions leave alone: the account, the colour and
                   the abilities, folded under one row. */}
               {(!memberTeam || sessionAccounts.length > 1) && (

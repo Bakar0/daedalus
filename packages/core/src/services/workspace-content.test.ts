@@ -6,7 +6,7 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import { createApplicationContext, versionsAfterAnnouncing } from "../index";
 import { createRepository, FakeTmux } from "./workspace-content.fixtures";
 import {
-  AGENTS_TEMPLATE,
+  agentsTemplate,
   ensureSessionInstructionFiles,
   ensureWorkspaceContentFiles,
   sessionDirectoryName,
@@ -344,16 +344,122 @@ function withUnsizedJournal(workspacePath: string, current: string): string {
   );
 }
 
+// The instruction files as they were before the custom instructions folder.
+const withoutCustomInstructions = (current: string): string =>
+  current.replace(/^7\. .*\n/m, "");
+
+test("every instruction file points at the custom instructions index, which Daedalus creates once", async () => {
+  await withTemporaryDaedalusHome(async (home) => {
+    const workspacePath = join(home, "workspace");
+    const sessionPath = join(home, "session");
+    await mkdir(workspacePath, { recursive: true });
+    await mkdir(sessionPath, { recursive: true });
+    const index = join(home, "instructions", "INDEX.md");
+
+    await ensureWorkspaceContentFiles(workspacePath, home);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    for (const agents of [workspacePath, sessionPath])
+      expect(await readFile(join(agents, "AGENTS.md"), "utf8")).toContain(
+        `7. \`${index}\` holds the user's own instructions`,
+      );
+    expect(await readFile(index, "utf8")).toContain("## Topics");
+    // A rule for every request is read with the index, not behind a topic.
+    expect(await readFile(index, "utf8")).toContain("## Always");
+    expect(await readFile(join(sessionPath, "AGENTS.md"), "utf8")).toContain(
+      'Follow the rules under "Always" on every request',
+    );
+    // Workflows are their own folder, not instructions.
+    expect(await readFile(index, "utf8")).not.toContain("workflow");
+    expect(await pathExists(join(home, "workflows", "CHOOSING.md"))).toBe(true);
+
+    // Files from before the "Always" section get the new step 7.
+    for (const agents of [workspacePath, sessionPath]) {
+      const path = join(agents, "AGENTS.md");
+      await Bun.write(
+        path,
+        (await readFile(path, "utf8")).replace(
+          /^7\. .*$/m,
+          `7. \`${index}\` holds the user's own instructions for every workspace, with one line per topic file in \`${join(home, "instructions")}/\`. Read it at the start of a session and follow it, opening the topic files that apply to the task. When the user asks you to remember how they like something done, add it there with the daedalus-instructions skill.`,
+        ),
+      );
+    }
+    await ensureWorkspaceContentFiles(workspacePath, home);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    for (const agents of [workspacePath, sessionPath])
+      expect(await readFile(join(agents, "AGENTS.md"), "utf8")).toContain(
+        'under "Always"',
+      );
+
+    // An index the user's agents have written to is theirs.
+    await Bun.write(index, "# Mine\n");
+    await ensureWorkspaceContentFiles(workspacePath, home);
+    expect(await readFile(index, "utf8")).toBe("# Mine\n");
+  });
+});
+
+test("the workflows folder is made even with instruction files turned off", async () => {
+  await withTemporaryDaedalusHome(async (home) => {
+    const workspacePath = join(home, "workspace");
+    await mkdir(workspacePath, { recursive: true });
+    await ensureWorkspaceContentFiles(workspacePath, home, false);
+    expect(await pathExists(join(home, "instructions"))).toBe(false);
+    expect(await pathExists(join(home, "workflows", "CHOOSING.md"))).toBe(true);
+    // The user's workflows are their own: none is written for them.
+    expect(
+      await pathExists(join(home, "workflows", "flows", "feature.md")),
+    ).toBe(false);
+  });
+});
+
+test("instruction files from before the custom instructions folder are upgraded, and removed when turned off", async () => {
+  await withTemporaryDaedalusHome(async (home) => {
+    const workspacePath = join(home, "workspace");
+    const sessionPath = join(home, "session");
+    await mkdir(workspacePath, { recursive: true });
+    await mkdir(sessionPath, { recursive: true });
+    const workspaceAgents = join(workspacePath, "AGENTS.md");
+    const sessionAgents = join(sessionPath, "AGENTS.md");
+    const workspaceCurrent = agentsTemplate(home);
+    const sessionCurrent = sessionInstructionsTemplate(workspacePath, home);
+    expect(sessionInstructionsTemplate(workspacePath)).toBe(
+      withoutCustomInstructions(sessionCurrent),
+    );
+
+    await Bun.write(
+      workspaceAgents,
+      withoutCustomInstructions(workspaceCurrent),
+    );
+    await Bun.write(sessionAgents, withoutCustomInstructions(sessionCurrent));
+    await ensureWorkspaceContentFiles(workspacePath, home);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, true);
+    expect(await readFile(workspaceAgents, "utf8")).toBe(workspaceCurrent);
+    expect(await readFile(sessionAgents, "utf8")).toBe(sessionCurrent);
+
+    await ensureWorkspaceContentFiles(workspacePath, home, false);
+    await ensureSessionInstructionFiles(
+      sessionPath,
+      workspacePath,
+      home,
+      false,
+    );
+    expect(await pathExists(workspaceAgents)).toBe(false);
+    expect(await pathExists(sessionAgents)).toBe(false);
+  });
+});
+
 test("a session's instructions from before journal entries had a size are upgraded", async () => {
   await withTemporaryDaedalusHome(async (home) => {
     const workspacePath = join(home, "workspace");
     const sessionPath = join(home, "session");
     await mkdir(sessionPath, { recursive: true });
     const agentsPath = join(sessionPath, "AGENTS.md");
-    const current = sessionInstructionsTemplate(workspacePath);
+    const current = sessionInstructionsTemplate(workspacePath, home);
     expect(current).toContain("at most 5 one-line bullets");
     expect(current).toContain(join(workspacePath, "journal"));
-    const previous = withUnsizedJournal(workspacePath, current);
+    const previous = withUnsizedJournal(
+      workspacePath,
+      withoutCustomInstructions(current),
+    );
     expect(previous).not.toBe(current);
 
     await Bun.write(agentsPath, previous);
@@ -367,14 +473,15 @@ test("a workspace's AGENTS.md from before journal entries had a size is upgraded
     const workspacePath = join(home, "workspace");
     await mkdir(workspacePath, { recursive: true });
     const agentsPath = join(workspacePath, "AGENTS.md");
-    const previous = AGENTS_TEMPLATE.replace(
+    const current = agentsTemplate(home);
+    const previous = withoutCustomInstructions(current).replace(
       /^2\. .*$/m,
       "2. \`JOURNAL.md\` contains chronological decisions, progress, blockers, questions, and handoffs. Read recent entries when prior workspace activity matters, and add meaningful updates when useful.",
     );
-    expect(previous).not.toBe(AGENTS_TEMPLATE);
+    expect(previous).not.toBe(current);
     await Bun.write(agentsPath, previous);
     await ensureWorkspaceContentFiles(workspacePath, home);
-    expect(await readFile(agentsPath, "utf8")).toBe(AGENTS_TEMPLATE);
+    expect(await readFile(agentsPath, "utf8")).toBe(current);
   });
 });
 
@@ -384,8 +491,11 @@ test("a session's instructions from before --branch was required are upgraded, a
     const sessionPath = join(home, "session");
     await mkdir(sessionPath, { recursive: true });
     const agentsPath = join(sessionPath, "AGENTS.md");
-    const current = sessionInstructionsTemplate(workspacePath);
-    const previous = withUnsizedJournal(workspacePath, current).replace(
+    const current = sessionInstructionsTemplate(workspacePath, home);
+    const previous = withUnsizedJournal(
+      workspacePath,
+      withoutCustomInstructions(current),
+    ).replace(
       / --branch <branch-name>`, then work in the returned path\..*$/m,
       "`, then work in the returned path.",
     );
@@ -456,5 +566,42 @@ describe("versionsAfterAnnouncing", () => {
     expect(versionsAfterAnnouncing(previous, current, ["shipped"])).toEqual(
       previous,
     );
+  });
+});
+
+test("the workflows switch adds step 8 to the instruction files and takes it away", async () => {
+  await withTemporaryDaedalusHome(async (home) => {
+    const workspacePath = join(home, "workspace");
+    const sessionPath = join(home, "session");
+    await mkdir(sessionPath, { recursive: true });
+    const workspaceAgents = join(workspacePath, "AGENTS.md");
+    const sessionAgents = join(sessionPath, "AGENTS.md");
+
+    await ensureWorkspaceContentFiles(workspacePath, home, true, true);
+    await ensureSessionInstructionFiles(
+      sessionPath,
+      workspacePath,
+      home,
+      true,
+      true,
+    );
+    for (const path of [workspaceAgents, sessionAgents])
+      expect(await readFile(path, "utf8")).toContain(
+        "8. Workflows are on. Before the first command of every request",
+      );
+
+    await ensureWorkspaceContentFiles(workspacePath, home, true, false);
+    await ensureSessionInstructionFiles(
+      sessionPath,
+      workspacePath,
+      home,
+      true,
+      false,
+    );
+    expect(await readFile(workspaceAgents, "utf8")).toBe(agentsTemplate(home));
+    expect(await readFile(sessionAgents, "utf8")).toBe(
+      sessionInstructionsTemplate(workspacePath, home),
+    );
+    expect(await readFile(workspaceAgents, "utf8")).not.toContain("8. ");
   });
 });

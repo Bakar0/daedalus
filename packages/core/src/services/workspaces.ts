@@ -100,6 +100,8 @@ export class WorkspaceService {
     private readonly archiveAgents: (workspaceId: string) => Promise<void>,
     private readonly daedalusHome: string,
     private readonly instructionFilesEnabled: () => boolean = () => true,
+    /** Whether workflows are on, which adds a step to the instruction files. */
+    private readonly workflowsEnabled: () => boolean = () => false,
     private readonly discardCheckouts: (
       workspaceId: string,
     ) => Promise<void> = async () => {},
@@ -189,6 +191,7 @@ export class WorkspaceService {
         path,
         this.daedalusHome,
         this.instructionFilesEnabled(),
+        this.workflowsEnabled(),
       );
       this.repositories.createWorkspace(workspace);
       return workspace;
@@ -260,6 +263,7 @@ export class WorkspaceService {
         workspace.path,
         this.daedalusHome,
         this.instructionFilesEnabled(),
+        this.workflowsEnabled(),
       );
     return workspace;
   }
