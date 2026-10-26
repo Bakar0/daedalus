@@ -9463,9 +9463,11 @@ dd {
   padding: 0 4px;
   text-transform: uppercase;
 }
-.workflow-approve {
+/* The agent asks in the conversation; the pane only says it waits. */
+.workflow-waiting {
+  color: #ff8282;
   font-size: 11px;
-  padding: 1px 8px;
+  white-space: nowrap;
 }
 /* A finished step keeps one line of what came out; the rest is on hover. */
 .workflow-step.state-done:not(.open) .workflow-step-note,

@@ -16,7 +16,7 @@ export const workflowHelp = `Workflow commands — the agent's place in its work
   daedal workflow step <step> start|done|skip --note "<line>"
   daedal workflow add <step> [--after <step>] [--description "<text>"] [--gate]
   daedal workflow remove <step>
-  daedal workflow approve [--note "<text>"]
+  daedal workflow approve
   daedal workflow end [--note "<text>"]
   daedal workflow save <name> [--when "<text>"] [--description "<text>"]
   daedal workflow status
@@ -49,13 +49,19 @@ iterations. It runs until 'end'.
 'step <step> start' marks the step you begin and finishes the one before.
 It prints one line, so chain it onto the command the step runs anyway:
   daedal workflow step test start --note "Run the CLI tests" && bun test
-A gated step that waits exits 4, so the chained command does not run.
+A step change that leaves a gate waiting exits 4, so the chained command
+does not run.
 Every step change takes --note, specific to this work: on start, what you
 will do in the step; on done, what came out; on skip, why.
-Starting a step that already ended goes back to it. A step with 'gate: user'
-does not start: it waits for the user's approval and raises attention. Stop
-and wait. The user approves in the session's Workflow pane, or tells you in
-the conversation and you run 'approve'.`;
+Starting a step that already ended goes back to it.
+
+Gates: a step with 'gate: user' needs the user to approve its result. Do
+the step, then 'step <step> done --note "<what to approve>"': the step
+waits, attention is raised, and no other step starts. Ask the user in the
+conversation and stop. When they approve, run 'approve', which marks the
+step done; to change the result first, start the step again. A step with
+'gate: before' waits when it starts, until the user agrees to it; then run
+'approve' and do the step. 'add --gate' adds a step with 'gate: user'.`;
 
 const STATE_MARK: Record<WorkflowStepState, string> = {
   pending: "·",
@@ -84,7 +90,10 @@ function printRun(run: WorkflowRun): void {
   console.log(runTitle(run));
   if (run.until && !run.endedAt) console.log(`  until: ${run.until}`);
   run.steps.forEach((step, position) => {
-    const tags = [step.gate ? "gate: user" : "", step.dynamic ? "no file" : ""]
+    const tags = [
+      step.gate ? `gate: ${step.gate}` : "",
+      step.dynamic ? "no file" : "",
+    ]
       .filter(Boolean)
       .map((tag) => ` [${tag}]`)
       .join("");
@@ -171,7 +180,7 @@ export async function workflowCommand(
       workflow.steps.forEach((name, index) => {
         const step = steps[index];
         console.log(
-          `\n## ${index + 1}. ${name}${step?.gate ? " [gate: user]" : ""}`,
+          `\n## ${index + 1}. ${name}${step?.gate ? ` [gate: ${step.gate}]` : ""}`,
         );
         console.log(step ? step.body : "(no step file)");
       });
@@ -219,7 +228,7 @@ export async function workflowCommand(
         // A step the agent named itself has no instructions to repeat.
         if (!step.body.trim()) return;
         console.log(
-          `\n## ${index + 1}. ${step.name}${step.gate ? " [gate: user]" : ""}\n${step.body}`,
+          `\n## ${index + 1}. ${step.name}${step.gate ? ` [gate: ${step.gate}]` : ""}\n${step.body}`,
         );
       });
     });
@@ -246,7 +255,9 @@ export async function workflowCommand(
     if (outcome.waiting)
       throw new DaedalusError(
         "CONFLICT",
-        `Step '${parsed.positionals[0]}' waits for the user's approval. Attention is raised; stop and wait for it.`,
+        stepAction === "done"
+          ? `Step '${parsed.positionals[0]}' waits for the user to approve what came out. Attention is raised; ask them in the conversation and stop.`
+          : `Step '${parsed.positionals[0]}' waits for the user to agree before it starts. Attention is raised; ask them in the conversation and stop.`,
         { runId: outcome.run.id },
       );
     printResult(outcome, json, () => {
@@ -292,8 +303,8 @@ export async function workflowCommand(
   }
   if (action === "approve") {
     expectPositionals(parsed.positionals, 0, "daedal workflow approve");
-    const outcome = await context.workflows.approveFor(sessionId, note);
-    printResult({ run: outcome.run }, json, () => printRun(outcome.run));
+    const run = context.workflows.approve(sessionId);
+    printResult({ run }, json, () => printRun(run));
     return 0;
   }
   if (action === "end") {

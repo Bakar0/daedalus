@@ -4,7 +4,8 @@ A workflow is the order an agent works in: a short list of steps such as plan,
 build, prove, ship. When workflows are on, an agent picks one of yours before
 the first command of a request, reports each step as it goes, and the
 session's Workflow pane in the side panel shows the steps as a checklist. A
-step marked `gate: user` waits for you to approve it in the pane.
+step marked `gate: user` waits for you to approve what came out of it: the
+agent asks in the conversation, and the pane shows the step waiting for you.
 
 Workflows are off until you turn them on in Settings › Sessions › "Run work in
 workflows". Edit them in the Workflows tab (the Workflow pane's "Open ↗"), or
@@ -41,11 +42,11 @@ The body is optional and goes to the agent when the run starts.
 
 ### A step file
 
-| Field         | Meaning                                                |
-| ------------- | ------------------------------------------------------ |
-| `name`        | the file's name, used in a workflow's `steps` list     |
-| `description` | one line on what the step is for                       |
-| `gate`        | optional: `user` makes the step wait for your approval |
+| Field         | Meaning                                                                                                  |
+| ------------- | -------------------------------------------------------------------------------------------------------- |
+| `name`        | the file's name, used in a workflow's `steps` list                                                       |
+| `description` | one line on what the step is for                                                                         |
+| `gate`        | optional: `user` waits for you to approve the step's result; `before` waits for you to agree to start it |
 
 The body is what the agent does in the step. It can be one line naming a
 command or a skill.
@@ -110,6 +111,7 @@ Make the real change. Follow the repository's instructions, replace any prototyp
 ---
 name: proof
 description: Show the user it works where they can try it.
+gate: user
 ---
 
 Put the change where the user can try it: relaunch the dev app, deploy to the dev environment, or run the command. Say in a few lines what to look at and what should happen. If the user asks for changes, start the step that makes them again and come back here. The step is done when the user says it works.
@@ -121,7 +123,6 @@ Put the change where the user can try it: relaunch the dev app, deploy to the de
 ---
 name: ship
 description: Get the change merged and out.
-gate: user
 ---
 
 Commit, push and open a pull request, and give its full URL. Wait for CI. Read every review comment, fix or answer each one, and push again until CI is green and no thread is open. The user merges. Then release, or deploy and promote from dev to stage to prod, as the repository's instructions say, checking each environment before the next.
@@ -324,6 +325,6 @@ Agents run these through the daedalus-workflows skill; you can run them too.
 | `daedal workflow start <name>`                  | starts a run of a workflow in this session       |
 | `daedal workflow start --steps a,b --name <x>`  | starts a dynamic run with steps named for it     |
 | `daedal workflow step <step> start\|done\|skip` | reports a step, with `--note` saying what or why |
-| `daedal workflow approve`                       | approves a gated step                            |
+| `daedal workflow approve`                       | records the user's approval of a gated step      |
 | `daedal workflow end --note "<why>"`            | ends the run                                     |
 | `daedal workflow save <name> --when "<work>"`   | saves this run as a workflow                     |

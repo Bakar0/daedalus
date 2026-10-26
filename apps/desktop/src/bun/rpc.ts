@@ -1250,14 +1250,6 @@ export function createDesktopRequestHandlers(
       mutate(() => context.workflows.saveFile(input)),
     workflowFileDelete: (input) =>
       mutate(() => context.workflows.deleteFile(input)),
-    workflowApprove: ({ runId, note }) =>
-      mutate(async () => {
-        const outcome = await context.workflows.approve({
-          runId,
-          ...(note ? { note } : {}),
-        });
-        return { run: workflowRunDto(outcome.run), told: outcome.told };
-      }),
     taskTimeline: ({ id }) =>
       result(async () => {
         const report = await context.taskHistory.report(id);

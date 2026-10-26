@@ -75,7 +75,7 @@ function titleOf(selection: Selection): string {
 
 const HINTS: Record<Selection["kind"], string> = {
   flow: "Frontmatter: name, description, when, steps: [a, b] or steps: dynamic (the agent names its own), and optionally loop: <step> and until. Runs already started keep their copy; a change applies from the next run.",
-  step: "Frontmatter: name, description, and optionally gate: user. The body is what the agent does in this step.",
+  step: "Frontmatter: name, description, and optionally gate: user (you approve its result) or gate: before (you agree before it starts). The body is what the agent does in this step.",
   choosing:
     "The rules an agent reads, in order, to pick a workflow for the work.",
 };

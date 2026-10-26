@@ -40,6 +40,8 @@ const FIXTURE_FLOWS: Record<string, string> = {
   todo: "steps: dynamic",
 };
 
+const GATES: Record<string, string> = { deploy: "user", test: "before" };
+
 async function writeFixtureWorkflows(home: string): Promise<void> {
   const root = workflowsHomePath(home);
   await rm(join(root, "flows"), { recursive: true, force: true });
@@ -49,7 +51,7 @@ async function writeFixtureWorkflows(home: string): Promise<void> {
   for (const [name, description] of Object.entries(FIXTURE_STEPS))
     await writeFile(
       join(root, "steps", `${name}.md`),
-      `---\nname: ${name}\ndescription: ${description}\n${name === "deploy" ? "gate: user\n" : ""}---\n\n${description}\n`,
+      `---\nname: ${name}\ndescription: ${description}\n${GATES[name] ? `gate: ${GATES[name]}\n` : ""}---\n\n${description}\n`,
     );
   for (const [name, fields] of Object.entries(FIXTURE_FLOWS))
     await writeFile(
@@ -104,7 +106,6 @@ interface Setup {
   workflows: WorkflowService;
   raised: Array<{ sessionId: string; reason: string }>;
   cleared: string[];
-  delivered: Array<{ sessionId: string; line: string }>;
   workspaceId: string;
   session(taskId?: string | null): AgentSession;
 }
@@ -123,7 +124,6 @@ const withWorkflows = (run: (setup: Setup) => Promise<void>) =>
       await writeFixtureWorkflows(home);
       const raised: Setup["raised"] = [];
       const cleared: string[] = [];
-      const delivered: Setup["delivered"] = [];
       const workflows = new WorkflowService(
         context.repositories,
         context.config.home,
@@ -138,12 +138,6 @@ const withWorkflows = (run: (setup: Setup) => Promise<void>) =>
           },
         },
         () => true,
-        {
-          deliver: async (session, line) => {
-            delivered.push({ sessionId: session.id, line: String(line) });
-            return { kind: "delivered" };
-          },
-        },
       );
       const session = (taskId: string | null = null): AgentSession => {
         const id = crypto.randomUUID();
@@ -186,7 +180,6 @@ const withWorkflows = (run: (setup: Setup) => Promise<void>) =>
         workflows,
         raised,
         cleared,
-        delivered,
         workspaceId: workspace.id,
         session,
       });
@@ -283,68 +276,132 @@ describe("WorkflowService", () => {
     );
   });
 
-  test("a gated step waits and raises attention; approval clears it and tells the session", async () => {
-    await withWorkflows(
-      async ({ workflows, session, raised, cleared, delivered }) => {
-        const agent = session();
-        await workflows.start({
-          sessionId: agent.id,
-          workflow: "feature",
-        });
-        // Marking it done without starting it would skip the approval.
-        await expect(
-          workflows.step({
-            note: "n",
-            sessionId: agent.id,
-            step: "deploy",
-            action: "done",
-          }),
-        ).rejects.toThrow("needs the user's approval");
-        const gated = await workflows.step({
-          sessionId: agent.id,
-          step: "deploy",
-          action: "start",
-          note: "Release 1.2",
-        });
-        expect(gated.waiting).toBe(true);
-        expect(states(gated.run).deploy).toBe("waiting");
-        expect(raised).toEqual([
-          {
-            sessionId: agent.id,
-            reason: "Approve step 'deploy' of workflow 'feature': Release 1.2",
-          },
-        ]);
-        await expect(
-          workflows.step({
-            note: "n",
-            sessionId: agent.id,
-            step: "deploy",
-            action: "done",
-          }),
-        ).rejects.toThrow("waits for the user's approval");
-
-        const approved = await workflows.approve({ runId: gated.run.id });
-        expect(states(approved.run).deploy).toBe("active");
-        expect(approved.told).toBe(true);
-        expect(cleared).toEqual([agent.id]);
-        expect(delivered[0]?.line).toContain("approved step 'deploy'");
-
-        // Going back to a gated step needs another approval.
-        await workflows.step({
+  test("a 'user' gate waits on done until the user approves what came out", async () => {
+    await withWorkflows(async ({ workflows, session, raised, cleared }) => {
+      const agent = session();
+      await workflows.start({ sessionId: agent.id, workflow: "feature" });
+      await workflows.step({
+        sessionId: agent.id,
+        step: "deploy",
+        action: "start",
+        note: "Release 1.2",
+      });
+      // The agent cannot move on before the user saw the result.
+      await expect(
+        workflows.step({
           note: "n",
           sessionId: agent.id,
-          step: "deploy",
+          step: "validate-on-prod",
+          action: "start",
+        }),
+      ).rejects.toThrow("needs the user's approval when it is done");
+      const done = await workflows.step({
+        sessionId: agent.id,
+        step: "deploy",
+        action: "done",
+        note: "1.2 is on the beta feed",
+      });
+      expect(done.waiting).toBe(true);
+      expect(states(done.run).deploy).toBe("waiting");
+      expect(done.run.steps.find((step) => step.name === "deploy")?.note).toBe(
+        "1.2 is on the beta feed",
+      );
+      expect(raised).toEqual([
+        {
+          sessionId: agent.id,
+          reason:
+            "Approve the result of step 'deploy' of workflow 'feature': 1.2 is on the beta feed",
+        },
+      ]);
+      await expect(
+        workflows.step({
+          note: "n",
+          sessionId: agent.id,
+          step: "validate-on-prod",
+          action: "start",
+        }),
+      ).rejects.toThrow("waits for the user to approve what came out");
+
+      const approved = workflows.approve(agent.id);
+      expect(states(approved).deploy).toBe("done");
+      expect(states(approved)["validate-on-prod"]).toBe("pending");
+      expect(cleared).toEqual([agent.id]);
+      expect(() => workflows.approve(agent.id)).toThrow(
+        "is not waiting for an approval",
+      );
+    });
+  });
+
+  test("going back into a step that waits on its result takes the question away", async () => {
+    await withWorkflows(async ({ workflows, session, cleared }) => {
+      const agent = session();
+      await workflows.start({ sessionId: agent.id, workflow: "feature" });
+      await workflows.step({
+        sessionId: agent.id,
+        step: "deploy",
+        action: "start",
+        note: "n",
+      });
+      await workflows.step({
+        sessionId: agent.id,
+        step: "deploy",
+        action: "done",
+        note: "n",
+      });
+      const back = await workflows.step({
+        sessionId: agent.id,
+        step: "deploy",
+        action: "start",
+        note: "Change it first",
+      });
+      expect(back.waiting).toBe(false);
+      expect(states(back.run).deploy).toBe("active");
+      expect(cleared).toEqual([agent.id]);
+    });
+  });
+
+  test("a 'before' gate waits on start; approval starts the step", async () => {
+    await withWorkflows(async ({ workflows, session, raised, cleared }) => {
+      const agent = session();
+      await workflows.start({ sessionId: agent.id, workflow: "feature" });
+      const gated = await workflows.step({
+        sessionId: agent.id,
+        step: "test",
+        action: "start",
+        note: "Run the suite",
+      });
+      expect(gated.waiting).toBe(true);
+      expect(states(gated.run).test).toBe("waiting");
+      expect(raised[0]?.reason).toBe(
+        "Approve starting step 'test' of workflow 'feature': Run the suite",
+      );
+      await expect(
+        workflows.step({
+          note: "n",
+          sessionId: agent.id,
+          step: "test",
           action: "done",
-        });
-        const again = await workflows.step({
-          note: "n",
-          sessionId: agent.id,
-          step: "deploy",
-          action: "start",
-        });
-        expect(again.waiting).toBe(true);
-      },
-    );
+        }),
+      ).rejects.toThrow("waits for the user's approval to start");
+
+      expect(states(workflows.approve(agent.id)).test).toBe("active");
+      expect(cleared).toEqual([agent.id]);
+
+      // Going back to it needs another approval.
+      await workflows.step({
+        note: "n",
+        sessionId: agent.id,
+        step: "test",
+        action: "done",
+      });
+      const again = await workflows.step({
+        note: "n",
+        sessionId: agent.id,
+        step: "test",
+        action: "start",
+      });
+      expect(again.waiting).toBe(true);
+    });
   });
 
   test("a skip needs a reason, and the run ends when every step is finished", async () => {

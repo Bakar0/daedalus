@@ -175,7 +175,9 @@ export function StepView({
       <div className="file-view-fields">
         {step.gate && (
           <Field label="Gate">
-            Waits for your approval in the Workflow pane before it starts.
+            {step.gate === "before"
+              ? "The agent asks you before it starts this step."
+              : "The agent asks you to approve what comes out of this step before it moves on."}
           </Field>
         )}
         <Field label="Used by">

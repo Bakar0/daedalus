@@ -44,7 +44,7 @@ describe("file read views", () => {
     const html = renderToStaticMarkup(
       <StepView flows={[flow]} onFlow={() => {}} step={steps[1]!} />,
     );
-    expect(html).toContain("Waits for your approval");
+    expect(html).toContain("approve what comes out of this step");
     expect(html).toMatch(/Used by.*bug/s);
   });
 

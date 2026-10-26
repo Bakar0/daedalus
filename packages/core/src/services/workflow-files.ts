@@ -83,10 +83,10 @@ export function parseStepFile(
   if (!nameText)
     throw new DaedalusError("VALIDATION", "The 'name' field is required");
   const gate = stringValue(fields.gate) ?? null;
-  if (gate !== null && gate !== "user")
+  if (gate !== null && gate !== "user" && gate !== "before")
     throw new DaedalusError(
       "VALIDATION",
-      "'gate' must be 'user', or left out for a step that needs no approval",
+      "'gate' must be 'user' (the user approves what the step produced) or 'before' (the user approves starting it), or left out",
     );
   if (!body)
     throw new DaedalusError(
@@ -298,7 +298,7 @@ export interface WorkflowFile {
   steps?: string[];
   dynamic?: boolean;
   loop?: string | null;
-  gate?: "user" | null;
+  gate?: "user" | "before" | null;
   problem: string | null;
 }
 

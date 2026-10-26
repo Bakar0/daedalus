@@ -148,7 +148,7 @@ const ALLOWED: Record<string, Spec> = {
     positionals: { min: 1, max: 1 },
   },
   "workflow approve": {
-    values: [SESSION_FLAG, "note"],
+    values: [SESSION_FLAG],
     positionals: { min: 0, max: 0 },
   },
   "workflow status": {

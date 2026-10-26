@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { ensureDirectory, pathExists, writeTextFile } from "@daedalus/platform";
 import type {
   AgentSession,
+  WorkflowGate,
   WorkflowRun,
   WorkflowRunStep,
   WorkflowStepDefinition,
@@ -10,7 +11,6 @@ import type {
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { ActivityService } from "./activity";
-import type { SessionChannel } from "./session-channel";
 import {
   deleteWorkflowFile,
   ensureWorkflowsFolder,
@@ -35,6 +35,10 @@ const FINISHED: ReadonlySet<WorkflowStepState> = new Set(["done", "skipped"]);
 /** A step the run is in: active, or waiting for the user's approval. */
 const isLive = (step: { state: WorkflowStepState }) =>
   step.state === "active" || step.state === "waiting";
+
+/** A step done by the agent and waiting for the user to approve its result. */
+const awaitsResult = (step: WorkflowRunStep) =>
+  step.state === "waiting" && step.gate === "user";
 
 const noWorkflow = (name: string, catalog: WorkflowCatalog) =>
   `No workflow '${name}'. Workflows: ${catalog.workflows.map((item) => item.name).join(", ") || "none"}`;
@@ -87,7 +91,6 @@ export class WorkflowService {
     private readonly activity: Pick<ActivityService, "raise" | "clear">,
     /** The user's switch for workflows, in Settings › Sessions. */
     private readonly enabled: () => boolean,
-    private readonly channel?: Pick<SessionChannel, "deliver">,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -131,7 +134,7 @@ export class WorkflowService {
    */
   async instructions(run: WorkflowRun): Promise<{
     notes: string;
-    steps: { name: string; gate: boolean; body: string }[];
+    steps: { name: string; gate: WorkflowGate | null; body: string }[];
   }> {
     const catalog = await this.catalog();
     return {
@@ -140,7 +143,7 @@ export class WorkflowService {
         "",
       steps: run.steps.map((step) => ({
         name: step.name,
-        gate: step.gate === "user",
+        gate: step.gate,
         body:
           catalog.steps.find((item) => item.name === step.name)?.body ??
           step.description,
@@ -441,10 +444,13 @@ export class WorkflowService {
 
   /**
    * Moves one step. Starting a step finishes the one that was active, so an
-   * agent that forgets a `done` still shows where it is. Starting a step that
-   * already ended goes back to it. A gated step waits for the user instead,
-   * and raises attention saying so. When every step has finished, the run
-   * ends, or a circular one goes round again from its loop step.
+   * agent that forgets a `done` still shows where it is, except one whose
+   * result the user has to approve. Starting a step that already ended goes
+   * back to it. Gates wait for the user and raise attention: a `before` gate
+   * when its step starts, a `user` gate when its step is done, until the
+   * user approves what came out; no other step starts meanwhile. When every
+   * step has finished, the run ends, or a circular one goes round again from
+   * its loop step.
    */
   async step(input: {
     sessionId: string;
@@ -467,18 +473,31 @@ export class WorkflowService {
             : 'Say why the step is skipped with --note "<one line>"',
       );
     const now = this.now().toISOString();
-    let steps = run.steps.map((step) => ({ ...step }));
+    const steps = run.steps.map((step) => ({ ...step }));
     const target = steps[index]!;
     let waiting = false;
     if (input.action === "start") {
-      for (const step of steps)
-        if (step !== target && step.state === "active") {
+      for (const step of steps) {
+        if (step === target) continue;
+        if (awaitsResult(step))
+          throw new DaedalusError(
+            "CONFLICT",
+            `Step '${step.name}' waits for the user to approve what came out. Ask them; to change it first, start '${step.name}' again.`,
+          );
+        if (step.state === "active" && step.gate === "user" && !step.approvedAt)
+          throw new DaedalusError(
+            "CONFLICT",
+            `Step '${step.name}' needs the user's approval when it is done. Finish it with 'done' and a note saying what to approve.`,
+          );
+        if (step.state === "active") {
           step.state = "done";
           step.endedAt = now;
         }
+      }
       // An approval covers one pass through the step; going back needs another.
-      if (FINISHED.has(target.state)) target.approvedAt = null;
-      waiting = target.gate === "user" && !target.approvedAt;
+      if (FINISHED.has(target.state) || awaitsResult(target))
+        target.approvedAt = null;
+      waiting = target.gate === "before" && !target.approvedAt;
       target.state = waiting ? "waiting" : "active";
       target.startedAt = now;
       target.endedAt = null;
@@ -489,25 +508,49 @@ export class WorkflowService {
       if (target.state === "waiting")
         throw new DaedalusError(
           "CONFLICT",
-          `Step '${target.name}' waits for the user's approval`,
+          awaitsResult(target)
+            ? `Step '${target.name}' already waits for the user to approve what came out`
+            : `Step '${target.name}' waits for the user's approval to start`,
         );
-      // A gated step is done only after the user approved it. Skipping it
-      // stays possible: that does not do what the gate guards.
-      if (
-        input.action === "done" &&
-        target.gate === "user" &&
-        !target.approvedAt
-      )
-        throw new DaedalusError(
-          "CONFLICT",
-          `Step '${target.name}' needs the user's approval; start it so they are asked`,
-        );
-      target.state = input.action === "done" ? "done" : "skipped";
+      // A step whose result the user approves waits here, holding what to
+      // approve as its note. Skipping it does not: nothing came out.
+      waiting =
+        input.action === "done" && target.gate === "user" && !target.approvedAt;
+      target.state = waiting
+        ? "waiting"
+        : input.action === "done"
+          ? "done"
+          : "skipped";
       target.startedAt ??= now;
-      target.endedAt = now;
-      target.waitingSessionId = null;
+      target.endedAt = waiting ? null : now;
+      target.waitingSessionId = waiting ? session.id : null;
       target.note = note;
     }
+    // Leaving a step that was waiting, by going back into it, takes the
+    // question away.
+    if (!waiting && run.steps.some((step) => step.state === "waiting"))
+      this.activity.clear(session.id);
+    const { run: saved, looped } = this.settle(run, steps);
+    if (waiting)
+      await this.activity.raise({
+        sessionId: session.id,
+        reason:
+          target.gate === "before"
+            ? `Approve starting step '${target.name}' of workflow '${run.workflow}': ${note}`
+            : `Approve the result of step '${target.name}' of workflow '${run.workflow}': ${note}`,
+      });
+    return { run: saved, waiting, looped };
+  }
+
+  /**
+   * Saves the run's steps, and ends it when every step has finished, or
+   * starts a circular run's next iteration from its loop step.
+   */
+  private settle(
+    run: WorkflowRun,
+    changed: WorkflowRunStep[],
+  ): { run: WorkflowRun; looped: boolean } {
+    let steps = changed;
     const finished = steps.every((step) => FINISHED.has(step.state));
     let iteration = run.iteration;
     let history = run.history;
@@ -530,29 +573,23 @@ export class WorkflowService {
       );
       iteration += 1;
     }
-    const saved = this.save(
-      { ...run, steps, iteration, history },
-      finished && !looped,
-    );
-    if (waiting)
-      await this.activity.raise({
-        sessionId: session.id,
-        reason: `Approve step '${target.name}' of workflow '${run.workflow}'${note ? `: ${note}` : ""}`,
-      });
-    return { run: saved, waiting, looped };
+    return {
+      run: this.save(
+        { ...run, steps, iteration, history },
+        finished && !looped,
+      ),
+      looped,
+    };
   }
 
   /**
-   * The user's approval of the step a run waits on. The waiting session's
-   * attention clears and, when Daedalus can reach it, it is told to go on.
+   * The user's approval, which they give in the conversation and the agent
+   * records: a `before` step starts, and a `user` step is done with what
+   * came out. The session's attention clears.
    */
-  async approve(input: {
-    runId: string;
-    note?: string;
-  }): Promise<{ run: WorkflowRun; told: boolean }> {
-    const run = this.repositories.workflows.find(input.runId);
-    if (!run)
-      throw new DaedalusError("NOT_FOUND", `No workflow run '${input.runId}'`);
+  approve(sessionId: string): WorkflowRun {
+    const session = this.requireSession(sessionId);
+    const run = this.requireOpen(session);
     const target = run.steps.find((step) => step.state === "waiting");
     if (!target)
       throw new DaedalusError(
@@ -560,42 +597,26 @@ export class WorkflowService {
         `Workflow '${run.workflow}' is not waiting for an approval`,
       );
     const now = this.now().toISOString();
-    const waitingSessionId = target.waitingSessionId;
     const steps = run.steps.map((step) =>
-      step === target
-        ? {
-            ...step,
-            state: "active" as const,
-            approvedAt: now,
-            waitingSessionId: null,
-          }
-        : step,
+      step !== target
+        ? step
+        : step.gate === "before"
+          ? {
+              ...step,
+              state: "active" as const,
+              approvedAt: now,
+              waitingSessionId: null,
+            }
+          : {
+              ...step,
+              state: "done" as const,
+              approvedAt: now,
+              endedAt: now,
+              waitingSessionId: null,
+            },
     );
-    const saved = this.save({ ...run, steps });
-    let told = false;
-    const session = waitingSessionId
-      ? this.repositories.findAgent(waitingSessionId)
-      : undefined;
-    if (session) {
-      this.activity.clear(session.id);
-      if (this.channel && session.status === "running") {
-        const outcome = await this.channel
-          .deliver(
-            session,
-            `Daedalus: the user approved step '${target.name}' of workflow '${run.workflow}'${input.note?.trim() ? ` (${input.note.trim()})` : ""}. Go on with it.`,
-            { when: "now" },
-          )
-          .catch(() => undefined);
-        told = outcome?.kind === "delivered";
-      }
-    }
-    return { run: saved, told };
-  }
-
-  /** Approval from inside a session, after the user said yes there. */
-  approveFor(sessionId: string, note?: string) {
-    const run = this.requireOpen(this.requireSession(sessionId));
-    return this.approve({ runId: run.id, ...(note ? { note } : {}) });
+    this.activity.clear(session.id);
+    return this.settle(run, steps).run;
   }
 
   /**
