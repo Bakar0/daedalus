@@ -5,11 +5,18 @@ import type { UUID } from "./index";
  * file in `instructions/steps/` holds what the agent does in it, either full
  * instructions or one line naming a command or skill.
  */
+/**
+ * Where a step waits for the user:
+ * - `user`: after the agent did it. The step is done once the user approves
+ *   what came out, and the next one cannot start before.
+ * - `before`: before the agent starts it, such as before pushing.
+ */
+export type WorkflowGate = "user" | "before";
+
 export interface WorkflowStepDefinition {
   name: string;
   description: string;
-  /** `user`: the agent waits for the user's approval before doing the step. */
-  gate: "user" | null;
+  gate: WorkflowGate | null;
   body: string;
 }
 
@@ -36,7 +43,8 @@ export interface WorkflowDefinition {
 
 /**
  * - `pending`: not reached yet.
- * - `waiting`: a gated step the agent reached; it waits for the user.
+ * - `waiting`: a gated step waiting for the user: to start, for a `before`
+ *   gate, or to approve what came out, for a `user` gate.
  * - `active`: the step the agent is doing now.
  * - `done`, `skipped`: finished, with a note saying why when skipped.
  */
@@ -46,12 +54,12 @@ export type WorkflowStepState =
 export interface WorkflowRunStep {
   name: string;
   description: string;
-  gate: "user" | null;
+  gate: WorkflowGate | null;
   state: WorkflowStepState;
   startedAt: string | null;
   endedAt: string | null;
   approvedAt: string | null;
-  /** The session waiting on a gated step, which approval tells to go on. */
+  /** The session waiting on a gated step, whose attention approval clears. */
   waitingSessionId: string | null;
   /** What the agent said it would do in this step when it started it. */
   plan: string | null;

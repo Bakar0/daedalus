@@ -18,32 +18,6 @@ export const confirmDiscard = () =>
     danger: true,
   });
 
-export function PlainRow({
-  label,
-  note,
-  onSelect,
-  selected,
-}: {
-  label: string;
-  note?: string;
-  onSelect: () => void;
-  selected: boolean;
-}) {
-  return (
-    <li>
-      <button
-        aria-current={selected ? "true" : undefined}
-        className={`workflows-file${selected ? " selected" : ""}`}
-        onClick={onSelect}
-        type="button"
-      >
-        <span className="workflows-file-name">{label}</span>
-        {note && <small>{note}</small>}
-      </button>
-    </li>
-  );
-}
-
 export function Group({
   children,
   onNew,
@@ -87,43 +61,50 @@ export function TabIntro({
 }
 
 /**
- * One file, edited as the markdown it is. Save is on while the text differs
- * from what is saved, or the file is new; Cmd-S saves too.
+ * One file. It opens on `view`, the file read as the agent reads it, and
+ * Edit turns it into its markdown; Save goes back to the view, and Cancel
+ * drops the changes. A file with no view, such as a new one, is edited
+ * straight away. Cmd-S saves.
  */
 export function FileDetail({
   alert,
   children,
   dirty,
   draft,
+  editing,
   hint,
   label,
+  onCancel,
   onDelete,
   onDraft,
-  onRevert,
+  onEdit,
   onSave,
   path,
-  saved,
   saving,
   title,
+  view,
 }: {
   /** Why the last save was refused, or what is wrong with the file. */
   alert?: string | null;
-  /** Shown between the heading and the text, such as a workflow's steps. */
+  /** Shown under the heading in both modes, such as a step's gate. */
   children?: ReactNode;
   dirty: boolean;
   draft: string;
+  editing: boolean;
   hint: string;
   label: string;
+  onCancel: () => void;
   /** Present when the file can be deleted. */
   onDelete?: () => void;
   onDraft: (text: string) => void;
-  onRevert: () => void;
+  onEdit: () => void;
   onSave: () => void;
   path: string;
-  saved: string;
   saving: boolean;
   title: string;
+  view?: ReactNode;
 }) {
+  const reading = !editing && view !== undefined;
   return (
     <section aria-label={label} className="workflows-detail">
       <header className="workflows-detail-heading">
@@ -137,22 +118,30 @@ export function FileDetail({
               Delete
             </button>
           )}
-          <button
-            className="quiet"
-            disabled={draft === saved || saving}
-            onClick={onRevert}
-            type="button"
-          >
-            Revert
-          </button>
-          <button
-            className="primary"
-            disabled={!dirty || saving}
-            onClick={onSave}
-            type="button"
-          >
-            {saving ? "Saving…" : "Save"}
-          </button>
+          {reading ? (
+            <button className="quiet" onClick={onEdit} type="button">
+              Edit
+            </button>
+          ) : (
+            <>
+              <button
+                className="quiet"
+                disabled={saving}
+                onClick={onCancel}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="primary"
+                disabled={!dirty || saving}
+                onClick={onSave}
+                type="button"
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </>
+          )}
         </div>
       </header>
       {children}
@@ -161,20 +150,73 @@ export function FileDetail({
           {alert}
         </p>
       )}
-      <textarea
-        aria-label="File text"
-        className="workflows-text"
-        onChange={(event) => onDraft(event.target.value)}
-        onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === "s") {
-            event.preventDefault();
-            if (dirty && !saving) onSave();
-          }
-        }}
-        spellCheck={false}
-        value={draft}
-      />
-      <p className="workflows-hint">{hint}</p>
+      {reading ? (
+        <div className="file-view">{view}</div>
+      ) : (
+        <>
+          <textarea
+            aria-label="File text"
+            autoFocus
+            className="workflows-text"
+            onChange={(event) => onDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "s") {
+                event.preventDefault();
+                if (dirty && !saving) onSave();
+              }
+            }}
+            spellCheck={false}
+            value={draft}
+          />
+          <p className="workflows-hint">{hint}</p>
+        </>
+      )}
     </section>
+  );
+}
+
+/** A file in the list: its name and a count on one line, a summary under it. */
+export function FileRow({
+  badge,
+  meta,
+  name,
+  onSelect,
+  problem,
+  selected,
+  summary,
+}: {
+  /** A short tag after the name, such as "gate". */
+  badge?: string;
+  /** Counts on the right, such as "6 steps · 1 gate". */
+  meta?: string;
+  name: string;
+  onSelect: () => void;
+  problem?: string | null;
+  selected: boolean;
+  summary?: string;
+}) {
+  return (
+    <li>
+      <button
+        aria-current={selected ? "true" : undefined}
+        className={`workflows-file${selected ? " selected" : ""}`}
+        onClick={onSelect}
+        type="button"
+      >
+        <span className="workflows-file-line">
+          <span className="workflows-file-name">
+            {name}
+            {badge && <span className="workflow-gate">{badge}</span>}
+            {problem && (
+              <span className="workflows-problem-mark" title={problem}>
+                !
+              </span>
+            )}
+          </span>
+          {meta && <span className="workflows-file-meta">{meta}</span>}
+        </span>
+        {summary && <small>{summary}</small>}
+      </button>
+    </li>
   );
 }

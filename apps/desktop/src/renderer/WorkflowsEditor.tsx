@@ -1,8 +1,9 @@
 /**
- * The Workflows tab: the user's workflows, steps and choosing rules, each
- * edited as the markdown it is. Daedalus checks a workflow or step the way a
- * run reads it and refuses to save one a run could not use, with the reason.
- * Examples to copy are in the docs the header links to.
+ * The Workflows tab: the user's workflows, steps and choosing rules. Each
+ * opens as a read view and is edited as the markdown it is. Daedalus checks a
+ * workflow or step the way a run reads it and refuses to save one a run could
+ * not use, with the reason. Examples to copy are in the docs the header links
+ * to.
  */
 import { useEffect, useState } from "react";
 import type {
@@ -10,14 +11,15 @@ import type {
   WorkflowFileKindDto,
   WorkflowFilesDto,
 } from "@daedalus/protocol";
+import { MarkdownView, StepView, WorkflowView } from "./FileViews";
 import type { DesktopClient } from "./client-types";
 import { askConfirm } from "./dialogs";
 import {
   confirmDiscard,
   DOCS_URL,
   FileDetail,
+  FileRow,
   Group,
-  PlainRow,
   TabIntro,
 } from "./FileEditorParts";
 
@@ -73,48 +75,24 @@ function titleOf(selection: Selection): string {
 
 const HINTS: Record<Selection["kind"], string> = {
   flow: "Frontmatter: name, description, when, steps: [a, b] or steps: dynamic (the agent names its own), and optionally loop: <step> and until. Runs already started keep their copy; a change applies from the next run.",
-  step: "Frontmatter: name, description, and optionally gate: user. The body is what the agent does in this step.",
+  step: "Frontmatter: name, description, and optionally gate: user (you approve its result) or gate: before (you agree before it starts). The body is what the agent does in this step.",
   choosing:
     "The rules an agent reads, in order, to pick a workflow for the work.",
 };
 
-function FileRow({
-  file,
-  onSelect,
-  selected,
-}: {
-  file: WorkflowFileDto;
-  onSelect: () => void;
-  selected: boolean;
-}) {
-  return (
-    <li>
-      <button
-        aria-current={selected ? "true" : undefined}
-        className={`workflows-file${selected ? " selected" : ""}`}
-        onClick={onSelect}
-        type="button"
-      >
-        <span className="workflows-file-name">
-          {file.name}
-          {file.gate && <span className="workflow-gate">gate</span>}
-          {file.loop && <span className="workflow-tag">↻ {file.loop}</span>}
-          {file.problem && (
-            <span className="workflows-problem-mark" title={file.problem}>
-              !
-            </span>
-          )}
-        </span>
-        {file.dynamic ? (
-          <small>Steps named by the agent each run</small>
-        ) : file.steps ? (
-          <small>{file.steps.join(" → ")}</small>
-        ) : (
-          file.description && <small>{file.description}</small>
-        )}
-      </button>
-    </li>
-  );
+const plural = (count: number, word: string) =>
+  `${count} ${word}${count === 1 ? "" : "s"}`;
+
+/** "6 steps · 1 gate", or "dynamic" for a workflow whose agent names them. */
+function flowMeta(flow: WorkflowFileDto, steps: WorkflowFileDto[]): string {
+  if (flow.dynamic) return "dynamic";
+  const names = flow.steps ?? [];
+  const gates = names.filter(
+    (name) => steps.find((step) => step.name === name)?.gate,
+  ).length;
+  return [plural(names.length, "step"), gates ? plural(gates, "gate") : ""]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 export function WorkflowsEditor({
@@ -127,6 +105,8 @@ export function WorkflowsEditor({
   const [files, setFiles] = useState<WorkflowFilesDto>();
   const [selection, setSelection] = useState<Selection>({ kind: "choosing" });
   const [draft, setDraft] = useState("");
+  // A file opens on its read view; Edit shows its markdown.
+  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refusal, setRefusal] = useState<string>();
 
@@ -166,10 +146,26 @@ export function WorkflowsEditor({
       : (current?.path ?? "Saved under the name in its frontmatter");
 
   const select = async (next: Selection) => {
-    if (draft !== saved && !(await confirmDiscard())) return;
+    if (editing && draft !== saved && !(await confirmDiscard())) return;
     setSelection(next);
     setDraft(textOf(files, next));
     setRefusal(undefined);
+    setEditing("name" in next && next.name === null);
+  };
+
+  const cancel = () => {
+    setDraft(saved);
+    setRefusal(undefined);
+    setEditing(false);
+    // A new file that was never saved has nothing to show.
+    if (isNew) {
+      const own = files.flows[0];
+      const next: Selection = own
+        ? { kind: "flow", name: own.name }
+        : { kind: "choosing" };
+      setSelection(next);
+      setDraft(textOf(files, next));
+    }
   };
 
   const save = async () => {
@@ -189,6 +185,7 @@ export function WorkflowsEditor({
       return;
     }
     setFiles(response.data);
+    setEditing(false);
     // A file is named after its `name` or heading, which the save may have
     // changed, so find it again by what was written.
     if (selection.kind === "flow" || selection.kind === "step") {
@@ -229,6 +226,7 @@ export function WorkflowsEditor({
     setSelection(next);
     setDraft(textOf(response.data, next));
     setRefusal(undefined);
+    setEditing(false);
   };
 
   const is = (kind: Selection["kind"], name?: string) =>
@@ -254,10 +252,13 @@ export function WorkflowsEditor({
           >
             {files.flows.map((file) => (
               <FileRow
-                file={file}
                 key={file.name}
+                meta={flowMeta(file, files.steps)}
+                name={file.name}
                 onSelect={() => void select({ kind: "flow", name: file.name })}
+                problem={file.problem}
                 selected={is("flow", file.name)}
+                summary={file.description}
               />
             ))}
             {files.flows.length === 0 && (
@@ -265,67 +266,76 @@ export function WorkflowsEditor({
                 None yet. Agents name their own steps until you add one.
               </li>
             )}
-            <PlainRow
-              label="Choosing rules"
-              note="How an agent picks a workflow"
+            <FileRow
+              name="Choosing rules"
               onSelect={() => void select({ kind: "choosing" })}
               selected={is("choosing")}
+              summary="How an agent picks a workflow"
             />
           </Group>
           <Group
             onNew={() => void select({ kind: "step", name: null })}
             title="Steps"
           >
-            {files.steps.map((file) => (
-              <FileRow
-                file={file}
-                key={file.name}
-                onSelect={() => void select({ kind: "step", name: file.name })}
-                selected={is("step", file.name)}
-              />
-            ))}
+            {files.steps.map((file) => {
+              const users = files.flows.filter((flow) =>
+                flow.steps?.includes(file.name),
+              ).length;
+              return (
+                <FileRow
+                  key={file.name}
+                  {...(file.gate ? { badge: "gate" } : {})}
+                  meta={users ? `used by ${users}` : "unused"}
+                  name={file.name}
+                  onSelect={() =>
+                    void select({ kind: "step", name: file.name })
+                  }
+                  problem={file.problem}
+                  selected={is("step", file.name)}
+                  summary={file.description}
+                />
+              );
+            })}
           </Group>
         </nav>
         <FileDetail
           alert={refusal ?? current?.problem}
           dirty={dirty}
           draft={draft}
+          editing={editing}
           hint={HINTS[selection.kind]}
           label="Workflow file"
+          onCancel={cancel}
           onDraft={setDraft}
-          onRevert={() => {
-            setDraft(saved);
-            setRefusal(undefined);
-          }}
+          onEdit={() => setEditing(true)}
           onSave={() => void save()}
           path={path}
-          saved={saved}
           saving={saving}
           title={titleOf(selection)}
           {...("name" in selection && selection.name
             ? { onDelete: () => void remove() }
             : {})}
-        >
-          {current?.steps && current.steps.length > 0 && (
-            <div aria-label="Steps" className="workflows-chain">
-              {current.steps.map((step, index) => (
-                <span key={step}>
-                  {index > 0 && <span aria-hidden="true"> → </span>}
-                  <button
-                    className="workflows-chip"
-                    onClick={() => void select({ kind: "step", name: step })}
-                    type="button"
-                  >
-                    {step}
-                  </button>
-                </span>
-              ))}
-              {current.loop && (
-                <span className="workflow-tag">↻ back to {current.loop}</span>
-              )}
-            </div>
-          )}
-        </FileDetail>
+          view={
+            selection.kind === "choosing" ? (
+              <MarkdownView
+                empty="No rules yet. Agents build a workflow for each piece of work."
+                text={files.choosing.text}
+              />
+            ) : !current ? undefined : selection.kind === "flow" ? (
+              <WorkflowView
+                flow={current}
+                onStep={(name) => void select({ kind: "step", name })}
+                steps={files.steps}
+              />
+            ) : (
+              <StepView
+                flows={files.flows}
+                onFlow={(name) => void select({ kind: "flow", name })}
+                step={current}
+              />
+            )
+          }
+        />
       </div>
     </div>
   );

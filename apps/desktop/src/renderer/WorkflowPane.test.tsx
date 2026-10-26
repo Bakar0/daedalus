@@ -17,7 +17,12 @@ const run = (states: WorkflowStepStateDto[]): WorkflowRunDto => ({
     endedAt: null,
     approvedAt: null,
     plan: name === "review" ? "Reading the diff of index.ts" : null,
-    note: name === "research" ? "Found the index code" : null,
+    note:
+      name === "research"
+        ? "Found the index code"
+        : name === "deploy"
+          ? "1.2 is on the beta feed"
+          : null,
     dynamic: false,
   })),
   dynamic: false,
@@ -35,11 +40,7 @@ const run = (states: WorkflowStepStateDto[]): WorkflowRunDto => ({
 describe("workflow pane", () => {
   test("a vertical list: done steps checked, the current one spinning", () => {
     const html = renderToStaticMarkup(
-      <WorkflowSteps
-        busy={false}
-        onApprove={() => {}}
-        run={run(["done", "active", "pending"])}
-      />,
+      <WorkflowSteps run={run(["done", "active", "pending"])} />,
     );
     expect(html.match(/<li/g)).toHaveLength(3);
     expect(html).toContain("workflow-mark state-done");
@@ -49,22 +50,17 @@ describe("workflow pane", () => {
     expect(html).not.toContain("Approve");
   });
 
-  test("a waiting gate has Approve on its own row", () => {
+  test("a step waiting on its result says so and shows what to approve, with no button", () => {
     const html = renderToStaticMarkup(
-      <WorkflowSteps
-        busy={false}
-        onApprove={() => {}}
-        run={run(["done", "done", "waiting"])}
-      />,
+      <WorkflowSteps run={run(["done", "done", "waiting"])} />,
     );
-    expect(html).toMatch(/deploy.*Approve/s);
+    expect(html).toMatch(/deploy.*waiting for you.*1\.2 is on the beta feed/s);
+    expect(html).not.toContain("<button");
   });
 
   test("the pane names the workflow; without a run it says so in one dim line", () => {
     const open = renderToStaticMarkup(
       <WorkflowPane
-        busy={false}
-        onApprove={() => {}}
         enabled
         onOpenSettings={() => {}}
         onOpenEditor={() => {}}
@@ -81,8 +77,6 @@ describe("workflow pane", () => {
     expect(open).not.toContain("Resize");
     const empty = renderToStaticMarkup(
       <WorkflowPane
-        busy={false}
-        onApprove={() => {}}
         enabled
         onOpenSettings={() => {}}
         onOpenEditor={() => {}}
@@ -111,8 +105,6 @@ describe("workflow pane", () => {
     };
     const html = renderToStaticMarkup(
       <WorkflowPane
-        busy={false}
-        onApprove={() => {}}
         enabled
         onOpenSettings={() => {}}
         onOpenEditor={() => {}}
@@ -127,11 +119,7 @@ describe("workflow pane", () => {
 
   test("a step shows its plan until done, then what came out, cut to fit", () => {
     const html = renderToStaticMarkup(
-      <WorkflowSteps
-        busy={false}
-        onApprove={() => {}}
-        run={run(["done", "active", "pending"])}
-      />,
+      <WorkflowSteps run={run(["done", "active", "pending"])} />,
     );
     // A row with a line opens it on a click; the line is the step's own.
     expect(html).toMatch(
@@ -143,9 +131,7 @@ describe("workflow pane", () => {
   test("off, the pane says so and links to Settings, with no steps", () => {
     const html = renderToStaticMarkup(
       <WorkflowPane
-        busy={false}
         enabled={false}
-        onApprove={() => {}}
         onOpenEditor={() => {}}
         onOpenSettings={() => {}}
         run={run(["active", "pending", "pending"])}

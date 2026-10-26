@@ -83,10 +83,10 @@ export function parseStepFile(
   if (!nameText)
     throw new DaedalusError("VALIDATION", "The 'name' field is required");
   const gate = stringValue(fields.gate) ?? null;
-  if (gate !== null && gate !== "user")
+  if (gate !== null && gate !== "user" && gate !== "before")
     throw new DaedalusError(
       "VALIDATION",
-      "'gate' must be 'user', or left out for a step that needs no approval",
+      "'gate' must be 'user' (the user approves what the step produced) or 'before' (the user approves starting it), or left out",
     );
   if (!body)
     throw new DaedalusError(
@@ -290,10 +290,15 @@ export interface WorkflowFile {
   path: string;
   text: string;
   description: string;
+  /** For a workflow: the work it fits. */
+  when?: string;
+  until?: string;
+  /** What follows the frontmatter: a step's instructions, a workflow's notes. */
+  body?: string;
   steps?: string[];
   dynamic?: boolean;
   loop?: string | null;
-  gate?: "user" | null;
+  gate?: "user" | "before" | null;
   problem: string | null;
 }
 
@@ -324,7 +329,12 @@ async function readFiles(
 export async function readWorkflowFiles(root: string): Promise<WorkflowFiles> {
   const steps = await readFiles(workflowStepsPath(root), (text, name) => {
     const step = parseStepFile(text, name);
-    return { name: step.name, description: step.description, gate: step.gate };
+    return {
+      name: step.name,
+      description: step.description,
+      gate: step.gate,
+      body: step.body,
+    };
   });
   const known = new Set(
     steps.filter((step) => !step.problem).map((step) => step.name),
@@ -334,6 +344,9 @@ export async function readWorkflowFiles(root: string): Promise<WorkflowFiles> {
     return {
       name: flow.name,
       description: flow.description,
+      when: flow.when,
+      until: flow.until,
+      body: flow.body,
       ...(flow.dynamic ? { dynamic: true } : { steps: flow.steps }),
       loop: flow.loop,
     };

@@ -485,7 +485,6 @@ export async function createApplicationContext(
       config.home,
       activity,
       () => workflowsEnabled(config),
-      sessionChannel,
       options.now,
     ),
     routineDelivery,

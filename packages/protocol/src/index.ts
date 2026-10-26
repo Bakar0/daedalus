@@ -1336,7 +1336,11 @@ export type WorkflowStepStateDto =
 export interface WorkflowRunStepDto {
   name: string;
   description: string;
-  gate: "user" | null;
+  /**
+   * `user`: the user approves the step's result; `before`: the user agrees
+   * before it starts.
+   */
+  gate: "user" | "before" | null;
   state: WorkflowStepStateDto;
   startedAt: string | null;
   endedAt: string | null;
@@ -1368,12 +1372,17 @@ export interface WorkflowFileDto {
   path: string;
   text: string;
   description: string;
+  /** For a workflow: the work it fits, and when a circular one stops. */
+  when?: string;
+  until?: string;
+  /** What follows the frontmatter: a step's instructions, a workflow's notes. */
+  body?: string;
   /** For a workflow: its steps; for a step: whether it is gated. */
   steps?: string[];
   /** A workflow with `steps: dynamic`: each run names its own steps. */
   dynamic?: boolean;
   loop?: string | null;
-  gate?: "user" | null;
+  gate?: "user" | "before" | null;
   /** Why the file cannot be used, when it cannot. */
   problem: string | null;
 }
@@ -2088,11 +2097,6 @@ export interface DesktopRpcSchema {
         TaskDto
       >;
       taskSetStatus: Request<{ id: string; status: TaskStatus }, TaskDto>;
-      /** The user's approval of the gated step a run waits on. */
-      workflowApprove: Request<
-        { runId: string; note?: string },
-        { run: WorkflowRunDto; told: boolean }
-      >;
       /**
        * Assembled on demand, so it is a request rather than a snapshot field:
        * it reads `JOURNAL.md` and would otherwise ride along on every tick.

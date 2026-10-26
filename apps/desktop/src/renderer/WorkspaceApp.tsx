@@ -3152,8 +3152,6 @@ export function WorkspaceApp({
       run.sessionId ? [[run.sessionId, run] as const] : [],
     ),
   );
-  const approveWorkflowStep = (run: { id: string }) =>
-    void perform(client.request.workflowApprove({ runId: run.id }));
   // Workflows are the daedalus-workflows skill, off until the user turns it
   // on. Read again whenever a dialog closes, since Settings can change it.
   const [workflowsOn, setWorkflowsOn] = useState(false);
@@ -7455,10 +7453,8 @@ export function WorkspaceApp({
               {!workspacePanelCollapsed && activeSession?.kind === "agent" && (
                 <SidePanelDock>
                   <WorkflowPane
-                    busy={busy}
                     enabled={workflowsOn}
                     key={activeSession.id}
-                    onApprove={approveWorkflowStep}
                     onOpenSettings={() => {
                       setSettingsSection("sessions");
                       setModal("settings");

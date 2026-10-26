@@ -1,8 +1,8 @@
 /**
  * The focused session's workflow, under the side panel's tabs: one row per
  * step, a check when it is done and a spinner on the step the agent is in.
- * The agent reports the steps; the user only approves a gated one, and
- * folds the pane. The dock it sits in (SidePanelDock) resizes it.
+ * The agent reports the steps and asks for approvals in the conversation;
+ * the pane only shows a gated step waiting for the user, and folds. The dock it sits in (SidePanelDock) resizes it.
  */
 import { useState, type KeyboardEvent } from "react";
 import type { WorkflowRunDto, WorkflowStepStateDto } from "@daedalus/protocol";
@@ -10,7 +10,7 @@ import { timelineWhen } from "./TaskTimeline";
 
 const STATE_LABEL: Record<WorkflowStepStateDto, string> = {
   pending: "not started",
-  waiting: "waits for your approval",
+  waiting: "waiting for you",
   active: "in progress",
   done: "done",
   skipped: "skipped",
@@ -72,7 +72,9 @@ function stepTime(iso: string | null, now = new Date()): string {
  */
 function stepLine(step: WorkflowRunDto["steps"][number]): string | null {
   const finished = step.state === "done" || step.state === "skipped";
-  if (finished) return step.note ?? step.plan;
+  // A step waiting on its result holds what to approve as its note.
+  if (finished || (step.state === "waiting" && step.gate === "user"))
+    return step.note ?? step.plan;
   return step.plan ?? (step.dynamic ? step.description : null);
 }
 
@@ -161,15 +163,7 @@ function RunTags({ run }: { run: WorkflowRunDto }) {
   );
 }
 
-export function WorkflowSteps({
-  busy,
-  onApprove,
-  run,
-}: {
-  busy: boolean;
-  onApprove: (run: WorkflowRunDto) => void;
-  run: WorkflowRunDto;
-}) {
+export function WorkflowSteps({ run }: { run: WorkflowRunDto }) {
   const openRow = useOpenRow();
   const endLine = run.endedAt && run.endNote ? `Stopped: ${run.endNote}` : null;
   const end = openRow("end", endLine);
@@ -193,24 +187,24 @@ export function WorkflowSteps({
               <StepMark state={step.state} />
               <span className="workflow-step-name">
                 {step.name}
-                {step.gate && <span className="workflow-gate">gate</span>}
+                {step.gate && (
+                  <span
+                    className="workflow-gate"
+                    title={
+                      step.gate === "user"
+                        ? "You approve what comes out of this step"
+                        : "You agree before this step starts"
+                    }
+                  >
+                    gate
+                  </span>
+                )}
               </span>
               <time className="workflow-step-when">
                 {stepTime(step.endedAt ?? step.startedAt)}
               </time>
               {step.state === "waiting" && (
-                <button
-                  className="workflow-approve"
-                  disabled={busy}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onApprove(run);
-                  }}
-                  title={`Let the agent do step '${step.name}'`}
-                  type="button"
-                >
-                  Approve
-                </button>
+                <span className="workflow-waiting">waiting for you</span>
               )}
               {line && <span className="workflow-step-note">{line}</span>}
             </li>
@@ -270,18 +264,14 @@ export function WorkflowSteps({
  * The pane itself: a header that folds it, and the steps. With workflows off it says so and links to Settings. Without a run it says so in one dim line.
  */
 export function WorkflowPane({
-  busy,
   enabled,
-  onApprove,
   onOpenEditor,
   onOpenSettings,
   run,
   task,
 }: {
-  busy: boolean;
   /** Whether agents run work in workflows at all; off, the pane says so. */
   enabled: boolean;
-  onApprove: (run: WorkflowRunDto) => void;
   /** Opens Settings where workflows are turned on. */
   onOpenSettings: () => void;
   /** Opens the workflows editor as a center tab. */
@@ -362,7 +352,7 @@ export function WorkflowPane({
       {open &&
         (run ? (
           <div className="workflow-pane-body">
-            <WorkflowSteps busy={busy} onApprove={onApprove} run={run} />
+            <WorkflowSteps run={run} />
           </div>
         ) : (
           <p className="workflow-pane-empty">No workflow in this session</p>

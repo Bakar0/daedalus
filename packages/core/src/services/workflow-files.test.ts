@@ -38,7 +38,7 @@ async function copyDocExamples(folder: string, only?: string[]) {
 }
 
 describe("step and workflow files", () => {
-  test("a step reads its fields and body; a gate is 'user' or nothing", () => {
+  test("a step reads its fields and body; a gate is 'user', 'before' or nothing", () => {
     expect(
       parseStepFile(
         "---\ndescription: Ship it.\ngate: user\n---\n\nRun the release script.\n",
@@ -53,6 +53,9 @@ describe("step and workflow files", () => {
     expect(() =>
       parseStepFile("---\nname: x\ngate: lead\n---\nDo it.\n"),
     ).toThrow("'gate' must be 'user'");
+    expect(
+      parseStepFile("---\nname: x\ngate: before\n---\nDo it.\n").gate,
+    ).toBe("before");
     expect(() => parseStepFile("---\nname: x\n---\n")).toThrow(
       "no instructions",
     );
@@ -118,7 +121,7 @@ describe("step and workflow files", () => {
           .filter((item) => item.gate)
           .map((item) => item.name)
           .sort(),
-      ).toEqual(["decide", "prototype", "ship"]);
+      ).toEqual(["decide", "proof", "prototype"]);
     });
   });
 
