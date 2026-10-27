@@ -195,24 +195,33 @@ const AGENT_MESSAGE = /<agent-message from="([^"]+)"/g;
  * person. The transcript can tell, so this reads it.
  *
  * A launch is the `Agent` tool result whose `toolUseResult.status` is
- * `async_launched`, which only a real launch writes. A report is any of the
+ * `async_launched`, which only a real launch writes, or the `SendMessage`
+ * result naming a `resumedAgentId`: a message to an agent that already
+ * reported runs it again in the background under the same id. A report is any of the
  * three ways one comes back: the `<task-notification>` or the
  * `<agent-message>` hand-back Claude queues for the parent, or a `TaskOutput`
  * call that collected a finished task. Only queued entries and tool results
  * are read, never conversation text, so a transcript that merely quotes these
  * tags cannot settle an agent that is still running.
+ *
+ * A report settles only a launch it does not predate. After a resume, Claude
+ * writes the agent's earlier report into the transcript again with its
+ * original enqueue time, and that must not settle the new run.
  */
 export function pendingBackgroundAgents(
   text_: string,
   now = Date.now(),
 ): number {
   const launched = new Map<string, number>();
-  const reported = new Set<string>();
+  const reported = new Map<string, number>();
+  const report = (agentId: string, at: number) =>
+    reported.set(agentId, Math.max(reported.get(agentId) ?? at, at));
   for (const line of text_.split("\n")) {
     // Most lines are none of this; parsing only the candidates keeps a
     // multi-megabyte tail cheap.
     if (
       !line.includes("async_launched") &&
+      !line.includes("resumedAgentId") &&
       !line.includes("<task-notification>") &&
       !line.includes("<agent-message") &&
       !line.includes("retrieval_status")
@@ -227,6 +236,7 @@ export function pendingBackgroundAgents(
       toolUseResult?: {
         status?: unknown;
         agentId?: unknown;
+        resumedAgentId?: unknown;
         task?: { task_id?: unknown; status?: unknown };
       };
     };
@@ -236,15 +246,19 @@ export function pendingBackgroundAgents(
       // A truncated first line is expected when reading a tail.
       continue;
     }
+    const stamped = Date.parse(String(entry.timestamp));
     const result = entry.toolUseResult;
-    const agentId = text(result?.agentId);
-    if (result?.status === "async_launched" && agentId) {
-      const at = Date.parse(String(entry.timestamp));
-      launched.set(agentId, Number.isFinite(at) ? at : now);
-    }
+    const started =
+      result?.status === "async_launched"
+        ? text(result.agentId)
+        : text(result?.resumedAgentId);
+    if (started)
+      launched.set(started, Number.isFinite(stamped) ? stamped : now);
+    // Without a time of its own a report settles whatever came before it.
+    const at = Number.isFinite(stamped) ? stamped : Infinity;
     const collected = text(result?.task?.task_id);
     if (collected && text(result?.task?.status) !== "running")
-      reported.add(collected);
+      report(collected, at);
     const queued =
       entry.type === "queue-operation" && entry.operation === "enqueue"
         ? entry.content
@@ -253,11 +267,14 @@ export function pendingBackgroundAgents(
           : undefined;
     if (typeof queued !== "string") continue;
     for (const pattern of [TASK_ID, AGENT_MESSAGE])
-      for (const match of queued.matchAll(pattern)) reported.add(match[1]!);
+      for (const match of queued.matchAll(pattern)) report(match[1]!, at);
   }
   let pending = 0;
   for (const [agentId, at] of launched)
-    if (!reported.has(agentId) && now - at < BACKGROUND_AGENT_MAX_AGE_MS)
+    if (
+      (reported.get(agentId) ?? -Infinity) < at &&
+      now - at < BACKGROUND_AGENT_MAX_AGE_MS
+    )
       pending += 1;
   return pending;
 }

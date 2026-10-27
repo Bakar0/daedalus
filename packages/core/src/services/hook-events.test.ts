@@ -403,11 +403,14 @@ describe("Claude background agents", () => {
         description: "Map daedalus for on-call agent plan",
       },
     });
-  const notification = (agentId: string) =>
+  const notification = (
+    agentId: string,
+    timestamp = "2026-09-30T09:08:43.894Z",
+  ) =>
     JSON.stringify({
       type: "queue-operation",
       operation: "enqueue",
-      timestamp: "2026-09-30T09:08:43.894Z",
+      timestamp,
       content: `<task-notification>\n<task-id>${agentId}</task-id>\n<status>completed</status>\n</task-notification>`,
     });
   const handBack = (agentId: string) =>
@@ -424,6 +427,19 @@ describe("Claude background agents", () => {
       toolUseResult: {
         retrieval_status: status === "running" ? "timeout" : "success",
         task: { task_id: agentId, task_type: "local_agent", status },
+      },
+    });
+  // `SendMessage` to an agent that already reported starts it again in the
+  // background, as Claude Code 2.x writes it.
+  const resume = (agentId: string, timestamp: string) =>
+    JSON.stringify({
+      type: "user",
+      timestamp,
+      toolUseResult: {
+        success: true,
+        message: `Resuming agent ${agentId.slice(0, 7)}`,
+        resumedAgentId: agentId,
+        revivedAgentId: agentId,
       },
     });
   const stop = {
@@ -463,6 +479,26 @@ describe("Claude background agents", () => {
     expect(
       pendingBackgroundAgents([launch("a1"), quoted].join("\n"), now),
     ).toBe(1);
+  });
+
+  test("an agent resumed after its report is pending until it reports again", () => {
+    // Shaped like the session that showed done while its builder fixed review
+    // findings: the first report, the resume, then Claude's echo of that first
+    // report, which keeps its original enqueue time.
+    const first = notification("a1", "2026-09-30T09:04:00.000Z");
+    const resumed = [
+      launch("a1"),
+      first,
+      resume("a1", "2026-09-30T09:04:30.000Z"),
+      first,
+    ];
+    expect(pendingBackgroundAgents(resumed.join("\n"), now)).toBe(1);
+    expect(
+      pendingBackgroundAgents(
+        [...resumed, notification("a1", "2026-09-30T09:05:00.000Z")].join("\n"),
+        now,
+      ),
+    ).toBe(0);
   });
 
   test("a launch nobody reported for hours is presumed dead", () => {
