@@ -7,11 +7,25 @@ import type { UUID } from "./index";
  */
 /**
  * Where a step waits for the user:
- * - `user`: after the agent did it. The step is done once the user approves
- *   what came out, and the next one cannot start before.
- * - `before`: before the agent starts it, such as before pushing.
+ * - `start`: before the agent starts it, such as before pushing.
+ * - `result`: after the agent did it. The step is done once the user
+ *   approves what came out, and the next one cannot start before.
  */
-export type WorkflowGate = "user" | "before";
+export type WorkflowGate = "start" | "result";
+
+/**
+ * A gate as a file or a stored run spells it. `before` and `user` were the
+ * first names for `start` and `result`, and still read as them. Undefined
+ * for anything else.
+ */
+export function parseGate(
+  value: string | null | undefined,
+): WorkflowGate | null | undefined {
+  if (value === null || value === undefined) return null;
+  if (value === "start" || value === "before") return "start";
+  if (value === "result" || value === "user") return "result";
+  return undefined;
+}
 
 export interface WorkflowStepDefinition {
   name: string;

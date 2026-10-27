@@ -8,6 +8,7 @@
 import type { ReactNode } from "react";
 import type { InstructionFilesDto, WorkflowFileDto } from "@daedalus/protocol";
 import { MarkdownPreview } from "./markdown-preview";
+import { GATE_LABELS } from "./workflow-gates";
 
 /** A rule is a top-level bullet or numbered item; indented lines belong to it. */
 const isRule = (line: string) => /^(?:[-*+]|\d+[.)])\s+\S/.test(line);
@@ -125,7 +126,14 @@ export function WorkflowView({
                 >
                   <span className="step-timeline-name">
                     {name}
-                    {step?.gate && <span className="workflow-gate">gate</span>}
+                    {step?.gate && (
+                      <span
+                        className="workflow-gate"
+                        title={GATE_LABELS[step.gate].title}
+                      >
+                        {GATE_LABELS[step.gate].tag}
+                      </span>
+                    )}
                     {flow.loop === name && (
                       <span className="workflow-tag">↻ loops back here</span>
                     )}
@@ -174,11 +182,7 @@ export function StepView({
       {step.description && <p className="file-view-lede">{step.description}</p>}
       <div className="file-view-fields">
         {step.gate && (
-          <Field label="Gate">
-            {step.gate === "before"
-              ? "The agent asks you before it starts this step."
-              : "The agent asks you to approve what comes out of this step before it moves on."}
-          </Field>
+          <Field label="Gate">{GATE_LABELS[step.gate].field}</Field>
         )}
         <Field label="Used by">
           {usedBy.length ? (

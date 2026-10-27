@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite";
-import type {
-  WorkflowRun,
-  WorkflowRunStep,
-  WorkflowStepRecord,
+import {
+  parseGate,
+  type WorkflowRun,
+  type WorkflowRunStep,
+  type WorkflowStepRecord,
 } from "../domain";
 
 interface WorkflowRunRow {
@@ -28,10 +29,12 @@ const runFromRow = (row: WorkflowRunRow): WorkflowRun => ({
   workspaceId: row.workspace_id,
   sessionId: row.session_id,
   workflow: row.workflow,
-  // Steps stored before a step had a plan read as having none.
+  // Steps stored before a step had a plan read as having none, and the
+  // first gate names (`before`, `user`) read as `start` and `result`.
   steps: (JSON.parse(row.steps) as WorkflowRunStep[]).map((step) => ({
     ...step,
     plan: step.plan ?? null,
+    gate: parseGate(step.gate) ?? null,
   })),
   dynamic: row.dynamic === 1,
   modified: row.modified === 1,

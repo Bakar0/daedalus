@@ -7,6 +7,7 @@
 import { useState, type KeyboardEvent } from "react";
 import type { WorkflowRunDto, WorkflowStepStateDto } from "@daedalus/protocol";
 import { timelineWhen } from "./TaskTimeline";
+import { GATE_LABELS } from "./workflow-gates";
 
 const STATE_LABEL: Record<WorkflowStepStateDto, string> = {
   pending: "not started",
@@ -73,7 +74,7 @@ function stepTime(iso: string | null, now = new Date()): string {
 function stepLine(step: WorkflowRunDto["steps"][number]): string | null {
   const finished = step.state === "done" || step.state === "skipped";
   // A step waiting on its result holds what to approve as its note.
-  if (finished || (step.state === "waiting" && step.gate === "user"))
+  if (finished || (step.state === "waiting" && step.gate === "result"))
     return step.note ?? step.plan;
   return step.plan ?? (step.dynamic ? step.description : null);
 }
@@ -190,13 +191,9 @@ export function WorkflowSteps({ run }: { run: WorkflowRunDto }) {
                 {step.gate && (
                   <span
                     className="workflow-gate"
-                    title={
-                      step.gate === "user"
-                        ? "You approve what comes out of this step"
-                        : "You agree before this step starts"
-                    }
+                    title={GATE_LABELS[step.gate].title}
                   >
-                    gate
+                    {GATE_LABELS[step.gate].tag}
                   </span>
                 )}
               </span>
@@ -204,7 +201,11 @@ export function WorkflowSteps({ run }: { run: WorkflowRunDto }) {
                 {stepTime(step.endedAt ?? step.startedAt)}
               </time>
               {step.state === "waiting" && (
-                <span className="workflow-waiting">waiting for you</span>
+                <span className="workflow-waiting">
+                  {step.gate
+                    ? GATE_LABELS[step.gate].waiting
+                    : "waiting for you"}
+                </span>
               )}
               {line && <span className="workflow-step-note">{line}</span>}
             </li>

@@ -25,7 +25,7 @@ const flow = file({
 });
 const steps = [
   file({ name: "reproduce", description: "Make it happen.", body: "Run it." }),
-  file({ name: "ship", description: "Get it out.", gate: "user" }),
+  file({ name: "ship", description: "Get it out.", gate: "result" }),
 ];
 
 describe("file read views", () => {

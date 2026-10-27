@@ -38,7 +38,7 @@ async function copyDocExamples(folder: string, only?: string[]) {
 }
 
 describe("step and workflow files", () => {
-  test("a step reads its fields and body; a gate is 'user', 'before' or nothing", () => {
+  test("a step reads its fields and body; a gate is 'start', 'result' or nothing", () => {
     expect(
       parseStepFile(
         "---\ndescription: Ship it.\ngate: user\n---\n\nRun the release script.\n",
@@ -47,15 +47,22 @@ describe("step and workflow files", () => {
     ).toEqual({
       name: "deploy",
       description: "Ship it.",
-      gate: "user",
+      gate: "result",
       body: "Run the release script.",
     });
     expect(() =>
       parseStepFile("---\nname: x\ngate: lead\n---\nDo it.\n"),
-    ).toThrow("'gate' must be 'user'");
-    expect(
-      parseStepFile("---\nname: x\ngate: before\n---\nDo it.\n").gate,
-    ).toBe("before");
+    ).toThrow("'gate' must be 'start'");
+    // The first names, `before` and `user`, still read as the new ones.
+    for (const [written, read] of [
+      ["start", "start"],
+      ["result", "result"],
+      ["before", "start"],
+      ["user", "result"],
+    ])
+      expect(
+        parseStepFile(`---\nname: x\ngate: ${written}\n---\nDo it.\n`).gate,
+      ).toBe(read);
     expect(() => parseStepFile("---\nname: x\n---\n")).toThrow(
       "no instructions",
     );
@@ -172,7 +179,7 @@ describe("step and workflow files", () => {
     const step = {
       name: "try",
       description: "Try it: once",
-      gate: "user" as const,
+      gate: "result" as const,
       body: "Try it: once",
     };
     expect(parseStepFile(renderStepFile(step))).toEqual(step);
