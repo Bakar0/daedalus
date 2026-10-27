@@ -1,5 +1,5 @@
 /**
- * The ⌘/ sheet: every key the app has, searchable, grouped as the command
+ * The shortcuts sheet (Help › Keyboard Shortcuts, or ⌘K): every key the app has, searchable, grouped as the command
  * table groups them, with the keys elements answer to themselves after.
  * The sections for the area focus was in come first. A dialog with the
  * app's focus scope; Escape closes it and gives focus back.

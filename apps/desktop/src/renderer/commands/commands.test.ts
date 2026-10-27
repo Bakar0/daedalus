@@ -455,33 +455,39 @@ describe("the command table", () => {
       { includeNative: true },
     ).find((binding) => binding.native)?.id;
 
-  test("⌥⌘B folds the panel from anywhere, typing included", () => {
+  test("⌘B toggles the side panel from anywhere, typing included", () => {
     // Its View menu item owns the key, which macOS delivers wherever focus is.
-    const optCmdB = press("∫", "KeyB", { metaKey: true, altKey: true });
-    expect(run(optCmdB, sidebarInput)).toBeUndefined();
-    expect(menuOwner(optCmdB, sidebarInput)).toBe("panel.toggleWorkspacePanel");
-    expect(menuOwner(optCmdB, xtermInput)).toBe("panel.toggleWorkspacePanel");
+    const cmdB = cmd("b", "KeyB");
+    expect(run(cmdB, sidebarInput)).toBeUndefined();
+    expect(menuOwner(cmdB, sidebarInput)).toBe("panel.toggleWorkspacePanel");
+    expect(menuOwner(cmdB, xtermInput)).toBe("panel.toggleWorkspacePanel");
+    expect(menuOwner(cmdB, monacoInput)).toBe("panel.toggleWorkspacePanel");
+    // ⌥⌘B is free again.
+    expect(
+      menuOwner(press("∫", "KeyB", { metaKey: true, altKey: true }), preview),
+    ).toBeUndefined();
   });
 
-  test("the history and session keys leave Monaco's indent and cursor keys alone", () => {
-    const back = press("[", "BracketLeft", { metaKey: true });
-    const next = press("ArrowDown", "ArrowDown", {
-      metaKey: true,
-      altKey: true,
-    });
-    expect(run(back, monacoInput)).toBeUndefined();
-    expect(run(next, monacoInput)).toBeUndefined();
-    expect(run(back, xtermInput)).toBe("history.back");
-    expect(run(next, sidebarButton)).toBe("session.next");
+  test("the removed focus and history keys are free", () => {
+    for (const event of [
+      press("F6", "F6"),
+      press("F6", "F6", { shiftKey: true }),
+      cmd("0", "Digit0"),
+      cmd("[", "BracketLeft"),
+      cmd("]", "BracketRight"),
+      cmd("/", "Slash"),
+      press("E", "KeyE", { metaKey: true, shiftKey: true }),
+      press("R", "KeyR", { metaKey: true, shiftKey: true }),
+      press("A", "KeyA", { metaKey: true, shiftKey: true }),
+      press("ArrowDown", "ArrowDown", { metaKey: true, altKey: true }),
+      press("ArrowUp", "ArrowUp", { metaKey: true, altKey: true }),
+    ]) {
+      expect(run(event, sidebarButton)).toBeUndefined();
+      expect(menuOwner(event, sidebarButton)).toBeUndefined();
+    }
   });
 
-  test("F6 and the new-item keys act everywhere, typing included", () => {
-    // F6 stays the dispatcher's (its Go menu items only show it), so a
-    // dialog keeps it; the new-item keys are their File menu items'.
-    expect(run(press("F6", "F6"), sidebarInput)).toBe("area.next");
-    expect(run(press("F6", "F6", { shiftKey: true }), monacoInput)).toBe(
-      "area.previous",
-    );
+  test("the new-item keys act everywhere, typing included", () => {
     expect(menuOwner(cmd("n", "KeyN"), monacoInput)).toBe("session.new");
     expect(
       menuOwner(press("N", "KeyN", { metaKey: true, shiftKey: true }), preview),
@@ -496,11 +502,9 @@ describe("the command table", () => {
       expect.arrayContaining([
         "tab.save",
         "tab.close",
-        "area.next",
-        "session.next",
-        "history.back",
+        "tab.next",
+        "session.switch",
         "palette.open",
-        "help.shortcuts",
       ]),
     );
     for (const entry of shown)
@@ -509,12 +513,9 @@ describe("the command table", () => {
           (binding) => binding.id === entry.id && binding.native,
         ),
       ).toEqual([]);
-    // So ⌘W still reaches a field outside the tabs, and ⌘[ Monaco.
+    // So ⌘W still reaches a field outside the tabs.
     expect(menuOwner(cmd("w", "KeyW"), sidebarInput)).toBeUndefined();
     expect(run(cmd("w", "KeyW"), sidebarInput)).toBeUndefined();
-    expect(
-      run(press("[", "BracketLeft", { metaKey: true }), monacoInput),
-    ).toBeUndefined();
   });
 
   test("⌘K opens the palette from anywhere, a terminal and Monaco included", () => {
@@ -531,11 +532,48 @@ describe("the command table", () => {
     ).toBe(true);
   });
 
-  test("⌘/ leaves Monaco its toggle comment, but the menu still opens the sheet there", () => {
-    const slash = cmd("/", "Slash");
-    expect(run(slash, monacoInput)).toBeUndefined();
-    expect(run(slash, sidebarButton)).toBe("help.shortcuts");
-    expect(run(slash, xtermInput)).toBe("help.shortcuts");
+  test("⌃Tab and ⌃⇧Tab switch sessions from a terminal and Monaco, and repeat", () => {
+    const ctrlTab = press("Tab", "Tab", { ctrlKey: true });
+    const ctrlShiftTab = press("Tab", "Tab", { ctrlKey: true, shiftKey: true });
+    for (const target of [xtermInput, monacoInput, sidebarButton, preview]) {
+      expect(run(ctrlTab, target)).toBe("session.switch");
+      expect(run(ctrlShiftTab, target)).toBe("session.switchBack");
+    }
+    for (const event of [ctrlTab, ctrlShiftTab])
+      expect(
+        terminalKeepsKey(
+          event,
+          contextFor(xtermInput, "key"),
+          realBindings,
+          always,
+        ),
+      ).toBe(true);
+    // A held Tab keeps moving down the list.
+    expect(
+      new KeyMatcher(() => realBindings, always).handle(
+        { ...ctrlTab, repeat: true },
+        contextFor(xtermInput, "key"),
+      )?.kind,
+    ).toBe("run");
+    // Plain Tab and ⌃ letters still reach the shell.
+    expect(run(press("Tab", "Tab"), xtermInput)).toBeUndefined();
+    expect(
+      run(press("r", "KeyR", { ctrlKey: true }), xtermInput),
+    ).toBeUndefined();
+  });
+
+  test("⌘1 to ⌘9 go to a center tab from anywhere, a terminal included", () => {
+    for (let digit = 1; digit <= 9; digit += 1) {
+      const key = cmd(String(digit), `Digit${digit}`);
+      const expected = digit === 9 ? "tab.goToLast" : `tab.goTo${digit}`;
+      expect(run(key, xtermInput)).toBe(expected);
+      expect(run(key, monacoInput)).toBe(expected);
+      expect(run(key, sidebarButton)).toBe(expected);
+      expect(menuOwner(key, sidebarButton)).toBeUndefined();
+    }
+  });
+
+  test("a key's keysNot leaves an area to its owner, the menu and palette still run it", () => {
     expect(rankIn({ keysNot: ["editor"] }, ["editor", "tabs"])).toBeUndefined();
     expect(
       rankIn({ keysNot: ["editor"] }, ["editor", "tabs"], { forKey: false }),
@@ -555,7 +593,7 @@ describe("the command table", () => {
   });
 
   test("the menu's keys are left to the menu", () => {
-    expect(run(cmd("1", "Digit1"), sidebarButton)).toBeUndefined();
+    expect(run(cmd("b", "KeyB"), sidebarButton)).toBeUndefined();
     expect(
       run(press("`", "Backquote", { ctrlKey: true }), sidebarButton),
     ).toBeUndefined();
@@ -578,7 +616,7 @@ describe("swallowsNativeRepeat", () => {
     ).toBe(true);
     expect(
       swallowsNativeRepeat(
-        held(press("∫", "KeyB", { metaKey: true, altKey: true })),
+        held(cmd("b", "KeyB")),
         contextFor(xtermInput, "key"),
         realBindings,
       ),
@@ -628,9 +666,8 @@ describe("terminalKeepsKey", () => {
     expect(
       keeps(press("}", "BracketRight", { metaKey: true, shiftKey: true })),
     ).toBe(true);
-    expect(keeps(press("∫", "KeyB", { metaKey: true, altKey: true }))).toBe(
-      true,
-    );
+    expect(keeps(cmd("b", "KeyB"))).toBe(true);
+    expect(keeps(press("Tab", "Tab", { ctrlKey: true }))).toBe(true);
   });
 
   test("the shell gets everything else", () => {
@@ -649,21 +686,14 @@ describe("terminalKeepsKey", () => {
     expect(keeps(cmd("s", "KeyS"))).toBe(false);
   });
 
-  test("F6 and ⇧F6 move between areas from inside a terminal", () => {
-    expect(keeps(press("F6", "F6"))).toBe(true);
-    expect(keeps(press("F6", "F6", { shiftKey: true }))).toBe(true);
-    expect(keeps(press("F6", "F6"), integratedInput)).toBe(true);
-  });
-
-  test("the session and history keys are kept, being ⌘ keys", () => {
-    expect(keeps(press("[", "BracketLeft", { metaKey: true }))).toBe(true);
-    expect(keeps(press("]", "BracketRight", { metaKey: true }))).toBe(true);
-    expect(
-      keeps(press("ArrowDown", "ArrowDown", { metaKey: true, altKey: true })),
-    ).toBe(true);
+  test("the new-item keys are kept, being ⌘ keys; the removed ones are the shell's", () => {
     expect(keeps(cmd("n", "KeyN"))).toBe(true);
     expect(keeps(cmd("t", "KeyT"))).toBe(true);
-    expect(keeps(cmd("0", "Digit0"))).toBe(true);
+    expect(keeps(press("F6", "F6"))).toBe(false);
+    expect(keeps(press("[", "BracketLeft", { metaKey: true }))).toBe(false);
+    expect(
+      keeps(press("ArrowDown", "ArrowDown", { metaKey: true, altKey: true })),
+    ).toBe(false);
   });
 
   test("a command that is disabled leaves its key to the shell", () => {
@@ -698,22 +728,6 @@ describe("registry", () => {
     expect(ran).toBe(1);
     dispose();
     expect(runCommand("tab.close", where(["tabs", "center"]))).toBe(false);
-  });
-
-  test("a command whose keys leave an area still runs there from the menu", async () => {
-    const { registerCommand, isCommandEnabled } = await import("./registry");
-    const dispose = registerCommand("help.shortcuts", { run: () => {} });
-    const editor: CommandArea[] = ["editor", "tabs", "center"];
-    expect(isCommandEnabled("help.shortcuts", context(editor, true))).toBe(
-      false,
-    );
-    expect(
-      isCommandEnabled("help.shortcuts", context(editor, true, "menu")),
-    ).toBe(true);
-    expect(
-      isCommandEnabled("help.shortcuts", context(editor, true, "palette")),
-    ).toBe(true);
-    dispose();
   });
 
   test("host commands run through the host; the person's keys apply here", async () => {

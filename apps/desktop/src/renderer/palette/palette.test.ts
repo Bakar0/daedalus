@@ -1,45 +1,36 @@
 import { describe, expect, test } from "vitest";
 import { COMMAND_SPECS, type CommandArea } from "@daedalus/protocol";
 import {
+  filterActions,
   flattenGroups,
   fuzzyScore,
-  GROUP_LIMIT,
   loadRecent,
   type PaletteEntry,
-  parsePaletteQuery,
   rankPalette,
   recordRecent,
+  RECENT_SHOWN,
+  RESULT_LIMIT,
   saveRecent,
 } from "./palette-model";
+import { panelActions, type PaletteRow } from "./CommandPalette";
 import {
   commandSheetSections,
   ELEMENT_KEY_SECTIONS,
   filterSheetSections,
   orderSheetSections,
 } from "./shortcut-sheet";
-import { type ItemActionResolver, itemActionsFor } from "../item-actions";
+import {
+  type ItemActionResolver,
+  itemActionsById,
+  itemActionsFor,
+  registerItemActionsById,
+} from "../item-actions";
 import {
   sessionItemActions,
   sessionMenuEntries,
   type SessionMenuModel,
   workspaceItemActions,
 } from "../SessionMenu";
-
-describe("parsePaletteQuery", () => {
-  test("a prefix narrows the palette, anything else searches it all", () => {
-    expect(parsePaletteQuery(">close")).toEqual({
-      mode: "commands",
-      text: "close",
-    });
-    expect(parsePaletteQuery("#12")).toEqual({ mode: "tasks", text: "12" });
-    expect(parsePaletteQuery("@ api")).toEqual({
-      mode: "sessions",
-      text: "api",
-    });
-    expect(parsePaletteQuery("  back ")).toEqual({ mode: "all", text: "back" });
-    expect(parsePaletteQuery("")).toEqual({ mode: "all", text: "" });
-  });
-});
 
 describe("fuzzyScore", () => {
   test("a run of the query beats scattered letters, a word start beats the middle", () => {
@@ -64,89 +55,186 @@ describe("fuzzyScore", () => {
 
 const entry = (
   key: string,
-  section: PaletteEntry["section"],
+  kind: PaletteEntry["kind"],
   title: string,
-): PaletteEntry => ({ key, section, title });
+  subtitle?: string,
+): PaletteEntry => ({ key, kind, title, ...(subtitle ? { subtitle } : {}) });
 
 const entries: PaletteEntry[] = [
-  entry("item:rename", "item", "Rename…"),
-  entry("command:tab.close", "commands", "Close Tab"),
-  entry("command:history.back", "commands", "Back"),
-  entry("command:session.new", "commands", "New Session"),
-  entry("session:a", "sessions", "api refactor"),
-  entry("session:b", "sessions", "billing"),
-  entry("task:1", "tasks", "#12 Fix the close button"),
-  entry("workspace:w", "workspaces", "daedalus"),
+  entry("command:tab.close", "action", "Close Tab"),
+  entry("command:session.new", "action", "New Session"),
+  entry("command:task.new", "action", "New Task"),
+  entry("command:view.board", "view", "Board"),
+  entry("session:a", "session", "api refactor", "daedalus · Working"),
+  entry("session:b", "session", "billing", "shop · Idle"),
+  entry("task:1", "task", "#12 Fix the close button", "daedalus · To do"),
+  entry("workspace:w", "workspace", "daedalus"),
+  entry("setting:keyboard", "setting", "Keyboard Settings"),
 ];
 
-const titles = (raw: string, recent: string[] = []) =>
-  rankPalette(entries, raw, recent).map((group) => [
-    group.section,
-    group.entries.map((row) => row.title),
+const keys = (query: string, options = {}) =>
+  rankPalette(entries, query, options).map((group) => [
+    group.id,
+    group.entries.map((row) => row.key),
   ]);
 
 describe("rankPalette", () => {
-  test("with nothing typed, every group in order, the item's actions first", () => {
-    expect(titles("").map(([section]) => section)).toEqual([
-      "item",
-      "commands",
-      "sessions",
-      "tasks",
-      "workspaces",
+  test("there are no prefixes: > @ # are searched like any text", () => {
+    expect(keys(">")).toEqual([]);
+    expect(keys("#12")).toEqual([["results", ["task:1"]]]);
+  });
+
+  test("with nothing typed: the focused item, Recent, then Suggestions", () => {
+    expect(
+      keys("", {
+        selected: "session:a",
+        recent: ["task:1", "session:a", "gone"],
+        suggestions: ["command:session.new", "task:1", "command:task.new"],
+      }),
+    ).toEqual([
+      ["selected", ["session:a"]],
+      ["recent", ["task:1"]],
+      ["suggestions", ["command:session.new", "command:task.new"]],
+    ]);
+    expect(keys("")).toEqual([]);
+  });
+
+  test("Recent shows only the latest few", () => {
+    const many = entries.map((row) => row.key);
+    const recent = rankPalette(entries, "", { recent: many })[0];
+    expect(recent?.entries).toHaveLength(RECENT_SHOWN);
+  });
+
+  test("typing mixes every kind in one list, best match first", () => {
+    expect(keys("billing")).toEqual([["results", ["session:b"]]]);
+    expect(keys("close")[0]?.[1]).toEqual(["command:tab.close", "task:1"]);
+    expect(keys("keyboard")).toEqual([["results", ["setting:keyboard"]]]);
+  });
+
+  test("a title match beats a match on the subtitle", () => {
+    // "daedalus" is the workspace's name, and the subtitle of a session
+    // and a task in it.
+    expect(keys("daedalus")[0]?.[1]).toEqual([
+      "workspace:w",
+      "session:a",
+      "task:1",
     ]);
   });
 
-  test("recently used commands float up", () => {
-    const commands = titles("", [
-      "command:session.new",
-      "command:history.back",
-    ])[1];
-    expect(commands).toEqual([
-      "commands",
-      ["New Session", "Back", "Close Tab"],
-    ]);
+  test("a search matches the kind too", () => {
+    expect(keys("session api")[0]?.[1]).toContain("session:a");
   });
 
-  test("a recent command wins a close match, but not a much better one", () => {
+  test("recent use lifts a close match, but not past a much better one", () => {
     const rows = flattenGroups(
       rankPalette(
         [
-          entry("command:a", "commands", "Close Tab"),
-          entry("command:b", "commands", "Close Panel"),
+          entry("command:a", "action", "Close Tab"),
+          entry("command:b", "action", "Close Panel"),
         ],
         "close",
-        ["command:b"],
+        { recent: ["command:b"] },
       ),
     );
     expect(rows.map((row) => row.key)).toEqual(["command:b", "command:a"]);
+    expect(
+      flattenGroups(
+        rankPalette(entries, "billing", { recent: ["session:a"] }),
+      ).map((row) => row.key),
+    ).toEqual(["session:b"]);
   });
 
-  test("typing keeps only matches, and the group with the best one comes first", () => {
-    expect(titles("billing")).toEqual([["sessions", ["billing"]]]);
-    const close = titles("close");
-    expect(close.map(([section]) => section)).toEqual(["commands", "tasks"]);
+  test("the sessions used lately are lifted", () => {
+    const two = [
+      entry("session:x", "session", "api one"),
+      entry("session:y", "session", "api two"),
+    ];
+    expect(
+      flattenGroups(rankPalette(two, "api", { boost: ["session:y"] }))[0]?.key,
+    ).toBe("session:y");
   });
 
-  test("the focused item's actions stay first while they match", () => {
-    expect(titles("re")[0]).toEqual(["item", ["Rename…"]]);
-  });
-
-  test("> lists commands only, # tasks, @ sessions", () => {
-    expect(titles(">").map(([section]) => section)).toEqual(["commands"]);
-    expect(titles("#12")).toEqual([["tasks", ["#12 Fix the close button"]]]);
-    expect(titles("@")).toEqual([["sessions", ["api refactor", "billing"]]]);
-    expect(titles(">billing")).toEqual([]);
-  });
-
-  test("a group shows at most its limit", () => {
-    const many = Array.from({ length: GROUP_LIMIT + 10 }, (_, index) =>
-      entry(`task:${index}`, "tasks", `#${index} task`),
+  test("a search shows at most its limit", () => {
+    const many = Array.from({ length: RESULT_LIMIT + 10 }, (_, index) =>
+      entry(`task:${index}`, "task", `#${index} task`),
     );
-    expect(rankPalette(many, "")[0]?.entries).toHaveLength(GROUP_LIMIT);
+    expect(rankPalette(many, "task")[0]?.entries).toHaveLength(RESULT_LIMIT);
   });
 });
 
-describe("recent commands", () => {
+describe("the Actions panel", () => {
+  const row = (actions?: PaletteRow["actions"]): PaletteRow => ({
+    key: "session:a",
+    kind: "session",
+    title: "api",
+    primary: "Open Session",
+    run: () => {},
+    ...(actions ? { actions } : {}),
+  });
+
+  test("lists the primary action first, then the item's own without its open", () => {
+    const listed = panelActions(
+      row(() => [
+        { id: "open", label: "Open task", run: () => {} },
+        { id: "rename", label: "Rename…", run: () => {} },
+        {
+          id: "archive",
+          label: "Archive",
+          confirm: "Stops it.",
+          run: () => {},
+        },
+      ]),
+    );
+    expect(listed.map((action) => [action.id, action.label])).toEqual([
+      ["primary", "Open Session"],
+      ["rename", "Rename…"],
+      ["archive", "Archive"],
+    ]);
+    expect(listed[2]).toMatchObject({ confirm: "Stops it." });
+    expect(panelActions(row()).map((action) => action.id)).toEqual(["primary"]);
+  });
+
+  test("its field filters the actions by label and description", () => {
+    const actions = [
+      { id: "rename", label: "Rename…" },
+      { id: "routines", label: "Routines", description: "Grant routines." },
+      { id: "archive", label: "Archive" },
+    ];
+    expect(filterActions(actions, "").map((action) => action.id)).toEqual([
+      "rename",
+      "routines",
+      "archive",
+    ]);
+    expect(filterActions(actions, "arch").map((action) => action.id)).toEqual([
+      "archive",
+    ]);
+    expect(filterActions(actions, "grant").map((action) => action.id)).toEqual([
+      "routines",
+    ]);
+  });
+
+  test("any session, task or workspace resolves its actions by id", () => {
+    const dispose = registerItemActionsById("task", (id) =>
+      id === "t1"
+        ? {
+            title: "#1",
+            actions: [{ id: "start", label: "Start", run: () => {} }],
+            ref: { kind: "task", id },
+          }
+        : undefined,
+    );
+    try {
+      expect(itemActionsById({ kind: "task", id: "t1" })?.title).toBe("#1");
+      expect(itemActionsById({ kind: "task", id: "t2" })).toBeUndefined();
+      expect(itemActionsById({ kind: "session", id: "t1" })).toBeUndefined();
+    } finally {
+      dispose();
+    }
+    expect(itemActionsById({ kind: "task", id: "t1" })).toBeUndefined();
+  });
+});
+
+describe("recent rows", () => {
   test("the latest goes first, without duplicates, up to the limit", () => {
     expect(recordRecent(["a", "b", "c"], "b")).toEqual(["b", "a", "c"]);
     expect(recordRecent(["a", "b"], "c", 2)).toEqual(["c", "a"]);
@@ -367,7 +455,7 @@ describe("the shortcuts sheet", () => {
         section.rows.map((row) => row.label),
       );
     expect(labels("close tab")).toContain("Close Tab");
-    expect(labels("⌘[")).toEqual(expect.arrayContaining(["Back"]));
+    expect(labels("⇧⌘[")).toEqual(expect.arrayContaining(["Previous Tab"]));
     expect(labels("no such key")).toEqual([]);
     expect(filterSheetSections(sections, "  ")).toHaveLength(sections.length);
   });
@@ -376,7 +464,7 @@ describe("the shortcuts sheet", () => {
 describe("the shortcuts sheet with the person's keys", () => {
   test("shows a rebound key and marks it changed", async () => {
     const { allCommands, setKeyOverrides } = await import("../commands");
-    setKeyOverrides({ "tab.close": ["mod+shift+w"], "view.board": [] });
+    setKeyOverrides({ "tab.close": ["mod+shift+w"], "tab.next": [] });
     try {
       const rows = commandSheetSections(allCommands()).flatMap(
         (section) => section.rows,
@@ -387,7 +475,7 @@ describe("the shortcuts sheet with the person's keys", () => {
         changed: true,
       });
       // Unbound, it leaves the sheet; untouched, it is not marked.
-      expect(rows.find((row) => row.label === "Board")).toBeUndefined();
+      expect(rows.find((row) => row.label === "Next Tab")).toBeUndefined();
       expect(rows.find((row) => row.label === "Save")?.changed).toBeUndefined();
     } finally {
       setKeyOverrides({});

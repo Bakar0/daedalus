@@ -22,6 +22,15 @@ export interface CommandContext {
    * (quit) act until it closes.
    */
   readonly modal: boolean;
+  /**
+   * The modifiers held with the key that ran the command; only for a key.
+   * The session switcher waits for them to be let go.
+   */
+  readonly held?: {
+    readonly mod: boolean;
+    readonly ctrl: boolean;
+    readonly alt: boolean;
+  };
 }
 
 /** The parts of an element the context reads, so it can be tested without a DOM. */

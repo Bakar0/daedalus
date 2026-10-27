@@ -1,46 +1,17 @@
 import { describe, expect, test } from "vitest";
-import { cycleArea } from "./areas";
 import { gridMove, gridTabStop } from "./board-grid";
-import { EMPTY_HISTORY, recordVisit, stepHistory, type Visit } from "./history";
-import { nextNeedingYou, stepSession } from "./session-cycle";
+import {
+  nextNeedingYou,
+  recordMru,
+  stepSwitcher,
+  switcherOrder,
+} from "./session-cycle";
 import {
   type TreeItem,
   neighbourOf,
   treeKeyAction,
   treeTabStop,
 } from "./sidebar-tree";
-
-describe("cycleArea", () => {
-  const all = [
-    "sidebar",
-    "center",
-    "right-panel",
-    "terminal-panel",
-    "toasts",
-  ] as const;
-
-  test("F6 goes forward and ⇧F6 back, wrapping", () => {
-    expect(cycleArea(all, "sidebar", 1)).toBe("center");
-    expect(cycleArea(all, "toasts", 1)).toBe("sidebar");
-    expect(cycleArea(all, "sidebar", -1)).toBe("toasts");
-    expect(cycleArea(all, "right-panel", -1)).toBe("center");
-  });
-
-  test("skips regions that are not showing, whatever order they come in", () => {
-    expect(cycleArea(["center", "sidebar"], "sidebar", 1)).toBe("center");
-    expect(cycleArea(["terminal-panel", "sidebar"], "sidebar", 1)).toBe(
-      "terminal-panel",
-    );
-    expect(cycleArea(["sidebar", "center"], "center", 1)).toBe("sidebar");
-  });
-
-  test("from nowhere, or a hidden region, F6 enters the first and ⇧F6 the last", () => {
-    expect(cycleArea(all, undefined, 1)).toBe("sidebar");
-    expect(cycleArea(all, undefined, -1)).toBe("toasts");
-    expect(cycleArea(["sidebar", "center"], "toasts", 1)).toBe("sidebar");
-    expect(cycleArea([], "sidebar", 1)).toBeUndefined();
-  });
-});
 
 describe("treeKeyAction", () => {
   const items: TreeItem[] = [
@@ -199,83 +170,41 @@ describe("gridMove", () => {
   });
 });
 
-describe("visit history", () => {
-  const session = (id: string): Visit => ({
-    kind: "session",
-    id,
-    workspaceId: "w",
-  });
-  const task = (id: string): Visit => ({ kind: "task", id, workspaceId: "w" });
-  const all = () => true;
-
-  test("back from a task returns to the session it came from, and forward again", () => {
-    let history = recordVisit(EMPTY_HISTORY, session("s1"));
-    history = recordVisit(history, task("t1"));
-    const back = stepHistory(history, -1, all);
-    expect(back?.visit).toEqual(session("s1"));
-    const forward = stepHistory(back!.history, 1, all);
-    expect(forward?.visit).toEqual(task("t1"));
-    expect(stepHistory(forward!.history, 1, all)).toBeUndefined();
+describe("the session switcher", () => {
+  test("the session just shown moves to the front of the recent order", () => {
+    let order: readonly string[] = [];
+    order = recordMru(order, "a");
+    order = recordMru(order, "b");
+    order = recordMru(order, "a");
+    expect(order).toEqual(["a", "b"]);
+    // Already first: the same list, so nothing re-renders.
+    expect(recordMru(order, "a")).toBe(order);
+    expect(recordMru(["a", "b", "c"], "d", 3)).toEqual(["d", "a", "b"]);
   });
 
-  test("visiting what is shown records nothing", () => {
-    const history = recordVisit(EMPTY_HISTORY, session("s1"));
-    expect(recordVisit(history, session("s1"))).toBe(history);
+  test("lists the live sessions used lately first, then the rest in sidebar order", () => {
+    expect(switcherOrder(["c", "gone", "a"], ["a", "b", "c", "d"])).toEqual([
+      "c",
+      "a",
+      "b",
+      "d",
+    ]);
+    expect(switcherOrder([], ["a", "b"])).toEqual(["a", "b"]);
+    expect(switcherOrder(["a"], [])).toEqual([]);
   });
 
-  test("a new visit after going back drops what was ahead", () => {
-    let history = recordVisit(EMPTY_HISTORY, session("s1"));
-    history = recordVisit(history, session("s2"));
-    history = stepHistory(history, -1, all)!.history;
-    history = recordVisit(history, task("t1"));
-    expect(history.entries).toEqual([session("s1"), task("t1")]);
-    expect(stepHistory(history, 1, all)).toBeUndefined();
-  });
-
-  test("after leaving a visit, Back returns to it before going further", () => {
-    let history = recordVisit(EMPTY_HISTORY, session("a"));
-    history = recordVisit(history, session("b"));
-    // ⌘1: the Workspace view, neither a session nor a task.
-    const back = stepHistory(history, -1, all, { away: true });
-    expect(back?.visit).toEqual(session("b"));
-    expect(stepHistory(back!.history, -1, all)?.visit).toEqual(session("a"));
-    expect(stepHistory(history, 1, all, { away: true })).toBeUndefined();
-  });
-
-  test("away from a visit that is gone, Back skips it too", () => {
-    let history = recordVisit(EMPTY_HISTORY, session("a"));
-    history = recordVisit(history, session("gone"));
-    const back = stepHistory(history, -1, (visit) => visit.id !== "gone", {
-      away: true,
-    });
-    expect(back?.visit).toEqual(session("a"));
-  });
-
-  test("entries that are gone are skipped", () => {
-    let history = recordVisit(EMPTY_HISTORY, session("s1"));
-    history = recordVisit(history, session("gone"));
-    history = recordVisit(history, task("t1"));
-    const back = stepHistory(history, -1, (visit) => visit.id !== "gone");
-    expect(back?.visit).toEqual(session("s1"));
-    expect(back?.history.entries).toEqual([session("s1"), task("t1")]);
-    expect(stepHistory(EMPTY_HISTORY, -1, all)).toBeUndefined();
+  test("Tab moves down and ⇧Tab up, wrapping", () => {
+    expect(stepSwitcher(0, 3, 1)).toBe(1);
+    expect(stepSwitcher(2, 3, 1)).toBe(0);
+    expect(stepSwitcher(0, 3, -1)).toBe(2);
+    expect(stepSwitcher(0, 0, 1)).toBe(0);
   });
 });
 
-describe("session cycling", () => {
+describe("next session that needs you", () => {
   const order = ["a", "b", "c", "d"];
 
-  test("⌥⌘↓ and ⌥⌘↑ step through sidebar order, wrapping", () => {
-    expect(stepSession(order, "b", 1)).toBe("c");
-    expect(stepSession(order, "d", 1)).toBe("a");
-    expect(stepSession(order, "a", -1)).toBe("d");
-    expect(stepSession(order, undefined, 1)).toBe("a");
-    expect(stepSession(order, undefined, -1)).toBe("d");
-    expect(stepSession(["a"], "a", 1)).toBeUndefined();
-    expect(stepSession([], undefined, 1)).toBeUndefined();
-  });
-
-  test("⇧⌘A goes round the sessions that need you", () => {
+  test("goes round the sessions that need you", () => {
     const needs = (id: string) => id === "b" || id === "d";
     expect(nextNeedingYou(order, needs, undefined)).toBe("b");
     expect(nextNeedingYou(order, needs, "b")).toBe("d");

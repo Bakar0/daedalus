@@ -990,11 +990,16 @@ export function FileTree({
     if (!row) return undefined;
     return entryByPath(row.dataset.path ?? "");
   };
-  // The palette lists the focused file's actions first.
+  // Opened on a focused file, the palette shows the file first, its menu
+  // as the file's Actions panel.
   useItemActions((element) => {
     const entry = entryOfRow(element);
     return entry
-      ? { title: entry.name, actions: fileMenuActions(entry) }
+      ? {
+          title: entry.name,
+          actions: fileMenuActions(entry),
+          ref: { kind: "file", id: entry.path },
+        }
       : undefined;
   });
   // ⇧F10 or the menu key opens the focused file's menu under its row.

@@ -10,7 +10,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { gridMove, gridTabStop } from "./navigation/board-grid";
 import { accountModelKey } from "./account-models";
 import { askConfirm } from "./dialogs";
-import { type ItemAction, useItemActions } from "./item-actions";
+import {
+  type ItemAction,
+  useItemActions,
+  useItemActionsById,
+} from "./item-actions";
 import { KeyHints } from "./keyboard-ui";
 import {
   ReportDetails,
@@ -748,8 +752,8 @@ export function BoardView(props: BoardViewProps) {
   };
 
   /**
-   * What a card's buttons do, as one list: the ⌘K palette (and ⇧F10, which
-   * opens it on a card) offers these first when the card has focus. The
+   * What a card's buttons do, as one list: the ⌘K palette's Actions panel
+   * for the task (and ⇧F10, which opens it on a card). The
    * same `taskActions` decide both, so a button and its row come and go
    * together.
    */
@@ -876,17 +880,23 @@ export function BoardView(props: BoardViewProps) {
       })),
     ];
   };
-  useItemActions((element) => {
-    const card = element.closest<HTMLElement>(".board-card[data-task-id]");
-    const task = card ? tasksById.get(card.dataset.taskId ?? "") : undefined;
+  const cardActionsOf = (id: string) => {
+    const task = tasksById.get(id);
     const lane = task ? laneById.get(task.id) : undefined;
     return task && lane
       ? {
           title: `#${task.number} ${task.title}`,
           actions: cardItemActions(task, lane),
+          ref: { kind: "task" as const, id: task.id },
         }
       : undefined;
+  };
+  useItemActions((element) => {
+    const card = element.closest<HTMLElement>(".board-card[data-task-id]");
+    return card ? cardActionsOf(card.dataset.taskId ?? "") : undefined;
   });
+  // The palette's Actions panel for any task this board shows.
+  useItemActionsById("task", cardActionsOf);
 
   const renderCard = (task: TaskDto, lane: BoardLane) => {
     const {
@@ -1331,11 +1341,10 @@ export function BoardView(props: BoardViewProps) {
             </span>
             <KeyHints
               hints={[
+                { command: "palette.open", label: "to do anything" },
                 ...(workspace
                   ? [{ command: "task.new" as const, label: "new task" }]
                   : []),
-                { command: "palette.open", label: "jump anywhere" },
-                { command: "help.shortcuts", label: "all shortcuts" },
               ]}
             />
           </div>

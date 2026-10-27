@@ -136,18 +136,20 @@ describe("conflicts in the editor", () => {
   });
 
   test("an area key and a global key of the dispatcher's are no conflict: the area wins", () => {
-    // F6 is the dispatcher's (the menu only shows it): ⌘W in the tabs still
-    // closes the tab, F6's command elsewhere.
-    expect(keyConflicts("area.next", "mod+w", {})).toEqual([]);
+    // ⌘1 is the dispatcher's (no menu item): ⌘W in the tabs would still
+    // close the tab, and go to the first tab elsewhere.
+    expect(keyConflicts("tab.goTo1", "mod+w", {})).toEqual([]);
     // Two tab keys collide.
     expect(keyConflicts("tab.next", "mod+w", {})).toEqual(["tab.close"]);
   });
 
   test("a menu-owned key conflicts with an area key too: the menu fires first", () => {
-    // The Board's ⌘2 is its menu item's accelerator, so ⌘W there would
-    // never reach the tabs.
+    // A key on the Board's menu item would be its accelerator, so ⌘W there
+    // would never reach the tabs; ⌘B is the side panel's.
     expect(keyConflicts("view.board", "mod+w", {})).toEqual(["tab.close"]);
-    expect(keyConflicts("tab.close", "mod+2", {})).toEqual(["view.board"]);
+    expect(keyConflicts("tab.close", "mod+b", {})).toEqual([
+      "panel.toggleWorkspacePanel",
+    ]);
   });
 
   test("one sequence beginning another is a conflict", () => {
@@ -156,12 +158,12 @@ describe("conflicts in the editor", () => {
       "palette.open",
     ]);
     const bindings = compileBindings(COMMAND_SPECS, {
-      "area.next": ["mod+j mod+j"],
-      "area.previous": ["mod+j"],
+      "tab.goTo1": ["mod+j mod+j"],
+      "tab.goTo2": ["mod+j"],
     });
     expect(
       findConflicts(bindings).map(([a, b]) => [a.id, b.id]),
-    ).toContainEqual(["area.next", "area.previous"]);
+    ).toContainEqual(["tab.goTo1", "tab.goTo2"]);
     // A sequence starting with a menu key's chord, in any area.
     expect(keyConflicts("tab.close", "mod+n mod+w", {})).toEqual([
       "session.new",

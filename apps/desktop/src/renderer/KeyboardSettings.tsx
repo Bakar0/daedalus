@@ -1,6 +1,6 @@
 /**
  * Settings › Keyboard: every command with its keys, grouped and searchable
- * as the ⌘/ sheet is, and a recorder to change them. The keys live in
+ * as the shortcuts sheet is, and a recorder to change them. The keys live in
  * `keybindings.json`, which the host owns: an edit here goes to the host by
  * RPC, the host writes the file and rebuilds the menu bar, and the window
  * takes the keys the host sends back, as it does for a hand edit.

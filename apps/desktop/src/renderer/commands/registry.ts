@@ -1,7 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import {
   COMMAND_SPECS,
-  type CommandArea,
   type CommandId,
   type CommandSpec,
   type HostCommandId,
@@ -296,7 +295,11 @@ function onKeyDown(event: KeyboardEvent) {
   if (!result) return;
   event.preventDefault();
   event.stopPropagation();
-  if (result.kind === "run") runCommand(result.binding.id, context);
+  if (result.kind === "run")
+    runCommand(result.binding.id, {
+      ...context,
+      held: { mod: event.metaKey, ctrl: event.ctrlKey, alt: event.altKey },
+    });
 }
 
 let suspended = 0;
@@ -316,23 +319,13 @@ export function suspendKeyDispatch(): () => void {
   };
 }
 
-// Which area has focus, kept as focus moves, for whatever shows it (an area
-// highlight, the shortcuts sheet listing that area's keys first).
-let focusedAreas: readonly CommandArea[] = [];
-const focusListeners = new Set<() => void>();
-function onFocusIn(event: FocusEvent) {
-  // A sequence started in one place does not finish in another.
-  matcher.reset();
-  const areas = contextFor(elementTarget(event), "key").areas;
-  if (areas.join() === focusedAreas.join()) return;
-  focusedAreas = areas;
-  for (const listener of focusListeners) listener();
-}
+// A sequence started in one place does not finish in another.
+const onFocusIn = () => matcher.reset();
 const onBlur = () => matcher.reset();
 
 let installs = 0;
 
-/** Installs the dispatcher and focus tracking on the window; returns the uninstall. */
+/** Installs the dispatcher on the window; returns the uninstall. */
 export function installKeyDispatcher(): () => void {
   installs += 1;
   if (installs === 1) {
@@ -351,17 +344,6 @@ export function installKeyDispatcher(): () => void {
 
 export function useKeyDispatcher(): void {
   useEffect(() => installKeyDispatcher(), []);
-}
-
-/** The areas focus is in, innermost first, re-rendering when it moves. */
-export function useFocusedAreas(): readonly CommandArea[] {
-  return useSyncExternalStore(
-    (listener) => {
-      focusListeners.add(listener);
-      return () => focusListeners.delete(listener);
-    },
-    () => focusedAreas,
-  );
 }
 
 /**

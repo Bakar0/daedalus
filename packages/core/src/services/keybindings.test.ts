@@ -96,7 +96,8 @@ describe("keybindings.json", () => {
       });
       // Its own default, however it is spelled, is no override.
       await keys.set([
-        { id: "view.board", keys: ["cmd+2"] },
+        { id: "tab.goTo2", keys: ["cmd+2"] },
+        { id: "view.board", keys: null },
         { id: "tab.close", keys: null },
       ]);
       expect(await fileOf(home)).toEqual({ "no.such": ["mod+y"] });

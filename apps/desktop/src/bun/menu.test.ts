@@ -89,13 +89,14 @@ describe("desktop application menu", () => {
         : [];
 
     expect(Object.fromEntries(shortcuts ?? [])).toEqual({
-      "view.workspace": "Command+1",
-      "view.board": "Command+2",
-      "view.session": "Command+3",
-      "view.world": "Command+4",
+      // ⌘1 to ⌘9 are the center's tabs now; the views keep their items.
+      "view.workspace": undefined,
+      "view.board": undefined,
+      "view.session": undefined,
+      "view.world": undefined,
       "view.worldWindow": "Command+Option+4",
       "terminal.toggle": "Control+`",
-      "panel.toggleWorkspacePanel": "Command+Option+B",
+      "panel.toggleWorkspacePanel": "Command+B",
     });
   });
 
@@ -162,7 +163,7 @@ describe("desktop application menu", () => {
     );
     expect(accelerators["view.board"]).toBe("Command+Shift+B");
     expect(accelerators["terminal.toggle"]).toBeUndefined();
-    expect(accelerators["view.session"]).toBe("Command+3");
+    expect(accelerators["panel.toggleWorkspacePanel"]).toBe("Command+B");
   });
 
   test("a key that types, or a ⌃ letter, is shown on its item but never owned", () => {
@@ -216,7 +217,7 @@ describe("desktop application menu", () => {
       expect(accelerator("terminal.new")?.accelerator).toBeUndefined();
       // Skipped entries keep their defaults.
       expect(accelerator("task.new")?.accelerator).toBe("Command+Shift+N");
-      expect(accelerator("view.board")?.accelerator).toBe("Command+2");
+      expect(accelerator("view.board")?.accelerator).toBeUndefined();
     });
   });
 });
@@ -258,23 +259,9 @@ describe("File, Go and Help menus", () => {
 
   test("Go owns the keys that act everywhere and only shows the others", () => {
     expect(rows(menuNamed("Go"))).toEqual([
-      ["area.sidebar", "Focus Workspaces", "Command+0"],
-      ["panel.files", "Show Files", "Command+Shift+E"],
-      ["panel.repositories", "Show Repositories", "Command+Shift+R"],
-      "divider",
-      ["area.next", "Focus Next Area (F6)", null],
-      ["area.previous", "Focus Previous Area (⇧F6)", null],
-      "divider",
-      ["session.next", "Next Session (⌥⌘↓)", null],
-      ["session.previous", "Previous Session (⌥⌘↑)", null],
-      [
-        "session.nextNeedsYou",
-        "Next Session That Needs You",
-        "Command+Shift+A",
-      ],
-      "divider",
-      ["history.back", "Back (⌘[)", null],
-      ["history.forward", "Forward (⌘])", null],
+      // ⌃Tab waits for ⌃ to be let go, which only the dispatcher sees.
+      ["session.switch", "Switch Session (⌃⇥)", null],
+      ["session.nextNeedsYou", "Next Session That Needs You", null],
       "divider",
       ["tab.next", "Next Tab (⇧⌘])", null],
       ["tab.previous", "Previous Tab (⇧⌘[)", null],
@@ -285,7 +272,7 @@ describe("File, Go and Help menus", () => {
 
   test("Help opens the shortcuts sheet, and Settings is in the app menu", () => {
     expect(rows(menuNamed("Help"))).toEqual([
-      ["help.shortcuts", "Keyboard Shortcuts (⌘/)", null],
+      ["help.shortcuts", "Keyboard Shortcuts", null],
     ]);
     expect(rows(menuNamed("Daedalus")).slice(0, 4)).toEqual([
       "?",
@@ -297,7 +284,7 @@ describe("File, Go and Help menus", () => {
 
   test("a rebound key a menu only shows is shown rebound, an unbound one not at all", () => {
     const go = buildApplicationMenu({
-      "history.back": ["mod+alt+left"],
+      "tab.next": ["mod+alt+right"],
       "palette.open": [],
     }).find((item) => "label" in item && item.label === "Go");
     const items = (go && "submenu" in go ? go.submenu : []) ?? [];
@@ -306,7 +293,7 @@ describe("File, Go and Help menus", () => {
         "action" in item && item.action ? [[item.action, item.label]] : [],
       ),
     );
-    expect(labels["history.back"]).toBe("Back (⌥⌘←)");
+    expect(labels["tab.next"]).toBe("Next Tab (⌥⌘→)");
     expect(labels["palette.open"]).toBe("Command Palette…");
   });
 });

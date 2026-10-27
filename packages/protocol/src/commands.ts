@@ -50,9 +50,9 @@ export interface CommandWhen {
   /** ...and not inside any of these. */
   readonly not?: readonly CommandArea[];
   /**
-   * The keys alone leave these areas to whatever owns them there (⌘/ is
-   * Monaco's toggle comment); the command itself still runs from them by the
-   * menu or the palette. `not` excludes the command, this only its keys.
+   * The keys alone leave these areas to whatever owns them there (a key
+   * rebound onto one of Monaco's, say); the command itself still runs from
+   * them by the menu or the palette. `not` excludes the command, this only its keys.
    */
   readonly keysNot?: readonly CommandArea[];
 }
@@ -83,10 +83,11 @@ export interface CommandSpec {
    * A native key equivalent fires wherever focus is, before a field, Monaco
    * or a terminal sees it, and Electrobun's menu has no way to show a key
    * without owning it. So a command whose key must still reach those when
-   * the command does not act there (⌘W outside the tabs, ⌘[ indenting in
-   * Monaco, F6 inside a dialog) sets `showKeyOnly`: its item gets no
-   * accelerator, its title carries the key's glyphs instead, and the
-   * dispatcher keeps the key, with its `when` and its dialog rule.
+   * the command does not act there (⌘W outside the tabs, ⌘K inside a
+   * dialog, ⌃Tab whose release the switcher waits for) sets `showKeyOnly`:
+   * its item gets no accelerator, its title carries the key's glyphs
+   * instead, and the dispatcher keeps the key, with its `when` and its
+   * dialog rule.
    */
   readonly menu?: {
     readonly bar: CommandMenu;
@@ -136,32 +137,34 @@ export const COMMAND_SPECS = [
     runsIn: "host",
     menu: { bar: "Daedalus", section: 1 },
   },
+  // The views keep their View menu items and palette rows; ⌘1 to ⌘9 are
+  // the center's tabs now, as in a browser.
   {
     id: "view.workspace",
     title: "Workspace",
     group: "View",
-    keys: ["mod+1"],
+    keys: [],
     menu: { bar: "View", section: 0 },
   },
   {
     id: "view.board",
     title: "Board",
     group: "View",
-    keys: ["mod+2"],
+    keys: [],
     menu: { bar: "View", section: 0 },
   },
   {
     id: "view.session",
     title: "Session",
     group: "View",
-    keys: ["mod+3"],
+    keys: [],
     menu: { bar: "View", section: 0 },
   },
   {
     id: "view.world",
     title: "World",
     group: "View",
-    keys: ["mod+4"],
+    keys: [],
     menu: { bar: "View", section: 0 },
   },
   {
@@ -179,13 +182,33 @@ export const COMMAND_SPECS = [
     keys: ["ctrl+`"],
     menu: { bar: "View", section: 1 },
   },
-  // ⌥⌘B, the key VS Code gives its secondary side bar.
+  // ⌘B opens and closes the right side panel, as it does VS Code's side bar.
+  // Monaco binds nothing to ⌘B, and a terminal leaves ⌘ keys to the app.
   {
     id: "panel.toggleWorkspacePanel",
-    title: "Fold Workspace Panel",
+    title: "Toggle Side Panel",
     group: "Panels",
-    keys: ["mod+alt+b"],
+    keys: ["mod+b"],
     menu: { bar: "View", section: 1 },
+  },
+  // The side panel's tabs, from the palette: no keys.
+  {
+    id: "panel.files",
+    title: "Show Files Panel",
+    group: "Panels",
+    keys: [],
+  },
+  {
+    id: "panel.repositories",
+    title: "Show Repositories Panel",
+    group: "Panels",
+    keys: [],
+  },
+  {
+    id: "panel.tasks",
+    title: "Show Tasks Panel",
+    group: "Panels",
+    keys: [],
   },
   // The center tabs. Handled by the app rather than as Monaco commands so
   // they also work on a Markdown preview, an image or a diff. Save does not
@@ -215,7 +238,7 @@ export const COMMAND_SPECS = [
     group: "Tabs",
     keys: ["mod+shift+]"],
     when: { areas: ["tabs"] },
-    menu: { bar: "Go", section: 4, showKeyOnly: true },
+    menu: { bar: "Go", section: 1, showKeyOnly: true },
   },
   {
     id: "tab.previous",
@@ -223,86 +246,91 @@ export const COMMAND_SPECS = [
     group: "Tabs",
     keys: ["mod+shift+["],
     when: { areas: ["tabs"] },
-    menu: { bar: "Go", section: 4, showKeyOnly: true },
-  },
-  // Moving between areas and inside them. F6 is kept from the shell too, so
-  // it works from inside a terminal; inside a dialog it is the dialog's, so
-  // its menu items only show the keys.
-  {
-    id: "area.next",
-    title: "Focus Next Area",
-    group: "Go",
-    keys: ["f6"],
     menu: { bar: "Go", section: 1, showKeyOnly: true },
   },
+  // ⌘1 to ⌘8 pick the center's tab by its place, ⌘9 the last, as a browser
+  // does. They act from anywhere, a terminal included, so they are the
+  // dispatcher's rather than menu items: nine items would bury the Go menu.
   {
-    id: "area.previous",
-    title: "Focus Previous Area",
+    id: "tab.goTo1",
+    title: "Go to Tab 1",
+    group: "Tabs",
+    keys: ["mod+1"],
+  },
+  {
+    id: "tab.goTo2",
+    title: "Go to Tab 2",
+    group: "Tabs",
+    keys: ["mod+2"],
+  },
+  {
+    id: "tab.goTo3",
+    title: "Go to Tab 3",
+    group: "Tabs",
+    keys: ["mod+3"],
+  },
+  {
+    id: "tab.goTo4",
+    title: "Go to Tab 4",
+    group: "Tabs",
+    keys: ["mod+4"],
+  },
+  {
+    id: "tab.goTo5",
+    title: "Go to Tab 5",
+    group: "Tabs",
+    keys: ["mod+5"],
+  },
+  {
+    id: "tab.goTo6",
+    title: "Go to Tab 6",
+    group: "Tabs",
+    keys: ["mod+6"],
+  },
+  {
+    id: "tab.goTo7",
+    title: "Go to Tab 7",
+    group: "Tabs",
+    keys: ["mod+7"],
+  },
+  {
+    id: "tab.goTo8",
+    title: "Go to Tab 8",
+    group: "Tabs",
+    keys: ["mod+8"],
+  },
+  {
+    id: "tab.goToLast",
+    title: "Go to Last Tab",
+    group: "Tabs",
+    keys: ["mod+9"],
+  },
+  // ⌃Tab is the session switcher, as ⌘Tab is the app switcher: held ⌃, each
+  // Tab moves down the sessions in the order they were last used (⌃⇧Tab
+  // up), and letting go of ⌃ opens the highlighted one. A quick tap goes back
+  // to the previous session. The dispatcher keeps it from a terminal and
+  // Monaco (which binds no ⌃Tab on a Mac); a held Tab keeps moving.
+  {
+    id: "session.switch",
+    title: "Switch Session",
     group: "Go",
-    keys: ["shift+f6"],
-    menu: { bar: "Go", section: 1, showKeyOnly: true },
+    keys: ["ctrl+tab"],
+    allowRepeat: true,
+    menu: { bar: "Go", section: 0, showKeyOnly: true },
   },
   {
-    id: "area.sidebar",
-    title: "Focus Workspaces",
+    id: "session.switchBack",
+    title: "Switch Session, Backwards",
     group: "Go",
-    keys: ["mod+0"],
-    menu: { bar: "Go", section: 0 },
-  },
-  {
-    id: "panel.files",
-    title: "Show Files",
-    group: "Panels",
-    keys: ["mod+shift+e"],
-    menu: { bar: "Go", section: 0 },
-  },
-  {
-    id: "panel.repositories",
-    title: "Show Repositories",
-    group: "Panels",
-    keys: ["mod+shift+r"],
-    menu: { bar: "Go", section: 0 },
-  },
-  // ⌥⌘↑ / ⌥⌘↓ and ⌘[ / ⌘] are Monaco's add-cursor and indent keys, so they
-  // leave the editor alone, and their menu items only show the keys.
-  {
-    id: "session.next",
-    title: "Next Session",
-    group: "Go",
-    keys: ["mod+alt+down"],
-    when: { not: ["editor"] },
-    menu: { bar: "Go", section: 2, showKeyOnly: true },
-  },
-  {
-    id: "session.previous",
-    title: "Previous Session",
-    group: "Go",
-    keys: ["mod+alt+up"],
-    when: { not: ["editor"] },
-    menu: { bar: "Go", section: 2, showKeyOnly: true },
+    keys: ["ctrl+shift+tab"],
+    allowRepeat: true,
   },
   {
     id: "session.nextNeedsYou",
     title: "Next Session That Needs You",
     group: "Go",
-    keys: ["mod+shift+a"],
-    menu: { bar: "Go", section: 2 },
-  },
-  {
-    id: "history.back",
-    title: "Back",
-    group: "Go",
-    keys: ["mod+["],
-    when: { not: ["editor"] },
-    menu: { bar: "Go", section: 3, showKeyOnly: true },
-  },
-  {
-    id: "history.forward",
-    title: "Forward",
-    group: "Go",
-    keys: ["mod+]"],
-    when: { not: ["editor"] },
-    menu: { bar: "Go", section: 3, showKeyOnly: true },
+    keys: [],
+    menu: { bar: "Go", section: 0 },
   },
   {
     id: "session.new",
@@ -342,26 +370,25 @@ export const COMMAND_SPECS = [
     keys: ["shift+f10", "contextmenu"],
     when: { areas: ["sidebar", "board", "right-panel"] },
   },
-  // ⌘K reaches everything: commands, places and the focused item's
-  // actions. The dispatcher keeps it, so the palette's own field sees it.
-  // It acts from a terminal and the editor too, as a bound ⌘ key does;
-  // Monaco's ⌘K chords give way to it.
+  // ⌘K is the one place to go: sessions, tasks, workspaces, every command,
+  // the settings pages, and each item's actions. The dispatcher keeps it, so
+  // the palette's own field sees it (⌘K there opens a row's actions). It
+  // acts from a terminal and the editor too, as a bound ⌘ key does; Monaco's
+  // ⌘K chords give way to it.
   {
     id: "palette.open",
     title: "Command Palette…",
     group: "Go",
     keys: ["mod+k"],
-    menu: { bar: "Go", section: 5, showKeyOnly: true },
+    menu: { bar: "Go", section: 2, showKeyOnly: true },
   },
-  // ⌘/ is Monaco's toggle comment, so in the editor the key is Monaco's;
-  // the Help menu still opens the sheet from there.
+  // No key: the Help menu and the palette open it.
   {
     id: "help.shortcuts",
     title: "Keyboard Shortcuts",
     group: "Help",
-    keys: ["mod+/"],
-    when: { keysNot: ["editor"] },
-    menu: { bar: "Help", section: 0, showKeyOnly: true },
+    keys: [],
+    menu: { bar: "Help", section: 0 },
   },
 ] as const satisfies readonly CommandSpec[];
 

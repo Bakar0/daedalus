@@ -179,8 +179,8 @@ export interface KeyHint {
 }
 
 /**
- * A muted line of keys for an empty state: `⌘N new session · ⌘K jump
- * anywhere`. A command with no key (unbound) is left out.
+ * A muted line of keys for an empty state: `⌘K to do anything · ⌘N new
+ * session`. A command with no key (unbound) is left out.
  */
 export function KeyHints({ hints }: { hints: readonly KeyHint[] }) {
   const shown = hints.flatMap((hint) => {

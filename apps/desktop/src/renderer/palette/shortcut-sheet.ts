@@ -1,5 +1,5 @@
 /**
- * The ⌘/ sheet's content as data: every command with keys, grouped as the
+ * The shortcuts sheet's content as data: every command with keys, grouped as the
  * command table groups them, plus the keys elements answer to themselves
  * (the sidebar tree, the board, the file tree, a terminal), which are not
  * commands. The sections for where focus is come first.
@@ -83,6 +83,32 @@ const glyphs = (...keys: string[]) => keys.map(formatKeyGlyphs);
  * describes them. Static: they are not rebound.
  */
 export const ELEMENT_KEY_SECTIONS: readonly SheetSection[] = [
+  {
+    title: "Command palette",
+    areas: [],
+    rows: [
+      { label: "Move between results", keys: glyphs("up", "down") },
+      { label: "Run the result's main action", keys: glyphs("enter") },
+      {
+        label: "Show the result's actions",
+        keys: glyphs("mod+k", "right"),
+      },
+      { label: "Back from the actions", keys: glyphs("escape", "left") },
+      { label: "Close", keys: glyphs("escape") },
+    ],
+  },
+  {
+    title: "Session switcher",
+    areas: [],
+    rows: [
+      {
+        label: "Next / previous session, while ⌃ is held",
+        keys: glyphs("ctrl+tab", "ctrl+shift+tab"),
+      },
+      { label: "Open the highlighted session", keys: ["Release ⌃"] },
+      { label: "Cancel", keys: glyphs("escape") },
+    ],
+  },
   {
     title: "Sidebar tree",
     areas: ["sidebar"],
@@ -194,7 +220,7 @@ export function orderSheetSections(
 
 /**
  * Only the rows that match the search: every word of it appears in the
- * row's label, its section's title or its keys' glyphs (so `⌘[` and `tab
+ * row's label, its section's title or its keys' glyphs (so `⇧⌘[` and `tab
  * close` both find theirs). A section with none left is dropped.
  */
 export function filterSheetSections(

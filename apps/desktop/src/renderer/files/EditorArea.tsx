@@ -24,6 +24,7 @@ import { type AppTheme, appearanceOf } from "../theme";
 import { askConfirm } from "../dialogs";
 import { type CommandContext, useCommand } from "../commands";
 import { Tooltip } from "../keyboard-ui";
+import { focusWhenReady, isShown } from "../navigation/area-focus";
 import {
   focusIsLost,
   restoreCandidates,
@@ -787,7 +788,8 @@ export default function EditorArea({
     [client, closeImages, workspaceId],
   );
 
-  // ⌘S saves and ⌘W closes the active tab; ⇧⌘[ and ⇧⌘] move between tabs.
+  // ⌘S saves and ⌘W closes the active tab; ⇧⌘[ and ⇧⌘] move between tabs,
+  // and ⌘1 to ⌘9 go to one.
   // Commands in the shared table (`tab.*`), acting while focus is in this
   // area; run by the app rather than as Monaco commands so they also work on
   // a Markdown preview.
@@ -834,6 +836,53 @@ export default function EditorArea({
     enabled: inThisArea,
     run: () => apiRef.current?.activatePrevious(),
   });
+  // ⌘1 to ⌘8 pick a tab by its place in the strip, ⌘9 the last, as a
+  // browser does, from anywhere (a terminal too). The strip is the group
+  // focus is in, else the active one. Focus that was in the strip follows
+  // to the new tab's terminal or editor, so the caret is never dropped.
+  const groupFor = (context: CommandContext) => {
+    const api = apiRef.current;
+    const target = context.target;
+    return (
+      (target
+        ? api?.groups.find((item) => item.element.contains(target))
+        : undefined) ?? api?.activeGroup
+    );
+  };
+  const tabAt = (context: CommandContext, place: number | "last") => {
+    const panels = groupFor(context)?.panels ?? [];
+    return place === "last" ? panels.at(-1) : panels[place - 1];
+  };
+  const goToTab = (context: CommandContext, place: number | "last") => {
+    const group = groupFor(context);
+    const panel = tabAt(context, place);
+    if (!group || !panel) return;
+    const hadFocus = Boolean(
+      context.target && group.element.contains(context.target),
+    );
+    panel.api.setActive();
+    if (hadFocus)
+      focusWhenReady(() =>
+        [
+          ...group.element.querySelectorAll<HTMLElement>(
+            ".xterm-helper-textarea, .monaco-editor textarea",
+          ),
+        ].find(isShown),
+      );
+  };
+  const tabCommand = (place: number | "last") => ({
+    enabled: (context: CommandContext) => Boolean(tabAt(context, place)),
+    run: (context: CommandContext) => goToTab(context, place),
+  });
+  useCommand("tab.goTo1", tabCommand(1));
+  useCommand("tab.goTo2", tabCommand(2));
+  useCommand("tab.goTo3", tabCommand(3));
+  useCommand("tab.goTo4", tabCommand(4));
+  useCommand("tab.goTo5", tabCommand(5));
+  useCommand("tab.goTo6", tabCommand(6));
+  useCommand("tab.goTo7", tabCommand(7));
+  useCommand("tab.goTo8", tabCommand(8));
+  useCommand("tab.goToLast", tabCommand("last"));
 
   // Delete and Backspace on a focused tab close it through `close`, which
   // asks about unsaved changes, rather than through dockview's own handler,
