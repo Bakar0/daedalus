@@ -29,6 +29,13 @@ const ITEMS = [
   '[role="menuitemcheckbox"]:not(:disabled)',
 ].join(", ");
 
+/**
+ * Marks an item the arrow keys reach that a click does not close the menu
+ * for: a pin that toggles in place, or a confirm that asks for a second
+ * click first. Such an item never takes the menu's first focus either.
+ */
+export const KEEP_OPEN = "data-menu-keep-open";
+
 export interface MenuRect {
   top: number;
   left: number;
@@ -169,8 +176,11 @@ export function Menu({
     // straight away.
     const list = items();
     (
-      list.find((item) => item.getAttribute("aria-checked") === "true") ??
-      list[0]
+      list.find(
+        (item) =>
+          item.getAttribute("aria-checked") === "true" &&
+          !item.hasAttribute(KEEP_OPEN),
+      ) ?? list[0]
     )?.focus();
     const onPointerDown = (event: PointerEvent) => {
       if (!ref.current?.contains(event.target as Node)) close(false);
@@ -236,7 +246,8 @@ export function Menu({
         // Choosing an item closes the menu; the item's own click has already
         // run by the time this sees the event.
         onClick={(event) => {
-          if ((event.target as Element).closest(ITEMS)) close(true);
+          const item = (event.target as Element).closest(ITEMS);
+          if (item && !item.hasAttribute(KEEP_OPEN)) close(true);
         }}
         ref={popoverRef}
         role="menu"

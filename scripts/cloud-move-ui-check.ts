@@ -135,7 +135,7 @@ await withBrowser(
         "Boolean(document.querySelector('.menu-popover:popover-open [data-action=\"cloud\"] .menu-item-icon svg'))",
       )) &&
         (await browser.text("menu-action-cloud")) === "Move to cloud" &&
-        (await browser.attribute("pin-cloud", "aria-pressed")) === "false",
+        (await browser.attribute("pin-cloud", "aria-checked")) === "false",
       "Move to cloud is not in Settings with its icon, unpinned",
     );
     await browser.click("pin-cloud");

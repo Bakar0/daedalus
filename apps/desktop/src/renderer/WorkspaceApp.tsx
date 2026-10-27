@@ -220,6 +220,15 @@ export {
 } from "./files/explorer-state";
 import { sessionColorStyle } from "./session-color-style";
 import { TerminalClipboardGate } from "./terminal-clipboard";
+import { isTopmostScope, useFocusScope } from "./use-focus-scope";
+import { onTabListKeyDown, rovingTabIndex } from "./tab-roving";
+
+/** The side panel's tabs, in the order they are drawn. */
+const SIDE_PANEL_TABS = [
+  ["files", "Files"],
+  ["git", "Repositories"],
+  ["tasks", "Tasks"],
+] as const;
 
 /** The handle a member name becomes, as the core makes it. */
 function teamHandlePreview(name: string): string {
@@ -1236,12 +1245,11 @@ function Modal({
   const error = useContext(DialogErrorContext);
   const close = useRef(onClose);
   close.current = onClose;
-  // A dialog opened from a session would otherwise leave the caret in the
-  // terminal, where xterm swallows Escape and sends it to the agent.
-  useEffect(() => {
-    const element = section.current;
-    if (element && !element.contains(document.activeElement)) element.focus();
-  }, []);
+  // The scope pulls focus in, so a dialog opened from a session does not
+  // leave the caret in the terminal, where xterm swallows Escape and sends it
+  // to the agent. It also keeps Tab inside, makes the page behind inert and
+  // gives focus back when the dialog closes.
+  useFocusScope(section);
   // Escape closes it, on the window like the task drawer, so a menu or a
   // confirm on top that handles Escape first (`preventDefault`, or a stopped
   // event) closes only itself.
@@ -1249,7 +1257,9 @@ function Modal({
     if (!dismissible) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (document.querySelector(".app-dialog-backdrop")) return;
+      // Only the dialog on top: another dialog, or one of the app's
+      // confirms, may be over this one, and it takes the key.
+      if (!isTopmostScope(section.current)) return;
       event.preventDefault();
       close.current();
     };
@@ -2811,16 +2821,28 @@ export function WorkspaceApp({
   // Escape closes the open task, unless it is being edited (an unsaved brief
   // is not lost to a stray key) or a dialog is on top of it.
   useEffect(() => {
-    if (view !== "board" || !selectedTaskId || editingTask || modal) return;
+    if (
+      view !== "board" ||
+      !selectedTaskId ||
+      editingTask ||
+      modal ||
+      secretsWorkspace ||
+      quitRequest
+    )
+      return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
+      // Any dialog on top (Secrets, Quit, the app's confirms) takes this
+      // Escape; it may run after this listener, so it cannot be relied on to
+      // mark the event handled first.
+      if (document.querySelector(".modal-backdrop")) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable]")) return;
       setSelectedTaskId(undefined);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editingTask, modal, selectedTaskId, view]);
+  }, [editingTask, modal, quitRequest, secretsWorkspace, selectedTaskId, view]);
 
   const clearAttention = useCallback(
     async (sessionId: string) => {
@@ -7211,20 +7233,25 @@ export function WorkspaceApp({
               <div
                 aria-label="Workspace panel"
                 className="side-panel-tabs"
+                // Focus moves on the arrows; Enter or Space opens, since a
+                // click on the open tab folds the panel.
+                onKeyDown={(event) => onTabListKeyDown(event)}
                 role="tablist"
               >
-                {(
-                  [
-                    ["files", "Files"],
-                    ["git", "Repositories"],
-                    ["tasks", "Tasks"],
-                  ] as const
-                ).map(([tab, label]) => (
+                {SIDE_PANEL_TABS.map(([tab, label], index) => (
                   <button
                     aria-label={label}
                     aria-selected={!workspacePanelCollapsed && panelTab === tab}
                     className="side-panel-tab"
                     key={tab}
+                    tabIndex={rovingTabIndex(
+                      index,
+                      workspacePanelCollapsed
+                        ? -1
+                        : SIDE_PANEL_TABS.findIndex(
+                            ([item]) => item === panelTab,
+                          ),
+                    )}
                     onClick={() => {
                       if (workspacePanelCollapsed) toggleBoardDetailPanel();
                       else if (panelTab === tab) {
@@ -7543,7 +7570,16 @@ export function WorkspaceApp({
             </div>
           </div>
           <div className="integrated-terminal-body">
-            <div className="integrated-terminal-stage">
+            <div
+              aria-labelledby={
+                activeIntegratedTerminal
+                  ? `integrated-terminal-tab-${activeIntegratedTerminal.id}`
+                  : undefined
+              }
+              className="integrated-terminal-stage"
+              id="integrated-terminal-stage"
+              role={activeIntegratedTerminal ? "tabpanel" : undefined}
+            >
               {activeIntegratedTerminal
                 ? integratedTerminals.map((terminal) => (
                     <IntegratedTerminalSurface
@@ -7575,20 +7611,32 @@ export function WorkspaceApp({
               <div
                 aria-label="Terminal tabs"
                 className="integrated-terminal-tabs"
+                // Arrows move focus only; Enter or Space selects. Selecting
+                // puts the caret in that terminal, which would take the next
+                // arrow key.
+                onKeyDown={(event) => onTabListKeyDown(event)}
                 role="tablist"
               >
-                {integratedTerminals.map((terminal) => (
+                {integratedTerminals.map((terminal, index) => (
                   <div
                     className={`integrated-terminal-tab ${terminal.id === activeIntegratedTerminal?.id ? "active" : ""}`}
                     key={terminal.id}
                   >
                     <button
+                      aria-controls="integrated-terminal-stage"
                       aria-label={`${terminal.name}, ${terminal.workingDirectory}`}
                       aria-selected={
                         terminal.id === activeIntegratedTerminal?.id
                       }
+                      id={`integrated-terminal-tab-${terminal.id}`}
                       onClick={() => setActiveTerminalId(terminal.id)}
                       role="tab"
+                      tabIndex={rovingTabIndex(
+                        index,
+                        integratedTerminals.findIndex(
+                          (item) => item.id === activeIntegratedTerminal?.id,
+                        ),
+                      )}
                       title={
                         terminal.revivedAt
                           ? `${terminal.workingDirectory} — reopened after a restart, scrollback not restored`

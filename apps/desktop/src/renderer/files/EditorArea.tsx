@@ -22,6 +22,12 @@ import {
 import type { DesktopClient } from "../client-types";
 import { type AppTheme, appearanceOf } from "../theme";
 import { askConfirm } from "../dialogs";
+import {
+  focusIsLost,
+  restoreCandidates,
+  restoreFocus,
+} from "../use-focus-scope";
+import { deleteKeyCloses, tabCloseRequest } from "./tab-keys";
 import { MarkdownPreview } from "../markdown-preview";
 import { INSTRUCTIONS_ICON_PATH, WORKFLOW_ICON_PATH } from "../WorkflowPane";
 import {
@@ -552,14 +558,43 @@ export default function EditorArea({
   );
 
   /** The session, task and web tabs: one each for session and task. */
+  // Where focus was when a Team or Routines tab was opened, by panel id,
+  // so closing the tab gives it back.
+  const openers = useRef(new Map<string, HTMLElement[]>());
+  /**
+   * Puts focus in a Team or Routines tab that was just opened or brought to
+   * the front, so Tab and the keys start there and not where the opener
+   * was. The page mounts through dockview's portal, so it is looked for over
+   * a few frames.
+   */
+  const focusAbilityPanel = useCallback((id: string) => {
+    if (!openers.current.has(id))
+      openers.current.set(id, restoreCandidates(document.activeElement));
+    let tries = 5;
+    const attempt = () => {
+      const root = [
+        ...document.querySelectorAll<HTMLElement>(".ability-panel"),
+      ].find((element) => element.dataset.panelId === id);
+      if (root) {
+        if (!root.contains(document.activeElement))
+          root.focus({ preventScroll: true });
+        return;
+      }
+      if (--tries > 0) requestAnimationFrame(attempt);
+    };
+    requestAnimationFrame(attempt);
+  }, []);
+
   const placeApp = useCallback(
     (id: string, params: FilePanelParams, title: string) => {
       const api = apiRef.current;
       if (!api) return;
+      const takesFocus = params.kind === "team" || params.kind === "routines";
       const existing = api.getPanel(id);
       if (existing) {
         existing.api.updateParameters({ ...existing.params, ...params });
         existing.api.setActive();
+        if (takesFocus) focusAbilityPanel(id);
         return;
       }
       // The session tab leads the strip; the others open beside the tab in
@@ -588,8 +623,9 @@ export default function EditorArea({
               }
             : {}),
       });
+      if (takesFocus) focusAbilityPanel(id);
     },
-    [],
+    [focusAbilityPanel],
   );
 
   // A request that arrives before dockview is ready (the editor chunk has
@@ -781,6 +817,44 @@ export default function EditorArea({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [close, save, workspaceId]);
 
+  // Delete and Backspace on a focused tab close it through `close`, which
+  // asks about unsaved changes, rather than through dockview's own handler,
+  // which would close the panel outright. Caught in the capture phase, before
+  // the tab strip's listener sees the key.
+  const areaRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const area = areaRef.current;
+    if (!area) return;
+    const onKey = (event: KeyboardEvent) => {
+      const id = tabCloseRequest(event);
+      const api = apiRef.current;
+      if (!id || !api) return;
+      const panel = api.getPanel(id);
+      if (!panel) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const kind = (panel.params as FilePanelParams | undefined)?.kind;
+      if (!deleteKeyCloses(kind)) return;
+      const tab = event.target as HTMLElement;
+      const neighbour = [
+        tab.nextElementSibling,
+        tab.previousElementSibling,
+      ].find(
+        (element): element is HTMLElement =>
+          element instanceof HTMLElement &&
+          element.classList.contains("dv-tab"),
+      );
+      void close(panel).then(() => {
+        // Closed: focus stays in the strip, on the tab beside it, as
+        // dockview's own handler leaves it.
+        if (!api.getPanel(id) && focusIsLost() && neighbour?.isConnected)
+          neighbour.focus();
+      });
+    };
+    area.addEventListener("keydown", onKey, true);
+    return () => area.removeEventListener("keydown", onKey, true);
+  }, [close]);
+
   const onReady = useCallback(
     ({ api }: { api: DockviewApi }) => {
       apiRef.current = api;
@@ -822,6 +896,17 @@ export default function EditorArea({
           queueMicrotask(() => {
             if (!api.getPanel(panel.id))
               callbacks.current.onTerminalTabClosed?.(terminalId);
+          });
+          return;
+        }
+        if (params.kind === "team" || params.kind === "routines") {
+          queueMicrotask(() => {
+            if (api.getPanel(panel.id)) return;
+            const opener = openers.current.get(panel.id);
+            openers.current.delete(panel.id);
+            // Only when the close dropped focus with the tab; a tab closed
+            // from elsewhere leaves focus where the user has it.
+            if (opener && focusIsLost()) restoreFocus(opener);
           });
           return;
         }
@@ -883,7 +968,7 @@ export default function EditorArea({
 
   return (
     <EditorContext.Provider value={context}>
-      <div className="editor-area">
+      <div className="editor-area" ref={areaRef}>
         <DockviewReact
           className={
             appearanceOf(theme) === "dark"
@@ -971,6 +1056,7 @@ function FileTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
   return (
     <div
       className={`file-tab ${params.preview ? "preview" : ""} ${dirty ? "dirty" : ""}`}
+      data-panel-id={api.id}
       onClick={() =>
         requestFocus(
           params.diff
@@ -1125,6 +1211,7 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
   return (
     <div
       className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
+      data-panel-id={api.id}
       onAuxClick={(event) => {
         if (event.button === 1) api.close();
       }}
@@ -1220,16 +1307,25 @@ function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
     return () => subscription.dispose();
   }, [api]);
   return (
-    <div className="app-panel ability-panel">
+    // Focusable so opening the tab can put focus in it (`focusAbilityPanel`).
+    <div
+      className="app-panel ability-panel"
+      data-panel-id={api.id}
+      tabIndex={-1}
+    >
       {params.teamId && context.renderTeam?.(params.teamId, visible)}
     </div>
   );
 }
 
-function RoutinesPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+function RoutinesPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   const context = useEditorContext();
   return (
-    <div className="app-panel ability-panel">
+    <div
+      className="app-panel ability-panel"
+      data-panel-id={api.id}
+      tabIndex={-1}
+    >
       {params.sessionId && context.renderRoutines?.(params.sessionId)}
     </div>
   );

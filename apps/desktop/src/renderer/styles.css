@@ -323,6 +323,16 @@ select:focus {
   background: var(--elevated);
   border-color: rgb(69 150 254 / 0.72);
 }
+/* A field draws its ring inside its border rather than as an outline, so it
+   does not overlap the label or the field beside it. The terminal's and the
+   editor's hidden textareas are not fields anyone sees. */
+:is(input, textarea, select):focus-visible:not(
+    .xterm-helper-textarea,
+    .inputarea
+  ) {
+  border-color: #4596fe;
+  box-shadow: 0 0 0 1px #4596fe;
+}
 textarea {
   line-height: 1.55;
   resize: vertical;
@@ -1975,6 +1985,10 @@ button:not(
 .modal:focus {
   outline: none;
 }
+/* Same for a Team or Routines tab, which takes focus when it opens. */
+.ability-panel:focus {
+  outline: none;
+}
 /* The app's error, shown in the dialog because the window's banner is under
    the backdrop. */
 .modal-error {
@@ -2817,6 +2831,11 @@ dd {
 }
 .file-tree:focus-within .file-tree-row.focused:not(.selected) {
   background: var(--raised);
+}
+/* The row with focus, drawn inside the row as VS Code's explorer does. */
+.file-tree-row:focus-visible {
+  outline: 1px solid #4596fe;
+  outline-offset: -1px;
 }
 .file-tree-row.drop-target {
   background: var(--accent-wash);
@@ -4741,6 +4760,11 @@ dd {
 .board-card:hover {
   background: var(--raised-hover);
 }
+/* No offset: the lane scrolls, and a ring outside the card is clipped. */
+.board-card:focus-visible {
+  outline: 2px solid #4596fe;
+  outline-offset: 0;
+}
 .board-card.selected {
   background: rgb(69 150 254 / 0.095);
   border-color: rgb(69 150 254 / 0.42);
@@ -5335,6 +5359,11 @@ dd {
 .menu-item:focus-visible {
   background: var(--accent-wash) !important;
   outline: none;
+}
+/* Hover and keyboard focus would otherwise look the same; the item the
+   arrow keys are on also gets the ring, inside the item. */
+.menu-item:focus-visible {
+  box-shadow: inset 0 0 0 1px #4596fe;
 }
 .menu-item-label {
   flex: 1;
@@ -9248,7 +9277,7 @@ dd {
 .menu-pin:focus-visible {
   opacity: 1;
 }
-.menu-pin[aria-pressed="true"] {
+.menu-pin[aria-checked="true"] {
   color: var(--accent) !important;
   opacity: 1;
 }
@@ -9520,6 +9549,12 @@ dd {
 }
 .side-panel-dock-edge:hover {
   background: var(--accent-wash);
+}
+/* A thin line like the other resize edges, not a ring round a 7px strip. */
+.side-panel-dock-edge:focus-visible {
+  background: linear-gradient(var(--accent), var(--accent)) center / 100% 2px
+    no-repeat;
+  outline: none;
 }
 /* The workflow takes the room the dock has; its steps scroll inside. */
 .side-panel-dock > .workflow-pane:first-of-type {

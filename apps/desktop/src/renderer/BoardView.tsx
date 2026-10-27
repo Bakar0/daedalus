@@ -789,6 +789,15 @@ export function BoardView(props: BoardViewProps) {
         data-workspace-id={task.workspaceId}
         key={task.id}
         onClick={() => props.onSelectTask(task)}
+        onKeyDown={(event) => {
+          // Only the card itself: Enter on a button inside it is the
+          // button's.
+          if (event.target !== event.currentTarget) return;
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          props.onSelectTask(task);
+        }}
+        tabIndex={0}
       >
         <div className="board-card-title">
           {workspaceLabel !== undefined && (
@@ -1108,8 +1117,8 @@ export function BoardView(props: BoardViewProps) {
         {workspace && (
           <input
             aria-label="Quick capture: type a task title and press Enter"
+            aria-busy={capturing}
             className="board-capture"
-            disabled={capturing}
             onChange={(event) => setCapture(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -1118,6 +1127,9 @@ export function BoardView(props: BoardViewProps) {
               } else if (event.key === "Escape") setCapture("");
             }}
             placeholder="Capture a task… (Enter to add)"
+            // Read-only, not disabled, while it saves: disabling drops focus
+            // to the body, and the next task could not be typed straight on.
+            readOnly={capturing}
             value={capture}
           />
         )}

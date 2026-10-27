@@ -75,13 +75,13 @@ await withBrowser({ port: 41800, page: "cloud-test.html" }, async (browser) => {
     (await browser.has("menu-action-terminal")) &&
       (await browser.has("menu-action-secrets")) &&
       (await browser.has("menu-action-archive")) &&
-      (await browser.attribute("pin-terminal", "aria-pressed")) === "false",
+      (await browser.attribute("pin-terminal", "aria-checked")) === "false",
     "Settings does not list terminal, secrets and archive, unpinned",
   );
   await browser.screenshot("pins-workspace-menu");
   await browser.click("pin-terminal");
   expect(
-    (await browser.attribute("pin-terminal", "aria-pressed")) === "true",
+    (await browser.attribute("pin-terminal", "aria-checked")) === "true",
     "the terminal pin did not stick",
   );
   await close(browser);
@@ -114,9 +114,9 @@ await withBrowser({ port: 41800, page: "cloud-test.html" }, async (browser) => {
   // Sessions: rebirth and archive start pinned; there is no cloud action.
   await open(browser, "More actions for s-local");
   expect(
-    (await browser.attribute("pin-rebirth", "aria-pressed")) === "true" &&
+    (await browser.attribute("pin-rebirth", "aria-checked")) === "true" &&
       !(await browser.has("pin-cloud")) &&
-      (await browser.attribute("pin-archive", "aria-pressed")) === "true",
+      (await browser.attribute("pin-archive", "aria-checked")) === "true",
     "a session's rebirth and archive should start pinned, with no cloud",
   );
   await browser.screenshot("pins-session-menu");

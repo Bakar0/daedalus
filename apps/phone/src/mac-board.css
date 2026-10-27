@@ -354,6 +354,10 @@
 .board-card:hover {
   background: var(--raised-hover);
 }
+.board-card:focus-visible {
+  outline: 2px solid #4596fe;
+  outline-offset: 0;
+}
 .board-card.selected {
   background: rgb(69 150 254 / 0.095);
   border-color: rgb(69 150 254 / 0.42);

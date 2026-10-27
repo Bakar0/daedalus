@@ -14,7 +14,7 @@ import {
 } from "@daedalus/protocol";
 import { useState, type ReactNode } from "react";
 import { ConfirmButton } from "./ConfirmButton";
-import { Menu, MenuDots } from "./Menu";
+import { KEEP_OPEN, Menu, MenuDots } from "./Menu";
 import { PercentInput } from "./PercentInput";
 import { sessionColorStyle } from "./session-color-style";
 
@@ -253,8 +253,9 @@ function PinIcon() {
 
 /**
  * The menu's own rows for a card's actions: each runs its action, and its
- * pin puts it on the card or takes it off. The pin is not a menuitem, so
- * choosing it leaves the menu open.
+ * pin puts it on the card or takes it off. Every button is a menu item, so
+ * the arrow keys reach it; the pin and a confirm's first click are marked to
+ * leave the menu open.
  */
 function MenuActions({ actions }: { actions: MenuAction[] }) {
   if (!actions.length) return null;
@@ -274,6 +275,8 @@ function MenuActions({ actions }: { actions: MenuAction[] }) {
               data-testid={`menu-action-${action.id}`}
               disabled={action.disabled}
               onConfirm={action.run}
+              role="menuitem"
+              {...{ [KEEP_OPEN]: "" }}
               title={`${action.label}. Asks once more.`}
               type="button"
             >
@@ -302,11 +305,13 @@ function MenuActions({ actions }: { actions: MenuAction[] }) {
             </button>
           )}
           <button
+            aria-checked={action.pinned}
             aria-label={`${action.pinned ? "Unpin" : "Pin"} ${action.label}`}
-            aria-pressed={action.pinned}
             className="quiet menu-pin"
             data-testid={`pin-${action.id}`}
             onClick={() => action.onPin(!action.pinned)}
+            role="menuitemcheckbox"
+            {...{ [KEEP_OPEN]: "" }}
             title={
               action.pinned
                 ? "Pinned: also on the card. Click to keep it in this menu only."
