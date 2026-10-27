@@ -9,7 +9,7 @@ import type {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "../client-types";
 import { relativeTime } from "../routines/time";
-import { Group } from "../FileEditorParts";
+import { DOCS_URL, Group, TabIntro } from "../FileEditorParts";
 import { sessionColorStyle } from "../session-color-style";
 import { SplitList } from "../SplitList";
 
@@ -178,6 +178,11 @@ export function TeamPage({
       error={error}
       now={now}
       onOpenSession={onOpenSession}
+      onReadMore={() =>
+        void client.request.openExternal({
+          url: `${DOCS_URL}/abilities.md#orchestration-and-teams`,
+        })
+      }
       onPost={async (body) => {
         const said = await run(client.request.teamSay({ teamId, body }));
         await load();
@@ -205,6 +210,7 @@ export function TeamView({
   onPost,
   onSetGoal,
   onOpenSession,
+  onReadMore,
 }: {
   teamId: string;
   detail: TeamDetailDto | undefined;
@@ -215,6 +221,8 @@ export function TeamView({
   onPost: (body: string) => Promise<string[] | undefined>;
   onSetGoal: (goal: string) => Promise<void>;
   onOpenSession: (sessionId: string) => void;
+  /** Opens the teams docs. */
+  onReadMore: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -255,6 +263,11 @@ export function TeamView({
 
   return (
     <div className="workflows-tab team-tab">
+      <TabIntro onReadMore={onReadMore}>
+        A team is a lead session and the members it adds, working toward one
+        goal. Tag a member to send its session a one-line notice; it reads the
+        message with daedal team chat --tagged.
+      </TabIntro>
       <SplitList
         id="team"
         label="Members"

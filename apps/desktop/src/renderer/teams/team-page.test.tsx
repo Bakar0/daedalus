@@ -61,6 +61,7 @@ const view = (overrides: Partial<Parameters<typeof TeamView>[0]> = {}) =>
       error={undefined}
       now={now}
       onOpenSession={() => {}}
+      onReadMore={() => {}}
       onPost={async () => []}
       onSetGoal={async () => {}}
       teamId="team-1"
@@ -74,6 +75,8 @@ describe("the Team tab", () => {
     expect(html).toContain("Checkout API");
     expect(html).toContain("Lead and 1 member · 2 messages");
     expect(html).toContain("Ship v2");
+    expect(html).toContain("A team is a lead session");
+    expect(html).toContain("Read more and examples");
     expect(html).toContain('data-tone="failing"');
     expect(html).toContain("1 not delivered: no inbox yet");
     expect(html).toContain('title="2 unread"');

@@ -207,6 +207,7 @@ describe("the Routines tab", () => {
           setEnabled: () => {},
           savePurpose: () => {},
           togglePause: () => {},
+          readMore: () => {},
         }}
         busy={false}
         detail={detail}
@@ -218,6 +219,7 @@ describe("the Routines tab", () => {
       />,
     );
     expect(html).toContain("Keep main green");
+    expect(html).toContain("Routines are checks this session runs");
     expect(html).toContain("1 of 2 on · paused");
     expect(html).toContain("Every 15 min");
     expect(html).toContain("in 5m");

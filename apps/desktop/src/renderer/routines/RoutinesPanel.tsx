@@ -7,6 +7,7 @@ import type {
   RpcResult,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "../client-types";
+import { DOCS_URL, TabIntro } from "../FileEditorParts";
 import { durationLabel, relativeTime } from "./time";
 
 const OUTPUT_LABEL: Record<RoutineDto["output"], string> = {
@@ -63,24 +64,6 @@ function RunChip({ run }: { run: RoutineRunDto }) {
       {chip.text}
     </span>
   );
-}
-
-const HOW_TO_STORAGE_KEY = "daedalus.routines.howto.hidden";
-
-function howToHidden(): boolean {
-  try {
-    return window.localStorage.getItem(HOW_TO_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function hideHowTo(): void {
-  try {
-    window.localStorage.setItem(HOW_TO_STORAGE_KEY, "1");
-  } catch {
-    // Without storage the line shows again next time.
-  }
 }
 
 /**
@@ -295,6 +278,10 @@ export function RoutinesPage({
               action: paused ? "resume" : "pause",
             }),
           ),
+        readMore: () =>
+          void client.request.openExternal({
+            url: `${DOCS_URL}/abilities.md#routines`,
+          }),
       }}
       busy={busy}
       detail={detail}
@@ -313,6 +300,8 @@ export interface RoutinesActions {
   savePurpose(purpose: string): void;
   /** Pauses the session's routines, or resumes them when `paused`. */
   togglePause(paused: boolean): void;
+  /** Opens the routines docs. */
+  readMore(): void;
 }
 
 /**
@@ -340,7 +329,6 @@ export function RoutinesView({
   now: number;
   actions: RoutinesActions;
 }) {
-  const [showHowTo, setShowHowTo] = useState(() => !howToHidden());
   const [purpose, setPurpose] = useState(detail?.purpose ?? "");
   useEffect(() => setPurpose(detail?.purpose ?? ""), [detail?.purpose]);
   const purposeChanged = purpose.trim() !== (detail?.purpose ?? "").trim();
@@ -360,158 +348,147 @@ export function RoutinesView({
     .slice(0, RECENT_RUNS);
 
   return (
-    <div className="ability-page routines-page">
-      <header className="ability-page-header">
-        <div className="ability-page-title">
-          <span className="eyebrow">{sessionName}</span>
-          <h2>Routines</h2>
-          <small>
-            {detail.routines.length === 0
-              ? "No routines yet"
-              : `${enabled} of ${detail.routines.length} on`}
-            {status?.paused ? " · paused" : ""}
-            {status && status.waiting.length > 0
-              ? ` · ${status.waiting.length} waiting`
-              : ""}
-            {status?.hold ? ` · held: ${status.hold.text}` : ""}
-          </small>
-        </div>
-        {status && (
-          <div className="ability-page-actions">
-            <button
-              className="quiet"
-              disabled={busy}
-              onClick={() => actions.togglePause(status.paused)}
-              type="button"
-            >
-              {status.paused ? "Resume" : "Pause all"}
-            </button>
-          </div>
-        )}
-        {error && <p className="ability-page-error">{error}</p>}
-      </header>
+    <div className="workflows-tab">
       {/* The session is told nothing, so this is how the user learns. */}
-      {showHowTo && (
-        <p className="ability-page-howto">
-          <span>
-            Add or change a routine by asking the session in plain words, like
-            "check CI on main every 15 minutes".
-          </span>
-          <button
-            className="quiet"
-            onClick={() => {
-              hideHowTo();
-              setShowHowTo(false);
-            }}
-            type="button"
-          >
-            Don't show again
-          </button>
-        </p>
-      )}
-      <form
-        className="ability-page-field"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (purposeChanged) actions.savePurpose(purpose.trim());
-        }}
-      >
-        <label htmlFor={`routines-purpose-${sessionId}`}>Purpose</label>
-        <textarea
-          id={`routines-purpose-${sessionId}`}
-          maxLength={2000}
-          onChange={(event) => setPurpose(event.target.value)}
-          placeholder="What these routines watch for, and what counts as worth a task. The session judges each finding against it."
-          rows={2}
-          value={purpose}
-        />
-        {purposeChanged && (
-          <div className="ability-page-field-actions">
-            <button
-              className="quiet"
-              onClick={() => setPurpose(detail.purpose ?? "")}
-              type="button"
-            >
-              Cancel
-            </button>
-            <button disabled={busy} type="submit">
-              Save purpose
-            </button>
+      <TabIntro onReadMore={actions.readMore}>
+        Routines are checks this session runs on a schedule; it files a task or
+        tells you when one finds something. Add or change one by asking the
+        session in plain words, like "check CI on main every 15 minutes".
+      </TabIntro>
+      <div className="ability-page routines-page">
+        <header className="ability-page-header">
+          <div className="ability-page-title">
+            <span className="eyebrow">{sessionName}</span>
+            <h2>Routines</h2>
+            <small>
+              {detail.routines.length === 0
+                ? "No routines yet"
+                : `${enabled} of ${detail.routines.length} on`}
+              {status?.paused ? " · paused" : ""}
+              {status && status.waiting.length > 0
+                ? ` · ${status.waiting.length} waiting`
+                : ""}
+              {status?.hold ? ` · held: ${status.hold.text}` : ""}
+            </small>
           </div>
-        )}
-      </form>
-      <div className="ability-page-scroll">
-        {detail.routines.length === 0 ? (
-          <p className="ability-page-empty">No routines yet.</p>
-        ) : (
-          <table className="routines-table">
-            <thead>
-              <tr>
-                <th>Routine</th>
-                <th>Schedule</th>
-                <th>Next</th>
-                <th>Last run</th>
-                <th>Output</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {detail.routines.map((routine) => (
-                <RoutineRow
-                  busy={busy}
-                  key={routine.name}
-                  now={now}
-                  onRunNow={() => actions.runNow(routine.name)}
-                  onSetEnabled={(value) =>
-                    actions.setEnabled(routine.name, value)
-                  }
-                  routine={routine}
-                />
-              ))}
-            </tbody>
-          </table>
-        )}
-        {finished.length > 0 && (
-          <section className="ability-page-section">
-            <h3>Recent runs</h3>
-            <ul className="routine-runs">
-              {finished.map((item) => (
-                <li key={item.id}>
-                  <RunChip run={item} />
-                  <strong>{item.routine}</strong>
-                  <span className="routine-run-summary">
-                    {item.summary ?? ""}
-                  </span>
-                  <time dateTime={runAt(item)}>
-                    {relativeTime(runAt(item), now)}
-                  </time>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {detail.templates.length > 0 && (
-          <section className="ability-page-section">
-            <h3>Templates</h3>
-            <p className="ability-page-hint">
-              Ask the session to use one of these to add a routine.
-            </p>
+          {status && (
+            <div className="ability-page-actions">
+              <button
+                className="quiet"
+                disabled={busy}
+                onClick={() => actions.togglePause(status.paused)}
+                type="button"
+              >
+                {status.paused ? "Resume" : "Pause all"}
+              </button>
+            </div>
+          )}
+          {error && <p className="ability-page-error">{error}</p>}
+        </header>
+        <form
+          className="ability-page-field"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (purposeChanged) actions.savePurpose(purpose.trim());
+          }}
+        >
+          <label htmlFor={`routines-purpose-${sessionId}`}>Purpose</label>
+          <textarea
+            id={`routines-purpose-${sessionId}`}
+            maxLength={2000}
+            onChange={(event) => setPurpose(event.target.value)}
+            placeholder="What these routines watch for, and what counts as worth a task. The session judges each finding against it."
+            rows={2}
+            value={purpose}
+          />
+          {purposeChanged && (
+            <div className="ability-page-field-actions">
+              <button
+                className="quiet"
+                onClick={() => setPurpose(detail.purpose ?? "")}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button disabled={busy} type="submit">
+                Save purpose
+              </button>
+            </div>
+          )}
+        </form>
+        <div className="ability-page-scroll">
+          {detail.routines.length === 0 ? (
+            <p className="ability-page-empty">No routines yet.</p>
+          ) : (
             <table className="routines-table">
               <thead>
                 <tr>
-                  <th>Template</th>
+                  <th>Routine</th>
                   <th>Schedule</th>
+                  <th>Next</th>
+                  <th>Last run</th>
                   <th>Output</th>
+                  <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
-                {detail.templates.map((template) => (
-                  <TemplateRow key={template.name} template={template} />
+                {detail.routines.map((routine) => (
+                  <RoutineRow
+                    busy={busy}
+                    key={routine.name}
+                    now={now}
+                    onRunNow={() => actions.runNow(routine.name)}
+                    onSetEnabled={(value) =>
+                      actions.setEnabled(routine.name, value)
+                    }
+                    routine={routine}
+                  />
                 ))}
               </tbody>
             </table>
-          </section>
-        )}
+          )}
+          {finished.length > 0 && (
+            <section className="ability-page-section">
+              <h3>Recent runs</h3>
+              <ul className="routine-runs">
+                {finished.map((item) => (
+                  <li key={item.id}>
+                    <RunChip run={item} />
+                    <strong>{item.routine}</strong>
+                    <span className="routine-run-summary">
+                      {item.summary ?? ""}
+                    </span>
+                    <time dateTime={runAt(item)}>
+                      {relativeTime(runAt(item), now)}
+                    </time>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {detail.templates.length > 0 && (
+            <section className="ability-page-section">
+              <h3>Templates</h3>
+              <p className="ability-page-hint">
+                Ask the session to use one of these to add a routine.
+              </p>
+              <table className="routines-table">
+                <thead>
+                  <tr>
+                    <th>Template</th>
+                    <th>Schedule</th>
+                    <th>Output</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detail.templates.map((template) => (
+                    <TemplateRow key={template.name} template={template} />
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </div>
       </div>
     </div>
   );

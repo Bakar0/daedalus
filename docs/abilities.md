@@ -184,7 +184,9 @@ box has text, the runs in flight, a rebirth, or paused. Run now
 (`routineRunNow` over RPC) skips only the 2-minute wait for the next line.
 
 The bar's **Routines** button opens the session's Routines tab in the center
-tab strip. It shows the purpose, edited in place, and Pause all or Resume.
+tab strip. Like the Team, Workflows and Custom instructions tabs, it starts
+with one line saying what it is, how to ask for a routine, and a link to
+this section. It shows the purpose, edited in place, and Pause all or Resume.
 The routines are a table with one row each: schedule in words (`every 15m`
 reads "Every 15 min"; a cron or `at` schedule shows as written), next run,
 the last run's outcome and time, output, Run now and Enable or Disable. A
@@ -252,7 +254,10 @@ In the app:
   grouping is only how the list is drawn; dragging changes the stored order
   as before.
 - A lead's or member's terminal has a **Team** bar. Its **Team** button
-  opens the team's tab in the center tab strip: the goal, edited in place;
+  opens the team's tab in the center tab strip. It starts with one line
+  saying what a team is and a link to this section. Members are listed on
+  the left and the chat fills the right, as in the Workflows tab, and the
+  line between them drags to resize. It holds the goal, edited in place;
   each member with a status dot, its unread count and any delivery that
   failed, a click away from its session; the newest 100 messages of the
   chat, where a message longer than four lines folds; and a box to post as

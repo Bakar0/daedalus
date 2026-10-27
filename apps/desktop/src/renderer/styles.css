@@ -6438,23 +6438,10 @@ dd {
   font-size: 12px;
   margin: 0;
 }
-.ability-page-howto {
-  align-items: center;
-  background: var(--accent-wash);
-  border-radius: 8px;
-  color: var(--secondary);
-  display: flex;
-  flex: none;
-  font-size: 12px;
-  gap: 10px;
-  justify-content: space-between;
-  margin: 0;
-  padding: 8px 12px;
-}
-.ability-page-howto button {
-  flex: none;
-  font-size: 11px !important;
-  padding: 2px 8px !important;
+/* Under a tab's intro line, the page takes the rest of the height. */
+.workflows-tab > .ability-page {
+  flex: 1;
+  height: auto;
 }
 /* An inline field: reads as text until focused, then as an input. */
 .ability-page-field {
