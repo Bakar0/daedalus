@@ -16,7 +16,8 @@
  * palette's own anyway; see `palette-model.ts`.
  */
 import { type KeyboardEvent, useId, useMemo, useRef, useState } from "react";
-import { isComposingKey } from "../commands";
+import { chordsFromEvent, parseKey, sameChord } from "@daedalus/protocol";
+import { commandKeys, isComposingKey, shortcutLabel } from "../commands";
 import type { ItemAction } from "../item-actions";
 import { KeyGlyphs } from "../keyboard-ui";
 import { useFocusScope } from "../use-focus-scope";
@@ -59,6 +60,20 @@ export function panelActions(row: PaletteRow): ItemAction[] {
     // The item's own "open" is the primary action already.
     ...own.filter((action) => action.id !== "open"),
   ];
+}
+
+/** Whether a key is the palette's own key, which opens a row's actions. */
+export function isActionsKey(
+  event: Parameters<typeof chordsFromEvent>[0],
+  keys: readonly string[] = commandKeys("palette.open"),
+): boolean {
+  const chords = keys.flatMap((key) => {
+    const sequence = parseKey(key);
+    return sequence.length === 1 ? sequence : [];
+  });
+  return chordsFromEvent(event).some((typed) =>
+    chords.some((chord) => sameChord(chord, typed)),
+  );
 }
 
 const optionKey = (value: string) => value.replace(/[^\w-]/g, "_");
@@ -160,8 +175,10 @@ export function CommandPalette({
         ?.scrollIntoView({ block: "nearest" });
   };
 
+  // A row that cannot be used now (a brief is open, say) has no Actions
+  // panel either: its actions leave the page as its Enter would.
   const openActions = (row: PaletteRow | undefined) => {
-    if (!row?.actions) return false;
+    if (!row?.actions || row.disabled) return false;
     setPanel({ rowKey: row.key, query, activeKey: row.key });
     setQuery("");
     setActiveAction(undefined);
@@ -199,11 +216,9 @@ export function CommandPalette({
     const caretAtEnd =
       event.currentTarget.selectionStart === event.currentTarget.value.length &&
       event.currentTarget.selectionEnd === event.currentTarget.value.length;
-    const commandK =
-      event.metaKey &&
-      !event.altKey &&
-      !event.ctrlKey &&
-      event.key.toLowerCase() === "k";
+    // The key that opens the palette (⌘K, unless rebound) opens a row's
+    // actions in it.
+    const commandK = isActionsKey(event.nativeEvent);
     const handled = () => {
       event.preventDefault();
       event.stopPropagation();
@@ -229,6 +244,7 @@ export function CommandPalette({
       // ⌘K opens the row's actions and goes back from them; on a row with
       // none it closes the palette, as it opened it.
       if (panel) closeActions();
+      else if (current?.disabled) return;
       else if (!openActions(current)) onClose();
     } else if (event.key === "ArrowRight" && !panel && caretAtEnd) {
       if (openActions(current)) handled();
@@ -435,9 +451,11 @@ export function CommandPalette({
               <KeyGlyphs glyphs="⎋" /> Back
             </span>
           ) : (
-            current?.actions && (
+            current?.actions &&
+            !current.disabled && (
               <span className="palette-footer-hint">
-                <KeyGlyphs glyphs="⌘K" /> Actions
+                <KeyGlyphs glyphs={shortcutLabel("palette.open") ?? "→"} />{" "}
+                Actions
               </span>
             )
           )}

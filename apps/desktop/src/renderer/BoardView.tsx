@@ -48,6 +48,7 @@ import {
 } from "./board-lanes";
 import {
   cardButtons,
+  startItemActions,
   taskActions,
   type BoardLaunch,
   type BoardProvider,
@@ -771,50 +772,18 @@ export function BoardView(props: BoardViewProps) {
       otherProvider,
       reviewPullRequest,
       reviewWorktree,
-      startable,
       starting,
-      waitingOn,
     } = actions;
     const shows = cardButtons(task, lane, actions);
-    const cannotStart = !props.tmuxAvailable || starting;
     return [
       { id: "open", label: "Open task", run: () => props.onSelectTask(task) },
-      ...(startable
-        ? [
-            {
-              id: "start",
-              label: waitingOn.length
-                ? `Start, waiting on ${waitingOn.map((item) => `#${item.number}`).join(", ")}`
-                : "Start",
-              disabled: cannotStart,
-              run: () =>
-                void confirmStartDespite(task, waitingOn).then(
-                  (start) => start && props.onStart(task),
-                ),
-            },
-            {
-              id: "start-with",
-              label: "Start with…",
-              disabled: cannotStart,
-              run: () =>
-                void confirmStartDespite(task, waitingOn).then(
-                  (start) => start && props.onStartWith(task),
-                ),
-            },
-            ...(!task.description.trim()
-              ? [
-                  {
-                    id: "refine",
-                    label: "Refine",
-                    description:
-                      "Start a session that questions you about this task, then writes its brief",
-                    disabled: cannotStart,
-                    run: () => props.onDraftBrief(task),
-                  },
-                ]
-              : []),
-          ]
-        : []),
+      ...startItemActions(task, actions, {
+        tmuxAvailable: props.tmuxAvailable,
+        confirmStart: confirmStartDespite,
+        onStart: props.onStart,
+        onStartWith: props.onStartWith,
+        onDraftBrief: props.onDraftBrief,
+      }),
       ...(offersSecondOpinion && otherProvider && lastAgent
         ? [
             {

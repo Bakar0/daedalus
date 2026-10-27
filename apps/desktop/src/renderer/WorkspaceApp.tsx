@@ -88,9 +88,14 @@ import { findPathCandidates } from "./terminal-file-links";
 import { repositoryFuzzyScore } from "./repository-search";
 import { ReorderGroup } from "./ReorderGroup";
 import { useListReorder, type ReorderHandles } from "./use-list-reorder";
-import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
+import {
+  BoardView,
+  confirmStartDespite,
+  TaskRelationsBlock,
+  type BoardProvider,
+} from "./BoardView";
 import { laneFor } from "./board-lanes";
-import { taskActions } from "./task-actions";
+import { startItemActions, taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { WorkflowPane } from "./WorkflowPane";
 import { SidePanelDock } from "./SidePanelDock";
@@ -284,10 +289,13 @@ import {
   treeTabStop,
 } from "./navigation/sidebar-tree";
 import {
+  moveSwitcher,
   nextNeedingYou,
+  pruneSwitcher,
   recordMru,
-  stepSwitcher,
   switcherOrder,
+  type SwitcherState,
+  switcherStart,
 } from "./navigation/session-cycle";
 import {
   type HeldModifiers,
@@ -3187,8 +3195,18 @@ export function WorkspaceApp({
     enabled: () => Boolean(workspaceId),
     run: () => setView("workspace"),
   });
+  // Closed from inside, focus would drop to the page: it goes to the
+  // center's terminal or editor instead.
   useCommand("terminal.toggle", {
-    run: () => setTerminalPanelOpen((current) => !current),
+    run: () => {
+      const inside = Boolean(
+        terminalPanelOpen &&
+        document.activeElement?.closest('[data-area="terminal-panel"]'),
+      );
+      setTerminalPanelOpen((current) => !current);
+      if (inside)
+        focusWhenReady(() => areaDefault("center") ?? areaDefault("sidebar"));
+    },
   });
   // A clicked notification runs `daedal focus`, which raises the app and lands
   // here. Selecting the session is the whole point: an alert that only brings
@@ -6802,12 +6820,22 @@ export function WorkspaceApp({
     if (shownSessionId)
       sessionMru.current = recordMru(sessionMru.current, shownSessionId);
   }, [shownSessionId]);
-  const [switcher, setSwitcher] = useState<{
-    ids: string[];
-    index: number;
-    held?: HeldModifiers;
-    returnFocus: HTMLElement | null;
-  }>();
+  const [switcher, setSwitcher] = useState<
+    SwitcherState & {
+      held?: HeldModifiers;
+      returnFocus: HTMLElement | null;
+    }
+  >();
+  // The live sessions, read by the switcher's steps, which may come faster
+  // than renders: one archived while it is open drops out of its rows.
+  const liveSessionIds = useRef<ReadonlySet<string>>(new Set());
+  liveSessionIds.current = new Set(sidebarSessionOrder);
+  const liveSessionKey = sidebarSessionOrder.join();
+  useEffect(() => {
+    setSwitcher((open) =>
+      open ? pruneSwitcher(open, liveSessionIds.current) : open,
+    );
+  }, [liveSessionKey]);
   /**
    * Switching sessions leaves the page, so it waits while a brief is being
    * edited or a field (not a terminal or the editor, whose text stays in
@@ -6820,24 +6848,12 @@ export function WorkspaceApp({
       context.areas.includes("editor"));
   const stepSessionSwitcher = (context: CommandContext, direction: 1 | -1) => {
     if (switcher) {
-      // Functional: a held Tab repeats faster than the window renders.
-      setSwitcher((open) =>
-        open
-          ? {
-              ...open,
-              index: stepSwitcher(open.index, open.ids.length, direction),
-            }
-          : open,
-      );
+      moveSessionSwitcher(direction);
       return;
     }
     const ids = switcherOrder(sessionMru.current, sidebarSessionOrder);
     if (ids.length === 0) return;
-    // The first Tab lands on the session before the one showing (from a
-    // view with no session, on the last one used); ⇧Tab on the oldest.
-    const start = ids[0] === shownSessionId ? 1 : 0;
-    const index =
-      direction === 1 ? Math.min(start, ids.length - 1) : ids.length - 1;
+    const index = switcherStart(ids, shownSessionId, direction);
     const active = document.activeElement;
     setSwitcher({
       ids,
@@ -6849,6 +6865,12 @@ export function WorkspaceApp({
           : null,
     });
   };
+  // Functional: a held Tab repeats faster than the window renders. Tab,
+  // ⇧Tab and the arrows all step over the live rows.
+  const moveSessionSwitcher = (direction: 1 | -1) =>
+    setSwitcher((open) =>
+      open ? moveSwitcher(open, liveSessionIds.current, direction) : open,
+    );
   useCommand("session.switch", {
     enabled: (context) =>
       Boolean(switcher) ||
@@ -6863,7 +6885,7 @@ export function WorkspaceApp({
   });
   const switcherRows = (switcher?.ids ?? []).flatMap((id): SwitcherRow[] => {
     const session = sessionsByIdForKeys.get(id);
-    if (!session) return [];
+    if (!session || !liveSessionIds.current.has(id)) return [];
     const status = statusViewFor(session);
     const workspaceName = workspaceNames.get(session.workspaceId);
     return [
@@ -6900,6 +6922,10 @@ export function WorkspaceApp({
   const [recentRows, setRecentRows] = useState(() => loadRecent());
   const [shortcutsAreas, setShortcutsAreas] =
     useState<readonly CommandArea[]>();
+  // A dialog or the palette opening on top ends the switcher.
+  useEffect(() => {
+    if (palette || modal || shortcutsAreas) setSwitcher(undefined);
+  }, [palette, modal, shortcutsAreas]);
   // Kept as the palette's own context: it is what runs the rows.
   const openPalette = (context: CommandContext, startInActions = false) =>
     setPalette({ context: { ...context, source: "palette" }, startInActions });
@@ -6961,24 +6987,52 @@ export function WorkspaceApp({
   const setTaskStatus = (task: TaskDto, status: TaskStatus) =>
     void perform(client.request.taskSetStatus({ id: task.id, status }));
   /**
+   * Start, Start with… and Refine for a task whose board is not on screen,
+   * worked out as its card would (`taskActions` over its own workspace):
+   * only when it can start, asking about unfinished dependencies, and
+   * waiting while a Start is in flight.
+   */
+  const fallbackStartActions = (task: TaskDto): ItemAction[] => {
+    const sessions = agents.filter(
+      (item) => item.workspaceId === task.workspaceId,
+    );
+    const sessionIds = new Set(sessions.map((item) => item.id));
+    const inputs = {
+      sessions,
+      activity: activityById,
+      attention: attentionById,
+      worktrees: (snapshot?.worktrees ?? []).filter((item) =>
+        sessionIds.has(item.sessionId),
+      ),
+    };
+    const actions = taskActions(task, laneFor(task, inputs), {
+      ...inputs,
+      launches: sessionLaunches.filter(
+        (item) => item.workspaceId === task.workspaceId,
+      ),
+      availableProviders: availableBoardProviders,
+      tasksById: new Map(
+        (snapshot?.tasks ?? [])
+          .filter((item) => item.workspaceId === task.workspaceId)
+          .map((item) => [item.id, item]),
+      ),
+    });
+    return startItemActions(task, actions, {
+      tmuxAvailable: Boolean(snapshot?.settings.tmuxAvailable),
+      confirmStart: confirmStartDespite,
+      onStart: (item) => void startTaskSession(item),
+      onStartWith: (item) => openSessionModal(item),
+      onDraftBrief: (item) => void startTaskSession(item, { draftBrief: true }),
+    });
+  };
+  /**
    * A task's actions: its board card's when its board is on screen (see
    * `BoardView`), else starting it and opening it; then setting its status.
    */
   const taskActionsOf = (task: TaskDto): ItemAction[] => {
-    const card = itemActionsById({ kind: "task", id: task.id })?.actions ?? [
-      {
-        id: "start",
-        label: "Start",
-        disabled: !snapshot?.settings.tmuxAvailable,
-        run: () => void startTaskSession(task),
-      },
-      {
-        id: "start-with",
-        label: "Start with…",
-        disabled: !snapshot?.settings.tmuxAvailable,
-        run: () => openSessionModal(task),
-      },
-    ];
+    const card =
+      itemActionsById({ kind: "task", id: task.id })?.actions ??
+      fallbackStartActions(task);
     return [
       ...card,
       ...TASK_STATUSES.filter((status) => status !== task.status).map(
@@ -7023,14 +7077,17 @@ export function WorkspaceApp({
       : editingTask
         ? "Save or cancel the brief first"
         : "Leave the field you are typing in first";
-    const place = (row: PaletteRow): PaletteRow =>
-      stay
-        ? {
-            ...row,
-            disabled: true,
-            subtitle: [row.subtitle, stay].filter(Boolean).join(" · "),
-          }
-        : row;
+    // Its Actions panel goes too: it offers the same ways off the page
+    // (Open board, Start) and the item's own menu, which can wait.
+    const place = (row: PaletteRow): PaletteRow => {
+      if (!stay) return row;
+      const { actions: _held, ...rest } = row;
+      return {
+        ...rest,
+        disabled: true,
+        subtitle: [row.subtitle, stay].filter(Boolean).join(" · "),
+      };
+    };
     // A focused file is not a search result of its own: it gets a row.
     const file: PaletteRow[] =
       item?.ref?.kind === "file"
@@ -7040,7 +7097,7 @@ export function WorkspaceApp({
               item.actions[0];
             return primary
               ? [
-                  {
+                  place({
                     key: `file:${item.ref.id}`,
                     kind: "file",
                     title: item.title,
@@ -7048,7 +7105,7 @@ export function WorkspaceApp({
                     primary: primary.label,
                     run: primary.run,
                     actions: () => item.actions,
-                  },
+                  }),
                 ]
               : [];
           })()
@@ -7168,7 +7225,11 @@ export function WorkspaceApp({
   const paletteBoost = useMemo(
     () =>
       palette
-        ? sessionMru.current.slice(0, 8).map((id) => `session:${id}`)
+        ? sessionMru.current
+            // The session on screen would otherwise top every search.
+            .filter((id) => id !== shownSessionId)
+            .slice(0, 8)
+            .map((id) => `session:${id}`)
         : [],
     [palette],
   );
@@ -9727,9 +9788,7 @@ export function WorkspaceApp({
             index={Math.min(switcher.index, switcherRows.length - 1)}
             onCancel={() => closeSwitcher()}
             onCommit={(id) => closeSwitcher(id)}
-            onMove={(index) =>
-              setSwitcher((open) => (open ? { ...open, index } : open))
-            }
+            onMove={moveSessionSwitcher}
             rows={switcherRows}
           />
         )}

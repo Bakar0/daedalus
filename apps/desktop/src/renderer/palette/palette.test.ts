@@ -12,10 +12,10 @@ import {
   RESULT_LIMIT,
   saveRecent,
 } from "./palette-model";
-import { panelActions, type PaletteRow } from "./CommandPalette";
+import { isActionsKey, panelActions, type PaletteRow } from "./CommandPalette";
 import {
   commandSheetSections,
-  ELEMENT_KEY_SECTIONS,
+  elementKeySections,
   filterSheetSections,
   orderSheetSections,
 } from "./shortcut-sheet";
@@ -192,6 +192,31 @@ describe("the Actions panel", () => {
     ]);
     expect(listed[2]).toMatchObject({ confirm: "Stops it." });
     expect(panelActions(row()).map((action) => action.id)).toEqual(["primary"]);
+  });
+
+  test("the palette's own key opens the actions, rebound too", () => {
+    const event = (
+      key: string,
+      code: string,
+      metaKey = true,
+      shiftKey = false,
+    ) => ({
+      key,
+      code,
+      metaKey,
+      shiftKey,
+      ctrlKey: false,
+      altKey: false,
+    });
+    expect(isActionsKey(event("k", "KeyK"))).toBe(true);
+    expect(isActionsKey(event("k", "KeyK", false))).toBe(false);
+    expect(isActionsKey(event("P", "KeyP", true, true), ["mod+shift+p"])).toBe(
+      true,
+    );
+    expect(isActionsKey(event("k", "KeyK"), ["mod+shift+p"])).toBe(false);
+    // A sequence cannot be one press; unbound, only → opens them.
+    expect(isActionsKey(event("k", "KeyK"), ["mod+k mod+a"])).toBe(false);
+    expect(isActionsKey(event("k", "KeyK"), [])).toBe(false);
   });
 
   test("its field filters the actions by label and description", () => {
@@ -385,7 +410,7 @@ describe("item actions", () => {
 describe("the shortcuts sheet", () => {
   const sections = [
     ...commandSheetSections(COMMAND_SPECS),
-    ...ELEMENT_KEY_SECTIONS,
+    ...elementKeySections(),
   ];
 
   test("lists every command with a key once, grouped as the table groups them", () => {
@@ -426,7 +451,7 @@ describe("the shortcuts sheet", () => {
   });
 
   test("lists the keys elements answer to themselves", () => {
-    const titles = ELEMENT_KEY_SECTIONS.map((section) => section.title);
+    const titles = elementKeySections().map((section) => section.title);
     expect(titles).toEqual(
       expect.arrayContaining([
         "Sidebar tree",
@@ -436,7 +461,7 @@ describe("the shortcuts sheet", () => {
         "Task page",
       ]),
     );
-    const rows = ELEMENT_KEY_SECTIONS.flatMap((section) => section.rows);
+    const rows = elementKeySections().flatMap((section) => section.rows);
     expect(rows.find((row) => row.label === "Reorder")?.keys).toEqual([
       "⌥↑",
       "⌥↓",
@@ -458,6 +483,44 @@ describe("the shortcuts sheet", () => {
     expect(labels("⇧⌘[")).toEqual(expect.arrayContaining(["Previous Tab"]));
     expect(labels("no such key")).toEqual([]);
     expect(filterSheetSections(sections, "  ")).toHaveLength(sections.length);
+  });
+});
+
+describe("the sheet's palette and switcher rows", () => {
+  const row = (
+    sections: ReturnType<typeof elementKeySections>,
+    label: string,
+  ) =>
+    sections
+      .flatMap((section) => section.rows)
+      .find((item) => item.label.startsWith(label))?.keys;
+
+  test("name the command keys as they stand", () => {
+    const defaults = elementKeySections();
+    expect(row(defaults, "Show the result's actions")).toEqual(["⌘K", "→"]);
+    expect(row(defaults, "Next / previous session, while ⌃")).toEqual([
+      "⌃⇥",
+      "⌃⇧⇥",
+    ]);
+    expect(row(defaults, "Open the highlighted session")).toEqual([
+      "Release ⌃",
+    ]);
+    const rebound = elementKeySections({
+      palette: ["mod+shift+p"],
+      switchSession: ["alt+tab"],
+      switchBack: [],
+    });
+    expect(row(rebound, "Show the result's actions")).toEqual(["⇧⌘P", "→"]);
+    expect(row(rebound, "Next / previous session, while ⌥")).toEqual(["⌥⇥"]);
+    expect(row(rebound, "Open the highlighted session")).toEqual(["Release ⌥"]);
+    // With no modifier to hold, Enter opens.
+    const plain = elementKeySections({
+      palette: [],
+      switchSession: ["f8"],
+      switchBack: [],
+    });
+    expect(row(plain, "Open the highlighted session")).toEqual(["↩"]);
+    expect(row(plain, "Show the result's actions")).toEqual(["→"]);
   });
 });
 

@@ -6,12 +6,12 @@
  */
 import type { CommandArea } from "@daedalus/protocol";
 import { useMemo, useRef, useState } from "react";
-import { allCommands, useKeybindings } from "../commands";
+import { allCommands, commandKeys, useKeybindings } from "../commands";
 import { KeyGlyphs } from "../keyboard-ui";
 import { useFocusScope } from "../use-focus-scope";
 import {
   commandSheetSections,
-  ELEMENT_KEY_SECTIONS,
+  elementKeySections,
   filterSheetSections,
   orderSheetSections,
 } from "./shortcut-sheet";
@@ -35,7 +35,14 @@ export function ShortcutsSheet({
   const ordered = useMemo(
     () =>
       orderSheetSections(
-        [...commandSheetSections(allCommands()), ...ELEMENT_KEY_SECTIONS],
+        [
+          ...commandSheetSections(allCommands()),
+          ...elementKeySections({
+            palette: commandKeys("palette.open"),
+            switchSession: commandKeys("session.switch"),
+            switchBack: commandKeys("session.switchBack"),
+          }),
+        ],
         focusedAreas,
       ),
     [focusedAreas, keybindings],

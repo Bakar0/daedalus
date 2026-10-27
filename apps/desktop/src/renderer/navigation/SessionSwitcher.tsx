@@ -11,8 +11,18 @@
  *
  * A listbox with `aria-activedescendant`: it takes focus while it is open,
  * so a screen reader follows the highlight, and gives it back on Escape.
+ * What each key does is decided by `switcherDecision` (`session-cycle.ts`).
  */
 import { useEffect, useId, useRef, useState } from "react";
+import { hasOpenScope } from "../use-focus-scope";
+import {
+  type HeldModifiers,
+  holdsAny,
+  type SwitcherInput,
+  switcherDecision,
+} from "./session-cycle";
+
+export type { HeldModifiers } from "./session-cycle";
 
 export interface SwitcherRow {
   id: string;
@@ -22,27 +32,8 @@ export interface SwitcherRow {
   status?: { tone: string; attention: boolean; label: string };
 }
 
-/** The modifiers the opening key held; the switcher opens when they go. */
-export interface HeldModifiers {
-  mod: boolean;
-  ctrl: boolean;
-  alt: boolean;
-}
-
 /** How long a held ⌃ waits before the list shows, so a tap never flashes it. */
 export const SWITCHER_SHOW_DELAY_MS = 150;
-
-const anyHeld = (held: HeldModifiers | undefined) =>
-  Boolean(held && (held.mod || held.ctrl || held.alt));
-
-/** Whether a key event says the held modifiers are still down. */
-const stillHeld = (
-  held: HeldModifiers,
-  event: Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey">,
-) =>
-  (!held.mod || event.metaKey) &&
-  (!held.ctrl || event.ctrlKey) &&
-  (!held.alt || event.altKey);
 
 export function SessionSwitcher({
   rows,
@@ -56,17 +47,18 @@ export function SessionSwitcher({
   /** The highlighted row. */
   index: number;
   held?: HeldModifiers;
-  onMove: (index: number) => void;
+  /** One step of the highlight, as Tab and ⇧Tab take it. */
+  onMove: (direction: 1 | -1) => void;
   onCommit: (id: string) => void;
   onCancel: () => void;
 }) {
   const listId = useId();
   const list = useRef<HTMLDivElement>(null);
-  const holding = anyHeld(held);
+  const holding = holdsAny(held);
   const [visible, setVisible] = useState(!holding);
   const current = rows[Math.min(index, rows.length - 1)];
-  // Ends once: a commit, a cancel, nothing after (a late keyup, a press
-  // landing as it closes).
+  // Ends once: a commit, a cancel, nothing after (a late keyup, focus
+  // leaving the list as it closes).
   const ended = useRef(false);
   const end = (then: () => void) => {
     if (ended.current) return;
@@ -75,8 +67,8 @@ export function SessionSwitcher({
   };
   const commitTo = (id: string) => end(() => onCommit(id));
   const cancel = () => end(onCancel);
-  const latest = useRef({ current, commitTo, cancel, onMove, index, rows });
-  latest.current = { current, commitTo, cancel, onMove, index, rows };
+  const latest = useRef({ current, commitTo, cancel, onMove });
+  latest.current = { current, commitTo, cancel, onMove };
 
   useEffect(() => {
     if (visible) return;
@@ -90,49 +82,55 @@ export function SessionSwitcher({
   }, [visible]);
 
   useEffect(() => {
-    const commit = () => {
-      const { current: row, commitTo: open, cancel: stop } = latest.current;
-      if (row) open(row.id);
-      else stop();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (held && holding && !stillHeld(held, event)) {
-        commit();
-        return;
+    const act = (input: SwitcherInput, event?: Event) => {
+      const decision = switcherDecision(held, input, {
+        scopeOpen: hasOpenScope(),
+      });
+      if (decision.consume && event) {
+        event.preventDefault();
+        event.stopPropagation();
       }
-      const { index: at, rows: shown, onMove: move } = latest.current;
-      const step = (to: number) =>
-        move((to + shown.length) % Math.max(shown.length, 1));
-      if (event.key === "Escape") latest.current.cancel();
-      else if (event.key === "Enter") commit();
-      else if (event.key === "ArrowDown") step(at + 1);
-      else if (event.key === "ArrowUp") step(at - 1);
-      else return;
-      event.preventDefault();
-      event.stopPropagation();
+      const { current: row, commitTo: open, cancel: stop } = latest.current;
+      if (decision.action === "cancel") stop();
+      else if (decision.action === "commit") {
+        if (row) open(row.id);
+        else stop();
+      } else if (decision.action === "move" && decision.direction)
+        latest.current.onMove(decision.direction);
     };
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (held && holding && !stillHeld(held, event)) commit();
-    };
-    // The window losing focus, or a press outside the list, cancels.
-    const onBlur = () => latest.current.cancel();
+    const onKey = (event: KeyboardEvent) =>
+      act(
+        {
+          type: event.type === "keyup" ? "keyup" : "keydown",
+          key: event.key,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+          altKey: event.altKey,
+          inList:
+            event.target instanceof Node &&
+            Boolean(list.current?.contains(event.target)),
+        },
+        event,
+      );
+    const onBlur = () => act({ type: "blur" });
+    // A press outside the list cancels; one on a row is the row's click.
     const onPointerDown = (event: PointerEvent) => {
       if (!(
         event.target instanceof Node && list.current?.contains(event.target)
       ))
-        latest.current.cancel();
+        act({ type: "focusout" });
     };
-    window.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener("keyup", onKeyUp, true);
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKey, true);
     window.addEventListener("blur", onBlur);
     window.addEventListener("pointerdown", onPointerDown, true);
     return () => {
-      window.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKey, true);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("pointerdown", onPointerDown, true);
     };
-  }, [held, holding]);
+  }, [held]);
 
   useEffect(() => {
     if (!current) return;
@@ -148,6 +146,12 @@ export function SessionSwitcher({
         aria-activedescendant={current ? `${listId}-${current.id}` : undefined}
         aria-label="Switch session"
         className="session-switcher"
+        // Focus going elsewhere (a dialog, a click) ends the switcher.
+        onBlur={(event) => {
+          const to = event.relatedTarget;
+          if (!(to instanceof Node && event.currentTarget.contains(to)))
+            latest.current.cancel();
+        }}
         ref={list}
         role="listbox"
         tabIndex={-1}

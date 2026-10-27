@@ -1,10 +1,15 @@
 import { describe, expect, test } from "vitest";
 import { gridMove, gridTabStop } from "./board-grid";
 import {
+  moveSwitcher,
   nextNeedingYou,
+  pruneSwitcher,
   recordMru,
   stepSwitcher,
+  type SwitcherInput,
+  switcherDecision,
   switcherOrder,
+  switcherStart,
 } from "./session-cycle";
 import {
   type TreeItem,
@@ -198,6 +203,156 @@ describe("the session switcher", () => {
     expect(stepSwitcher(2, 3, 1)).toBe(0);
     expect(stepSwitcher(0, 3, -1)).toBe(2);
     expect(stepSwitcher(0, 0, 1)).toBe(0);
+  });
+});
+
+describe("the switcher's keys", () => {
+  const ctrl = { mod: false, ctrl: true, alt: false };
+  const key = (
+    key: string,
+    {
+      type = "keydown",
+      ctrlKey = true,
+      inList = false,
+    }: {
+      type?: "keydown" | "keyup";
+      ctrlKey?: boolean;
+      inList?: boolean;
+    } = {},
+  ): SwitcherInput => ({
+    type,
+    key,
+    ctrlKey,
+    metaKey: false,
+    altKey: false,
+    inList,
+  });
+
+  test("letting go of ⌃ opens the highlighted session", () => {
+    expect(
+      switcherDecision(ctrl, key("Control", { type: "keyup", ctrlKey: false })),
+    ).toEqual({ action: "commit", consume: false });
+    // A held Tab is a move, which the command does; nothing here.
+    expect(switcherDecision(ctrl, key("Tab")).action).toBe("none");
+    expect(switcherDecision(ctrl, key("Tab", { type: "keyup" })).action).toBe(
+      "none",
+    );
+  });
+
+  test("a quick tap goes back to the previous session", () => {
+    // ⌃Tab from the session on screen lands on the one before it, and the
+    // release that follows at once opens it.
+    const ids = ["now", "before", "older"];
+    expect(ids[switcherStart(ids, "now", 1)]).toBe("before");
+    expect(
+      switcherDecision(ctrl, key("Control", { type: "keyup", ctrlKey: false }))
+        .action,
+    ).toBe("commit");
+    // From a view with no session, the last one used; ⇧ starts at the oldest.
+    expect(switcherStart(ids, undefined, 1)).toBe(0);
+    expect(switcherStart(ids, "now", -1)).toBe(2);
+    expect(switcherStart(["now"], "now", 1)).toBe(0);
+    expect(switcherStart([], undefined, 1)).toBe(0);
+  });
+
+  test("a key pressed after ⌃ was let go opens the session and is not typed", () => {
+    expect(switcherDecision(ctrl, key("a", { ctrlKey: false }))).toEqual({
+      action: "commit",
+      consume: true,
+    });
+  });
+
+  test("Escape cancels, Enter opens, the arrows move", () => {
+    expect(switcherDecision(ctrl, key("Escape"))).toEqual({
+      action: "cancel",
+      consume: true,
+    });
+    expect(switcherDecision(ctrl, key("Enter")).action).toBe("commit");
+    expect(switcherDecision(ctrl, key("ArrowDown"))).toMatchObject({
+      action: "move",
+      direction: 1,
+    });
+    expect(switcherDecision(ctrl, key("ArrowUp"))).toMatchObject({
+      action: "move",
+      direction: -1,
+    });
+  });
+
+  test("the window losing focus, focus leaving the list, or a dialog on top cancels", () => {
+    expect(switcherDecision(ctrl, { type: "blur" }).action).toBe("cancel");
+    expect(switcherDecision(ctrl, { type: "focusout" }).action).toBe("cancel");
+    expect(switcherDecision(ctrl, key("Escape"), { scopeOpen: true })).toEqual({
+      action: "cancel",
+      consume: false,
+    });
+  });
+
+  test("with nothing held, only keys aimed at the list are its own", () => {
+    // Opened from the menu or a key with no modifier: Enter opens.
+    expect(
+      switcherDecision(
+        undefined,
+        key("Enter", { ctrlKey: false, inList: true }),
+      ).action,
+    ).toBe("commit");
+    expect(
+      switcherDecision(undefined, key("Enter", { ctrlKey: false })),
+    ).toEqual({ action: "none", consume: false });
+    expect(
+      switcherDecision(
+        { mod: false, ctrl: false, alt: false },
+        key("Escape", { ctrlKey: false }),
+      ).action,
+    ).toBe("none");
+    // A key release never opens it.
+    expect(
+      switcherDecision(
+        undefined,
+        key("Control", { type: "keyup", ctrlKey: false, inList: true }),
+      ).action,
+    ).toBe("none");
+  });
+});
+
+describe("stale switcher rows", () => {
+  const live = (...ids: string[]) => new Set(ids);
+
+  test("a session archived while it is open drops out, the highlight staying on its session", () => {
+    const state = { ids: ["a", "b", "c"], index: 2 };
+    expect(pruneSwitcher(state, live("a", "b", "c"))).toBe(state);
+    expect(pruneSwitcher(state, live("a", "c"))).toEqual({
+      ids: ["a", "c"],
+      index: 1,
+    });
+    // The highlighted one went: the row that took its place.
+    expect(
+      pruneSwitcher({ ids: ["a", "b", "c"], index: 1 }, live("a", "c")),
+    ).toEqual({
+      ids: ["a", "c"],
+      index: 1,
+    });
+    expect(pruneSwitcher({ ids: ["a", "b"], index: 1 }, live("a"))).toEqual({
+      ids: ["a"],
+      index: 0,
+    });
+  });
+
+  test("with none left it closes, so ⌃Tab is not swallowed", () => {
+    expect(pruneSwitcher({ ids: ["a"], index: 0 }, live())).toBeUndefined();
+    expect(moveSwitcher({ ids: ["a"], index: 0 }, live(), 1)).toBeUndefined();
+  });
+
+  test("Tab and the arrows step over the live rows alike, wrapping", () => {
+    const state = { ids: ["a", "gone", "b", "c"], index: 0 };
+    const alive = live("a", "b", "c");
+    expect(moveSwitcher(state, alive, 1)).toEqual({
+      ids: ["a", "b", "c"],
+      index: 1,
+    });
+    expect(moveSwitcher(state, alive, -1)).toEqual({
+      ids: ["a", "b", "c"],
+      index: 2,
+    });
   });
 });
 

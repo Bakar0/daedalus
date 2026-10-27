@@ -6,6 +6,9 @@
  */
 import {
   type CommandArea,
+  type CommandId,
+  commandSpec,
+  parseKey,
   type CommandGroup,
   type CommandWhen,
   formatKeyGlyphs,
@@ -78,37 +81,79 @@ export function commandSheetSections(
 
 const glyphs = (...keys: string[]) => keys.map(formatKeyGlyphs);
 
+/** The command keys the element sections name, overrides applied. */
+export interface ElementSectionKeys {
+  /** `palette.open`: in the palette it opens a row's actions. */
+  palette: readonly string[];
+  /** `session.switch` and `session.switchBack`. */
+  switchSession: readonly string[];
+  switchBack: readonly string[];
+}
+
+const defaultKeys = (id: CommandId) => commandSpec(id).keys;
+
+/** The modifiers a key holds down, as glyphs: `⌃` for ⌃Tab. */
+const heldGlyphs = (key: string | undefined) => {
+  const chord = key ? parseKey(key)[0] : undefined;
+  return chord
+    ? `${chord.ctrl ? "⌃" : ""}${chord.alt ? "⌥" : ""}${chord.mod ? "⌘" : ""}`
+    : "";
+};
+
 /**
  * Keys that belong to elements rather than commands, as docs/desktop.md
- * describes them. Static: they are not rebound.
+ * describes them. They are not rebound themselves, but the palette's
+ * actions key and the switcher's keys are commands' keys, so a rebound
+ * one shows as the person set it.
  */
-export const ELEMENT_KEY_SECTIONS: readonly SheetSection[] = [
-  {
-    title: "Command palette",
-    areas: [],
-    rows: [
-      { label: "Move between results", keys: glyphs("up", "down") },
-      { label: "Run the result's main action", keys: glyphs("enter") },
-      {
-        label: "Show the result's actions",
-        keys: glyphs("mod+k", "right"),
-      },
-      { label: "Back from the actions", keys: glyphs("escape", "left") },
-      { label: "Close", keys: glyphs("escape") },
-    ],
+export function elementKeySections(
+  keys: ElementSectionKeys = {
+    palette: defaultKeys("palette.open"),
+    switchSession: defaultKeys("session.switch"),
+    switchBack: defaultKeys("session.switchBack"),
   },
-  {
-    title: "Session switcher",
-    areas: [],
-    rows: [
-      {
-        label: "Next / previous session, while ⌃ is held",
-        keys: glyphs("ctrl+tab", "ctrl+shift+tab"),
-      },
-      { label: "Open the highlighted session", keys: ["Release ⌃"] },
-      { label: "Cancel", keys: glyphs("escape") },
-    ],
-  },
+): SheetSection[] {
+  const held = heldGlyphs(keys.switchSession[0]);
+  return [
+    {
+      title: "Command palette",
+      areas: [],
+      rows: [
+        { label: "Move between results", keys: glyphs("up", "down") },
+        { label: "Run the result's main action", keys: glyphs("enter") },
+        {
+          label: "Show the result's actions",
+          keys: glyphs(...keys.palette.slice(0, 1), "right"),
+        },
+        { label: "Back from the actions", keys: glyphs("escape", "left") },
+        { label: "Close", keys: glyphs("escape") },
+      ],
+    },
+    {
+      title: "Session switcher",
+      areas: [],
+      rows: [
+        {
+          label: held
+            ? `Next / previous session, while ${held} is held`
+            : "Next / previous session",
+          keys: glyphs(
+            ...keys.switchSession.slice(0, 1),
+            ...keys.switchBack.slice(0, 1),
+          ),
+        },
+        {
+          label: "Open the highlighted session",
+          keys: held ? [`Release ${held}`] : glyphs("enter"),
+        },
+        { label: "Cancel", keys: glyphs("escape") },
+      ],
+    },
+    ...STATIC_ELEMENT_SECTIONS,
+  ];
+}
+
+const STATIC_ELEMENT_SECTIONS: readonly SheetSection[] = [
   {
     title: "Sidebar tree",
     areas: ["sidebar"],

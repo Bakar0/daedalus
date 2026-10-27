@@ -13,6 +13,7 @@ import type {
   SessionWorktreeDto,
   TaskDto,
 } from "@daedalus/protocol";
+import type { ItemAction } from "./item-actions";
 import {
   sessionWaitingSince,
   taskSessions,
@@ -225,4 +226,65 @@ export function cardButtons(
     park: actionRow && actions.canPark,
     setInProgress,
   };
+}
+
+/** What starting a task needs from whoever offers it. */
+export interface StartActionDeps {
+  tmuxAvailable: boolean;
+  /**
+   * Asks before starting a task whose hard dependencies are not done;
+   * resolves whether to start (`confirmStartDespite` in `BoardView`).
+   */
+  confirmStart: (task: TaskDto, waitingOn: TaskDto[]) => Promise<boolean>;
+  onStart: (task: TaskDto) => void;
+  onStartWith: (task: TaskDto) => void;
+  onDraftBrief: (task: TaskDto) => void;
+}
+
+/**
+ * Start, Start with… and Refine as item actions, when the task can be
+ * started: the board card's and the palette's for a task whose board is
+ * not on screen, so both ask about unfinished dependencies and wait while
+ * a Start is in flight.
+ */
+export function startItemActions(
+  task: TaskDto,
+  actions: Pick<TaskActions, "startable" | "starting" | "waitingOn">,
+  deps: StartActionDeps,
+): ItemAction[] {
+  if (!actions.startable) return [];
+  const { waitingOn } = actions;
+  const cannotStart = !deps.tmuxAvailable || actions.starting;
+  const start = (then: (task: TaskDto) => void) => () =>
+    void deps.confirmStart(task, waitingOn).then((go) => {
+      if (go) then(task);
+    });
+  return [
+    {
+      id: "start",
+      label: waitingOn.length
+        ? `Start, waiting on ${waitingOn.map((item) => `#${item.number}`).join(", ")}`
+        : "Start",
+      disabled: cannotStart,
+      run: start(deps.onStart),
+    },
+    {
+      id: "start-with",
+      label: "Start with…",
+      disabled: cannotStart,
+      run: start(deps.onStartWith),
+    },
+    ...(!task.description.trim()
+      ? [
+          {
+            id: "refine",
+            label: "Refine",
+            description:
+              "Start a session that questions you about this task, then writes its brief",
+            disabled: cannotStart,
+            run: () => deps.onDraftBrief(task),
+          },
+        ]
+      : []),
+  ];
 }

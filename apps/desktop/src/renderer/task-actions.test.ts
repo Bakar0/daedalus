@@ -8,6 +8,7 @@ import type {
 import { laneFor } from "./board-lanes";
 import {
   cardButtons,
+  startItemActions,
   taskActions,
   type BoardLaunch,
   type TaskActionInputs,
@@ -401,5 +402,83 @@ describe("cardButtons", () => {
       cardButtons(task(1, { status: "in_progress" }), "running", flags())
         .setInProgress,
     ).toBe(false);
+  });
+});
+
+describe("startItemActions", () => {
+  const deps = (confirm: boolean) => {
+    const calls: string[] = [];
+    return {
+      calls,
+      deps: {
+        tmuxAvailable: true,
+        confirmStart: async (item: TaskDto, waiting: TaskDto[]) => {
+          calls.push(`confirm:${item.number}:${waiting.length}`);
+          return confirm;
+        },
+        onStart: (item: TaskDto) => calls.push(`start:${item.number}`),
+        onStartWith: (item: TaskDto) => calls.push(`with:${item.number}`),
+        onDraftBrief: (item: TaskDto) => calls.push(`refine:${item.number}`),
+      },
+    };
+  };
+  const ready = { startable: true, starting: false, waitingOn: [] };
+
+  test("offers nothing for a task that cannot start", () => {
+    expect(
+      startItemActions(
+        task(1),
+        { ...ready, startable: false },
+        deps(true).deps,
+      ),
+    ).toEqual([]);
+  });
+
+  test("asks about unfinished dependencies before starting, and starts only on yes", async () => {
+    const blocker = task(2);
+    const yes = deps(true);
+    const actions = startItemActions(
+      task(1),
+      { ...ready, waitingOn: [blocker] },
+      yes.deps,
+    );
+    expect(actions[0]?.label).toBe("Start, waiting on #2");
+    actions[0]?.run();
+    actions[1]?.run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(yes.calls).toEqual([
+      "confirm:1:1",
+      "confirm:1:1",
+      "start:1",
+      "with:1",
+    ]);
+    const no = deps(false);
+    startItemActions(
+      task(1),
+      { ...ready, waitingOn: [blocker] },
+      no.deps,
+    )[0]?.run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(no.calls).toEqual(["confirm:1:1"]);
+  });
+
+  test("waits while a Start is in flight or tmux is missing", () => {
+    for (const disabled of [
+      startItemActions(task(1), { ...ready, starting: true }, deps(true).deps),
+      startItemActions(task(1), ready, {
+        ...deps(true).deps,
+        tmuxAvailable: false,
+      }),
+    ])
+      expect(disabled.every((action) => action.disabled)).toBe(true);
+  });
+
+  test("offers Refine only for a task with no brief", () => {
+    const ids = (description: string) =>
+      startItemActions(task(1, { description }), ready, deps(true).deps).map(
+        (action) => action.id,
+      );
+    expect(ids("A brief.")).toEqual(["start", "start-with"]);
+    expect(ids("  ")).toEqual(["start", "start-with", "refine"]);
   });
 });
