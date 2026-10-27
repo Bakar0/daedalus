@@ -1,10 +1,18 @@
 import { describe, expect, test } from "vitest";
 import {
-  CHECK_FOR_UPDATES_MENU_ACTION,
-  QUIT_MENU_ACTION,
-  SHUTDOWN_MENU_ACTION,
+  COMMAND_SPECS,
+  type CommandSpec,
+  isHostCommandId,
+  isRendererCommandId,
 } from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
+
+type Item = (typeof APPLICATION_MENU)[number];
+const actionsIn = (items: readonly Item[]): Item[] =>
+  items.flatMap((item) => [
+    item,
+    ...("submenu" in item && item.submenu ? actionsIn(item.submenu) : []),
+  ]);
 
 describe("desktop application menu", () => {
   test("provides native macOS editing commands", () => {
@@ -51,9 +59,9 @@ describe("desktop application menu", () => {
         ),
       ),
     ).toEqual({
-      [CHECK_FOR_UPDATES_MENU_ACTION]: undefined,
-      [QUIT_MENU_ACTION]: "Command+Q",
-      [SHUTDOWN_MENU_ACTION]: "Command+Shift+Q",
+      "app.checkForUpdates": undefined,
+      "app.quit": "Command+Q",
+      "app.quitAndShutDown": "Command+Shift+Q",
     });
   });
 
@@ -71,12 +79,57 @@ describe("desktop application menu", () => {
         : [];
 
     expect(Object.fromEntries(shortcuts ?? [])).toEqual({
-      "view-workspace": "Command+1",
-      "view-board": "Command+2",
-      "view-session": "Command+3",
-      "view-world": "Command+4",
-      "open-world-window": "Command+Option+4",
-      "toggle-terminal": "Control+`",
+      "view.workspace": "Command+1",
+      "view.board": "Command+2",
+      "view.session": "Command+3",
+      "view.world": "Command+4",
+      "view.worldWindow": "Command+Option+4",
+      "terminal.toggle": "Control+`",
     });
+  });
+
+  test("keeps the View menu's order and divides its sections", () => {
+    const viewMenu = APPLICATION_MENU.find(
+      (item) => "label" in item && item.label === "View",
+    );
+    const submenu =
+      (viewMenu && "submenu" in viewMenu ? viewMenu.submenu : []) ?? [];
+    expect(
+      submenu.map((item) =>
+        "action" in item && item.action
+          ? item.action
+          : "type" in item
+            ? item.type
+            : "?",
+      ),
+    ).toEqual([
+      "view.workspace",
+      "view.board",
+      "view.session",
+      "view.world",
+      "view.worldWindow",
+      "divider",
+      "terminal.toggle",
+    ]);
+  });
+
+  test("every menu action is a command from the table, titled as the table says", () => {
+    const specs: readonly CommandSpec[] = COMMAND_SPECS;
+    const items = actionsIn(APPLICATION_MENU).flatMap((item) =>
+      "action" in item && item.action ? [item] : [],
+    );
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      const action = "action" in item ? item.action : undefined;
+      expect(isHostCommandId(action) || isRendererCommandId(action)).toBe(true);
+      const spec = specs.find((entry) => entry.id === action);
+      expect("label" in item ? item.label : undefined).toBe(spec?.title);
+    }
+    // And every command the table places in a menu is there.
+    expect(
+      new Set(items.map((item) => ("action" in item ? item.action : ""))),
+    ).toEqual(
+      new Set(specs.filter((spec) => spec.menu).map((spec) => spec.id)),
+    );
   });
 });

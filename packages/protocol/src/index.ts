@@ -1,3 +1,5 @@
+import type { RendererCommandId } from "./commands";
+
 export type ErrorCode =
   "VALIDATION" | "NOT_FOUND" | "CONFLICT" | "DEPENDENCY" | "INTERNAL";
 
@@ -2347,7 +2349,8 @@ export interface DesktopRpcSchema {
         changes: WorkspaceFileChangeDto[];
         overflow: boolean;
       };
-      command: { command: DesktopCommand };
+      /** A menu item was chosen: run this command. */
+      command: { command: RendererCommandId };
       windowResized: { width: number; height: number };
       /**
        * Raised by `daedal focus`, which is what a clicked notification runs.
@@ -2368,29 +2371,8 @@ export interface DesktopRpcSchema {
   };
 }
 
-/**
- * Menu actions the host handles itself rather than forwarding to the window.
- * `{ role: "quit" }` is a native macOS role that never reaches our code, so
- * the quit item carries an action instead.
- */
-export const QUIT_MENU_ACTION = "quit-requested";
-export const SHUTDOWN_MENU_ACTION = "quit-and-shut-down";
-export const CHECK_FOR_UPDATES_MENU_ACTION = "check-for-updates";
-export const OPEN_WORLD_WINDOW_MENU_ACTION = "open-world-window";
-
-export const DESKTOP_COMMANDS = [
-  "view-board",
-  "view-session",
-  "view-workspace",
-  "view-world",
-  "toggle-terminal",
-] as const;
-
-export type DesktopCommand = (typeof DESKTOP_COMMANDS)[number];
-
-export const isDesktopCommand = (value: unknown): value is DesktopCommand =>
-  typeof value === "string" &&
-  (DESKTOP_COMMANDS as readonly string[]).includes(value);
+export * from "./commands";
+export * from "./keys";
 
 export type TerminalClientMessage =
   | { type: "input"; data: string }

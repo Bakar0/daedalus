@@ -22,6 +22,7 @@ import {
 import type { DesktopClient } from "../client-types";
 import { type AppTheme, appearanceOf } from "../theme";
 import { askConfirm } from "../dialogs";
+import { type CommandContext, useCommand } from "../commands";
 import {
   focusIsLost,
   restoreCandidates,
@@ -785,43 +786,49 @@ export default function EditorArea({
     [client, closeImages, workspaceId],
   );
 
-  // Cmd+S saves and Cmd+W closes the active tab; Cmd+Shift+[ and ] move
-  // between tabs. Handled here rather than as Monaco commands so they also
-  // work on a Markdown preview.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const api = apiRef.current;
-      if (!api || !event.metaKey) return;
-      const target = event.target as Node | null;
-      const root = document.querySelector(".editor-area");
-      if (!root || !target || !root.contains(target)) return;
-      if (event.key === "s" && !event.shiftKey) {
-        event.preventDefault();
-        const params = api.activePanel?.params as FilePanelParams | undefined;
-        const doc = params?.path
-          ? getDocument(workspaceId, params.path)
-          : undefined;
-        if (doc) void save(doc);
-      } else if (event.key === "w" && !event.shiftKey) {
-        event.preventDefault();
-        if (api.activePanel) void close(api.activePanel);
-      } else if (event.shiftKey && event.code === "BracketRight") {
-        event.preventDefault();
-        api.activateNext();
-      } else if (event.shiftKey && event.code === "BracketLeft") {
-        event.preventDefault();
-        api.activatePrevious();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [close, save, workspaceId]);
+  // ⌘S saves and ⌘W closes the active tab; ⇧⌘[ and ⇧⌘] move between tabs.
+  // Commands in the shared table (`tab.*`), acting while focus is in this
+  // area; run by the app rather than as Monaco commands so they also work on
+  // a Markdown preview.
+  const areaRef = useRef<HTMLDivElement>(null);
+  const inThisArea = (context: CommandContext) =>
+    Boolean(
+      apiRef.current &&
+      areaRef.current &&
+      context.target &&
+      areaRef.current.contains(context.target),
+    );
+  useCommand("tab.save", {
+    enabled: inThisArea,
+    run: () => {
+      const params = apiRef.current?.activePanel?.params as
+        FilePanelParams | undefined;
+      const doc = params?.path
+        ? getDocument(workspaceId, params.path)
+        : undefined;
+      if (doc) void save(doc);
+    },
+  });
+  useCommand("tab.close", {
+    enabled: inThisArea,
+    run: () => {
+      const panel = apiRef.current?.activePanel;
+      if (panel) void close(panel);
+    },
+  });
+  useCommand("tab.next", {
+    enabled: inThisArea,
+    run: () => apiRef.current?.activateNext(),
+  });
+  useCommand("tab.previous", {
+    enabled: inThisArea,
+    run: () => apiRef.current?.activatePrevious(),
+  });
 
   // Delete and Backspace on a focused tab close it through `close`, which
   // asks about unsaved changes, rather than through dockview's own handler,
   // which would close the panel outright. Caught in the capture phase, before
   // the tab strip's listener sees the key.
-  const areaRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const area = areaRef.current;
     if (!area) return;
@@ -968,7 +975,7 @@ export default function EditorArea({
 
   return (
     <EditorContext.Provider value={context}>
-      <div className="editor-area" ref={areaRef}>
+      <div className="editor-area" data-area="tabs" ref={areaRef}>
         <DockviewReact
           className={
             appearanceOf(theme) === "dark"

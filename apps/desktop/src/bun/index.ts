@@ -29,19 +29,13 @@ import {
   startCommandWorker,
 } from "@daedalus/platform";
 import type {
-  DesktopCommand,
   DesktopRpcSchema,
+  HostCommandId,
   DesktopSnapshotPart,
   DesktopWindowRole,
   TerminalServerMessage,
 } from "@daedalus/protocol";
-import {
-  CHECK_FOR_UPDATES_MENU_ACTION,
-  OPEN_WORLD_WINDOW_MENU_ACTION,
-  isDesktopCommand,
-  QUIT_MENU_ACTION,
-  SHUTDOWN_MENU_ACTION,
-} from "@daedalus/protocol";
+import { isHostCommandId, isRendererCommandId } from "@daedalus/protocol";
 import { APPLICATION_MENU } from "./menu";
 import { acceptFirstMouse } from "./first-mouse";
 import { daedalusCheckout } from "./checkout";
@@ -617,25 +611,31 @@ ApplicationMenu.on("application-menu-clicked", (rawEvent) => {
   void context.logger.write("info", "menu_action", {
     action: typeof command === "string" ? command : String(command),
   });
-  if (command === QUIT_MENU_ACTION) {
-    void quitController.requestQuit();
+  // Every item is a command from the shared table, by id: the host runs its
+  // own few and hands the rest to the window.
+  if (isHostCommandId(command)) {
+    runHostCommand(command);
     return;
   }
-  if (command === SHUTDOWN_MENU_ACTION) {
-    void quitController.requestShutdownAndQuit();
-    return;
-  }
-  if (command === OPEN_WORLD_WINDOW_MENU_ACTION) {
-    openWorldWindow();
-    return;
-  }
-  if (command === CHECK_FOR_UPDATES_MENU_ACTION) {
-    void updates.check({ manual: true });
-    return;
-  }
-  if (isDesktopCommand(command))
-    rpc.send.command({ command: command satisfies DesktopCommand });
+  if (isRendererCommandId(command)) rpc.send.command({ command });
 });
+
+function runHostCommand(command: HostCommandId) {
+  switch (command) {
+    case "app.quit":
+      void quitController.requestQuit();
+      return;
+    case "app.quitAndShutDown":
+      void quitController.requestShutdownAndQuit();
+      return;
+    case "view.worldWindow":
+      openWorldWindow();
+      return;
+    case "app.checkForUpdates":
+      void updates.check({ manual: true });
+      return;
+  }
+}
 
 /**
  * Every `Utils.quit()` passes through `before-quit`, which makes it the one

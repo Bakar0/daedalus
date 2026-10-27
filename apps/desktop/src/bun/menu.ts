@@ -1,92 +1,73 @@
 import type { ApplicationMenuItemConfig } from "electrobun/bun";
-import {
-  CHECK_FOR_UPDATES_MENU_ACTION,
-  OPEN_WORLD_WINDOW_MENU_ACTION,
-  QUIT_MENU_ACTION,
-  SHUTDOWN_MENU_ACTION,
-} from "@daedalus/protocol";
+import { type CommandMenu, menuSections } from "@daedalus/protocol";
 
-export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
-  {
-    label: "Daedalus",
-    submenu: [
-      { role: "about" },
-      {
-        label: "Check for Updates…",
-        action: CHECK_FOR_UPDATES_MENU_ACTION,
-      },
-      { type: "divider" },
-      { role: "hide" },
-      { role: "hideOthers" },
-      { role: "showAll" },
-      { type: "divider" },
-      // The discoverable off switch, for people who never open a terminal.
-      // It archives every live session, closes the terminals and ends the
-      // Daedalus tmux server, which is exactly `daedal shutdown`.
-      {
-        label: "Quit and Shut Down Sessions",
-        action: SHUTDOWN_MENU_ACTION,
-        accelerator: "Command+Shift+Q",
-      },
-      // Deliberately not `{ role: "quit" }`. That is a native macOS role, so
-      // Cmd+Q would terminate the app without ever reaching our code and the
-      // user would never be told what keeps running.
-      {
-        label: "Quit Daedalus",
-        action: QUIT_MENU_ACTION,
-        accelerator: "Command+Q",
-      },
-    ],
-  },
-  {
-    label: "Edit",
-    submenu: [
-      { role: "undo" },
-      { role: "redo" },
-      { type: "divider" },
-      { role: "cut" },
-      { role: "copy" },
-      { role: "paste" },
-      { role: "pasteAndMatchStyle" },
-      { role: "delete" },
-      { role: "selectAll" },
-    ],
-  },
-  {
-    label: "View",
-    submenu: [
-      {
-        label: "Workspace",
-        action: "view-workspace",
-        accelerator: "Command+1",
-      },
-      { label: "Board", action: "view-board", accelerator: "Command+2" },
-      {
-        label: "Session",
-        action: "view-session",
-        accelerator: "Command+3",
-      },
-      { label: "World", action: "view-world", accelerator: "Command+4" },
-      {
-        label: "Open World in New Window",
-        action: OPEN_WORLD_WINDOW_MENU_ACTION,
-        accelerator: "Command+Option+4",
-      },
-      { type: "divider" },
-      {
-        label: "Toggle Integrated Terminal",
-        action: "toggle-terminal",
-        accelerator: "Control+`",
-      },
-    ],
-  },
-  {
-    label: "Window",
-    submenu: [
-      { role: "minimize" },
-      { role: "zoom" },
-      { type: "divider" },
-      { role: "bringAllToFront" },
-    ],
-  },
-];
+/**
+ * A menu's commands, from the shared command table: the item's action is the
+ * command id, and its accelerator comes from the command's key. A click
+ * reaches `application-menu-clicked` with that id (see `index.ts`).
+ */
+export function commandItems(bar: CommandMenu): ApplicationMenuItemConfig[][] {
+  return menuSections(bar).map((section) =>
+    section.map(({ id, title, accelerator }) => ({
+      label: title,
+      action: id,
+      ...(accelerator ? { accelerator } : {}),
+    })),
+  );
+}
+
+const divided = (
+  sections: ApplicationMenuItemConfig[][],
+): ApplicationMenuItemConfig[] =>
+  sections.flatMap((section, index) =>
+    index === 0 ? section : [{ type: "divider" } as const, ...section],
+  );
+
+export function buildApplicationMenu(): ApplicationMenuItemConfig[] {
+  const [updates = [], quit = []] = commandItems("Daedalus");
+  return [
+    {
+      label: "Daedalus",
+      submenu: [
+        { role: "about" },
+        ...updates,
+        { type: "divider" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "showAll" },
+        { type: "divider" },
+        // Quit is deliberately a command, not `{ role: "quit" }`: that is a
+        // native macOS role, so ⌘Q would terminate the app without ever
+        // reaching our code. See `app.quit` in the command table.
+        ...quit,
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "divider" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
+        { role: "selectAll" },
+      ],
+    },
+    { label: "View", submenu: divided(commandItems("View")) },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        { type: "divider" },
+        { role: "bringAllToFront" },
+      ],
+    },
+  ];
+}
+
+export const APPLICATION_MENU: ApplicationMenuItemConfig[] =
+  buildApplicationMenu();

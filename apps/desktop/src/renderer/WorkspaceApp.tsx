@@ -30,7 +30,6 @@ import type {
   AgentActivityDto,
   AgentSessionDto,
   AttentionReasonDto,
-  DesktopCommand,
   DesktopSnapshotDto,
   GitStatusDto,
   PullRequestRefDto,
@@ -222,6 +221,12 @@ import { sessionColorStyle } from "./session-color-style";
 import { TerminalClipboardGate } from "./terminal-clipboard";
 import { isTopmostScope, useFocusScope } from "./use-focus-scope";
 import { onTabListKeyDown, rovingTabIndex } from "./tab-roving";
+import {
+  runCommand,
+  terminalKeyHandler,
+  useCommand,
+  useKeyDispatcher,
+} from "./commands";
 
 /** The side panel's tabs, in the order they are drawn. */
 const SIDE_PANEL_TABS = [
@@ -1593,6 +1598,10 @@ function TerminalSurface({
       });
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
+      // The shell gets every key except the few the app keeps: F6, ⌃` and a
+      // key an enabled command is bound to in a terminal. ⌃C, ⌃R, the ⌥ keys
+      // and typing all reach the program. See `terminalKeepsKey`.
+      terminal.attachCustomKeyEventHandler(terminalKeyHandler);
       terminal.loadAddon(
         new WebLinksAddon((event) => event.preventDefault(), {
           hover: (_event, url, range) => {
@@ -2700,17 +2709,10 @@ export function WorkspaceApp({
     });
   }, []);
 
-  // ⌥⌘B folds the workspace panel, the key VS Code gives its secondary side bar.
-  useEffect(() => {
-    if (!workspacePanelVisible) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (!event.metaKey || !event.altKey || event.code !== "KeyB") return;
-      event.preventDefault();
-      toggleBoardDetailPanel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggleBoardDetailPanel, workspacePanelVisible]);
+  useCommand("panel.toggleWorkspacePanel", {
+    enabled: () => workspacePanelVisible,
+    run: toggleBoardDetailPanel,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -2946,25 +2948,32 @@ export function WorkspaceApp({
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, [client]);
-  const runDesktopCommand = useCallback(
-    (command: DesktopCommand) => {
-      if (command === "view-board") setView("board");
-      else if (command === "view-world" && workspaceId)
-        setView((current) =>
-          current === "world" ? lastWorkspaceView.current : "world",
-        );
-      else if (command === "view-session" && workspaceId) setView("session");
-      else if (command === "view-workspace" && workspaceId)
-        setView("workspace");
-      else if (command === "toggle-terminal")
-        setTerminalPanelOpen((current) => !current);
-    },
-    [workspaceId],
-  );
+  // The app's commands: one dispatcher for their keys, and the menu bar's
+  // clicks arrive by command id. See `commands/`.
+  useKeyDispatcher();
   useEffect(
-    () => client.subscribeCommands(runDesktopCommand),
-    [client, runDesktopCommand],
+    () => client.subscribeCommands((command) => runCommand(command)),
+    [client],
   );
+  useCommand("view.board", { run: () => setView("board") });
+  useCommand("view.world", {
+    enabled: () => Boolean(workspaceId),
+    run: () =>
+      setView((current) =>
+        current === "world" ? lastWorkspaceView.current : "world",
+      ),
+  });
+  useCommand("view.session", {
+    enabled: () => Boolean(workspaceId),
+    run: () => setView("session"),
+  });
+  useCommand("view.workspace", {
+    enabled: () => Boolean(workspaceId),
+    run: () => setView("workspace"),
+  });
+  useCommand("terminal.toggle", {
+    run: () => setTerminalPanelOpen((current) => !current),
+  });
   // A clicked notification runs `daedal focus`, which raises the app and lands
   // here. Selecting the session is the whole point: an alert that only brings
   // the window forward still leaves the user hunting.
@@ -6477,7 +6486,11 @@ export function WorkspaceApp({
         <div
           className={`workspace-shell mode-${view} ${workspacePanelVisible ? "has-workspace-panel" : ""}`}
         >
-          <aside className="workspace-column" ref={workspaceColumnRef}>
+          <aside
+            className="workspace-column"
+            data-area="sidebar"
+            ref={workspaceColumnRef}
+          >
             {/* The brand heads the left column, as the top bar it came from
               is gone. */}
             <div className="brand workspace-column-brand">
@@ -7009,6 +7022,7 @@ export function WorkspaceApp({
 
           <section
             className={`workspace-main workspace-content-column ${view === "world" ? "world-column" : "center-column"}`}
+            data-area="center"
           >
             {!workspace ? (
               <div className="empty large">
@@ -7229,6 +7243,7 @@ export function WorkspaceApp({
             <aside
               aria-label="Workspace panel"
               className={`board-detail-column side-panel ${workspacePanelCollapsed ? "panel-compact" : ""}`}
+              data-area="right-panel"
             >
               <div
                 aria-label="Workspace panel"
@@ -7396,6 +7411,7 @@ export function WorkspaceApp({
         <section
           aria-label="Integrated terminal"
           className={`integrated-terminal-panel ${terminalPanelOpen ? "open" : "collapsed"}`}
+          data-area="terminal-panel"
         >
           {terminalPanelOpen && (
             <div

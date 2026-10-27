@@ -1,6 +1,6 @@
 import type {
   AppUpdateDto,
-  DesktopCommand,
+  RendererCommandId,
   DesktopRpcSchema,
   ShutdownPlanDto,
   WorkspaceFileChangeDto,
@@ -19,7 +19,7 @@ export interface DesktopClient {
   request: DesktopRequests;
   /** Data changed; see `DataChange` for what the change says. */
   subscribe(listener: (change?: DataChange) => void): () => void;
-  subscribeCommands(listener: (command: DesktopCommand) => void): () => void;
+  subscribeCommands(listener: (command: RendererCommandId) => void): () => void;
   subscribeWindowResize(listener: () => void): () => void;
   subscribeFocusSession(listener: (sessionId: string) => void): () => void;
   /** Optional so test clients need not stub it. */
