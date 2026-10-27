@@ -11,6 +11,7 @@ import type {
   WorkflowFileKindDto,
   WorkflowFilesDto,
 } from "@daedalus/protocol";
+import { SplitList } from "./SplitList";
 import { MarkdownView, StepView, WorkflowView } from "./FileViews";
 import type { DesktopClient } from "./client-types";
 import { askConfirm } from "./dialogs";
@@ -244,60 +245,67 @@ export function WorkflowsEditor({
         ship. With workflows on, agents pick one of yours for each request and
         report its steps in the side panel.
       </TabIntro>
-      <div className="workflows-editor">
-        <nav aria-label="Workflow files" className="workflows-list">
-          <Group
-            onNew={() => void select({ kind: "flow", name: null })}
-            title="Workflows"
-          >
-            {files.flows.map((file) => (
-              <FileRow
-                key={file.name}
-                meta={flowMeta(file, files.steps)}
-                name={file.name}
-                onSelect={() => void select({ kind: "flow", name: file.name })}
-                problem={file.problem}
-                selected={is("flow", file.name)}
-                summary={file.description}
-              />
-            ))}
-            {files.flows.length === 0 && (
-              <li className="workflows-none">
-                None yet. Agents name their own steps until you add one.
-              </li>
-            )}
-            <FileRow
-              name="Choosing rules"
-              onSelect={() => void select({ kind: "choosing" })}
-              selected={is("choosing")}
-              summary="How an agent picks a workflow"
-            />
-          </Group>
-          <Group
-            onNew={() => void select({ kind: "step", name: null })}
-            title="Steps"
-          >
-            {files.steps.map((file) => {
-              const users = files.flows.filter((flow) =>
-                flow.steps?.includes(file.name),
-              ).length;
-              return (
+      <SplitList
+        id="workflows"
+        label="Workflow files"
+        list={
+          <>
+            <Group
+              onNew={() => void select({ kind: "flow", name: null })}
+              title="Workflows"
+            >
+              {files.flows.map((file) => (
                 <FileRow
                   key={file.name}
-                  {...(file.gate ? { badge: "gate" } : {})}
-                  meta={users ? `used by ${users}` : "unused"}
+                  meta={flowMeta(file, files.steps)}
                   name={file.name}
                   onSelect={() =>
-                    void select({ kind: "step", name: file.name })
+                    void select({ kind: "flow", name: file.name })
                   }
                   problem={file.problem}
-                  selected={is("step", file.name)}
+                  selected={is("flow", file.name)}
                   summary={file.description}
                 />
-              );
-            })}
-          </Group>
-        </nav>
+              ))}
+              {files.flows.length === 0 && (
+                <li className="workflows-none">
+                  None yet. Agents name their own steps until you add one.
+                </li>
+              )}
+              <FileRow
+                name="Choosing rules"
+                onSelect={() => void select({ kind: "choosing" })}
+                selected={is("choosing")}
+                summary="How an agent picks a workflow"
+              />
+            </Group>
+            <Group
+              onNew={() => void select({ kind: "step", name: null })}
+              title="Steps"
+            >
+              {files.steps.map((file) => {
+                const users = files.flows.filter((flow) =>
+                  flow.steps?.includes(file.name),
+                ).length;
+                return (
+                  <FileRow
+                    key={file.name}
+                    {...(file.gate ? { badge: "gate" } : {})}
+                    meta={users ? `used by ${users}` : "unused"}
+                    name={file.name}
+                    onSelect={() =>
+                      void select({ kind: "step", name: file.name })
+                    }
+                    problem={file.problem}
+                    selected={is("step", file.name)}
+                    summary={file.description}
+                  />
+                );
+              })}
+            </Group>
+          </>
+        }
+      >
         <FileDetail
           alert={refusal ?? current?.problem}
           dirty={dirty}
@@ -336,7 +344,7 @@ export function WorkflowsEditor({
             )
           }
         />
-      </div>
+      </SplitList>
     </div>
   );
 }

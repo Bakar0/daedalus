@@ -499,6 +499,39 @@ const client = {
           missedMs: 0,
         });
       },
+      workflowFiles: async () =>
+        ok({
+          root: "/tmp/daedalus-routines-test/workflows",
+          flows: [
+            {
+              name: "feature",
+              path: "flows/feature.md",
+              text: "---\nname: feature\ndescription: A feature that ships\nsteps: [plan, build]\n---\n",
+              description: "A feature that ships",
+              steps: ["plan", "build"],
+              problem: null,
+            },
+          ],
+          steps: [
+            {
+              name: "plan",
+              path: "steps/plan.md",
+              text: "---\nname: plan\ndescription: Write the plan\n---\nRead the code, then write the plan.\n",
+              description: "Write the plan",
+              body: "Read the code, then write the plan.",
+              problem: null,
+            },
+            {
+              name: "build",
+              path: "steps/build.md",
+              text: "---\nname: build\ndescription: Make the change\n---\nMake the change and test it.\n",
+              description: "Make the change",
+              body: "Make the change and test it.",
+              problem: null,
+            },
+          ],
+          choosing: { path: "CHOOSING.md", text: "# Choosing a workflow\n" },
+        }),
       instructionFiles: async () =>
         ok({
           root: "/tmp/daedalus-routines-test/instructions",

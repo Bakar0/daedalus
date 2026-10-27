@@ -6464,8 +6464,7 @@ dd {
   gap: 4px;
 }
 .ability-page-field label,
-.ability-page-section h3,
-.team-page-members h3 {
+.ability-page-section h3 {
   color: var(--muted);
   font-size: 10px;
   font-weight: 650;
@@ -6691,92 +6690,76 @@ dd {
   font-size: 11px;
 }
 
-/* Team: members down the left, the chat beside them. */
-.team-page-body {
-  display: grid;
-  flex: 1;
-  gap: 18px;
-  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
-  min-height: 0;
+/* The line between a split tab's list and its content; drag to resize. */
+.split-list-handle {
+  cursor: col-resize;
+  position: relative;
+  z-index: 1;
 }
-.team-page-members {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
-  overflow: auto;
-  padding-bottom: 18px;
+.split-list-handle::before {
+  bottom: 0;
+  content: "";
+  left: -3px;
+  position: absolute;
+  top: 0;
+  width: 6px;
 }
-.team-page-members ul {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* The grab area stays 6px wide; only the line in its middle shows. */
+.split-list-handle:hover::before,
+.split-list-handle:focus-visible::before {
+  background: linear-gradient(
+    to right,
+    transparent 2px,
+    var(--accent) 2px,
+    var(--accent) 4px,
+    transparent 4px
+  );
 }
-.team-member-card {
-  background: transparent !important;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: var(--text);
-  display: flex;
-  flex-direction: column;
-  font-weight: 400;
-  gap: 1px;
-  padding: 7px 9px;
-  text-align: left;
-  width: 100%;
+.split-list-handle:focus-visible {
+  outline: none;
+}
+
+/* Team: members in the list, the chat as the content. */
+.team-member-row {
   --dot: var(--muted);
 }
-.team-member-card:hover {
-  background: var(--raised) !important;
-  border-color: var(--line);
-}
-.team-member-card[data-tone="live"] {
+.team-member-row[data-tone="live"] {
   --dot: var(--success);
 }
-.team-member-card[data-tone="failing"] {
+.team-member-row[data-tone="failing"] {
   --dot: var(--danger);
 }
-.team-member-card[data-tone="off"] {
-  opacity: 0.55;
+.team-member-row[data-tone="failing"] small {
+  color: var(--danger);
+  white-space: normal;
 }
-.team-member-line {
-  align-items: center;
-  display: flex;
-  font-size: 13px;
-  gap: 6px;
+.team-member-row[data-tone="off"] {
+  opacity: 0.55;
 }
 .team-member-dot {
   background: var(--dot);
   border-radius: 50%;
   flex: none;
   height: 7px;
+  margin-right: 2px;
   width: 7px;
 }
-.team-member-card small {
+.team-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  min-width: 0;
+  padding: 14px 18px 0;
+}
+.team-detail-heading h2 {
+  color: var(--text);
+  font-size: 15px;
+  margin: 0 0 2px;
+}
+.team-detail-heading small {
   color: var(--muted);
   font-size: 11px;
-  overflow: hidden;
-  padding-left: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.team-member-card[data-tone="failing"] .team-member-state {
-  color: var(--danger);
-  white-space: normal;
-}
-.team-member-unread {
-  background: var(--accent);
-  border-radius: 999px;
-  color: white;
-  font-size: 10px;
-  font-weight: 650;
-  margin-left: auto;
-  min-width: 16px;
-  padding: 1px 5px;
-  text-align: center;
 }
 .team-tag {
   background: var(--raised-hover);
@@ -6785,13 +6768,6 @@ dd {
   font-size: 10px;
   font-weight: 500;
   padding: 1px 7px;
-}
-.team-page-chat {
-  border-left: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding-left: 18px;
 }
 .team-chat {
   display: flex;

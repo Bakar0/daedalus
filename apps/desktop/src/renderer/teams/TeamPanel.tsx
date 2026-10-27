@@ -9,7 +9,9 @@ import type {
 } from "@daedalus/protocol";
 import type { DesktopClient } from "../client-types";
 import { relativeTime } from "../routines/time";
+import { Group } from "../FileEditorParts";
 import { sessionColorStyle } from "../session-color-style";
+import { SplitList } from "../SplitList";
 
 /**
  * The bar above the terminal of a team's lead or member: which team, and a
@@ -252,92 +254,70 @@ export function TeamView({
   };
 
   return (
-    <div className="ability-page team-page">
-      <header className="ability-page-header">
-        <div className="ability-page-title">
-          <span className="eyebrow">Team</span>
-          <h2>{detail.team.name}</h2>
-          <small>
-            {memberCount === 0
-              ? "Only the lead"
-              : `Lead and ${memberCount} ${memberCount === 1 ? "member" : "members"}`}
-            {" · "}
-            {detail.messages.length}{" "}
-            {detail.messages.length === 1 ? "message" : "messages"}
-          </small>
-        </div>
-        {error && <p className="ability-page-error">{error}</p>}
-      </header>
-      <form
-        className="ability-page-field"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void saveGoal();
-        }}
-      >
-        <label htmlFor={`team-goal-${teamId}`}>Goal</label>
-        <textarea
-          id={`team-goal-${teamId}`}
-          maxLength={2000}
-          onChange={(event) => setGoal(event.target.value)}
-          placeholder="What the team is working toward. Members are told it when they start."
-          rows={2}
-          value={goal}
-        />
-        {goalChanged && (
-          <div className="ability-page-field-actions">
-            <button
-              className="quiet"
-              onClick={() => setGoal(detail.team.goal ?? "")}
-              type="button"
-            >
-              Cancel
-            </button>
-            <button disabled={busy} type="submit">
-              Save goal
-            </button>
-          </div>
-        )}
-      </form>
-      <div className="team-page-body">
-        <nav aria-label="Members" className="team-page-members">
-          <h3>Members</h3>
-          <ul>
+    <div className="workflows-tab team-tab">
+      <SplitList
+        id="team"
+        label="Members"
+        list={
+          <Group title="Members">
             {detail.members.map((member) => {
               const state = memberState(member);
               return (
-                <li key={member.sessionId}>
-                  <button
-                    className="team-member-card"
-                    data-tone={state.tone}
-                    onClick={() => onOpenSession(member.sessionId)}
-                    title={`Open ${member.name}`}
-                    type="button"
-                  >
-                    <span className="team-member-line">
-                      <span aria-hidden="true" className="team-member-dot" />
-                      <strong>@{member.handle}</strong>
-                      {member.role === "lead" && (
-                        <span className="team-tag">lead</span>
-                      )}
-                      {member.unread > 0 && (
-                        <span
-                          className="team-member-unread"
-                          title={`${member.unread} unread`}
-                        >
-                          {member.unread}
-                        </span>
-                      )}
-                    </span>
-                    <small>{member.name}</small>
-                    <small className="team-member-state">{state.text}</small>
-                  </button>
-                </li>
+                <MemberRow
+                  key={member.sessionId}
+                  member={member}
+                  onOpen={() => onOpenSession(member.sessionId)}
+                  state={state}
+                />
               );
             })}
-          </ul>
-        </nav>
-        <section aria-label="Chat" className="team-page-chat">
+          </Group>
+        }
+      >
+        <section aria-label="Chat" className="team-detail">
+          <header className="team-detail-heading">
+            <h2>{detail.team.name}</h2>
+            <small>
+              {memberCount === 0
+                ? "Only the lead"
+                : `Lead and ${memberCount} ${memberCount === 1 ? "member" : "members"}`}
+              {" · "}
+              {detail.messages.length}{" "}
+              {detail.messages.length === 1 ? "message" : "messages"}
+            </small>
+          </header>
+          {error && <p className="ability-page-error">{error}</p>}
+          <form
+            className="ability-page-field"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveGoal();
+            }}
+          >
+            <label htmlFor={`team-goal-${teamId}`}>Goal</label>
+            <textarea
+              id={`team-goal-${teamId}`}
+              maxLength={2000}
+              onChange={(event) => setGoal(event.target.value)}
+              placeholder="What the team is working toward. Members are told it when they start."
+              rows={1}
+              value={goal}
+            />
+            {goalChanged && (
+              <div className="ability-page-field-actions">
+                <button
+                  className="quiet"
+                  onClick={() => setGoal(detail.team.goal ?? "")}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button disabled={busy} type="submit">
+                  Save goal
+                </button>
+              </div>
+            )}
+          </form>
           <div className="team-chat" role="log">
             {detail.messages.length === 0 && (
               <p className="ability-page-empty">
@@ -382,7 +362,55 @@ export function TeamView({
             </div>
           </form>
         </section>
-      </div>
+      </SplitList>
     </div>
+  );
+}
+
+/**
+ * A member in the list, laid out like a file in the Workflows tab: its
+ * handle and unread count on one line, its session and state under it.
+ * Clicking it opens the session.
+ */
+function MemberRow({
+  member,
+  state,
+  onOpen,
+}: {
+  member: TeamMemberDto;
+  state: ReturnType<typeof memberState>;
+  onOpen: () => void;
+}) {
+  return (
+    <li>
+      <button
+        className="workflows-file team-member-row"
+        data-tone={state.tone}
+        onClick={onOpen}
+        title={`Open ${member.name}`}
+        type="button"
+      >
+        <span className="workflows-file-line">
+          <span className="workflows-file-name">
+            <span aria-hidden="true" className="team-member-dot" />@
+            {member.handle}
+            {member.role === "lead" && (
+              <span className="workflow-gate">lead</span>
+            )}
+          </span>
+          {member.unread > 0 && (
+            <span
+              className="workflows-file-meta"
+              title={`${member.unread} unread`}
+            >
+              {member.unread} unread
+            </span>
+          )}
+        </span>
+        <small>
+          {member.name} · {state.text}
+        </small>
+      </button>
+    </li>
   );
 }
