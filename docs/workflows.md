@@ -4,8 +4,11 @@ A workflow is the order an agent works in: a short list of steps such as plan,
 build, prove, ship. When workflows are on, an agent picks one of yours before
 the first command of a request, reports each step as it goes, and the
 session's Workflow pane in the side panel shows the steps as a checklist. A
-step marked `gate: user` waits for you to approve what came out of it: the
-agent asks in the conversation, and the pane shows the step waiting for you.
+step marked `gate: result` waits for you to approve what came out of it, and
+one marked `gate: start` waits for your go-ahead before it starts. The agent
+asks in the conversation, and the pane tags the step REVIEW or START and says
+what it waits for and that you answer in the session. `user` and `before`
+are the old names for `result` and `start` and still work.
 
 Workflows are off until you turn them on in Settings › Sessions › "Run work in
 workflows". Edit them in the Workflows tab (the Workflow pane's "Open ↗"), or
@@ -42,11 +45,11 @@ The body is optional and goes to the agent when the run starts.
 
 ### A step file
 
-| Field         | Meaning                                                                                                  |
-| ------------- | -------------------------------------------------------------------------------------------------------- |
-| `name`        | the file's name, used in a workflow's `steps` list                                                       |
-| `description` | one line on what the step is for                                                                         |
-| `gate`        | optional: `user` waits for you to approve the step's result; `before` waits for you to agree to start it |
+| Field         | Meaning                                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`        | the file's name, used in a workflow's `steps` list                                                                                             |
+| `description` | one line on what the step is for                                                                                                               |
+| `gate`        | optional: `result` waits for you to approve the step's result (tagged REVIEW); `start` waits for your go-ahead before it starts (tagged START) |
 
 The body is what the agent does in the step. It can be one line naming a
 command or a skill.
@@ -111,7 +114,7 @@ Make the real change. Follow the repository's instructions, replace any prototyp
 ---
 name: proof
 description: Show the user it works where they can try it.
-gate: user
+gate: result
 ---
 
 Put the change where the user can try it: relaunch the dev app, deploy to the dev environment, or run the command. Say in a few lines what to look at and what should happen. If the user asks for changes, start the step that makes them again and come back here. The step is done when the user says it works.
@@ -161,7 +164,7 @@ Read the code, docs and history the work touches. Write the plan in a few lines:
 ---
 name: prototype
 description: Build the smallest version that proves the approach.
-gate: user
+gate: result
 ---
 
 Build only the path that shows the approach works end to end, and mark its shortcuts. Show it to the user, by running it, a screenshot or a code snippet of how it is used, and adjust before building the rest.
@@ -281,7 +284,7 @@ Give two or three options. For each, say what it costs, what it gives up and whe
 ---
 name: decide
 description: The user picks an option.
-gate: user
+gate: result
 ---
 
 Write down the option the user chose and why, in one line.

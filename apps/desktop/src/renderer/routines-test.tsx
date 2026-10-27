@@ -206,6 +206,64 @@ let current: DesktopSnapshotDto = {
   ],
   routines: [status],
   routineReports: [],
+  // Argus is in a run: build done, deploy waiting on its result, and a
+  // release step that waits for the go-ahead.
+  workflowRuns: [
+    {
+      id: "run-1",
+      workspaceId: "routines-test-workspace",
+      sessionId: "argus",
+      workflow: "feature",
+      steps: [
+        {
+          name: "build",
+          description: "Make the change",
+          gate: null,
+          state: "done",
+          startedAt: iso(-3600),
+          endedAt: iso(-1800),
+          approvedAt: null,
+          plan: "Add the release notes page",
+          note: "Page added; 12 tests pass",
+          dynamic: false,
+        },
+        {
+          name: "deploy",
+          description: "Deploy to the beta feed",
+          gate: "result",
+          state: "waiting",
+          startedAt: iso(-1700),
+          endedAt: null,
+          approvedAt: null,
+          plan: "Publish 1.2 to the beta feed",
+          note: "1.2 is on the beta feed; release run 4031 passed",
+          dynamic: false,
+        },
+        {
+          name: "release",
+          description: "Promote to stable",
+          gate: "start",
+          state: "pending",
+          startedAt: null,
+          endedAt: null,
+          approvedAt: null,
+          plan: null,
+          note: null,
+          dynamic: false,
+        },
+      ],
+      dynamic: false,
+      modified: false,
+      loopTo: null,
+      until: "",
+      iteration: 1,
+      history: [],
+      endNote: null,
+      startedAt: iso(-3600),
+      updatedAt: iso(-60),
+      endedAt: null,
+    },
+  ],
   settings: {
     version: "0.3.0",
     channel: "stable",
@@ -499,6 +557,12 @@ const client = {
           missedMs: 0,
         });
       },
+      // Workflows on, so the Workflow pane shows the run.
+      skillList: async () =>
+        ok({
+          managed: [{ id: "daedalus-workflows", enabled: true }],
+          user: [],
+        }),
       workflowFiles: async () =>
         ok({
           root: "/tmp/daedalus-routines-test/workflows",
@@ -515,6 +579,7 @@ const client = {
           steps: [
             {
               name: "plan",
+              gate: "start" as const,
               path: "steps/plan.md",
               text: "---\nname: plan\ndescription: Write the plan\n---\nRead the code, then write the plan.\n",
               description: "Write the plan",
@@ -523,6 +588,7 @@ const client = {
             },
             {
               name: "build",
+              gate: "result" as const,
               path: "steps/build.md",
               text: "---\nname: build\ndescription: Make the change\n---\nMake the change and test it.\n",
               description: "Make the change",

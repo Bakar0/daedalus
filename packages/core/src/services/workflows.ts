@@ -38,7 +38,7 @@ const isLive = (step: { state: WorkflowStepState }) =>
 
 /** A step done by the agent and waiting for the user to approve its result. */
 const awaitsResult = (step: WorkflowRunStep) =>
-  step.state === "waiting" && step.gate === "user";
+  step.state === "waiting" && step.gate === "result";
 
 const noWorkflow = (name: string, catalog: WorkflowCatalog) =>
   `No workflow '${name}'. Workflows: ${catalog.workflows.map((item) => item.name).join(", ") || "none"}`;
@@ -374,7 +374,7 @@ export class WorkflowService {
           {
             ...file,
             ...(description ? { description } : {}),
-            gate: input.gate ? "user" : file.gate,
+            gate: input.gate ? "result" : file.gate,
           },
           false,
         )
@@ -382,7 +382,7 @@ export class WorkflowService {
           {
             name,
             description: description ?? "",
-            gate: input.gate ? "user" : null,
+            gate: input.gate ? "result" : null,
           },
           true,
         );
@@ -446,8 +446,8 @@ export class WorkflowService {
    * Moves one step. Starting a step finishes the one that was active, so an
    * agent that forgets a `done` still shows where it is, except one whose
    * result the user has to approve. Starting a step that already ended goes
-   * back to it. Gates wait for the user and raise attention: a `before` gate
-   * when its step starts, a `user` gate when its step is done, until the
+   * back to it. Gates wait for the user and raise attention: a `start` gate
+   * when its step starts, a `result` gate when its step is done, until the
    * user approves what came out; no other step starts meanwhile. When every
    * step has finished, the run ends, or a circular one goes round again from
    * its loop step.
@@ -484,7 +484,11 @@ export class WorkflowService {
             "CONFLICT",
             `Step '${step.name}' waits for the user to approve what came out. Ask them; to change it first, start '${step.name}' again.`,
           );
-        if (step.state === "active" && step.gate === "user" && !step.approvedAt)
+        if (
+          step.state === "active" &&
+          step.gate === "result" &&
+          !step.approvedAt
+        )
           throw new DaedalusError(
             "CONFLICT",
             `Step '${step.name}' needs the user's approval when it is done. Finish it with 'done' and a note saying what to approve.`,
@@ -497,7 +501,7 @@ export class WorkflowService {
       // An approval covers one pass through the step; going back needs another.
       if (FINISHED.has(target.state) || awaitsResult(target))
         target.approvedAt = null;
-      waiting = target.gate === "before" && !target.approvedAt;
+      waiting = target.gate === "start" && !target.approvedAt;
       target.state = waiting ? "waiting" : "active";
       target.startedAt = now;
       target.endedAt = null;
@@ -515,7 +519,9 @@ export class WorkflowService {
       // A step whose result the user approves waits here, holding what to
       // approve as its note. Skipping it does not: nothing came out.
       waiting =
-        input.action === "done" && target.gate === "user" && !target.approvedAt;
+        input.action === "done" &&
+        target.gate === "result" &&
+        !target.approvedAt;
       target.state = waiting
         ? "waiting"
         : input.action === "done"
@@ -535,7 +541,7 @@ export class WorkflowService {
       await this.activity.raise({
         sessionId: session.id,
         reason:
-          target.gate === "before"
+          target.gate === "start"
             ? `Approve starting step '${target.name}' of workflow '${run.workflow}': ${note}`
             : `Approve the result of step '${target.name}' of workflow '${run.workflow}': ${note}`,
       });
@@ -600,7 +606,7 @@ export class WorkflowService {
     const steps = run.steps.map((step) =>
       step !== target
         ? step
-        : step.gate === "before"
+        : step.gate === "start"
           ? {
               ...step,
               state: "active" as const,

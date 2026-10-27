@@ -1337,10 +1337,10 @@ export interface WorkflowRunStepDto {
   name: string;
   description: string;
   /**
-   * `user`: the user approves the step's result; `before`: the user agrees
-   * before it starts.
+   * `start`: the user gives the go-ahead before the step; `result`: the user
+   * approves what came out of it.
    */
-  gate: "user" | "before" | null;
+  gate: "start" | "result" | null;
   state: WorkflowStepStateDto;
   startedAt: string | null;
   endedAt: string | null;
@@ -1382,7 +1382,7 @@ export interface WorkflowFileDto {
   /** A workflow with `steps: dynamic`: each run names its own steps. */
   dynamic?: boolean;
   loop?: string | null;
-  gate?: "user" | "before" | null;
+  gate?: "start" | "result" | null;
   /** Why the file cannot be used, when it cannot. */
   problem: string | null;
 }

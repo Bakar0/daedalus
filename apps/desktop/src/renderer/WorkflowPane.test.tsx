@@ -11,7 +11,7 @@ const run = (states: WorkflowStepStateDto[]): WorkflowRunDto => ({
   steps: ["research", "review", "deploy"].map((name, index) => ({
     name,
     description: `About ${name}`,
-    gate: name === "deploy" ? "user" : null,
+    gate: name === "deploy" ? "result" : null,
     state: states[index]!,
     startedAt: null,
     endedAt: null,
@@ -54,7 +54,9 @@ describe("workflow pane", () => {
     const html = renderToStaticMarkup(
       <WorkflowSteps run={run(["done", "done", "waiting"])} />,
     );
-    expect(html).toMatch(/deploy.*waiting for you.*1\.2 is on the beta feed/s);
+    expect(html).toMatch(
+      /deploy.*review.*waiting for you to approve the result · answer in the session.*1\.2 is on the beta feed/s,
+    );
     expect(html).not.toContain("<button");
   });
 

@@ -7,7 +7,12 @@ import {
   writeFileAtomic,
   writeTextFile,
 } from "@daedalus/platform";
-import type { WorkflowDefinition, WorkflowStepDefinition } from "../domain";
+import {
+  parseGate,
+  type WorkflowDefinition,
+  type WorkflowGate,
+  type WorkflowStepDefinition,
+} from "../domain";
 import { DaedalusError } from "../errors";
 import { FRONTMATTER, stringValue } from "./routine-files";
 
@@ -82,11 +87,11 @@ export function parseStepFile(
   const nameText = stringValue(fields.name) ?? fallbackName;
   if (!nameText)
     throw new DaedalusError("VALIDATION", "The 'name' field is required");
-  const gate = stringValue(fields.gate) ?? null;
-  if (gate !== null && gate !== "user" && gate !== "before")
+  const gate = parseGate(stringValue(fields.gate));
+  if (gate === undefined)
     throw new DaedalusError(
       "VALIDATION",
-      "'gate' must be 'user' (the user approves what the step produced) or 'before' (the user approves starting it), or left out",
+      "'gate' must be 'start' (the user gives the go-ahead before the step starts) or 'result' (the user approves what the step produced), or left out",
     );
   if (!body)
     throw new DaedalusError(
@@ -298,7 +303,7 @@ export interface WorkflowFile {
   steps?: string[];
   dynamic?: boolean;
   loop?: string | null;
-  gate?: "user" | "before" | null;
+  gate?: WorkflowGate | null;
   problem: string | null;
 }
 

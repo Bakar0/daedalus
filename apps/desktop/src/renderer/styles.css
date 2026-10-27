@@ -9706,10 +9706,12 @@ dd {
   text-transform: uppercase;
 }
 /* The agent asks in the conversation; the pane only says it waits. */
+/* Its own line under the step's name, so the name and its tag stay in view. */
 .workflow-waiting {
   color: #ff8282;
   font-size: 11px;
-  white-space: nowrap;
+  grid-column: 2 / -1;
+  line-height: 1.35;
 }
 /* A finished step keeps one line of what came out; the rest is on hover. */
 .workflow-step.state-done:not(.open) .workflow-step-note,

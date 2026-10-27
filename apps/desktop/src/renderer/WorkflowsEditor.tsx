@@ -12,6 +12,7 @@ import type {
   WorkflowFilesDto,
 } from "@daedalus/protocol";
 import { SplitList } from "./SplitList";
+import { GATE_LABELS } from "./workflow-gates";
 import { MarkdownView, StepView, WorkflowView } from "./FileViews";
 import type { DesktopClient } from "./client-types";
 import { askConfirm } from "./dialogs";
@@ -76,7 +77,7 @@ function titleOf(selection: Selection): string {
 
 const HINTS: Record<Selection["kind"], string> = {
   flow: "Frontmatter: name, description, when, steps: [a, b] or steps: dynamic (the agent names its own), and optionally loop: <step> and until. Runs already started keep their copy; a change applies from the next run.",
-  step: "Frontmatter: name, description, and optionally gate: user (you approve its result) or gate: before (you agree before it starts). The body is what the agent does in this step.",
+  step: "Frontmatter: name, description, and optionally gate: start (you give the go-ahead before it starts) or gate: result (you approve what it produced). The body is what the agent does in this step.",
   choosing:
     "The rules an agent reads, in order, to pick a workflow for the work.",
 };
@@ -290,7 +291,9 @@ export function WorkflowsEditor({
                 return (
                   <FileRow
                     key={file.name}
-                    {...(file.gate ? { badge: "gate" } : {})}
+                    {...(file.gate
+                      ? { badge: GATE_LABELS[file.gate].tag }
+                      : {})}
                     meta={users ? `used by ${users}` : "unused"}
                     name={file.name}
                     onSelect={() =>

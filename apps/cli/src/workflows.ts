@@ -55,13 +55,15 @@ Every step change takes --note, specific to this work: on start, what you
 will do in the step; on done, what came out; on skip, why.
 Starting a step that already ended goes back to it.
 
-Gates: a step with 'gate: user' needs the user to approve its result. Do
+Gates: a step with 'gate: result' needs the user to approve its result. Do
 the step, then 'step <step> done --note "<what to approve>"': the step
 waits, attention is raised, and no other step starts. Ask the user in the
 conversation and stop. When they approve, run 'approve', which marks the
 step done; to change the result first, start the step again. A step with
-'gate: before' waits when it starts, until the user agrees to it; then run
-'approve' and do the step. 'add --gate' adds a step with 'gate: user'.`;
+'gate: start' waits when it starts, until the user gives the go-ahead; then
+run 'approve' and do the step. 'gate: user' and 'gate: before' are the old
+names for 'result' and 'start' and still work. 'add --gate' adds a step
+with 'gate: result'.`;
 
 const STATE_MARK: Record<WorkflowStepState, string> = {
   pending: "·",

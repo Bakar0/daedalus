@@ -276,7 +276,7 @@ describe("WorkflowService", () => {
     );
   });
 
-  test("a 'user' gate waits on done until the user approves what came out", async () => {
+  test("a 'result' gate waits on done until the user approves what came out", async () => {
     await withWorkflows(async ({ workflows, session, raised, cleared }) => {
       const agent = session();
       await workflows.start({ sessionId: agent.id, workflow: "feature" });
@@ -360,7 +360,7 @@ describe("WorkflowService", () => {
     });
   });
 
-  test("a 'before' gate waits on start; approval starts the step", async () => {
+  test("a 'start' gate waits on start; approval starts the step", async () => {
     await withWorkflows(async ({ workflows, session, raised, cleared }) => {
       const agent = session();
       await workflows.start({ sessionId: agent.id, workflow: "feature" });
@@ -401,6 +401,40 @@ describe("WorkflowService", () => {
         action: "start",
       });
       expect(again.waiting).toBe(true);
+    });
+  });
+
+  test("a run stored with the first gate names reads them as start and result", async () => {
+    await withWorkflows(async ({ context, workflows, session }) => {
+      const agent = session();
+      const run = await workflows.start({
+        sessionId: agent.id,
+        workflow: "feature",
+      });
+      // Runs saved before the rename carry `user` and `before`.
+      context.repositories.database
+        .query("UPDATE workflow_runs SET steps = ? WHERE id = ?")
+        .run(
+          JSON.stringify(
+            run.steps.map((step) => ({
+              ...step,
+              gate:
+                step.gate === "result"
+                  ? "user"
+                  : step.gate === "start"
+                    ? "before"
+                    : null,
+            })),
+          ),
+          run.id,
+        );
+      expect(
+        context.repositories.workflows
+          .find(run.id)
+          ?.steps.map((step) => step.gate),
+      ).toEqual(run.steps.map((step) => step.gate));
+      expect(run.steps.some((step) => step.gate === "result")).toBe(true);
+      expect(run.steps.some((step) => step.gate === "start")).toBe(true);
     });
   });
 

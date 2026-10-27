@@ -10,7 +10,7 @@ A workflow is an ordered list of steps (plan, build, ship). Its files
 live in `{{workflows}}`: `flows/<name>.md` (frontmatter `name`, `description`,
 `when`, `steps: [a, b]` or `steps: dynamic`, optional `loop: <step>` and
 `until`), `steps/<name>.md`
-(frontmatter `name`, `description`, optional `gate: user` or `gate: before`;
+(frontmatter `name`, `description`, optional `gate: start` or `gate: result`;
 the body is what to do), and `CHOOSING.md` (the user's rules for picking one). A **run** is this
 session's copy, shown as a checklist in its Workflow pane. Changing a run never
 changes a file. The CLI is `{{daedal}}`, written `daedal` below.
@@ -55,13 +55,14 @@ the step, on `done` what came out, on `skip` why. The user reads it in the
 pane. Starting a step finishes the one before; starting an earlier step goes
 back to it.
 
-- **Gates.** A step with `gate: user` needs the user to approve its result.
+- **Gates.** A step with `gate: result` (old name `user`) needs the user to
+  approve its result.
   Do the step, then `daedal workflow step <step> done --note "<what to
 approve>"`: the step waits, attention is raised, the command exits 4, and no
   other step starts. Show the user what to approve, ask in the conversation,
   and end your turn. When they approve, run `daedal workflow approve`, which
   marks the step done, and go on. When they want changes, start the step again
-  and do them. A step with `gate: before` waits when it starts: say what you
+  and do them. A step with `gate: start` (old name `before`) waits when it starts: say what you
   will do there, ask, and end your turn; after their yes, run
   `daedal workflow approve` and do the step. Never approve on the user's
   behalf.
