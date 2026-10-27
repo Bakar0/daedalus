@@ -6377,7 +6377,7 @@ dd {
   color: var(--muted);
 }
 
-/* The Routines drawer, over the right of the terminal. */
+/* The terminal and whatever sits over it, under the routine bar. */
 .terminal-stage {
   display: flex;
   flex: 1;
@@ -6385,244 +6385,523 @@ dd {
   min-height: 0;
   position: relative;
 }
-.routines-panel {
-  background: var(--overlay);
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  bottom: 8px;
-  box-shadow: 0 18px 50px rgb(0 0 0 / 0.45);
+/* The Team and Routines tabs: a header, an editable field, then content. */
+.ability-panel {
+  overflow: hidden;
+}
+.ability-page {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-width: calc(100% - 16px);
-  overflow-y: auto;
-  padding: 14px 16px;
-  position: absolute;
-  right: 8px;
-  top: 8px;
-  width: 400px;
-  z-index: 20;
+  gap: 12px;
+  height: 100%;
+  margin: 0 auto;
+  max-width: 980px;
+  min-height: 0;
+  padding: 18px 22px 0;
+  width: 100%;
+  box-sizing: border-box;
 }
-.app[data-theme="light"] .routines-panel {
-  box-shadow: 0 14px 40px rgb(75 95 128 / 0.28);
-}
-.routines-panel-heading {
+.ability-page-header {
   align-items: flex-start;
   display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 12px;
   justify-content: space-between;
 }
-.routines-panel-heading h2 {
-  font-size: 16px;
-  margin: 2px 0 0;
+.ability-page-title h2 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 650;
+  margin: 0 0 2px;
 }
-.routines-panel h3 {
+.ability-page-title small {
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  margin: 6px 0 0;
-  text-transform: uppercase;
+  font-size: 12px;
 }
-.team-members li {
-  padding: 0;
-}
-.team-member {
-  border-radius: 8px;
-  color: inherit;
-  display: grid;
-  gap: 3px;
-  padding: 9px 10px;
-  text-align: left;
-  width: 100%;
-}
-.team-member:hover:not(:disabled) {
-  background: var(--raised-hover);
-}
-.team-chat {
-  display: grid;
-  gap: 8px;
-}
-.team-message {
-  border-left: 2px solid var(--line-strong);
-  display: grid;
-  gap: 2px;
-  padding-left: 8px;
-}
-.team-message[data-author="user"] {
-  border-left-color: var(--accent);
-}
-.team-message[data-author="daedalus"] {
-  border-left-color: var(--line);
-}
-.team-message-head {
-  align-items: baseline;
-  color: var(--muted);
+.ability-page-actions {
   display: flex;
-  font-size: 11px;
+  gap: 6px;
+}
+.ability-page-error {
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  flex-basis: 100%;
+  font-size: 12px;
+  margin: 0;
+  padding: 8px 10px;
+}
+.ability-page-empty,
+.ability-page-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+.ability-page-howto {
+  align-items: center;
+  background: var(--accent-wash);
+  border-radius: 8px;
+  color: var(--secondary);
+  display: flex;
+  flex: none;
+  font-size: 12px;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 0;
+  padding: 8px 12px;
+}
+.ability-page-howto button {
+  flex: none;
+  font-size: 11px !important;
+  padding: 2px 8px !important;
+}
+/* An inline field: reads as text until focused, then as an input. */
+.ability-page-field {
+  display: flex;
+  flex: none;
+  flex-direction: column;
   gap: 4px;
 }
-.team-message-head strong {
-  color: var(--secondary);
-  font-size: 11px;
-}
-.team-message-head small {
-  margin-left: auto;
-}
-.team-message-cloud {
-  color: var(--accent);
-}
-.team-message p {
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.45;
+.ability-page-field label,
+.ability-page-section h3,
+.team-page-members h3 {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
   margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
+  text-transform: uppercase;
 }
-.team-composer {
-  display: grid;
+.ability-page-field textarea {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-left: -8px;
+  padding: 4px 8px;
+  resize: none;
+  width: calc(100% + 8px);
+}
+.ability-page-field textarea:hover {
+  background: var(--raised);
+}
+.ability-page-field textarea:focus {
+  background: var(--raised);
+  border-color: var(--accent);
+  outline: none;
+}
+.ability-page-field-actions {
+  display: flex;
   gap: 6px;
+  justify-content: flex-end;
 }
-.team-composer textarea {
+.ability-page-scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 22px;
+}
+.ability-page-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Routines: one row per routine; a row opens to its prompt and limits. */
+.routines-table {
+  border-collapse: collapse;
   font-size: 12px;
-  resize: vertical;
   width: 100%;
 }
-.team-composer button {
-  justify-self: end;
-}
-.team-composer-warning {
-  color: var(--warning, #f0b44c);
-  font-size: 11px;
-}
-.routines-panel-howto {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--secondary);
-  display: grid;
-  font-size: 12px;
-  gap: 6px;
-  justify-items: start;
-  line-height: 1.45;
-  margin: 0;
-  padding: 10px 12px;
-}
-.routines-panel-howto button {
-  background: none;
-  border: 0;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 0;
-}
-.routines-panel-howto button:hover:not(:disabled) {
-  background: none;
-  text-decoration: underline;
-}
-.routine-row-prompt summary {
+.routines-table th {
+  border-bottom: 1px solid var(--line);
   color: var(--muted);
-  cursor: pointer;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  padding: 0 10px 6px;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
-.routine-row-prompt pre {
-  background: var(--surface, rgb(0 0 0 / 0.2));
-  border: 1px solid var(--line);
+.routines-table td {
+  border-bottom: 1px solid var(--line);
+  color: var(--secondary);
+  padding: 8px 10px;
+  vertical-align: middle;
+}
+.routines-table th:first-child,
+.routines-table td:first-child {
+  padding-left: 2px;
+}
+.routine-row td:not(:first-child) {
+  white-space: nowrap;
+}
+.routines-table .routine-row-detail td {
+  padding: 0 10px 12px 22px;
+}
+.routine-row:hover td {
+  background: var(--raised);
+}
+.routine-row[data-open="true"] td {
+  border-bottom-color: transparent;
+}
+.routine-row[data-enabled="false"] td {
+  color: var(--muted);
+}
+.routine-row[data-enabled="false"] strong {
+  color: var(--muted);
+}
+.routine-row[data-failing="true"] td:first-child {
+  box-shadow: inset 2px 0 var(--danger);
+}
+.routine-row-name {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: var(--text) !important;
+  display: inline-flex;
+  font-size: 13px !important;
+  gap: 6px;
+  min-height: 0 !important;
+  padding: 0 0 0 6px !important;
+  text-align: left;
+}
+.routine-row-name strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.routine-row-caret {
+  color: var(--muted);
+  display: inline-block;
+  transition: transform 120ms ease;
+  width: 8px;
+}
+.routine-row[data-open="true"] .routine-row-caret {
+  transform: rotate(90deg);
+}
+.routine-row-failures {
+  color: var(--danger);
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+  padding-left: 20px;
+}
+.routine-row-last {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+.routine-row-muted {
+  color: var(--muted);
+}
+.routine-row-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.routine-row-actions button {
+  font-size: 11px !important;
+  padding: 3px 9px !important;
+}
+.routine-row-detail td {
+  padding: 0 10px 12px 22px;
+}
+.routine-row-detail p {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0 0 6px;
+}
+.routine-row-detail pre {
+  background: var(--panel);
   border-radius: 6px;
   color: var(--secondary);
   font-size: 11px;
   line-height: 1.5;
-  margin: 6px 0 0;
-  max-height: 220px;
+  margin: 0;
+  max-height: 260px;
   overflow: auto;
   padding: 8px 10px;
   white-space: pre-wrap;
-  word-break: break-word;
 }
-.routines-panel-purpose {
-  display: grid;
-  gap: 6px;
-  justify-items: end;
-}
-.routines-panel-purpose label {
-  display: grid;
-  gap: 3px;
-  width: 100%;
-}
-.routines-panel-purpose strong {
-  color: var(--secondary);
-  font-size: 12px;
-}
-.routines-panel-purpose small,
-.routines-panel-empty {
-  color: var(--muted);
+.routine-chip {
+  border-radius: 999px;
+  display: inline-block;
   font-size: 11px;
-  line-height: 1.4;
-  margin: 0;
+  line-height: 1;
+  padding: 3px 8px;
+  background: var(--raised-hover);
+  color: var(--secondary);
 }
-.routines-panel-purpose textarea {
-  font: inherit;
-  font-size: 12px;
-  margin-top: 4px;
-  resize: vertical;
+.routine-chip[data-tone="good"] {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
 }
-.routines-panel-error {
+.routine-chip[data-tone="bad"] {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--danger);
-  font-size: 12px;
-  margin: 0;
 }
-.routines-panel-list {
-  display: grid;
-  gap: 6px;
+.routine-chip[data-tone="busy"] {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+.routine-runs {
+  display: flex;
+  flex-direction: column;
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.routines-panel-list li {
+.routine-runs li {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  font-size: 12px;
+  gap: 10px;
+  grid-template-columns: 96px minmax(80px, 160px) 1fr auto;
+  padding: 7px 2px;
+}
+.routine-runs li .routine-chip {
+  justify-self: start;
+}
+.routine-runs strong {
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routine-run-summary {
+  color: var(--secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routine-runs time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Team: members down the left, the chat beside them. */
+.team-page-body {
+  display: grid;
+  flex: 1;
+  gap: 18px;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  min-height: 0;
+}
+.team-page-members {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 18px;
+}
+.team-page-members ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.team-member-card {
+  background: transparent !important;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  font-weight: 400;
+  gap: 1px;
+  padding: 7px 9px;
+  text-align: left;
+  width: 100%;
+  --dot: var(--muted);
+}
+.team-member-card:hover {
+  background: var(--raised) !important;
+  border-color: var(--line);
+}
+.team-member-card[data-tone="live"] {
+  --dot: var(--success);
+}
+.team-member-card[data-tone="failing"] {
+  --dot: var(--danger);
+}
+.team-member-card[data-tone="off"] {
+  opacity: 0.55;
+}
+.team-member-line {
+  align-items: center;
+  display: flex;
+  font-size: 13px;
+  gap: 6px;
+}
+.team-member-dot {
+  background: var(--dot);
+  border-radius: 50%;
+  flex: none;
+  height: 7px;
+  width: 7px;
+}
+.team-member-card small {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  padding-left: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-member-card[data-tone="failing"] .team-member-state {
+  color: var(--danger);
+  white-space: normal;
+}
+.team-member-unread {
+  background: var(--accent);
+  border-radius: 999px;
+  color: white;
+  font-size: 10px;
+  font-weight: 650;
+  margin-left: auto;
+  min-width: 16px;
+  padding: 1px 5px;
+  text-align: center;
+}
+.team-tag {
+  background: var(--raised-hover);
+  border-radius: 999px;
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 7px;
+}
+.team-page-chat {
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-left: 18px;
+}
+.team-chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 12px 0;
+}
+.team-message {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.team-message-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.team-message-head strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.team-message[data-author="user"] .team-message-head strong {
+  color: var(--accent);
+}
+.team-message[data-author="daedalus"] .team-message-head strong {
+  color: var(--muted);
+}
+.team-message-head time {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: auto;
+}
+.team-message-cloud {
+  color: var(--muted);
+  font-size: 11px;
+}
+.team-message p {
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.team-message[data-author="daedalus"] p {
+  color: var(--muted);
+  font-size: 12px;
+}
+.team-message[data-folded="true"] p {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  display: -webkit-box;
+  overflow: hidden;
+}
+.team-message-more {
+  align-self: flex-start;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: var(--accent) !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+}
+.team-message-more:hover {
+  text-decoration: underline;
+}
+.team-composer {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0 16px;
+}
+.team-composer textarea {
   background: var(--raised);
   border: 1px solid var(--line);
   border-radius: 8px;
-  display: grid;
-  gap: 3px;
-  padding: 8px 10px;
-}
-.routines-panel-list li[data-enabled="false"] {
-  opacity: 0.6;
-}
-.routines-panel-list li[data-failing="true"] {
-  border-color: rgb(255 137 135 / 0.5);
-}
-.routine-row-head {
-  align-items: baseline;
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-}
-.routine-row-head strong {
+  box-sizing: border-box;
+  color: var(--text);
+  font: inherit;
   font-size: 13px;
+  padding: 8px 10px;
+  resize: vertical;
+  width: 100%;
 }
-.routine-row-head code {
-  color: var(--muted);
-  font-size: 11px;
+.team-composer textarea:focus {
+  border-color: var(--accent);
+  outline: none;
 }
-.routine-row-meta {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-.routine-row-failures {
-  color: var(--danger);
-  font-size: 11px;
-}
-.routine-row-actions {
+.team-composer-row {
+  align-items: center;
   display: flex;
-  gap: 4px;
+  gap: 10px;
   justify-content: flex-end;
 }
-.routine-row-actions button {
-  font-size: 11px !important;
-  padding: 3px 8px !important;
+.team-composer-warning {
+  color: var(--danger);
+  font-size: 11px;
+  margin-right: auto;
+}
+.team-composer-hint {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 /* A routine report's strip on a board card */

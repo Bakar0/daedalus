@@ -85,7 +85,31 @@ export interface EditorAreaHandle {
   openWorkflows(): void;
   /** Shows the Custom instructions tab, adding it first if it is not open. */
   openInstructions(): void;
+  /** Shows a team's tab, adding it first if it is not open. */
+  openTeam(teamId: string, name: string): void;
+  /** Shows a session's Routines tab, adding it first if it is not open. */
+  openRoutines(sessionId: string, name: string): void;
+  /**
+   * Closes every Team tab whose team is not in `teams` and every Routines
+   * tab whose session is not in `routines`, including tabs the saved layout
+   * brought back for something that has since gone.
+   */
+  closeAbilityTabsExcept(keep: {
+    teams: ReadonlySet<string>;
+    routines: ReadonlySet<string>;
+  }): void;
 }
+
+/** The tabs the app draws rather than the editor. */
+type AppPanelKind =
+  | "session"
+  | "task"
+  | "web"
+  | "terminal"
+  | "workflows"
+  | "instructions"
+  | "team"
+  | "routines";
 
 /** What a center tab holds, for the app to follow which one is in front. */
 export type CenterPanelKind =
@@ -95,7 +119,9 @@ export type CenterPanelKind =
   | "web"
   | "terminal"
   | "workflows"
-  | "instructions";
+  | "instructions"
+  | "team"
+  | "routines";
 
 export interface EditorAreaProps {
   client: DesktopClient;
@@ -121,6 +147,12 @@ export interface EditorAreaProps {
   renderWorkflows?(): React.ReactNode;
   /** The Custom instructions tab's content, drawn by the app. */
   renderInstructions?(): React.ReactNode;
+  /** A team tab's content, drawn by the app; `visible` while in front. */
+  renderTeam?(teamId: string, visible: boolean): React.ReactNode;
+  /** A session's Routines tab content, drawn by the app. */
+  renderRoutines?(sessionId: string): React.ReactNode;
+  /** The current name for a Team or Routines tab, so renames show. */
+  abilityTabName?(kind: "team" | "routines", id: string): string | undefined;
   /** The + in the tab strip: a new terminal in a tab. */
   onNewTerminal?(): void;
   /** A terminal tab was closed by the user, so its shell should end. */
@@ -139,11 +171,15 @@ interface FilePanelParams {
   /** Empty on the session, task and web tabs. */
   path: string;
   /** Set on the session, task, web and terminal tabs. */
-  kind?: "session" | "task" | "web" | "terminal" | "workflows" | "instructions";
+  kind?: AppPanelKind;
   /** The page a web tab shows. */
   url?: string;
   /** The integrated terminal a terminal tab shows, and its name. */
   terminalId?: string;
+  /** The team a team tab shows. */
+  teamId?: string;
+  /** The session a Routines tab shows. */
+  sessionId?: string;
   title?: string;
   preview?: boolean;
   mode?: "edit" | "preview";
@@ -186,6 +222,9 @@ interface EditorContextValue {
   renderTerminal?(terminalId: string): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
+  renderTeam?(teamId: string, visible: boolean): React.ReactNode;
+  renderRoutines?(sessionId: string): React.ReactNode;
+  abilityTabName?(kind: "team" | "routines", id: string): string | undefined;
   onNewTerminal?(): void;
   onOpenExternal?(url: string): void;
   load(path: string): Promise<OpenDocument | undefined>;
@@ -278,6 +317,9 @@ export default function EditorArea({
   renderTerminal,
   renderWorkflows,
   renderInstructions,
+  renderTeam,
+  renderRoutines,
+  abilityTabName,
   onNewTerminal,
   onTerminalTabClosed,
   onOpenExternal,
@@ -628,6 +670,35 @@ export default function EditorArea({
             "Custom instructions",
           ),
         ),
+      openTeam: (teamId, name) =>
+        whenReady(() =>
+          placeApp(
+            `team:${teamId}`,
+            { path: "", kind: "team", teamId, title: name },
+            name,
+          ),
+        ),
+      openRoutines: (sessionId, name) =>
+        whenReady(() =>
+          placeApp(
+            `routines:${sessionId}`,
+            { path: "", kind: "routines", sessionId, title: name },
+            name,
+          ),
+        ),
+      closeAbilityTabsExcept: (keep) =>
+        whenReady(() => {
+          for (const panel of [...(apiRef.current?.panels ?? [])]) {
+            const params = panel.params as FilePanelParams | undefined;
+            if (
+              (params?.kind === "team" &&
+                !keep.teams.has(params.teamId ?? "")) ||
+              (params?.kind === "routines" &&
+                !keep.routines.has(params.sessionId ?? ""))
+            )
+              panel.api.close();
+          }
+        }),
       closeTerminal: (terminalId) =>
         whenReady(() =>
           apiRef.current?.getPanel(`terminal:${terminalId}`)?.api.close(),
@@ -795,6 +866,9 @@ export default function EditorArea({
     renderTerminal,
     renderWorkflows,
     renderInstructions,
+    renderTeam,
+    renderRoutines,
+    abilityTabName,
     onNewTerminal,
     onOpenExternal,
     load,
@@ -826,6 +900,8 @@ export default function EditorArea({
             terminal: TerminalPanel,
             workflows: WorkflowsPanel,
             instructions: InstructionsPanel,
+            team: TeamPanel,
+            routines: RoutinesPanel,
           }}
           dndStrategy="pointer"
           getTabContextMenuItems={({ panel, group, api }) =>
@@ -1041,7 +1117,11 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
             ? "Workflows"
             : params.kind === "instructions"
               ? "Custom instructions"
-              : (params.url ?? "Web");
+              : params.kind === "team"
+                ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
+                : params.kind === "routines"
+                  ? `Routines · ${context.abilityTabName?.("routines", params.sessionId ?? "") ?? params.title ?? ""}`
+                  : (params.url ?? "Web");
   return (
     <div
       className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
@@ -1076,11 +1156,7 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
   );
 }
 
-function AppTabIcon({
-  kind,
-}: {
-  kind: "session" | "task" | "web" | "terminal" | "workflows" | "instructions";
-}) {
+function AppTabIcon({ kind }: { kind: AppPanelKind }) {
   return (
     <svg
       aria-hidden="true"
@@ -1096,6 +1172,10 @@ function AppTabIcon({
         <path d={WORKFLOW_ICON_PATH} />
       ) : kind === "instructions" ? (
         <path d={INSTRUCTIONS_ICON_PATH} />
+      ) : kind === "team" ? (
+        <path d="M5.5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM1.5 13c0-2.2 1.8-4 4-4s4 1.8 4 4M11 7.5a1.75 1.75 0 1 0 0-3.5M11.5 9.2c1.7.3 3 1.8 3 3.8" />
+      ) : kind === "routines" ? (
+        <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM8 4.5V8l2.5 1.5" />
       ) : (
         <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM1.5 8h13M8 1.5c2 2 2 11 0 13M8 1.5c-2 2-2 11 0 13" />
       )}
@@ -1124,6 +1204,33 @@ function InstructionsPanel() {
   return (
     <div className="app-panel workflows-panel">
       {context.renderInstructions?.()}
+    </div>
+  );
+}
+
+function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
+  const context = useEditorContext();
+  // The tab reads the chat on a timer, so it stops while out of sight.
+  const [visible, setVisible] = useState(api.isVisible);
+  useEffect(() => {
+    setVisible(api.isVisible);
+    const subscription = api.onDidVisibilityChange((event) =>
+      setVisible(event.isVisible),
+    );
+    return () => subscription.dispose();
+  }, [api]);
+  return (
+    <div className="app-panel ability-panel">
+      {params.teamId && context.renderTeam?.(params.teamId, visible)}
+    </div>
+  );
+}
+
+function RoutinesPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel ability-panel">
+      {params.sessionId && context.renderRoutines?.(params.sessionId)}
     </div>
   );
 }

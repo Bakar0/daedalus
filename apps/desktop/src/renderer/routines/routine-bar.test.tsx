@@ -6,7 +6,7 @@ import type {
   RoutinesStatusDto,
 } from "@daedalus/protocol";
 import { clockLabel, RoutineBar, routineBarText } from "./RoutineBar";
-import { RoutinesPanel } from "./RoutinesPanel";
+import { RoutinesView, scheduleLabel } from "./RoutinesPanel";
 import { SessionMenu } from "../SessionMenu";
 
 const now = Date.parse("2026-10-04T10:00:00Z");
@@ -138,7 +138,7 @@ describe("the routine bar", () => {
   });
 });
 
-describe("the Routines panel", () => {
+describe("the Routines tab", () => {
   const detail: RoutinesDetailDto = {
     purpose: "Keep main green",
     routines: [
@@ -183,32 +183,60 @@ describe("the Routines panel", () => {
       },
     ],
     templates: [],
-    runs: [],
+    runs: [
+      {
+        id: 5,
+        routine: "ci-health",
+        status: "done",
+        queuedAt: at(-1300),
+        deliveredAt: at(-1290),
+        startedAt: at(-1280),
+        finishedAt: at(-1200),
+        outcome: "task",
+        summary: "main is red on lint",
+        missedMs: 0,
+      },
+    ],
   };
 
   test("shows the purpose, schedules, last runs and failures", () => {
     const html = renderToStaticMarkup(
-      <RoutinesPanel
+      <RoutinesView
+        actions={{
+          runNow: () => {},
+          setEnabled: () => {},
+          savePurpose: () => {},
+          togglePause: () => {},
+        }}
         busy={false}
         detail={detail}
         error={undefined}
         now={now}
-        onClose={() => {}}
-        onRunNow={() => {}}
-        onSavePurpose={() => {}}
-        onSetEnabled={() => {}}
+        sessionId="session-1"
         sessionName="Argus"
+        status={status({ paused: true })}
       />,
     );
     expect(html).toContain("Keep main green");
-    expect(html).toContain("2 routines");
-    expect(html).toContain("next in 5m");
-    expect(html).toContain("failed 10m ago");
+    expect(html).toContain("1 of 2 on · paused");
+    expect(html).toContain("Every 15 min");
+    expect(html).toContain("in 5m");
+    expect(html).toContain('data-tone="bad">failed</span>10m ago');
     expect(html).toContain("3 failures in a row: timed out");
     expect(html).toContain('data-failing="true"');
-    expect(html).toContain("never run");
+    expect(html).toContain("Never run");
+    expect(html).toContain("Resume");
     expect(html).toContain("Enable");
     expect(html).toContain("Disable");
+    expect(html).toContain("Recent runs");
+    expect(html).toContain("main is red on lint");
+  });
+
+  test("says a schedule in words when it can", () => {
+    expect(scheduleLabel("every 15m")).toBe("Every 15 min");
+    expect(scheduleLabel("every 1h")).toBe("Every hour");
+    expect(scheduleLabel("every 2d")).toBe("Every 2 days");
+    expect(scheduleLabel('cron "0 9 * * 1-5"')).toBe('cron "0 9 * * 1-5"');
   });
 });
 

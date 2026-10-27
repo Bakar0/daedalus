@@ -10,7 +10,7 @@ import type { SqliteRepositories } from "../repositories";
 import { TEAM_FILE, TEAM_SKILL, type AbilityService } from "./abilities";
 import type { ActivityService } from "./activity";
 import type { AgentService } from "./agents";
-import { cloudAuthorMark, indentBody, isCloudSession } from "./cloud-mark";
+import { cloudAuthorMark, isCloudSession, splitLines } from "./cloud-mark";
 import { sessionBaseName } from "./providers";
 import type { TeamTransport } from "./team-transport";
 
@@ -101,16 +101,34 @@ export function parseTags(body: string): string[] {
 
 /**
  * Teams: a lead holding the orchestration ability, its members, and the one
- * chat they share. Every message is stored; the ones that tag a session are
- * pushed into it through the provider's own inbox right away, from whichever
- * process posted them, so nothing waits on the desktop app.
+ * chat they share. Every message is stored; a session a message tags gets a
+ * one-line notice through the provider's own inbox right away, from whichever
+ * process posted it, so nothing waits on the desktop app. The session reads
+ * the message itself with `daedal team chat --tagged`.
  */
+/** Whether a message tags this reader, who did not write it. */
+const tagsReader = (message: TeamMessage, reader: string): boolean =>
+  message.tags.includes(reader) && message.author !== reader;
+
+/** A message's time as `team chat` prints it: `14:05`, local. */
+const clockTime = (iso: string): string => {
+  const date = new Date(iso);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
 /**
- * One message as a session reads it. Every body line after the first is
- * indented, so only a header starts a line with `[team ` (N-1).
+ * One message as `team chat` prints it: a header line, then every line of
+ * the body indented under it, so no body line can pass for a header (N-1).
  */
-export function teamBlock(team: string, author: string, body: string): string {
-  return `[team "${team}"] ${author}: ${indentBody(body)}`;
+export function teamChatText(message: TeamMessage, author: string): string {
+  const tags = message.tags.length
+    ? ` → ${message.tags.map((tag) => `@${tag}`).join(" ")}`
+    : "";
+  const body = splitLines(message.body)
+    .map((line) => `  ${line}`)
+    .join("\n");
+  return `#${message.id} ${clockTime(message.createdAt)} ${author}${tags}\n${body}`;
 }
 
 export class TeamService {
@@ -339,6 +357,8 @@ export class TeamService {
       teamId: team.id,
       handle,
       readThrough: 0,
+      // Tags from before it joined were for someone else with its handle.
+      taggedReadThrough: joinedAfter,
       deliveredThrough: joinedAfter,
       lastError: null,
       lastAttemptAt: null,
@@ -493,8 +513,8 @@ export class TeamService {
   }
 
   /**
-   * Sends one reader everything that tags it since its last delivery, as one
-   * message, with a count of what else is new in the chat. The cursor moves
+   * Tells one reader what tags it since its last delivery, as one line that
+   * points it at the chat. The cursor moves
    * before the send, inside a write lock, so two processes never send the
    * same messages; a failed send moves it back and records why.
    */
@@ -550,7 +570,7 @@ export class TeamService {
     try {
       await this.transport.deliver({
         session: await this.agents.recoverCodexThread(reader.session),
-        text: this.deliveryText(team, reader, claim.pending),
+        text: this.deliveryText(team, claim.pending),
         from: this.deliveryFrom(team, claim.pending),
       });
       this.repositories.teams.saveCursor({
@@ -578,30 +598,24 @@ export class TeamService {
     }
   }
 
-  private deliveryText(
-    team: Team,
-    reader: TeamReader,
-    pending: TeamMessage[],
-  ): string {
+  /**
+   * One line that says what is waiting and the command that reads it. The
+   * messages themselves stay in the chat: the session reads them with
+   * `daedal team chat`, which both providers show as a folded command call
+   * rather than a wall of text in the conversation. `--tagged` prints only
+   * what tags the session, so a busy chat costs it nothing extra.
+   */
+  private deliveryText(team: Team, pending: TeamMessage[]): string {
     const label = this.authorLabels(team);
-    const blocks = pending.map((message) =>
-      teamBlock(team.name, label(message.author), message.body),
+    const authors = [...new Set(pending.map((message) => message.author))].map(
+      label,
     );
-    const delivered = new Set(pending.map((message) => message.id));
-    const cursor = this.repositories.teams.cursor(team.id, reader.handle);
-    const others = this.repositories.teams
-      .messages(team.id, cursor.readThrough)
-      .filter(
-        (message) =>
-          !delivered.has(message.id) &&
-          !message.tags.includes(reader.handle) &&
-          message.author !== reader.handle,
-      ).length;
-    if (others)
-      blocks.push(
-        `(${others} other new message${others === 1 ? "" : "s"} in the team chat; run 'daedal team chat' to read ${others === 1 ? "it" : "them"}.)`,
-      );
-    return blocks.join("\n\n");
+    const count = pending.length;
+    const from =
+      authors.length === 1
+        ? authors[0]!
+        : `${authors.slice(0, -1).join(", ")} and ${authors.at(-1)!}`;
+    return `[team "${team.name}"] ${count} new ${count === 1 ? "message" : "messages"} for you from ${from}. Read ${count === 1 ? "it" : "them"} with: daedal team chat --tagged`;
   }
 
   private deliveryFrom(team: Team, pending: TeamMessage[]): string {
@@ -614,22 +628,60 @@ export class TeamService {
   /**
    * What a reader has not read yet, oldest first, and moves its read marker
    * to the newest message. `all` shows the newest messages whatever was read.
+   * `tagged` shows only unread messages that tag the reader and moves only
+   * their marker, so the rest of the chat stays unread for a full read.
    */
   chat(
     reference: string,
     reader: string,
-    options: { all?: boolean; limit?: number } = {},
-  ): { team: Team; messages: TeamMessage[]; skipped: number } {
+    options: { all?: boolean; tagged?: boolean; limit?: number } = {},
+  ): {
+    team: Team;
+    messages: TeamMessage[];
+    skipped: number;
+    /** For `tagged`: unread messages that do not tag the reader. */
+    others?: number;
+  } {
     const team = this.get(reference);
     const limit = Math.max(1, options.limit ?? CHAT_LIMIT);
     const cursor = this.repositories.teams.cursor(team.id, reader);
+    if (options.tagged) {
+      const after = this.repositories.teams.messages(
+        team.id,
+        cursor.readThrough,
+      );
+      const unread = after.filter(
+        (message) =>
+          message.id > cursor.taggedReadThrough && tagsReader(message, reader),
+      );
+      const others = after.filter(
+        (message) => message.author !== reader && !tagsReader(message, reader),
+      ).length;
+      const messages = unread.slice(-limit);
+      const last = unread.at(-1);
+      if (last)
+        this.repositories.teams.markRead(team.id, reader, "tagged", last.id);
+      return {
+        team,
+        messages,
+        skipped: unread.length - messages.length,
+        others,
+      };
+    }
+    // A tagged message read with --tagged is not printed again.
     const unread = options.all
       ? this.repositories.teams.recentMessages(team.id, limit)
-      : this.repositories.teams.messages(team.id, cursor.readThrough);
+      : this.repositories.teams
+          .messages(team.id, cursor.readThrough)
+          .filter(
+            (message) =>
+              message.id > cursor.taggedReadThrough ||
+              !tagsReader(message, reader),
+          );
     const messages = unread.slice(-limit);
     const last = this.repositories.teams.lastMessageId(team.id);
     if (last > cursor.readThrough)
-      this.repositories.teams.saveCursor({ ...cursor, readThrough: last });
+      this.repositories.teams.markRead(team.id, reader, "read", last);
     return {
       team,
       messages,
@@ -656,7 +708,12 @@ export class TeamService {
         ...reader,
         unread: messages.filter(
           (message) =>
-            message.id > cursor.readThrough && message.author !== reader.handle,
+            message.id > cursor.readThrough &&
+            message.author !== reader.handle &&
+            !(
+              message.id <= cursor.taggedReadThrough &&
+              tagsReader(message, reader.handle)
+            ),
         ).length,
         undelivered: messages.filter(
           (message) =>

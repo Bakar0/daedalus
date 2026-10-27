@@ -147,8 +147,8 @@ import {
 } from "./SessionMenu";
 import { useCloudState } from "./CloudPanel";
 import { RoutineBar } from "./routines/RoutineBar";
-import { TeamBar, TeamPanel } from "./teams/TeamPanel";
-import { RoutinesPanel } from "./routines/RoutinesPanel";
+import { TeamBar, TeamPage } from "./teams/TeamPanel";
+import { RoutinesPage } from "./routines/RoutinesPanel";
 import { ProBadge } from "./ProPlan";
 import { useMutation, useRpcQuery } from "./use-rpc";
 import { RemoteMenu } from "./RemoteMenu";
@@ -2304,18 +2304,6 @@ export function WorkspaceApp({
   }>({ name: "" });
   /** The workflows the session dialog offers, read when it opens. */
   const [workflowNames, setWorkflowNames] = useState<string[]>([]);
-  // The Routines drawer on the selected session, and what it last read.
-  const [routinesPanel, setRoutinesPanel] = useState<{
-    sessionId: string;
-    detail?: RoutinesDetailDto;
-    error?: string;
-  }>();
-  // The Team drawer: the team, and what it last read.
-  const [teamPanel, setTeamPanel] = useState<{
-    teamId: string;
-    detail?: TeamDetailDto;
-    error?: string;
-  }>();
   const [sessionLaunches, setSessionLaunches] = useState<SessionLaunchState[]>(
     initialSessionLaunches,
   );
@@ -3561,34 +3549,23 @@ export function WorkspaceApp({
     (status) => status.sessionId === activeSession?.id,
   );
   const activeSessionTeam = activeSession ? teamOf(activeSession) : undefined;
-  // The drawer reads its runs on request, so it reads again whenever the
-  // session's routine status moves: a run went in, finished or was queued.
-  const openRoutinesStatus =
-    routinesPanel &&
-    snapshot?.routines.find(
-      (status) => status.sessionId === routinesPanel.sessionId,
+  // A Team or Routines tab goes once its team or routines do, however that
+  // happened: revoked here or from the CLI, or its session archived.
+  const teamIds = (snapshot?.teams ?? []).map((team) => team.id).join(" ");
+  const routineSessionIds = (snapshot?.routines ?? [])
+    .map((status) => status.sessionId)
+    .join(" ");
+  const snapshotLoaded = Boolean(snapshot);
+  useEffect(() => {
+    if (!snapshotLoaded) return;
+    const ids = (text: string) => new Set(text ? text.split(" ") : []);
+    files.withEditor((handle) =>
+      handle.closeAbilityTabsExcept({
+        teams: ids(teamIds),
+        routines: ids(routineSessionIds),
+      }),
     );
-  const openRoutinesFingerprint = openRoutinesStatus
-    ? JSON.stringify([
-        openRoutinesStatus.waiting.map((run) => run.runId),
-        openRoutinesStatus.running,
-        openRoutinesStatus.paused,
-        openRoutinesStatus.nextRun,
-        openRoutinesStatus.routines,
-      ])
-    : undefined;
-  useEffect(() => {
-    if (routinesPanel && openRoutinesFingerprint)
-      void loadRoutinesDetail(routinesPanel.sessionId);
-  }, [openRoutinesFingerprint]);
-  // The chat moves without the snapshot knowing, so the open drawer reads
-  // again every few seconds.
-  const openTeamId = teamPanel?.teamId;
-  useEffect(() => {
-    if (!openTeamId) return;
-    const timer = setInterval(() => void loadTeamDetail(openTeamId), 4_000);
-    return () => clearInterval(timer);
-  }, [openTeamId]);
+  }, [files, snapshotLoaded, teamIds, routineSessionIds]);
   const activeSessionWorkspace = activeSession
     ? workspaceById.get(activeSession.workspaceId)
     : undefined;
@@ -4645,33 +4622,6 @@ export function WorkspaceApp({
         granted,
       }),
     );
-    if (!granted && routinesPanel?.sessionId === session.id)
-      setRoutinesPanel(undefined);
-  }
-
-  async function loadRoutinesDetail(sessionId: string) {
-    try {
-      const response = await client.request.routinesDetail({ sessionId });
-      setRoutinesPanel((current) =>
-        current?.sessionId !== sessionId
-          ? current
-          : response.ok
-            ? { sessionId, detail: response.data }
-            : { sessionId, error: response.error.message },
-      );
-    } catch (cause) {
-      setRoutinesPanel((current) =>
-        current?.sessionId === sessionId
-          ? { sessionId, error: errorMessage(cause) }
-          : current,
-      );
-    }
-  }
-
-  function openRoutinesPanel(sessionId: string) {
-    setTeamPanel(undefined);
-    setRoutinesPanel({ sessionId });
-    void loadRoutinesDetail(sessionId);
   }
 
   async function setOrchestrationAbility(
@@ -4695,43 +4645,21 @@ export function WorkspaceApp({
         granted,
       }),
     );
-    if (!granted) setTeamPanel(undefined);
   }
 
-  async function loadTeamDetail(teamId: string) {
-    try {
-      const response = await client.request.teamDetail({ teamId });
-      setTeamPanel((current) =>
-        current?.teamId !== teamId
-          ? current
-          : response.ok
-            ? { teamId, detail: response.data }
-            : { teamId, error: response.error.message },
-      );
-    } catch (cause) {
-      setTeamPanel((current) =>
-        current?.teamId === teamId
-          ? { teamId, error: errorMessage(cause) }
-          : current,
-      );
-    }
+  /** A routines request from the bar; an open tab reads it from the snapshot. */
+  async function routinesAction<T>(operation: Promise<RpcResult<T>>) {
+    return perform(operation);
   }
 
-  function openTeamPanel(teamId: string) {
-    setRoutinesPanel(undefined);
-    setTeamPanel({ teamId });
-    void loadTeamDetail(teamId);
+  function openRoutinesTab(session: AgentSessionDto) {
+    files.withEditor((handle) =>
+      handle.openRoutines(session.id, sessionName(session)),
+    );
   }
 
-  /** A routines request from the bar or the drawer, then a fresh drawer. */
-  async function routinesAction<T>(
-    sessionId: string,
-    operation: Promise<RpcResult<T>>,
-  ) {
-    const result = await perform(operation);
-    if (routinesPanel?.sessionId === sessionId)
-      await loadRoutinesDetail(sessionId);
-    return result;
+  function openTeamTab(team: { id: string; name: string }) {
+    files.withEditor((handle) => handle.openTeam(team.id, team.name));
   }
 
   async function restoreSession(session: AgentSessionDto) {
@@ -6268,14 +6196,9 @@ export function WorkspaceApp({
         <RoutineBar
           busy={busy}
           color={activeSession.color}
-          onOpenPanel={() =>
-            routinesPanel?.sessionId === activeSession.id
-              ? setRoutinesPanel(undefined)
-              : openRoutinesPanel(activeSession.id)
-          }
+          onOpenPanel={() => openRoutinesTab(activeSession)}
           onRunNow={() =>
             void routinesAction(
-              activeSession.id,
               client.request.routineRunNow({
                 sessionId: activeSession.id,
               }),
@@ -6283,7 +6206,6 @@ export function WorkspaceApp({
           }
           onTogglePause={() =>
             void routinesAction(
-              activeSession.id,
               client.request.routinesControl({
                 sessionId: activeSession.id,
                 action: activeSessionRoutines.paused ? "resume" : "pause",
@@ -6306,11 +6228,7 @@ export function WorkspaceApp({
                 item.teamId === activeSessionTeam.team.id && !item.archivedAt,
             ).length
           }
-          onOpenPanel={() =>
-            teamPanel?.teamId === activeSessionTeam.team.id
-              ? setTeamPanel(undefined)
-              : openTeamPanel(activeSessionTeam.team.id)
-          }
+          onOpenPanel={() => openTeamTab(activeSessionTeam.team)}
           role={activeSessionTeam.role}
           team={activeSessionTeam.team}
         />
@@ -6357,77 +6275,6 @@ export function WorkspaceApp({
               />
             ) : null;
           })()}
-          {activeSessionRoutines &&
-            routinesPanel?.sessionId === activeSession.id && (
-              <RoutinesPanel
-                busy={busy}
-                detail={routinesPanel.detail}
-                error={routinesPanel.error}
-                now={now}
-                onClose={() => setRoutinesPanel(undefined)}
-                onRunNow={(name) =>
-                  void routinesAction(
-                    activeSession.id,
-                    client.request.routineRunNow({
-                      sessionId: activeSession.id,
-                      name,
-                    }),
-                  )
-                }
-                onSavePurpose={(purpose) =>
-                  void routinesAction(
-                    activeSession.id,
-                    client.request.routinesPurpose({
-                      sessionId: activeSession.id,
-                      purpose,
-                    }),
-                  )
-                }
-                onSetEnabled={(name, enabled) =>
-                  void routinesAction(
-                    activeSession.id,
-                    client.request.routineSetEnabled({
-                      sessionId: activeSession.id,
-                      name,
-                      enabled,
-                    }),
-                  )
-                }
-                sessionName={sessionName(activeSession)}
-              />
-            )}
-          {activeSessionTeam &&
-            teamPanel?.teamId === activeSessionTeam.team.id && (
-              <TeamPanel
-                busy={busy}
-                detail={teamPanel.detail}
-                error={teamPanel.error}
-                now={now}
-                onClose={() => setTeamPanel(undefined)}
-                onOpenSession={(sessionId) => {
-                  const target = sessionsById.get(sessionId);
-                  if (target) showSession(target.id, target.workspaceId);
-                }}
-                onPost={async (body) => {
-                  const said = await perform(
-                    client.request.teamSay({
-                      teamId: activeSessionTeam.team.id,
-                      body,
-                    }),
-                  );
-                  await loadTeamDetail(activeSessionTeam.team.id);
-                  return said?.warnings;
-                }}
-                onSetGoal={(goal) =>
-                  void perform(
-                    client.request.teamGoal({
-                      teamId: activeSessionTeam.team.id,
-                      goal,
-                    }),
-                  ).then(() => loadTeamDetail(activeSessionTeam.team.id))
-                }
-              />
-            )}
           <TerminalSurface
             activity={activityById.get(activeSession.id)}
             attention={attentionById.get(activeSession.id)}
@@ -7223,6 +7070,42 @@ export function WorkspaceApp({
                 renderInstructions={() => (
                   <InstructionsEditor client={client} onError={setError} />
                 )}
+                abilityTabName={(kind, id) => {
+                  if (kind === "team")
+                    return snapshot?.teams.find((team) => team.id === id)?.name;
+                  const owner = sessionsById.get(id);
+                  return owner ? sessionName(owner) : undefined;
+                }}
+                renderTeam={(teamId, visible) => (
+                  <TeamPage
+                    busy={busy}
+                    client={client}
+                    now={now}
+                    onOpenSession={(sessionId) => {
+                      const target = sessionsById.get(sessionId);
+                      if (target) showSession(target.id, target.workspaceId);
+                    }}
+                    run={perform}
+                    teamId={teamId}
+                    visible={visible}
+                  />
+                )}
+                renderRoutines={(sessionId) => {
+                  const owner = sessionsById.get(sessionId);
+                  return (
+                    <RoutinesPage
+                      busy={busy}
+                      client={client}
+                      now={now}
+                      run={perform}
+                      sessionId={sessionId}
+                      sessionName={owner ? sessionName(owner) : "Session"}
+                      status={snapshot?.routines.find(
+                        (status) => status.sessionId === sessionId,
+                      )}
+                    />
+                  );
+                }}
                 renderTerminal={(terminalId) => {
                   const terminal = integratedTerminals.find(
                     (item) => item.id === terminalId,

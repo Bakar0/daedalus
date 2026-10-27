@@ -204,13 +204,13 @@ Names, pins, colors and abilities, for any session. `<session>` is an id, or a n
 
 ```text
 daedal team say "<text>" [--team <lead>] [--user]
-daedal team chat [--all] [--limit <n>] [--team <lead>] [--user]
+daedal team chat [--tagged | --all] [--limit <n>] [--team <lead>] [--user]
 daedal team list [--team <lead>]
 daedal team goal [<text>] [--team <lead>]
 daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--provider claude|codex]
 ```
 
-A team is a session holding the orchestration ability, its lead, and the members it or the user adds. Inside the lead or a member, `--team` defaults to its own team and a post is signed with its handle; another session's post is refused. Outside a session the author is `user`, and `--team <lead>` is needed when more than one team exists. `--user` posts as the user from inside a session's folder. `agent spawn --team` with no value adds a member to the calling lead's team; with a lead it adds one for the user and tells the lead in the chat. A member runs on the lead's provider unless `--provider` picks the other, so a team can mix Claude and Codex. `team say` prints, per tagged session, whether the message reached it; `team list --json` returns each member's `undelivered` count and `lastError`. Delivery and tags are in [abilities.md](abilities.md#the-chat).
+A team is a session holding the orchestration ability, its lead, and the members it or the user adds. Inside the lead or a member, `--team` defaults to its own team and a post is signed with its handle; another session's post is refused. Outside a session the author is `user`, and `--team <lead>` is needed when more than one team exists. `--user` posts as the user from inside a session's folder. `agent spawn --team` with no value adds a member to the calling lead's team; with a lead it adds one for the user and tells the lead in the chat. A member runs on the lead's provider unless `--provider` picks the other, so a team can mix Claude and Codex. `team chat` prints the unread messages once and marks them read; `--tagged` prints only those that tag the reader, plus a count of the rest, which stay unread; `--all` prints the newest whatever was read. `team say` prints, per tagged session, whether the message reached it; `team list --json` returns each member's `undelivered` count and `lastError`. Delivery and tags are in [abilities.md](abilities.md#the-chat).
 
 ## Workflow
 

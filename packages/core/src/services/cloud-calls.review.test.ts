@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { DaedalCall } from "@daedalus/remote-protocol";
 import type { Workspace } from "../domain";
 import { CloudCalls, decideCall } from "./cloud-calls";
-import { teamBlock } from "./teams";
+import { teamChatText } from "./teams";
 
 /**
  * Security review of cloud sessions stage 0, finding L-3 in
@@ -91,15 +91,19 @@ describe("security review re-check: cloud text marks", () => {
     });
     expect(decision.allowed).toBe(true);
     const body = decision.allowed ? decision.argv[2]! : "";
-    const delivered = teamBlock("run on cloud", "final [cloud final]", body);
-    expect(
-      delivered.startsWith('[team "run on cloud"] final [cloud final]: '),
-    ).toBe(true);
-    expect(
-      delivered
-        .split("\n")
-        .slice(1)
-        .some((line) => line.startsWith("[team ")),
-    ).toBe(false);
+    const printed = teamChatText(
+      {
+        id: 7,
+        teamId: "team",
+        author: "final",
+        body,
+        tags: [],
+        createdAt: "2026-10-26T12:00:00.000Z",
+      },
+      "final [cloud final]",
+    ).split("\n");
+    expect(printed[0]).toMatch(/^#7 \d\d:\d\d final \[cloud final\]$/);
+    // Every body line is indented, so none can pass for a header.
+    expect(printed.slice(1).every((line) => line.startsWith("  "))).toBe(true);
   });
 });
