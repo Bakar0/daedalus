@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
@@ -147,6 +147,76 @@ describe("keybindings.json", () => {
       await keys.set([{ id: "tab.close", keys: [] }]);
       await seen;
       expect(changes).toBe(1);
+    });
+  });
+
+  test("reset all replaces a broken file, keeping it as keybindings.json.bak", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const keys = await service(home);
+      await writeFile(keys.path, '{ "tab.close": [], ');
+      expect((await keys.resetAll()).rejected).toEqual([]);
+      expect(await fileOf(home)).toEqual({});
+      expect(await readFile(`${keys.path}.bak`, "utf8")).toBe(
+        '{ "tab.close": [], ',
+      );
+    });
+  });
+
+  test("a write another process made meanwhile is kept, not overwritten", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await mkdir(home, { recursive: true });
+      const path = keybindingsPath(home);
+      let raced = false;
+      const keys = new KeybindingService(path, {
+        beforeCommit: async () => {
+          if (raced) return;
+          raced = true;
+          // `daedal keys set` from a terminal, between the read and the rename.
+          await writeFile(path, JSON.stringify({ "palette.open": ["mod+p"] }));
+        },
+      });
+      await keys.set([{ id: "tab.close", keys: [] }]);
+      expect(await fileOf(home)).toEqual({
+        "palette.open": ["mod+p"],
+        "tab.close": [],
+      });
+    });
+  });
+
+  test("gives up with a conflict when the file never stops changing", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await mkdir(home, { recursive: true });
+      const path = keybindingsPath(home);
+      let count = 0;
+      const keys = new KeybindingService(path, {
+        beforeCommit: async () => {
+          count += 1;
+          await writeFile(
+            path,
+            JSON.stringify({ "view.board": [`f${count}`] }),
+          );
+        },
+      });
+      await expect(
+        keys.set([{ id: "tab.close", keys: [] }]),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+  });
+
+  test("a symlinked file is written through, and stays a symlink", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const keys = await service(home);
+      const dotfiles = join(home, "dotfiles");
+      await mkdir(dotfiles);
+      const real = join(dotfiles, "keybindings.json");
+      await writeFile(real, "{}\n");
+      await symlink(real, keys.path);
+      await keys.set([{ id: "tab.close", keys: [] }]);
+      expect((await lstat(keys.path)).isSymbolicLink()).toBe(true);
+      expect(JSON.parse(await readFile(real, "utf8"))).toEqual({
+        "tab.close": [],
+      });
+      expect((await keys.read()).overrides).toEqual({ "tab.close": [] });
     });
   });
 });

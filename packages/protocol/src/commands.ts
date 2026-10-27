@@ -2,6 +2,8 @@ import {
   formatAccelerator,
   formatKeyGlyphs,
   normalizeKey,
+  isShellChord,
+  parseKey,
   reservedKeyReason,
 } from "./keys";
 
@@ -485,22 +487,29 @@ export const menuAccelerator = (
   overrides: KeyOverrides = {},
 ): string | undefined => {
   const first = keysOf(spec, overrides)[0];
-  return spec.menu && !spec.menu.showKeyOnly && first
-    ? formatAccelerator(first)
-    : undefined;
+  if (!spec.menu || spec.menu.showKeyOnly || !first) return undefined;
+  // A key that types, or a ⌃ letter, is never a native accelerator: the
+  // item only shows it and the dispatcher keeps it (`isShellChord`).
+  const chord = parseKey(first);
+  if (chord.length === 1 && isShellChord(chord[0]!)) return undefined;
+  return formatAccelerator(first);
 };
 
 /**
- * The glyphs a `showKeyOnly` item writes in its title in place of an
- * accelerator (`⌘W`), so the menu still teaches the key the dispatcher
- * keeps. Undefined for any other item, or one whose key was unbound.
+ * The glyphs a menu item writes in its title when it shows its key without
+ * owning it (`⌘W`): a `showKeyOnly` item, or one whose key a menu cannot
+ * own (a sequence, a key that types, a ⌃ letter). So the menu still teaches
+ * the key the dispatcher keeps. Undefined for an item whose accelerator is
+ * the key, or one whose key was unbound.
  */
 export const menuKeyLabel = (
   spec: CommandSpec,
   overrides: KeyOverrides = {},
 ): string | undefined => {
   const first = keysOf(spec, overrides)[0];
-  return spec.menu?.showKeyOnly && first ? formatKeyGlyphs(first) : undefined;
+  if (!spec.menu || !first || menuAccelerator(spec, overrides))
+    return undefined;
+  return formatKeyGlyphs(first);
 };
 
 /**

@@ -378,6 +378,10 @@ const RESERVED_CHORDS: Record<string, string> = {
   "mod+a": "⌘A is Select All",
   "mod+z": "⌘Z is Undo",
   "shift+mod+z": "⇧⌘Z is Redo",
+  "alt+shift+mod+v": "⌥⇧⌘V is Paste and Match Style",
+  "ctrl+mod+space": "⌃⌘Space opens the emoji picker",
+  "shift+mod+/": "⇧⌘/ searches the Help menu",
+  "mod+?": "⇧⌘/ searches the Help menu",
 };
 
 /**
@@ -403,9 +407,23 @@ export function keyWarning(text: string): string | undefined {
   const written = chordText(first);
   if (written === "mod+q")
     return "⌘Q quits Daedalus everywhere else on a Mac; a slip would quit it here too.";
-  if (first.ctrl && !first.mod && !first.alt && /^[a-z]$/.test(first.key))
-    return `${formatKeyGlyphs(text)} is a terminal control key; bound, the shell and agents never get it.`;
+  if (isControlLetter(first))
+    return `${formatKeyGlyphs(text)} is a control key terminals and text fields use (⌃C, ⌃D, ⌃R, ⌃A...); bound, a terminal or field no longer gets it where the command acts. A menu only shows it.`;
   if (isTypingChord(first))
-    return `${formatKeyGlyphs(text)} has no ⌘, ⌃ or ⌥: it acts only outside text fields and terminals, and lists and the sidebar tree lose it.`;
+    return `${formatKeyGlyphs(text)} has no ⌘, ⌃ or ⌥: it acts only outside text fields and terminals, and lists and the sidebar tree lose it there. A menu only shows it.`;
   return undefined;
 }
+
+/** ⌃ (and maybe ⇧) with a letter and no ⌘ or ⌥: a terminal's control key. */
+const isControlLetter = (chord: KeyChord) =>
+  chord.ctrl && !chord.mod && !chord.alt && /^[a-z]$/.test(chord.key);
+
+/**
+ * A chord a native menu accelerator must never own: one that types (no ⌘,
+ * ⌃ or ⌥) or a ⌃ letter. An accelerator fires wherever focus is, before a
+ * field or a terminal sees the key, so such a key on a menu item would
+ * start a command on every "j" typed, or keep ⌃C from the shell. Its menu
+ * item only shows it; the dispatcher keeps it, with its typing guard.
+ */
+export const isShellChord = (chord: KeyChord): boolean =>
+  isTypingChord(chord) || isControlLetter(chord);

@@ -559,7 +559,11 @@ const createRpc = (role: DesktopWindowRole = "main") =>
         },
         commands: {
           run: runHostCommand,
-          keybindingsChanged: applyKeybindings,
+          keybindingsChanged: (state) => {
+            // Newer than any read still in flight.
+            keybindingsGeneration += 1;
+            applyKeybindings(state);
+          },
         },
         updates: {
           current: () => updates.update,
@@ -624,12 +628,21 @@ function applyKeybindings(next: KeybindingsDto): void {
   if (windowOpen) rpc.send.keybindingsChanged(next);
   if (worldOpen) worldRpc.send.keybindingsChanged(next);
 }
-const reloadKeybindings = () =>
-  context.keybindings.read().then(applyKeybindings, (error: unknown) =>
-    context.logger.write("error", "keybindings_read_failed", {
-      message: error instanceof Error ? error.message : String(error),
-    }),
+// Reads can overlap (a burst of edits, a write from Settings); only the
+// newest read's result is applied, so an older one never lands last.
+let keybindingsGeneration = 0;
+const reloadKeybindings = () => {
+  const generation = ++keybindingsGeneration;
+  return context.keybindings.read().then(
+    (next) => {
+      if (generation === keybindingsGeneration) applyKeybindings(next);
+    },
+    (error: unknown) =>
+      context.logger.write("error", "keybindings_read_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      }),
   );
+};
 void reloadKeybindings();
 context.keybindings.watch(
   () => void reloadKeybindings(),

@@ -1426,7 +1426,8 @@ describe("daedal keys", () => {
       expect(await Bun.file(join(home, "keybindings.json")).json()).toEqual({
         "palette.open": ["mod+shift+p"],
       });
-      const unbound = await cli(home, ["keys", "set", "tab.close"]);
+      expect((await cli(home, ["keys", "set", "tab.close"])).exitCode).toBe(2);
+      const unbound = await cli(home, ["keys", "unbind", "tab.close"]);
       expect(unbound.stdout).toContain("tab.close: unbound");
       const listed = await cli(home, ["keys", "list", "--json"]);
       const rows = JSON.parse(listed.stdout).data.commands as {

@@ -220,10 +220,34 @@ export class KeyMatcher {
   }
 }
 
+/** One sequence begins the other (equal sequences included). */
+export const prefixRelated = (a: KeySequence, b: KeySequence) => {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.every((chord, index) => {
+    const other = long[index];
+    return other !== undefined && sameChord(chord, other);
+  });
+};
+
+/** Whether two bindings can be asked for with focus in the same place. */
+const placesOverlap = (a: Binding, b: Binding) => {
+  // A menu key fires wherever focus is, before any area's binding sees it.
+  if (a.native || b.native) return true;
+  const aAreas = a.when?.areas;
+  const bAreas = b.when?.areas;
+  if (!aAreas && !bAreas) return true;
+  // A global binding and an area binding of the dispatcher's own are not
+  // a conflict: in the area the area's wins, elsewhere the global one.
+  if (!aAreas || !bAreas) return false;
+  return aAreas.some((area) => bAreas.includes(area));
+};
+
 /**
- * Pairs of bindings that claim the same keys in overlapping places with the
- * same precedence, where only table order would decide. A global binding
- * and an area binding of the same key are not a conflict: the area wins.
+ * Pairs of bindings that get in each other's way where focus can be in both
+ * their places: the same keys, where only table order would decide; or one
+ * sequence beginning the other (⌘K and ⌘K ⌘S), where the shorter runs at
+ * once or the longer waits. A menu-owned key takes its chord everywhere, so
+ * it conflicts with any binding that starts with that chord.
  */
 export function findConflicts(
   bindings: readonly Binding[],
@@ -231,14 +255,9 @@ export function findConflicts(
   const conflicts: [Binding, Binding][] = [];
   bindings.forEach((a, index) => {
     for (const b of bindings.slice(index + 1)) {
-      if (a.key !== b.key || a.id === b.id) continue;
-      const aAreas = a.when?.areas;
-      const bAreas = b.when?.areas;
-      const overlap =
-        !aAreas && !bAreas
-          ? true
-          : Boolean(aAreas && bAreas?.some((area) => aAreas.includes(area)));
-      if (overlap) conflicts.push([a, b]);
+      if (a.id === b.id) continue;
+      if (!prefixRelated(a.sequence, b.sequence)) continue;
+      if (placesOverlap(a, b)) conflicts.push([a, b]);
     }
   });
   return conflicts;

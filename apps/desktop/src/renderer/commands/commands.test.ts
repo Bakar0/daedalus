@@ -745,4 +745,37 @@ describe("registry", () => {
     expect(commandKeys("tab.close")).toEqual(["mod+w"]);
     disconnect();
   });
+
+  test("a menu command rebound to a key that types is the dispatcher's, with its typing guard", async () => {
+    const overrides = { "session.new": ["j"] } as const;
+    const bindings = compileBindings(COMMAND_SPECS, overrides);
+    const binding = bindings.find((entry) => entry.id === "session.new");
+    expect(binding?.native).toBe(false);
+    const press = {
+      key: "j",
+      code: "KeyJ",
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+    };
+    const enabled = () => true;
+    // Typed into a field, it stays text.
+    expect(
+      matchChords(
+        bindings,
+        [chordFromEvent(press)],
+        context([], true),
+        enabled,
+      ),
+    ).toBeUndefined();
+    expect(
+      matchChords(
+        bindings,
+        [chordFromEvent(press)],
+        context([], false),
+        enabled,
+      ),
+    ).toMatchObject({ kind: "run", binding: { id: "session.new" } });
+  });
 });

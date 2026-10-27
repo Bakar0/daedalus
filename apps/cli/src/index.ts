@@ -101,7 +101,7 @@ Usage:
   daedal team <say|chat|list|goal> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal secret <list|set|remove> ... [--json]
-  daedal keys <list|set|reset> ... [--json]
+  daedal keys <list|set|unbind|reset> ... [--json]
   daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
   daedal exec [--secret <NAME>]... -- <command> [<args>...]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]

@@ -165,6 +165,32 @@ describe("desktop application menu", () => {
     expect(accelerators["view.session"]).toBe("Command+3");
   });
 
+  test("a key that types, or a ⌃ letter, is shown on its item but never owned", () => {
+    const items = actionsIn(
+      buildApplicationMenu({
+        "session.new": ["j"],
+        "task.new": ["ctrl+c"],
+        "terminal.new": ["ctrl+shift+t"],
+        "view.board": ["mod+k mod+b"],
+      }),
+    );
+    const item = (id: string) =>
+      items.find((entry) => "action" in entry && entry.action === id) as
+        { label?: string; accelerator?: string } | undefined;
+    expect(item("session.new")).toMatchObject({ label: "New Session… (J)" });
+    expect(item("session.new")?.accelerator).toBeUndefined();
+    expect(item("task.new")).toMatchObject({ label: "New Task… (⌃C)" });
+    expect(item("task.new")?.accelerator).toBeUndefined();
+    expect(item("terminal.new")?.accelerator).toBeUndefined();
+    expect(item("view.board")).toMatchObject({ label: "Board (⌘K ⌘B)" });
+    // A ⌃ key with ⌘ or ⌥, or a ⌃ punctuation key, is still the menu's.
+    const owned = actionsIn(
+      buildApplicationMenu({ "session.new": ["ctrl+mod+j"] }),
+    ).find((entry) => "action" in entry && entry.action === "session.new") as
+      { accelerator?: string } | undefined;
+    expect(owned?.accelerator).toBe("Command+Control+J");
+  });
+
   test("is rebuilt from keybindings.json, its bad entries skipped", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await mkdir(home, { recursive: true });

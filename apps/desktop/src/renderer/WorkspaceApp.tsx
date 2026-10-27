@@ -272,6 +272,9 @@ import {
   useKeyDispatcher,
 } from "./commands";
 
+/** How the error bar starts when keybindings.json has entries it skipped. */
+const SKIPPED_KEYS = "Some keys in keybindings.json were skipped:";
+
 /** The side panel's tabs, in the order they are drawn. */
 const SIDE_PANEL_TABS = [
   ["files", "Files"],
@@ -3117,7 +3120,12 @@ export function WorkspaceApp({
         )
         .join("; ");
       if (skipped && skipped !== reported)
-        setError(`Some keys in keybindings.json were skipped: ${skipped}`);
+        setError(`${SKIPPED_KEYS} ${skipped}`);
+      // Fixed: the error it raised goes, and no other.
+      if (!skipped && reported)
+        setError((current) =>
+          current?.startsWith(SKIPPED_KEYS) ? undefined : current,
+        );
       reported = skipped;
     };
     void client.request

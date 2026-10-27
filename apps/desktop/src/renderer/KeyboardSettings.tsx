@@ -5,7 +5,7 @@
  * RPC, the host writes the file and rebuilds the menu bar, and the window
  * takes the keys the host sends back, as it does for a hand edit.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type CommandGroup,
   type CommandId,
@@ -20,10 +20,11 @@ import {
 import {
   allCommands,
   applyKeybindings,
-  isComposingKey,
+  clearedKeys,
   keyConflicts,
   keysWithout,
   recordKeyEvent,
+  recordedKeys,
   suspendKeyDispatch,
   useKeybindings,
 } from "./commands";
@@ -97,7 +98,10 @@ export function KeyboardSettings({
 
   const accept = (next: PendingKey) =>
     void save([
-      { id: next.id, keys: [next.key] },
+      {
+        id: next.id,
+        keys: recordedKeys(next.id, next.key, keybindings.overrides),
+      },
       ...next.conflicts.map((other) => ({
         id: other,
         keys: keysWithout(other, next.key, keybindings.overrides),
@@ -116,19 +120,35 @@ export function KeyboardSettings({
   // dispatcher is suspended, and the press is stopped before the dialog's
   // Escape, its Tab trap or the menu bar (WebKit hands a key the page
   // handled no further) can act on it.
+  // The listeners below live as long as one recording; they read the keys
+  // and the actions as they are when a key comes, not as they were when it
+  // started.
+  const latest = useRef({ keybindings, save, accept });
+  latest.current = { keybindings, save, accept };
   useEffect(() => {
     if (!recording) return;
     const resume = suspendKeyDispatch();
     const onKey = (event: KeyboardEvent) => {
-      if (isComposingKey(event)) return;
+      const recorded = recordKeyEvent(event);
+      // Text an input method is still composing is left to it.
+      if (
+        recorded.kind === "ignore" &&
+        (event.isComposing || event.keyCode === 229)
+      )
+        return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      const recorded = recordKeyEvent(event);
       if (recorded.kind === "ignore") return;
       setRecording(undefined);
       if (recorded.kind === "cancel") return;
+      const { keybindings, save, accept } = latest.current;
       if (recorded.kind === "clear") {
-        void save([{ id: recording, keys: [] }]);
+        void save([
+          {
+            id: recording,
+            keys: clearedKeys(recording, keybindings.overrides),
+          },
+        ]);
         return;
       }
       const conflicts = keyConflicts(
@@ -149,7 +169,15 @@ export function KeyboardSettings({
       if (!conflicts.length && !warning && !reserved) accept(next);
       else setPending(next);
     };
-    const onPointer = () => setRecording(undefined);
+    // A press anywhere else ends it; on its own button, the click does.
+    const onPointer = (event: Event) => {
+      const button =
+        event.target instanceof Element
+          ? event.target.closest("[data-keys-for]")
+          : null;
+      if (button?.getAttribute("data-keys-for") === recording) return;
+      setRecording(undefined);
+    };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("mousedown", onPointer, true);
     window.addEventListener("blur", onPointer);
@@ -166,7 +194,8 @@ export function KeyboardSettings({
     <div className="keyboard-settings">
       <p className="settings-note">
         Click a shortcut, or focus it and press Enter, then press the new keys.
-        ⎋ cancels, ⌫ removes the key. Your keys are kept in{" "}
+        The new key replaces the first one shown; a command&apos;s other keys
+        stay. ⎋ cancels, ⌫ removes that first key. Your keys are kept in{" "}
         <code>keybindings.json</code>, which you can also edit by hand; a change
         there applies at once.
       </p>
@@ -204,7 +233,12 @@ export function KeyboardSettings({
           armedLabel="Reset all"
           armedTitle="Put every shortcut back to its default"
           className="quiet"
-          disabled={Object.keys(keybindings.overrides).length === 0}
+          // Also for a file with entries that were skipped, or that is not
+          // valid JSON: resetting is how the error goes away.
+          disabled={
+            Object.keys(keybindings.overrides).length === 0 &&
+            keybindings.rejected.length === 0
+          }
           onConfirm={() =>
             void perform<KeybindingsDto>(
               client.request.keybindingsReset({}),
@@ -238,7 +272,9 @@ export function KeyboardSettings({
                     command.keys.length
                       ? command.keys.map(formatKeyGlyphs).join(" or ")
                       : "no shortcut"
-                  }. Press Enter to record a new one.`}
+                  }. Press Enter to record a key in place of ${
+                    command.keys.length ? "the first" : "none"
+                  }.`}
                   aria-pressed={isRecording}
                   className="keyboard-settings-keys"
                   data-keys-for={command.id}
@@ -293,18 +329,30 @@ export function KeyboardSettings({
                     ) : null}
                     {!pending.reserved && pending.conflicts.length > 0 && (
                       <p>
-                        <KeyGlyphs glyphs={formatKeyGlyphs(pending.key)} /> is
-                        already{" "}
+                        <KeyGlyphs glyphs={formatKeyGlyphs(pending.key)} />{" "}
+                        clashes with{" "}
                         {pending.conflicts
                           .map((other) => commandSpec(other).title)
                           .join(" and ")}
-                        . Replacing takes it from{" "}
+                        , which has that key, a key it starts, or a menu key
+                        that fires first. Replacing takes those keys from{" "}
                         {pending.conflicts.length > 1 ? "them" : "it"}.
                       </p>
                     )}
                     {!pending.reserved && pending.warning && (
                       <p>{pending.warning}</p>
                     )}
+                    {!pending.reserved &&
+                      command.keys.length > 1 &&
+                      command.keys[0] && (
+                        <p>
+                          It replaces{" "}
+                          <KeyGlyphs
+                            glyphs={formatKeyGlyphs(command.keys[0])}
+                          />
+                          ; the other keys stay.
+                        </p>
+                      )}
                     <div className="keyboard-settings-pending-actions">
                       {!pending.reserved && (
                         <button

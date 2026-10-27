@@ -11,7 +11,8 @@ import { expectPositionals, parseArguments, printResult } from "./arguments";
 
 export const keysHelp = `Keyboard shortcut commands:
   daedal keys list
-  daedal keys set <command-id> [<key>...]
+  daedal keys set <command-id> <key> [<key>...]
+  daedal keys unbind <command-id>
   daedal keys reset [<command-id>]
 
 The desktop app's keys, kept in keybindings.json in the Daedalus home
@@ -22,8 +23,11 @@ A key is written as the file writes it: mod is ⌘, then ctrl, alt (⌥) and
 shift, joined by +, as in mod+shift+p or ctrl+\`. A sequence is two chords
 separated by a space, as in "mod+k mod+s".
 
-'set' with no key unbinds the command. 'reset' puts one command, or every
-command, back to its default keys. Keys macOS or the Edit menu own (⌘Tab,
+'set' replaces a command's keys with these; the first is the one the menu
+shows. 'unbind' leaves a command with no key (it still runs from the menu
+and the palette). 'reset' puts one command, or every command, back to its
+default keys; resetting every command keeps the old file as
+keybindings.json.bak. Keys macOS or the Edit menu own (⌘Tab,
 ⌘Space, ⌘H, ⌘M, ⌘C, ⌘V, ⌘X, ⌘A, ⌘Z and the like) are refused.`;
 
 const commandRows = (
@@ -81,19 +85,27 @@ export async function keysCommand(
   }
   if (action === "set") {
     const [reference, ...keys] = parsed.positionals;
+    if (!keys.length)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Usage: daedal keys set <command-id> <key> [<key>...] (to remove its keys: daedal keys unbind <command-id>)",
+      );
     const id = command(reference);
     const state = await context.keybindings.set([{ id, keys }]);
     printResult(state, json, () => {
-      console.log(
-        keys.length
-          ? `${id}: ${keys.map(formatKeyGlyphs).join(", ")}`
-          : `${id}: unbound`,
-      );
+      console.log(`${id}: ${keys.map(formatKeyGlyphs).join(", ")}`);
       for (const key of keys) {
         const warning = keyWarning(key);
         if (warning) console.error(`Note: ${warning}`);
       }
     });
+    return 0;
+  }
+  if (action === "unbind") {
+    expectPositionals(parsed.positionals, 1, "daedal keys unbind <command-id>");
+    const id = command(parsed.positionals[0]);
+    const state = await context.keybindings.set([{ id, keys: [] }]);
+    printResult(state, json, () => console.log(`${id}: unbound`));
     return 0;
   }
   if (action === "reset") {

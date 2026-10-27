@@ -6,7 +6,14 @@ import {
   normalizeKey,
   reservedKeyReason,
 } from "@daedalus/protocol";
-import { keyConflicts, keysWithout, recordKeyEvent } from "./recorder";
+import {
+  clearedKeys,
+  keyConflicts,
+  keysWithout,
+  recordKeyEvent,
+  recordedKeys,
+} from "./recorder";
+import { compileBindings, findConflicts } from "./dispatch";
 
 const press = (
   key: string,
@@ -77,6 +84,39 @@ describe("the key recorder", () => {
     ).toEqual({ kind: "key", key: "shift+escape" });
   });
 
+  test("a dead key with ⌥ records its physical key; composing text is left alone", () => {
+    // ⌥E, ⌥N, ⌥U and ⌥` are dead keys on a US layout: the key is "Dead".
+    for (const [code, key] of [
+      ["KeyE", "alt+e"],
+      ["KeyN", "alt+n"],
+      ["KeyU", "alt+u"],
+      ["Backquote", "alt+`"],
+    ])
+      expect(
+        recordKeyEvent({
+          ...press("Dead", code!, { altKey: true }),
+          isComposing: true,
+          keyCode: 229,
+        }),
+      ).toEqual({ kind: "key", key });
+    expect(
+      recordKeyEvent({
+        ...press("Dead", "KeyE", { altKey: true, metaKey: true }),
+        keyCode: 229,
+      }),
+    ).toEqual({ kind: "key", key: "alt+mod+e" });
+    // Typed alone or with ⇧, it is text for the input method.
+    expect(
+      recordKeyEvent({ ...press("a", "KeyA"), isComposing: true }),
+    ).toEqual({ kind: "ignore" });
+    expect(
+      recordKeyEvent({
+        ...press("Process", "KeyA", { shiftKey: true }),
+        keyCode: 229,
+      }),
+    ).toEqual({ kind: "ignore" });
+  });
+
   test("a key that names nothing is ignored", () => {
     expect(recordKeyEvent(press("Unidentified", ""))).toEqual({
       kind: "ignore",
@@ -95,11 +135,37 @@ describe("conflicts in the editor", () => {
     expect(keyConflicts("view.board", "cmd+N", {})).toEqual(["session.new"]);
   });
 
-  test("an area key and a global key are no conflict: the area wins", () => {
-    // ⌘W closes a tab only in the tabs; a global ⌘W elsewhere is fine.
-    expect(keyConflicts("view.board", "mod+w", {})).toEqual([]);
+  test("an area key and a global key of the dispatcher's are no conflict: the area wins", () => {
+    // F6 is the dispatcher's (the menu only shows it): ⌘W in the tabs still
+    // closes the tab, F6's command elsewhere.
+    expect(keyConflicts("area.next", "mod+w", {})).toEqual([]);
     // Two tab keys collide.
     expect(keyConflicts("tab.next", "mod+w", {})).toEqual(["tab.close"]);
+  });
+
+  test("a menu-owned key conflicts with an area key too: the menu fires first", () => {
+    // The Board's ⌘2 is its menu item's accelerator, so ⌘W there would
+    // never reach the tabs.
+    expect(keyConflicts("view.board", "mod+w", {})).toEqual(["tab.close"]);
+    expect(keyConflicts("tab.close", "mod+2", {})).toEqual(["view.board"]);
+  });
+
+  test("one sequence beginning another is a conflict", () => {
+    // ⌘K opens the palette at once, so ⌘K ⌘S would never be typed.
+    expect(keyConflicts("view.board", "mod+k mod+s", {})).toEqual([
+      "palette.open",
+    ]);
+    const bindings = compileBindings(COMMAND_SPECS, {
+      "area.next": ["mod+j mod+j"],
+      "area.previous": ["mod+j"],
+    });
+    expect(
+      findConflicts(bindings).map(([a, b]) => [a.id, b.id]),
+    ).toContainEqual(["area.next", "area.previous"]);
+    // A sequence starting with a menu key's chord, in any area.
+    expect(keyConflicts("tab.close", "mod+n mod+w", {})).toEqual([
+      "session.new",
+    ]);
   });
 
   test("a command's own key is no conflict", () => {
@@ -109,6 +175,23 @@ describe("conflicts in the editor", () => {
   test("replacing takes the key from the other command and keeps its others", () => {
     expect(keysWithout("session.new", "mod+n", {})).toEqual([]);
     expect(keysWithout("item.menu", "contextmenu", {})).toEqual(["shift+f10"]);
+    // A key that begins the new one goes too.
+    expect(keysWithout("palette.open", "mod+k mod+s", {})).toEqual([]);
+  });
+
+  test("a recorded key replaces only the first key; ⌫ removes only that", () => {
+    expect(recordedKeys("item.menu", "mod+i", {})).toEqual([
+      "mod+i",
+      "contextmenu",
+    ]);
+    expect(recordedKeys("item.menu", "contextmenu", {})).toEqual([
+      "contextmenu",
+    ]);
+    expect(recordedKeys("view.board", "mod+shift+b", {})).toEqual([
+      "mod+shift+b",
+    ]);
+    expect(clearedKeys("item.menu", {})).toEqual(["contextmenu"]);
+    expect(clearedKeys("view.board", {})).toEqual([]);
   });
 });
 
@@ -123,6 +206,10 @@ describe("reserved and risky keys", () => {
       "mod+space",
       "mod+shift+4",
       "mod+tab mod+x",
+      "mod+alt+shift+v",
+      "ctrl+mod+space",
+      "mod+shift+/",
+      "mod+?",
     ])
       expect(reservedKeyReason(key)).toBeDefined();
     for (const key of ["mod+q", "mod+n", "ctrl+c", "f6", "mod+k mod+c"])
@@ -145,7 +232,8 @@ describe("reserved and risky keys", () => {
 
   test("⌘Q, ⌃ and a letter, and a key with no ⌘ ⌃ ⌥ are warned about", () => {
     expect(keyWarning("mod+q")).toMatch(/quits/);
-    expect(keyWarning("ctrl+c")).toMatch(/terminal control key/);
+    expect(keyWarning("ctrl+c")).toMatch(/control key terminals/);
+    expect(keyWarning("ctrl+shift+c")).toMatch(/control key terminals/);
     expect(keyWarning("j")).toMatch(/no ⌘, ⌃ or ⌥/);
     expect(keyWarning("shift+enter")).toMatch(/no ⌘, ⌃ or ⌥/);
     for (const key of ["mod+n", "ctrl+`", "f6", "shift+f6", "alt+mod+b"])
