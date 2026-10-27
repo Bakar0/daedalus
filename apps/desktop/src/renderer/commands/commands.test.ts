@@ -5,7 +5,12 @@ import {
   type CommandId,
   type CommandSpec,
 } from "@daedalus/protocol";
-import { type CommandContext, type ElementLike, contextFor } from "./context";
+import {
+  type CommandContext,
+  type ElementLike,
+  contextFor,
+  typingOutsideTerminal,
+} from "./context";
 import {
   KeyMatcher,
   compileBindings,
@@ -124,6 +129,18 @@ describe("contextFor", () => {
 });
 
 // --- precedence ------------------------------------------------------------
+
+describe("typingOutsideTerminal", () => {
+  test("a field or Monaco counts, a terminal or a button does not", () => {
+    expect(typingOutsideTerminal(contextFor(sidebarInput, "key"))).toBe(true);
+    expect(typingOutsideTerminal(contextFor(monacoInput, "key"))).toBe(true);
+    expect(typingOutsideTerminal(contextFor(xtermInput, "key"))).toBe(false);
+    expect(typingOutsideTerminal(contextFor(integratedInput, "key"))).toBe(
+      false,
+    );
+    expect(typingOutsideTerminal(contextFor(sidebarButton, "key"))).toBe(false);
+  });
+});
 
 describe("rankIn", () => {
   test("the innermost area wins, then any area, then global", () => {

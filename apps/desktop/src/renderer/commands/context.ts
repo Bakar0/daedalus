@@ -86,3 +86,12 @@ export function contextFor(
   }
   return { areas, typing, target: element as Element | null, source, modal };
 }
+
+/**
+ * Focus is in a field that takes typing and is not a terminal: a task
+ * brief, a name, Monaco. Commands that leave the page (back, the next
+ * session, a new task) wait while it does, so unsaved text is never lost to
+ * a key. A terminal is different: its text lives in the program.
+ */
+export const typingOutsideTerminal = (context: CommandContext): boolean =>
+  context.typing && !context.areas.includes("terminal");

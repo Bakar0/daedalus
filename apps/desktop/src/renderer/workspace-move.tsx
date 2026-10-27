@@ -186,8 +186,11 @@ export function WorkspaceMoveState({
   error,
   onCancel,
   onDismiss,
+  buttonTabIndex,
 }: {
   name: string;
+  /** -1 inside the sidebar tree, whose item menu offers the same. */
+  buttonTabIndex?: number;
   /** The host's entry; absent when only `error` is there. */
   move?: WorkspaceMoveDto;
   /** Why the move call failed, when the host has no entry to show it. */
@@ -228,6 +231,7 @@ export function WorkspaceMoveState({
             className="quiet workspace-move-cancel"
             data-testid="workspace-move-cancel"
             onClick={onCancel}
+            tabIndex={buttonTabIndex}
             title="Stop waiting; the workspace stays where it is"
             type="button"
           >
@@ -239,6 +243,7 @@ export function WorkspaceMoveState({
             className="quiet workspace-move-cancel"
             data-testid="workspace-move-dismiss"
             onClick={onDismiss}
+            tabIndex={buttonTabIndex}
             type="button"
           >
             Dismiss
@@ -292,7 +297,10 @@ export function WorkspaceNotice({
   text,
   testId,
   onDismiss,
+  buttonTabIndex,
 }: {
+  /** -1 inside the sidebar tree, whose item menu offers the same. */
+  buttonTabIndex?: number;
   text: string;
   testId: string;
   onDismiss: () => void;
@@ -304,6 +312,7 @@ export function WorkspaceNotice({
         className="quiet"
         data-testid={`${testId}-dismiss`}
         onClick={onDismiss}
+        tabIndex={buttonTabIndex}
         type="button"
       >
         Got it

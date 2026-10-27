@@ -90,7 +90,9 @@ The window has five areas, each a labeled region: the sidebar, the center, the r
 
 The sidebar is a tree and one Tab stop: ↑/↓ move, → unfolds a workspace or enters its first session, ← folds it or goes to the parent, Home/End, a letter jumps to the next item starting with it, Enter selects a workspace or opens a session with its terminal focused, and ⌥↑/↓ reorder. The board's cards are one Tab stop too: ↑/↓ move within a lane and on into the next, ←/→ change lane at the same position, Home/End go to the lane's ends, and Enter opens the task.
 
-Focus follows the user's intent: at start it is on the selected sidebar item (a restored session does not take the caret); opening a session by Enter, ⌥⌘↑/↓, ⇧⌘A or ⌘[ focuses its terminal; going to a workspace that comes back to its last session focuses that terminal, and otherwise stays on the sidebar item; archiving a sidebar item moves focus to its neighbour; a task created in the dialog opens with focus on its page.
+Focus follows the user's intent: at start it is on the selected sidebar item (a restored session or terminal does not take the caret); opening a session by Enter, ⌥⌘↑/↓, ⇧⌘A or ⌘[ focuses its terminal; opening a workspace with Enter focuses its last session's terminal when it comes back to one, while a mouse click or a toast leaves the caret where it is; a terminal takes the caret when the user makes it or brings it to the front, never on its own; archiving a sidebar item moves focus to its neighbour; closing or deleting a task page returns focus to its card, or the center; a task created in the dialog opens with focus on its page. Keys that leave the page (⌥⌘↑/↓, ⇧⌘A, ⌘[ ⌘], ⌘N, ⇧⌘N) wait while text is typed outside a terminal or a brief is being edited, so no unsaved text is lost.
+
+In the tree, a failed launch is dismissed with Delete, the archived sessions list opens with →, and an archived session is restored with Enter or deleted with Delete (after a confirm). What a card shows only when it applies (Mark as seen, Revive, Add a member, cancelling a cloud move, dismissing a notice) is also in the item's ⇧F10 menu.
 
 ## Agent status and attention
 

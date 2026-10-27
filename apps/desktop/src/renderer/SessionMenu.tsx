@@ -230,8 +230,9 @@ export interface MenuAction {
   /** The icon it has on the card, shown beside its label here too. */
   icon?: ReactNode;
   /** Shown on the card as well as here. */
-  pinned: boolean;
-  onPin: (pinned: boolean) => void;
+  pinned?: boolean;
+  /** Omitted: the action has no pin (it shows on the card when it applies). */
+  onPin?: (pinned: boolean) => void;
   run: () => void;
   disabled?: boolean;
   /** Asks once more before running, with this as what confirming does. */
@@ -304,23 +305,25 @@ function MenuActions({ actions }: { actions: MenuAction[] }) {
               <span className="menu-item-label">{action.label}</span>
             </button>
           )}
-          <button
-            aria-checked={action.pinned}
-            aria-label={`${action.pinned ? "Unpin" : "Pin"} ${action.label}`}
-            className="quiet menu-pin"
-            data-testid={`pin-${action.id}`}
-            onClick={() => action.onPin(!action.pinned)}
-            role="menuitemcheckbox"
-            {...{ [KEEP_OPEN]: "" }}
-            title={
-              action.pinned
-                ? "Pinned: also on the card. Click to keep it in this menu only."
-                : "Pin it to the card"
-            }
-            type="button"
-          >
-            <PinIcon />
-          </button>
+          {action.onPin && (
+            <button
+              aria-checked={Boolean(action.pinned)}
+              aria-label={`${action.pinned ? "Unpin" : "Pin"} ${action.label}`}
+              className="quiet menu-pin"
+              data-testid={`pin-${action.id}`}
+              onClick={() => action.onPin?.(!action.pinned)}
+              role="menuitemcheckbox"
+              {...{ [KEEP_OPEN]: "" }}
+              title={
+                action.pinned
+                  ? "Pinned: also on the card. Click to keep it in this menu only."
+                  : "Pin it to the card"
+              }
+              type="button"
+            >
+              <PinIcon />
+            </button>
+          )}
         </div>
       ))}
       <hr className="menu-separator" />

@@ -232,6 +232,25 @@ describe("visit history", () => {
     expect(stepHistory(history, 1, all)).toBeUndefined();
   });
 
+  test("after leaving a visit, Back returns to it before going further", () => {
+    let history = recordVisit(EMPTY_HISTORY, session("a"));
+    history = recordVisit(history, session("b"));
+    // ⌘1: the Workspace view, neither a session nor a task.
+    const back = stepHistory(history, -1, all, { away: true });
+    expect(back?.visit).toEqual(session("b"));
+    expect(stepHistory(back!.history, -1, all)?.visit).toEqual(session("a"));
+    expect(stepHistory(history, 1, all, { away: true })).toBeUndefined();
+  });
+
+  test("away from a visit that is gone, Back skips it too", () => {
+    let history = recordVisit(EMPTY_HISTORY, session("a"));
+    history = recordVisit(history, session("gone"));
+    const back = stepHistory(history, -1, (visit) => visit.id !== "gone", {
+      away: true,
+    });
+    expect(back?.visit).toEqual(session("a"));
+  });
+
   test("entries that are gone are skipped", () => {
     let history = recordVisit(EMPTY_HISTORY, session("s1"));
     history = recordVisit(history, session("gone"));

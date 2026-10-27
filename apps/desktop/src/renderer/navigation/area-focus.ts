@@ -9,8 +9,9 @@ import {
  * Moving focus between the app's regions (see `areas.ts`). Each region
  * remembers the element that last had focus inside it; entering the region
  * again goes back there while it is still on screen, else to the region's
- * natural default. A thin accent edge marks the focused region while the
- * keyboard is being used (`html[data-keyboard-nav]`).
+ * natural default. A thin accent edge marks the focused region once the
+ * keyboard has moved between regions (F6, the area keys, Tab across a
+ * border): `html[data-keyboard-nav]`, cleared by a pointer press.
  */
 
 const lastFocused = new Map<RegionArea, WeakRef<HTMLElement>>();
@@ -138,26 +139,29 @@ export function cycleFocus(direction: 1 | -1): boolean {
   return false;
 }
 
+/** A Tab press whose focus move has not landed yet. */
+let tabPressed = false;
+
 function onFocusIn(event: FocusEvent) {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   const area = regionOf(target);
   if (area) lastFocused.set(area, new WeakRef(target));
+  // Tab that crossed into another area shows the edge; Tab within one (or
+  // the arrows) does not.
+  if (tabPressed) {
+    tabPressed = false;
+    const from =
+      event.relatedTarget instanceof Element
+        ? regionOf(event.relatedTarget)
+        : undefined;
+    if (area && from && area !== from) markKeyboardNavigation();
+  }
 }
 
-const NAVIGATION_KEYS = new Set([
-  "Tab",
-  "F6",
-  "ArrowUp",
-  "ArrowDown",
-  "ArrowLeft",
-  "ArrowRight",
-  "Home",
-  "End",
-]);
-
 function onKeyDown(event: KeyboardEvent) {
-  if (NAVIGATION_KEYS.has(event.key)) markKeyboardNavigation();
+  tabPressed =
+    event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey;
 }
 
 function onPointerDown() {
