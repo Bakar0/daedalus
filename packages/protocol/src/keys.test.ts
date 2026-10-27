@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   chordFromEvent,
+  chordsFromEvent,
   formatAccelerator,
   formatAriaKeyShortcuts,
   formatKeyGlyphs,
@@ -75,16 +76,39 @@ describe("chordFromEvent", () => {
       ),
     ).toBe(true);
     expect(
-      sameChord(
-        chordFromEvent(
-          press("}", "BracketRight", { metaKey: true, shiftKey: true }),
-        ),
-        parseKey("mod+shift+]")[0]!,
-      ),
+      chordsFromEvent(
+        press("}", "BracketRight", { metaKey: true, shiftKey: true }),
+      ).some((chord) => sameChord(chord, parseKey("mod+shift+]")[0]!)),
     ).toBe(true);
     expect(
       chordFromEvent(press("¡", "Digit1", { metaKey: true, altKey: true })).key,
     ).toBe("1");
+  });
+
+  test("the layout's character comes first, then without ⇧, then the physical key", () => {
+    // German: / is ⇧7, so ⌘/ is typed as ⇧⌘7.
+    expect(
+      chordsFromEvent(
+        press("/", "Digit7", { metaKey: true, shiftKey: true }),
+      ).map((chord) =>
+        normalizeKey(`${chord.shift ? "shift+" : ""}mod+${chord.key}`),
+      ),
+    ).toEqual(["shift+mod+/", "mod+/", "shift+mod+7"]);
+  });
+
+  test("a plain letter never falls back to the physical key", () => {
+    // Dvorak's ⌘X is on the key QWERTY calls B.
+    expect(chordsFromEvent(press("x", "KeyB", { metaKey: true }))).toEqual([
+      parseKey("mod+x")[0],
+    ]);
+  });
+
+  test("⌃§ on an international keyboard is not ⌃`", () => {
+    expect(
+      chordsFromEvent(press("§", "IntlBackslash", { ctrlKey: true })).some(
+        (chord) => chord.key === "`",
+      ),
+    ).toBe(false);
   });
 
   test("named keys and function keys", () => {

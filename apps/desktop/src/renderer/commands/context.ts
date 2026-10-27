@@ -17,6 +17,11 @@ export interface CommandContext {
   /** The focused element, or the key's target. */
   readonly target: Element | null;
   readonly source: "key" | "menu" | "palette";
+  /**
+   * A dialog is open. It owns the keyboard: only commands marked `inModal`
+   * (quit) act until it closes.
+   */
+  readonly modal: boolean;
 }
 
 /** The parts of an element the context reads, so it can be tested without a DOM. */
@@ -66,6 +71,7 @@ export function isEditableElement(element: ElementLike): boolean {
 export function contextFor(
   element: ElementLike | null,
   source: CommandContext["source"],
+  { modal = false }: { modal?: boolean } = {},
 ): CommandContext {
   const areas: CommandArea[] = [];
   let typing = element ? isEditableElement(element) : false;
@@ -78,5 +84,5 @@ export function contextFor(
       if (area && AREAS.has(area) && !areas.includes(area as CommandArea))
         areas.push(area as CommandArea);
   }
-  return { areas, typing, target: element as Element | null, source };
+  return { areas, typing, target: element as Element | null, source, modal };
 }

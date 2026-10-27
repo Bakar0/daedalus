@@ -798,11 +798,20 @@ export default function EditorArea({
       context.target &&
       areaRef.current.contains(context.target),
     );
+  // The tab a key means: the active one of the group focus is in (there may
+  // be a split), else the area's active tab.
+  const panelFor = (context: CommandContext) => {
+    const api = apiRef.current;
+    const target = context.target;
+    const group = target
+      ? api?.groups.find((item) => item.element.contains(target))
+      : undefined;
+    return group?.activePanel ?? api?.activePanel;
+  };
   useCommand("tab.save", {
     enabled: inThisArea,
-    run: () => {
-      const params = apiRef.current?.activePanel?.params as
-        FilePanelParams | undefined;
+    run: (context) => {
+      const params = panelFor(context)?.params as FilePanelParams | undefined;
       const doc = params?.path
         ? getDocument(workspaceId, params.path)
         : undefined;
@@ -811,8 +820,8 @@ export default function EditorArea({
   });
   useCommand("tab.close", {
     enabled: inThisArea,
-    run: () => {
-      const panel = apiRef.current?.activePanel;
+    run: (context) => {
+      const panel = panelFor(context);
       if (panel) void close(panel);
     },
   });

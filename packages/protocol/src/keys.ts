@@ -140,7 +140,6 @@ const CODE_KEYS: Record<string, string> = {
   Equal: "=",
   Backslash: "\\",
   Space: "space",
-  IntlBackslash: "`",
 };
 
 const EVENT_KEY_NAMES: Record<string, string> = {
@@ -165,38 +164,64 @@ export type KeyEventLike = Pick<
   "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey"
 >;
 
-/**
- * The base key an event pressed. A letter or digit is read from `key`, as the
- * layout produced it, unless ⌥ is down, which turns ⌥B into `∫`; then, and
- * for punctuation that ⇧ changes (⇧] is `}`), the physical `code` decides.
- */
-export function eventKey(
-  event: Pick<KeyboardEvent, "key" | "code" | "altKey">,
-) {
-  const named = EVENT_KEY_NAMES[event.key];
-  if (named) return named;
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.key))
-    return event.key.toLowerCase();
-  if (event.key === " ") return "space";
-  if (/^[a-z0-9]$/i.test(event.key) && !event.altKey)
-    return event.key.toLowerCase();
-  const letter = /^Key([A-Z])$/.exec(event.code)?.[1];
+const keyFromCode = (code: string): string | undefined => {
+  const letter = /^Key([A-Z])$/.exec(code)?.[1];
   if (letter) return letter.toLowerCase();
-  const digit = /^Digit([0-9])$/.exec(event.code)?.[1];
+  const digit = /^Digit([0-9])$/.exec(code)?.[1];
   if (digit) return digit;
-  const fromCode = CODE_KEYS[event.code];
-  if (fromCode) return fromCode;
-  return event.key.toLowerCase();
-}
+  return CODE_KEYS[code];
+};
 
-export function chordFromEvent(event: KeyEventLike): KeyChord {
-  return {
-    key: eventKey(event),
+/** The key an event's `key` names, before any fallback to the physical key. */
+const keyFromKey = (key: string): string | undefined => {
+  const named = EVENT_KEY_NAMES[key];
+  if (named) return named;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(key)) return key.toLowerCase();
+  if (key === " ") return "space";
+  if (/^[\x21-\x7e]$/.test(key)) return key.toLowerCase();
+  return undefined;
+};
+
+/**
+ * The chords an event may mean, best first. The layout's character comes
+ * first, so ⌘/ matches on a German keyboard, where / is ⇧7; when ⇧ was needed
+ * to type a punctuation character it is also tried without ⇧. The physical
+ * key comes last, and only when the layout produced no plain letter or
+ * digit: that is what turns ⌥⌘B (which types ∫) and ⇧⌘] (which types }) into
+ * their chords, without making Dvorak's ⌘X mean the key QWERTY calls B.
+ */
+export function chordsFromEvent(event: KeyEventLike): KeyChord[] {
+  const modifiers = {
     mod: event.metaKey,
     ctrl: event.ctrlKey,
     alt: event.altKey,
     shift: event.shiftKey,
   };
+  const chords: KeyChord[] = [];
+  const add = (chord: KeyChord) => {
+    if (!chords.some((known) => sameChord(known, chord))) chords.push(chord);
+  };
+  const fromKey = keyFromKey(event.key);
+  if (fromKey) {
+    add({ ...modifiers, key: fromKey });
+    if (
+      event.shiftKey &&
+      /^[\x21-\x7e]$/.test(fromKey) &&
+      !/^[a-z0-9]$/.test(fromKey)
+    )
+      add({ ...modifiers, key: fromKey, shift: false });
+  }
+  if (!fromKey || !/^[a-z0-9]$/.test(fromKey) || event.altKey) {
+    const fromCode = keyFromCode(event.code);
+    if (fromCode) add({ ...modifiers, key: fromCode });
+  }
+  if (chords.length === 0) add({ ...modifiers, key: event.key.toLowerCase() });
+  return chords;
+}
+
+/** The event's best chord; see `chordsFromEvent`. */
+export function chordFromEvent(event: KeyEventLike): KeyChord {
+  return chordsFromEvent(event)[0] as KeyChord;
 }
 
 /** A press of ⌘, ⇧, ⌥ or ⌃ alone, which never starts or breaks a chord. */

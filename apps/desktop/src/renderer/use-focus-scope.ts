@@ -208,6 +208,9 @@ const open: RefObject<HTMLElement | null>[] = [];
 const openRoots = () =>
   open.flatMap((ref) => (ref.current?.isConnected ? [ref.current] : []));
 
+/** Whether any focus scope (a dialog, a drawer, a confirm) is open. */
+export const hasOpenScope = () => openRoots().length > 0;
+
 /**
  * Whether `element` is the open scope drawn on top, the one that answers Tab
  * and Escape. Scopes stack by document order rather than by when they

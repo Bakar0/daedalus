@@ -52,7 +52,9 @@ import type {
   DesktopRpcSchema,
   DesktopSnapshotDto,
   DesktopWindowRole,
+  HostCommandId,
   IntegratedTerminalDto,
+  KeyOverrides,
   PresenceStateDto,
   RepositoryLibraryDto,
   RoutineDto,
@@ -73,6 +75,7 @@ import type {
   SecretDto,
   WorkflowRunDto,
 } from "@daedalus/protocol";
+import { isHostCommandId, validateKeyOverrides } from "@daedalus/protocol";
 
 import type { DesktopRemoteHost } from "./remote";
 
@@ -84,6 +87,18 @@ export interface DesktopQuitHost {
   dialogShown(): void;
   decide(choice: QuitChoice): Promise<void>;
 }
+
+/** The host's commands and its menu bar, as the window reaches them. */
+export interface DesktopCommandHost {
+  run(command: HostCommandId): void;
+  /** Rebuilds the menu bar with these keys. */
+  setKeyOverrides(overrides: KeyOverrides): void;
+}
+
+const NO_COMMANDS: DesktopCommandHost = {
+  run: () => {},
+  setKeyOverrides: () => {},
+};
 
 /** The host's `UpdateController`, as far as the window can reach it. */
 export interface DesktopUpdateHost {
@@ -552,6 +567,7 @@ export interface DesktopHost {
   revealPath(path: string): void;
   terminalEndpoint: string;
   quit: DesktopQuitHost;
+  commands: DesktopCommandHost;
   updates: DesktopUpdateHost;
   windows: DesktopWindowHost;
   clipboardWrite(text: string): boolean;
@@ -588,6 +604,7 @@ export function createDesktopRequestHandlers(
     revealPath = () => {},
     terminalEndpoint = "",
     quit = { dialogShown: () => {}, decide: async () => {} },
+    commands = NO_COMMANDS,
     updates = NO_UPDATES,
     windows = MAIN_WINDOW_ONLY,
     clipboardWrite = () => false,
@@ -1126,6 +1143,22 @@ export function createDesktopRequestHandlers(
       result(async () => {
         await quit.decide(choice);
         return { accepted: true as const };
+      }),
+    commandRun: ({ command }) =>
+      result(() => {
+        if (!isHostCommandId(command))
+          throw new DaedalusError(
+            "VALIDATION",
+            `Not a host command: ${String(command)}`,
+          );
+        commands.run(command);
+        return { ran: true as const };
+      }),
+    keyOverridesSet: ({ overrides }) =>
+      result(() => {
+        const valid = validateKeyOverrides(overrides);
+        commands.setKeyOverrides(valid.overrides);
+        return { rejected: valid.rejected };
       }),
     appUpdateGet: () => result(() => updates.current()),
     appUpdateCheck: () => result(() => updates.check()),

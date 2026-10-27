@@ -31,12 +31,13 @@ import {
 import type {
   DesktopRpcSchema,
   HostCommandId,
+  KeyOverrides,
   DesktopSnapshotPart,
   DesktopWindowRole,
   TerminalServerMessage,
 } from "@daedalus/protocol";
 import { isHostCommandId, isRendererCommandId } from "@daedalus/protocol";
-import { APPLICATION_MENU } from "./menu";
+import { buildApplicationMenu } from "./menu";
 import { acceptFirstMouse } from "./first-mouse";
 import { daedalusCheckout } from "./checkout";
 import { installCliShim } from "./cli-shim";
@@ -342,7 +343,11 @@ const rendererUrl = `views://mainview/index.html`;
 
 // WebKit text controls use the native responder chain for standard editing
 // commands on macOS. Defining these roles restores Cmd+C/V/X/A/Z everywhere.
-ApplicationMenu.setApplicationMenu(APPLICATION_MENU);
+// The menu's items and keys come from the shared command table; the window
+// sends the person's rebound keys, and the menu is rebuilt with them.
+ApplicationMenu.setApplicationMenu(buildApplicationMenu());
+const setMenuKeyOverrides = (overrides: KeyOverrides) =>
+  ApplicationMenu.setApplicationMenu(buildApplicationMenu(overrides));
 
 let revision = 0;
 const readModel = new ReadModel(context);
@@ -553,6 +558,10 @@ const createRpc = (role: DesktopWindowRole = "main") =>
         quit: {
           dialogShown: () => quitController.dialogShown(),
           decide: (choice) => quitController.decide(choice),
+        },
+        commands: {
+          run: runHostCommand,
+          setKeyOverrides: setMenuKeyOverrides,
         },
         updates: {
           current: () => updates.update,

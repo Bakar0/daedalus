@@ -531,4 +531,44 @@ describe("desktop RPC handlers", () => {
       }
     });
   });
+
+  test("runs host commands and rebuilds the menu with valid keys only", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const ran: string[] = [];
+      const menus: unknown[] = [];
+      const rpc = createDesktopRequestHandlers(context, {
+        commands: {
+          run: (command) => ran.push(command),
+          setKeyOverrides: (overrides) => menus.push(overrides),
+        },
+      });
+      try {
+        expect(await rpc.commandRun({ command: "view.worldWindow" })).toEqual({
+          ok: true,
+          data: { ran: true },
+        });
+        expect(ran).toEqual(["view.worldWindow"]);
+        // A renderer command is not the host's to run.
+        const refused = await rpc.commandRun({
+          command: "view.board" as never,
+        });
+        expect(refused.ok).toBe(false);
+        expect(ran).toHaveLength(1);
+
+        const response = await rpc.keyOverridesSet({
+          overrides: { "view.board": ["mod+shift+b", "hyper+x"] },
+        });
+        expect(response.ok && response.data.rejected).toEqual([
+          expect.objectContaining({ id: "view.board", key: "hyper+x" }),
+        ]);
+        expect(menus).toEqual([{ "view.board": ["mod+shift+b"] }]);
+      } finally {
+        context.close();
+      }
+    });
+  });
 });

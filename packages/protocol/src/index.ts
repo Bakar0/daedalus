@@ -1,4 +1,9 @@
-import type { RendererCommandId } from "./commands";
+import type {
+  HostCommandId,
+  KeyOverrides,
+  RejectedKey,
+  RendererCommandId,
+} from "./commands";
 
 export type ErrorCode =
   "VALIDATION" | "NOT_FOUND" | "CONFLICT" | "DEPENDENCY" | "INTERNAL";
@@ -1935,6 +1940,21 @@ export interface DesktopRpcSchema {
       quitDialogShown: Request<Record<string, never>, { acknowledged: true }>;
       /** The user's answer. `cancel` is the only one that does not quit. */
       quitDecision: Request<{ choice: QuitChoice }, { accepted: true }>;
+      /**
+       * Runs a command the host owns (quit, the World window, the update
+       * check), for a key, the palette or anything else in the window that
+       * names it by id.
+       */
+      commandRun: Request<{ command: HostCommandId }, { ran: true }>;
+      /**
+       * The keys the person rebound, so the host rebuilds the menu bar with
+       * them and a rebound menu command has one live key. Keys that do not
+       * parse are dropped and reported back.
+       */
+      keyOverridesSet: Request<
+        { overrides: KeyOverrides },
+        { rejected: RejectedKey[] }
+      >;
       /**
        * The update prompt as it stands, for a window that opens after the
        * host's check already ran. Changes after that arrive as

@@ -5,10 +5,12 @@ import {
   type CommandWhen,
   type KeyChord,
   type KeyEventLike,
+  type KeyOverrides,
   type KeySequence,
-  chordFromEvent,
+  chordsFromEvent,
   isModifierOnly,
   isTypingChord,
+  keysOf,
   menuAccelerator,
   normalizeKey,
   parseKey,
@@ -30,36 +32,40 @@ export interface Binding {
   /** Position in the table; earlier wins a tie. */
   readonly order: number;
   /**
-   * The native menu owns this key (it is the accelerator of the command's
-   * menu item), or the host runs the command. macOS delivers such a key
-   * through the menu, so the dispatcher leaves it alone and it never runs
-   * twice; a terminal still keeps it from the shell.
+   * The native menu owns this key: it is the accelerator of the command's
+   * menu item, which the host builds from the same keys and overrides. macOS
+   * delivers such a key through the menu, by id, so the dispatcher leaves it
+   * alone and it never runs twice; a terminal still keeps it from the shell.
    */
   readonly native: boolean;
+  readonly allowRepeat: boolean;
+  readonly inModal: boolean;
 }
 
-/** User keys per command, replacing the defaults (a later keybindings file). */
-export type KeyOverrides = Partial<Record<CommandId, readonly string[]>>;
-
+/**
+ * Compiles every key of every command. Keys are expected to be valid (the
+ * defaults are tested; overrides go through `validateKeyOverrides`); one that
+ * still does not parse throws, so a caller compiles before it commits.
+ */
 export function compileBindings(
   specs: readonly CommandSpec[],
   overrides: KeyOverrides = {},
 ): Binding[] {
   return specs.flatMap((spec, order) => {
     const id = spec.id as CommandId;
-    const keys = overrides[id] ?? spec.keys;
-    const accelerator = menuAccelerator(spec);
-    return keys.map((key, index) => ({
+    const accelerator = menuAccelerator(spec, overrides);
+    return keysOf(spec, overrides).map((key, index) => ({
       id,
       key: normalizeKey(key),
       sequence: parseKey(key),
       ...(spec.when ? { when: spec.when } : {}),
       order,
-      native:
-        spec.runsIn === "host" ||
-        // Only the first key is the menu item's accelerator, and only while
-        // it is still the default the host built the menu from.
-        (index === 0 && accelerator !== undefined && !overrides[id]),
+      // Only the first key is the menu item's accelerator; another key of the
+      // same command, or a host command with no menu item, is the
+      // dispatcher's to run.
+      native: index === 0 && accelerator !== undefined,
+      allowRepeat: spec.allowRepeat ?? false,
+      inModal: spec.inModal ?? false,
     }));
   });
 }
@@ -95,7 +101,8 @@ const startsWith = (sequence: KeySequence, typed: readonly KeyChord[]) =>
 
 /**
  * The bindings that act here for these chords, best first: by rank, then by
- * table order. Native bindings are included only when asked for.
+ * table order. Native bindings are included only when asked for. While a
+ * dialog is open only `inModal` bindings act.
  */
 export function applicableBindings(
   bindings: readonly Binding[],
@@ -106,6 +113,7 @@ export function applicableBindings(
   return bindings
     .flatMap((binding) => {
       if (binding.native && !includeNative) return [];
+      if (context.modal && !binding.inModal) return [];
       if (blockedByTyping(binding, context)) return [];
       if (!startsWith(binding.sequence, typed)) return [];
       const rank = rankIn(binding.when, context.areas);
@@ -121,11 +129,15 @@ export type MatchResult =
   | { kind: "run"; binding: Binding }
   /** The chords so far begin a longer sequence: wait for the next one. */
   | { kind: "pending" }
+  /** A held key repeating a command that does not repeat: swallow it. */
+  | { kind: "repeat"; binding: Binding }
   | undefined;
 
 /**
- * The first enabled binding whose keys are exactly these chords; failing
- * that, whether an enabled binding continues them.
+ * The best enabled binding for these chords decides: one whose keys are
+ * exactly these chords runs; one that continues them makes the matcher wait.
+ * So an exact match in the center does not shadow a longer sequence bound in
+ * the editor, nor the other way round.
  */
 export function matchChords(
   bindings: readonly Binding[],
@@ -133,14 +145,29 @@ export function matchChords(
   context: CommandContext,
   isEnabled: IsEnabled,
 ): MatchResult {
-  const candidates = applicableBindings(bindings, typed, context).filter(
-    (binding) => isEnabled(binding.id, context),
+  const best = applicableBindings(bindings, typed, context).find((binding) =>
+    isEnabled(binding.id, context),
   );
-  const exact = candidates.find(
-    (binding) => binding.sequence.length === typed.length,
-  );
-  if (exact) return { kind: "run", binding: exact };
-  return candidates.length > 0 ? { kind: "pending" } : undefined;
+  if (!best) return undefined;
+  return best.sequence.length === typed.length
+    ? { kind: "run", binding: best }
+    : { kind: "pending" };
+}
+
+/** The first of an event's possible chords that means something here. */
+function matchEvent(
+  bindings: readonly Binding[],
+  pending: readonly KeyChord[],
+  event: KeyEventLike,
+  context: CommandContext,
+  isEnabled: IsEnabled,
+): { result: MatchResult; typed: KeyChord[] } {
+  for (const chord of chordsFromEvent(event)) {
+    const typed = [...pending, chord];
+    const result = matchChords(bindings, typed, context, isEnabled);
+    if (result) return { result, typed };
+  }
+  return { result: undefined, typed: [] };
 }
 
 /** Keeps the chords of a sequence in progress between key presses. */
@@ -155,23 +182,34 @@ export class KeyMatcher {
     private readonly now: () => number = Date.now,
   ) {}
 
+  /** Forgets a sequence in progress: focus moved, or the window lost it. */
+  reset(): void {
+    this.pending = [];
+  }
+
   handle(
-    event: KeyEventLike & Pick<KeyboardEvent, "key">,
+    event: KeyEventLike & Partial<Pick<KeyboardEvent, "repeat">>,
     context: CommandContext,
   ): MatchResult {
     if (isModifierOnly(event)) return undefined;
-    const chord = chordFromEvent(event);
     if (this.pending.length > 0 && this.now() - this.pendingAt > this.timeoutMs)
       this.pending = [];
-    const typed = [...this.pending, chord];
-    const result = matchChords(this.bindings(), typed, context, this.isEnabled);
+    const hadPending = this.pending.length > 0;
+    const { result, typed } = matchEvent(
+      this.bindings(),
+      this.pending,
+      event,
+      context,
+      this.isEnabled,
+    );
     if (result?.kind === "pending") {
       this.pending = typed;
       this.pendingAt = this.now();
       return result;
     }
-    const hadPending = this.pending.length > 0;
     this.pending = [];
+    if (result?.kind === "run" && event.repeat && !result.binding.allowRepeat)
+      return { kind: "repeat", binding: result.binding };
     if (result || !hadPending) return result;
     // A sequence that went nowhere: the last chord may start something.
     return this.handle(event, context);
@@ -202,16 +240,11 @@ export function findConflicts(
   return conflicts;
 }
 
-/** Keys a terminal always gives the app: area cycling and the panel toggle. */
-const TERMINAL_RESERVED = (chord: KeyChord) =>
-  chord.key === "f6" ||
-  (chord.key === "`" && chord.ctrl && !chord.mod && !chord.alt && !chord.shift);
-
 /**
  * Whether a key pressed in a terminal belongs to the app rather than the
- * shell: F6, ⌃`, and a key an enabled command is bound to here (a menu's key
+ * shell: only a key an enabled command is bound to here (a menu's key
  * included, so the shell never sees it). Everything else, ⌃C, ⌃R, the ⌥
- * keys and plain typing, goes to the program.
+ * keys, function keys and plain typing, goes to the program.
  */
 export function terminalKeepsKey(
   event: KeyEventLike,
@@ -219,9 +252,9 @@ export function terminalKeepsKey(
   bindings: readonly Binding[],
   isEnabled: IsEnabled,
 ): boolean {
-  const chord = chordFromEvent(event);
-  if (TERMINAL_RESERVED(chord)) return true;
-  return applicableBindings(bindings, [chord], context, {
-    includeNative: true,
-  }).some((binding) => binding.native || isEnabled(binding.id, context));
+  return chordsFromEvent(event).some((chord) =>
+    applicableBindings(bindings, [chord], context, {
+      includeNative: true,
+    }).some((binding) => binding.native || isEnabled(binding.id, context)),
+  );
 }

@@ -5,7 +5,7 @@ import {
   isHostCommandId,
   isRendererCommandId,
 } from "@daedalus/protocol";
-import { APPLICATION_MENU } from "./menu";
+import { APPLICATION_MENU, buildApplicationMenu } from "./menu";
 
 type Item = (typeof APPLICATION_MENU)[number];
 const actionsIn = (items: readonly Item[]): Item[] =>
@@ -131,5 +131,23 @@ describe("desktop application menu", () => {
     ).toEqual(
       new Set(specs.filter((spec) => spec.menu).map((spec) => spec.id)),
     );
+  });
+
+  test("is rebuilt with the person's keys, so a rebound command has one", () => {
+    const view = buildApplicationMenu({
+      "view.board": ["mod+shift+b"],
+      "terminal.toggle": [],
+    }).find((item) => "label" in item && item.label === "View");
+    const submenu = (view && "submenu" in view ? view.submenu : []) ?? [];
+    const accelerators = Object.fromEntries(
+      submenu.flatMap((item) =>
+        "action" in item && item.action
+          ? [[item.action, item.accelerator] as const]
+          : [],
+      ),
+    );
+    expect(accelerators["view.board"]).toBe("Command+Shift+B");
+    expect(accelerators["terminal.toggle"]).toBeUndefined();
+    expect(accelerators["view.session"]).toBe("Command+3");
   });
 });

@@ -4,27 +4,36 @@ import {
   type CommandArea,
   type CommandId,
   type CommandSpec,
+  type HostCommandId,
+  type KeyOverrides,
+  type RejectedKey,
   type RendererCommandId,
   commandSpec,
   formatAriaKeyShortcuts,
   formatKeyGlyphs,
+  isHostCommandId,
+  keysOf,
+  validateKeyOverrides,
 } from "@daedalus/protocol";
+import { hasOpenScope } from "../use-focus-scope";
 import { type CommandContext, contextFor } from "./context";
 import {
   type Binding,
-  type KeyOverrides,
   KeyMatcher,
   compileBindings,
   findConflicts,
+  rankIn,
   terminalKeepsKey,
 } from "./dispatch";
 
 /**
  * The command table at run time: the shared specs (`@daedalus/protocol`
  * `COMMAND_SPECS`: id, title, group, keys, where they act, menu place) joined
- * to the code that runs each command, which the component owning the state
- * registers with `useCommand`. One keydown dispatcher on the window runs
- * them; the menu, and later the palette, run them by id with `runCommand`.
+ * to the code that runs each command. A renderer command's code is registered
+ * by the component owning its state, with `useCommand`; a host command runs
+ * in the bun process through the bridge `connectHost` installs. One keydown
+ * dispatcher on the window runs them; the menu, and later the palette, run
+ * them by id with `runCommand`.
  */
 
 export interface CommandHandler {
@@ -54,7 +63,38 @@ export function registerCommand(
   };
 }
 
-const handlerFor = (id: CommandId, context: CommandContext) => {
+/** How the window reaches the host: its commands and its menu bar's keys. */
+export interface HostBridge {
+  run(command: HostCommandId): void;
+  setKeyOverrides(overrides: KeyOverrides): void;
+}
+
+let host: HostBridge | undefined;
+
+/** Connects the host; returns the disconnect. */
+export function connectHost(bridge: HostBridge): () => void {
+  host = bridge;
+  bridge.setKeyOverrides(overrides);
+  return () => {
+    if (host === bridge) host = undefined;
+  };
+}
+
+/** Whether the command acts where the context says focus is. */
+const actsHere = (id: CommandId, context: CommandContext) => {
+  const spec = commandSpec(id);
+  if (context.modal && !spec.inModal) return false;
+  return rankIn(spec.when, context.areas) !== undefined;
+};
+
+const handlerFor = (
+  id: CommandId,
+  context: CommandContext,
+): CommandHandler | undefined => {
+  if (isHostCommandId(id)) {
+    const bridge = host;
+    return bridge ? { run: () => bridge.run(id) } : undefined;
+  }
   const list = handlers.get(id) ?? [];
   for (let index = list.length - 1; index >= 0; index -= 1) {
     const handler = list[index];
@@ -63,23 +103,38 @@ const handlerFor = (id: CommandId, context: CommandContext) => {
   return undefined;
 };
 
-export const isCommandEnabled = (id: CommandId, context: CommandContext) =>
+/** Enabled by its own code; the dispatcher checks where it acts itself. */
+const handlerEnabled = (id: CommandId, context: CommandContext) =>
   handlerFor(id, context) !== undefined;
+
+/**
+ * Whether the command would run now: it acts where focus is (its `when`,
+ * and no dialog in the way unless it is `inModal`), and its code says it is
+ * enabled. The same answer for a key, a menu click and the palette.
+ */
+export const isCommandEnabled = (id: CommandId, context: CommandContext) =>
+  actsHere(id, context) && handlerEnabled(id, context);
+
+const currentContext = (
+  element: Element | null,
+  source: CommandContext["source"],
+) => contextFor(element, source, { modal: hasOpenScope() });
 
 /** The context of whatever has focus now, for a command not run by a key. */
 export const focusContext = (
   source: CommandContext["source"] = "palette",
 ): CommandContext =>
-  contextFor(
+  currentContext(
     typeof document === "undefined" ? null : document.activeElement,
     source,
   );
 
-/** Runs a command if it is enabled; says whether it ran. */
+/** Runs a command if it is enabled here; says whether it ran. */
 export function runCommand(
   id: CommandId,
   context: CommandContext = focusContext(),
 ): boolean {
+  if (!actsHere(id, context)) return false;
   const handler = handlerFor(id, context);
   if (!handler) return false;
   handler.run(context);
@@ -108,10 +163,10 @@ export function useCommand(
 }
 
 let overrides: KeyOverrides = {};
-let bindings: Binding[] = compile();
+let bindings: readonly Binding[] = compile(overrides);
 
-function compile(): Binding[] {
-  const compiled = compileBindings(COMMAND_SPECS, overrides);
+function compile(next: KeyOverrides): Binding[] {
+  const compiled = compileBindings(COMMAND_SPECS, next);
   // A key two commands claim in the same place is decided by table order,
   // which is never what anyone meant. The table test fails on one; this
   // catches one a keybindings file introduces.
@@ -125,15 +180,24 @@ function compile(): Binding[] {
 
 export const currentBindings = (): readonly Binding[] => bindings;
 
-/** Replaces the keys of some commands (for a keybindings file). */
-export function setKeyOverrides(next: KeyOverrides): void {
+/**
+ * Replaces the person's keys (from a keybindings file, say). Every key is
+ * checked first; one that does not parse, or names no command, is dropped
+ * and returned, and the rest take effect together, here and in the menu bar.
+ */
+export function setKeyOverrides(raw: unknown): RejectedKey[] {
+  const { overrides: next, rejected } = validateKeyOverrides(raw);
+  const compiled = compile(next);
   overrides = next;
-  bindings = compile();
+  bindings = compiled;
+  matcher.reset();
+  host?.setKeyOverrides(next);
+  return rejected;
 }
 
 /** A command's keys as they stand, overrides applied. */
 export const commandKeys = (id: CommandId): readonly string[] =>
-  overrides[id] ?? commandSpec(id).keys;
+  keysOf(commandSpec(id), overrides);
 
 /** Its first key as macOS glyphs (`⇧⌘]`), for menus, rows and tooltips. */
 export const shortcutLabel = (id: CommandId): string | undefined => {
@@ -154,7 +218,9 @@ export const allCommands = (): (CommandSpec & {
     (spec) => ({ ...spec, keys: commandKeys(spec.id) }),
   );
 
-const matcher = new KeyMatcher(() => bindings, isCommandEnabled);
+// The dispatcher asks only whether the code is enabled: the bindings it
+// matches have already been filtered by area and dialog.
+const matcher = new KeyMatcher(() => bindings, handlerEnabled);
 
 const elementTarget = (event: Event) =>
   event.target instanceof Element ? event.target : null;
@@ -166,12 +232,12 @@ const elementTarget = (event: Event) =>
  */
 function onKeyDown(event: KeyboardEvent) {
   if (event.defaultPrevented || event.isComposing) return;
-  const result = matcher.handle(event, contextFor(elementTarget(event), "key"));
+  const context = currentContext(elementTarget(event), "key");
+  const result = matcher.handle(event, context);
   if (!result) return;
   event.preventDefault();
   event.stopPropagation();
-  if (result.kind === "run")
-    runCommand(result.binding.id, contextFor(elementTarget(event), "key"));
+  if (result.kind === "run") runCommand(result.binding.id, context);
 }
 
 // Which area has focus, kept as focus moves, for whatever shows it (an area
@@ -179,26 +245,31 @@ function onKeyDown(event: KeyboardEvent) {
 let focusedAreas: readonly CommandArea[] = [];
 const focusListeners = new Set<() => void>();
 function onFocusIn(event: FocusEvent) {
+  // A sequence started in one place does not finish in another.
+  matcher.reset();
   const areas = contextFor(elementTarget(event), "key").areas;
   if (areas.join() === focusedAreas.join()) return;
   focusedAreas = areas;
   for (const listener of focusListeners) listener();
 }
+const onBlur = () => matcher.reset();
 
 let installs = 0;
 
-/** Installs the dispatcher and focus tracking; returns the uninstall. */
-export function installKeyDispatcher(target: Window = window): () => void {
+/** Installs the dispatcher and focus tracking on the window; returns the uninstall. */
+export function installKeyDispatcher(): () => void {
   installs += 1;
   if (installs === 1) {
-    target.addEventListener("keydown", onKeyDown, true);
-    target.addEventListener("focusin", onFocusIn, true);
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("focusin", onFocusIn, true);
+    window.addEventListener("blur", onBlur);
   }
   return () => {
     installs -= 1;
     if (installs > 0) return;
-    target.removeEventListener("keydown", onKeyDown, true);
-    target.removeEventListener("focusin", onFocusIn, true);
+    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("focusin", onFocusIn, true);
+    window.removeEventListener("blur", onBlur);
   };
 }
 
@@ -224,8 +295,8 @@ export function useFocusedAreas(): readonly CommandArea[] {
 export function terminalKeyHandler(event: KeyboardEvent): boolean {
   return !terminalKeepsKey(
     event,
-    contextFor(elementTarget(event), "key"),
+    currentContext(elementTarget(event), "key"),
     bindings,
-    isCommandEnabled,
+    handlerEnabled,
   );
 }

@@ -34,7 +34,8 @@ const context = (
   areas: CommandArea[],
   typing = false,
   source: CommandContext["source"] = "key",
-): CommandContext => ({ areas, typing, target: null, source });
+  modal = false,
+): CommandContext => ({ areas, typing, target: null, source, modal });
 
 const press = (
   key: string,
@@ -192,11 +193,70 @@ describe("matchChords", () => {
 
   test("keys a native menu item owns are left to the menu", () => {
     const menu = compileBindings([
-      spec("menu.k", ["mod+k"], { menu: { bar: "View", section: 0 } }),
+      spec("menu.k", ["mod+k", "mod+shift+k"], {
+        menu: { bar: "View", section: 0 },
+      }),
       spec("host.j", ["mod+j"], { runsIn: "host" }),
     ]);
-    expect(menu.every((binding) => binding.native)).toBe(true);
+    // Only the menu item's accelerator is native; a second key, and a host
+    // command with no menu item, are the dispatcher's.
+    expect(menu.map((binding) => binding.native)).toEqual([true, false, false]);
     expect(matchChords(menu, [chord], context([]), always)).toBeUndefined();
+    const j = chordFromEvent(cmd("j", "KeyJ"));
+    expect(matchChords(menu, [j], context([]), always)?.kind).toBe("run");
+  });
+
+  test("a rebound menu command's new key is the menu's, the old one is free", () => {
+    const menu = [
+      spec("menu.k", ["mod+k"], { menu: { bar: "View", section: 0 } }),
+    ];
+    const rebound = compileBindings(menu, {
+      [id("menu.k")]: ["mod+shift+p", "g k"],
+    });
+    expect(rebound.map(({ key, native }) => [key, native])).toEqual([
+      ["shift+mod+p", true],
+      ["g k", false],
+    ]);
+    expect(matchChords(rebound, [chord], context([]), always)).toBeUndefined();
+  });
+
+  test("while a dialog is open only inModal commands act", () => {
+    const modal = compileBindings([
+      spec("global.k", ["mod+k"]),
+      spec("quit.k", ["mod+k"], { inModal: true }),
+    ]);
+    const run = (open: boolean) => {
+      const result = matchChords(
+        modal,
+        [chord],
+        context([], false, "key", open),
+        always,
+      );
+      return result?.kind === "run" ? result.binding.id : undefined;
+    };
+    expect(run(false)).toBe("global.k");
+    expect(run(true)).toBe("quit.k");
+    expect(
+      matchChords(
+        compileBindings([spec("global.k", ["mod+k"])]),
+        [chord],
+        context([], false, "key", true),
+        always,
+      ),
+    ).toBeUndefined();
+  });
+
+  test("the best rank decides between a key and a longer sequence", () => {
+    const mixed = compileBindings([
+      spec("center.k", ["mod+k"], { when: { areas: ["center"] } }),
+      spec("editor.ks", ["mod+k mod+s"], { when: { areas: ["editor"] } }),
+    ]);
+    expect(
+      matchChords(mixed, [chord], context(["editor", "center"]), always)?.kind,
+    ).toBe("pending");
+    expect(matchChords(mixed, [chord], context(["center"]), always)?.kind).toBe(
+      "run",
+    );
   });
 
   test("an override replaces the default keys", () => {
@@ -236,6 +296,36 @@ describe("KeyMatcher", () => {
     expect(matcher.handle(cmd("x", "KeyX"), context([]))).toBeUndefined();
     const result = matcher.handle(cmd("s", "KeyS"), context([]));
     expect(result?.kind === "run" && result.binding.id).toBe("plain");
+  });
+
+  test("focus moving forgets a sequence in progress", () => {
+    const matcher = new KeyMatcher(() => bindings, always);
+    matcher.handle(cmd("k", "KeyK"), context([]));
+    matcher.reset();
+    const result = matcher.handle(cmd("s", "KeyS"), context([]));
+    expect(result?.kind === "run" && result.binding.id).toBe("plain");
+  });
+
+  test("a held key does not repeat a command unless it allows it", () => {
+    const held = { ...cmd("s", "KeyS"), repeat: true };
+    const matcher = new KeyMatcher(() => bindings, always);
+    expect(matcher.handle(held, context([]))?.kind).toBe("repeat");
+    const repeating = new KeyMatcher(
+      () => compileBindings([spec("plain", ["mod+s"], { allowRepeat: true })]),
+      always,
+    );
+    expect(repeating.handle(held, context([]))?.kind).toBe("run");
+  });
+
+  test("a key matches by the layout's character first", () => {
+    // German: / is ⇧7.
+    const slash = compileBindings([spec("help", ["mod+/"])]);
+    const matcher = new KeyMatcher(() => slash, always);
+    const result = matcher.handle(
+      press("/", "Digit7", { metaKey: true, shiftKey: true }),
+      context([]),
+    );
+    expect(result?.kind === "run" && result.binding.id).toBe("help");
   });
 
   test("a sequence times out", () => {
@@ -278,6 +368,20 @@ describe("findConflicts", () => {
 // --- the real table --------------------------------------------------------
 
 describe("the command table", () => {
+  test("a menu item with a key acts everywhere, as the menu does", () => {
+    // macOS delivers a menu accelerator wherever focus is, so a command that
+    // owns one must not be limited to an area: it would fire from the menu
+    // where its keys say it should not, or reach a terminal and fire too.
+    const specs: readonly CommandSpec[] = COMMAND_SPECS;
+    for (const entry of specs.filter(
+      (item) => item.menu && item.keys.length > 0,
+    ))
+      expect({ id: entry.id, when: entry.when }).toEqual({
+        id: entry.id,
+        when: undefined,
+      });
+  });
+
   test("every key in it parses, and ids are unique", () => {
     const ids = COMMAND_SPECS.map((entry) => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -285,11 +389,10 @@ describe("the command table", () => {
   });
 
   const run = (event: ReturnType<typeof press>, target: ElementLike) => {
-    const result = matchChords(
-      realBindings,
-      [chordFromEvent(event)],
+    // As the dispatcher does: a fresh matcher, every chord the event may mean.
+    const result = new KeyMatcher(() => realBindings, always).handle(
+      event,
       contextFor(target, "key"),
-      always,
     );
     return result?.kind === "run" ? result.binding.id : undefined;
   };
@@ -344,9 +447,7 @@ describe("terminalKeepsKey", () => {
   ) =>
     terminalKeepsKey(event, contextFor(target, "key"), realBindings, isEnabled);
 
-  test("the app keeps F6, ⌃` and the keys of its commands", () => {
-    expect(keeps(press("F6", "F6"))).toBe(true);
-    expect(keeps(press("F6", "F6", { shiftKey: true }))).toBe(true);
+  test("the app keeps the keys of its commands, ⌃` among them", () => {
     expect(keeps(press("`", "Backquote", { ctrlKey: true }))).toBe(true);
     expect(keeps(cmd("w", "KeyW"))).toBe(true);
     expect(keeps(cmd("1", "Digit1"))).toBe(true);
@@ -365,6 +466,11 @@ describe("terminalKeepsKey", () => {
     expect(keeps(press("a", "KeyA"))).toBe(false);
     expect(keeps(press("Escape", "Escape"))).toBe(false);
     expect(keeps(press("Enter", "Enter"))).toBe(false);
+    // No command is bound to F6 yet, so htop and mc still get it.
+    expect(keeps(press("F6", "F6"))).toBe(false);
+    expect(keeps(press("F6", "F6", { shiftKey: true }))).toBe(false);
+    // ⌃§ on an international keyboard is not ⌃`.
+    expect(keeps(press("§", "IntlBackslash", { ctrlKey: true }))).toBe(false);
     // ⌘S is no command in a terminal.
     expect(keeps(cmd("s", "KeyS"))).toBe(false);
   });
@@ -381,5 +487,58 @@ describe("terminalKeepsKey", () => {
     expect(
       keeps(press("`", "Backquote", { ctrlKey: true }), integratedInput),
     ).toBe(true);
+  });
+});
+
+describe("registry", () => {
+  test("runCommand honours where a command acts, for the menu too", async () => {
+    const { registerCommand, runCommand, isCommandEnabled } =
+      await import("./registry");
+    let ran = 0;
+    const dispose = registerCommand("tab.close", { run: () => (ran += 1) });
+    const where = (areas: CommandArea[], modal = false) =>
+      context(areas, false, "menu", modal);
+    expect(runCommand("tab.close", where(["sidebar"]))).toBe(false);
+    expect(isCommandEnabled("tab.close", where(["sidebar"]))).toBe(false);
+    expect(runCommand("tab.close", where(["tabs", "center"]))).toBe(true);
+    expect(runCommand("tab.close", where(["tabs", "center"], true))).toBe(
+      false,
+    );
+    expect(ran).toBe(1);
+    dispose();
+    expect(runCommand("tab.close", where(["tabs", "center"]))).toBe(false);
+  });
+
+  test("host commands run through the host, which gets the keys too", async () => {
+    const { connectHost, runCommand, setKeyOverrides, commandKeys } =
+      await import("./registry");
+    const ran: string[] = [];
+    const sent: unknown[] = [];
+    expect(runCommand("app.quit", context([], false, "palette"))).toBe(false);
+    const disconnect = connectHost({
+      run: (command) => ran.push(command),
+      setKeyOverrides: (overrides) => sent.push(overrides),
+    });
+    expect(runCommand("app.quit", context([], false, "palette"))).toBe(true);
+    // Quit acts while a dialog is open.
+    expect(runCommand("app.quit", context([], false, "palette", true))).toBe(
+      true,
+    );
+    expect(ran).toEqual(["app.quit", "app.quit"]);
+
+    // A bad key is dropped and reported; the rest take effect at once.
+    const rejected = setKeyOverrides({
+      "tab.close": ["mod+banana", "mod+shift+w"],
+      "no.such": ["mod+x"],
+    });
+    expect(rejected.map((item) => [item.id, item.key])).toEqual([
+      ["tab.close", "mod+banana"],
+      ["no.such", undefined],
+    ]);
+    expect(commandKeys("tab.close")).toEqual(["mod+shift+w"]);
+    expect(sent.at(-1)).toEqual({ "tab.close": ["mod+shift+w"] });
+    setKeyOverrides({});
+    expect(commandKeys("tab.close")).toEqual(["mod+w"]);
+    disconnect();
   });
 });

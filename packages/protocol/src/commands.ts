@@ -1,4 +1,4 @@
-import { formatAccelerator } from "./keys";
+import { formatAccelerator, normalizeKey } from "./keys";
 
 /**
  * The app's commands as data: what each is called, its default keys, where
@@ -65,11 +65,19 @@ export interface CommandSpec {
    * dispatcher leaves it alone and nothing runs twice.
    */
   readonly menu?: { readonly bar: CommandMenu; readonly section: number };
+  /** A held key repeats the command. Off by default: a held ⌘W closes one tab. */
+  readonly allowRepeat?: boolean;
+  /**
+   * Its keys act while a dialog is open. Off by default, since a dialog owns
+   * the keyboard: the page behind it is inert and its commands wait.
+   */
+  readonly inModal?: boolean;
 }
 
 export const COMMAND_SPECS = [
   {
     id: "app.checkForUpdates",
+    inModal: true,
     title: "Check for Updates…",
     group: "App",
     keys: [],
@@ -81,6 +89,7 @@ export const COMMAND_SPECS = [
   // tmux server, which is exactly `daedal shutdown`.
   {
     id: "app.quitAndShutDown",
+    inModal: true,
     title: "Quit and Shut Down Sessions",
     group: "App",
     keys: ["mod+shift+q"],
@@ -92,6 +101,7 @@ export const COMMAND_SPECS = [
   // never be told what keeps running.
   {
     id: "app.quit",
+    inModal: true,
     title: "Quit Daedalus",
     group: "App",
     keys: ["mod+q"],
@@ -206,11 +216,79 @@ export const commandSpec = (id: CommandId): CommandSpec =>
   SPECS.find((spec) => spec.id === id) as CommandSpec;
 
 /**
- * The key a command's menu item shows and owns, if it has one: its first key,
- * when that is a single chord a menu can show.
+ * Keys a person chose, replacing a command's default keys; an empty list
+ * unbinds it. Both sides read them: the renderer's dispatcher and the host's
+ * menu, so a rebound menu command has one live key.
  */
-export const menuAccelerator = (spec: CommandSpec): string | undefined =>
-  spec.menu && spec.keys[0] ? formatAccelerator(spec.keys[0]) : undefined;
+export type KeyOverrides = Partial<Record<CommandId, readonly string[]>>;
+
+/** A command's keys, overrides applied. */
+export const keysOf = (
+  spec: CommandSpec,
+  overrides: KeyOverrides = {},
+): readonly string[] => overrides[spec.id as CommandId] ?? spec.keys;
+
+export interface RejectedKey {
+  id: string;
+  key?: string;
+  reason: string;
+}
+
+/**
+ * Reads overrides from anywhere (a keybindings file, an RPC), keeping every
+ * key that parses and reporting the rest, so one typo costs one key rather
+ * than the whole file.
+ */
+export function validateKeyOverrides(raw: unknown): {
+  overrides: KeyOverrides;
+  rejected: RejectedKey[];
+} {
+  const overrides: Partial<Record<CommandId, string[]>> = {};
+  const rejected: RejectedKey[] = [];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    return {
+      overrides,
+      rejected: raw === undefined ? [] : [{ id: "", reason: "Not an object" }],
+    };
+  for (const [id, keys] of Object.entries(raw)) {
+    if (!isCommandId(id)) {
+      rejected.push({ id, reason: "Unknown command" });
+      continue;
+    }
+    if (!Array.isArray(keys)) {
+      rejected.push({ id, reason: "Keys must be a list" });
+      continue;
+    }
+    const valid: string[] = [];
+    for (const key of keys) {
+      try {
+        if (typeof key !== "string") throw new Error("Not a string");
+        normalizeKey(key);
+        valid.push(key);
+      } catch (error) {
+        rejected.push({
+          id,
+          key: String(key),
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    overrides[id] = valid;
+  }
+  return { overrides, rejected };
+}
+
+/**
+ * The key a command's menu item shows and owns, if it has one: its first key,
+ * overrides applied, when that is a single chord a menu can show.
+ */
+export const menuAccelerator = (
+  spec: CommandSpec,
+  overrides: KeyOverrides = {},
+): string | undefined => {
+  const first = keysOf(spec, overrides)[0];
+  return spec.menu && first ? formatAccelerator(first) : undefined;
+};
 
 export interface MenuCommandItem {
   id: CommandId;
@@ -218,14 +296,22 @@ export interface MenuCommandItem {
   accelerator?: string;
 }
 
-/** A menu's commands, a list per section, in section and table order. */
-export function menuSections(bar: CommandMenu): MenuCommandItem[][] {
+export interface MenuSection {
+  section: number;
+  items: MenuCommandItem[];
+}
+
+/** A menu's commands by section, in section and table order. */
+export function menuSections(
+  bar: CommandMenu,
+  overrides: KeyOverrides = {},
+): MenuSection[] {
   const sections = new Map<number, MenuCommandItem[]>();
   for (const spec of COMMAND_SPECS as readonly (CommandSpec & {
     id: CommandId;
   })[]) {
     if (spec.menu?.bar !== bar) continue;
-    const accelerator = menuAccelerator(spec);
+    const accelerator = menuAccelerator(spec, overrides);
     const item: MenuCommandItem = {
       id: spec.id,
       title: spec.title,
@@ -237,5 +323,5 @@ export function menuSections(bar: CommandMenu): MenuCommandItem[][] {
   }
   return [...sections.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([, items]) => items);
+    .map(([section, items]) => ({ section, items }));
 }

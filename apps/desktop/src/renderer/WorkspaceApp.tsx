@@ -222,6 +222,8 @@ import { TerminalClipboardGate } from "./terminal-clipboard";
 import { isTopmostScope, useFocusScope } from "./use-focus-scope";
 import { onTabListKeyDown, rovingTabIndex } from "./tab-roving";
 import {
+  connectHost,
+  focusContext,
   runCommand,
   terminalKeyHandler,
   useCommand,
@@ -2952,7 +2954,24 @@ export function WorkspaceApp({
   // clicks arrive by command id. See `commands/`.
   useKeyDispatcher();
   useEffect(
-    () => client.subscribeCommands((command) => runCommand(command)),
+    () =>
+      client.subscribeCommands((command) =>
+        runCommand(command, focusContext("menu")),
+      ),
+    [client],
+  );
+  // Host commands (quit, the World window) run in the host, and the menu bar
+  // it draws takes the same keys the dispatcher does.
+  useEffect(
+    () =>
+      connectHost({
+        run: (command) => {
+          void client.request.commandRun?.({ command }).catch(() => {});
+        },
+        setKeyOverrides: (overrides) => {
+          void client.request.keyOverridesSet?.({ overrides }).catch(() => {});
+        },
+      }),
     [client],
   );
   useCommand("view.board", { run: () => setView("board") });
