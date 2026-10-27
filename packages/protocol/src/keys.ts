@@ -64,6 +64,7 @@ const NAMED_KEYS = new Set([
   "end",
   "pageup",
   "pagedown",
+  "contextmenu",
 ]);
 
 const isFunctionKey = (key: string) => /^f([1-9]|1[0-9]|2[0-4])$/.test(key);
@@ -156,6 +157,7 @@ const EVENT_KEY_NAMES: Record<string, string> = {
   End: "end",
   PageUp: "pageup",
   PageDown: "pagedown",
+  ContextMenu: "contextmenu",
 };
 
 /** The fields of a `KeyboardEvent` the matcher reads. */
@@ -245,6 +247,7 @@ const GLYPHS: Record<string, string> = {
   end: "↘",
   pageup: "⇞",
   pagedown: "⇟",
+  contextmenu: "Menu",
 };
 
 const keyGlyph = (key: string) =>
@@ -278,6 +281,7 @@ const ARIA_KEYS: Record<string, string> = {
   end: "End",
   pageup: "PageUp",
   pagedown: "PageDown",
+  contextmenu: "ContextMenu",
 };
 
 /**

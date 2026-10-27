@@ -345,6 +345,8 @@ export function SessionMenu({
   onRoutines,
   onOrchestration,
   actions = [],
+  returnFocus,
+  triggerTabIndex,
 }: {
   name: string;
   pinned: boolean;
@@ -368,11 +370,16 @@ export function SessionMenu({
   onOrchestration: (granted: boolean) => void;
   /** Its card's actions, each with a pin. */
   actions?: MenuAction[];
+  /** Where focus goes when the menu closes; see `Menu`. */
+  returnFocus?: () => void;
+  triggerTabIndex?: number;
 }) {
   return (
     <Menu
       align="end"
       className="session-card-menu"
+      returnFocus={returnFocus}
+      triggerTabIndex={triggerTabIndex}
       label={`More actions for ${name}`}
       menuLabel={`Actions for ${name}`}
       placement="left"
@@ -490,6 +497,8 @@ export function WorkspaceMenu({
   onAutoRebirth,
   cloud,
   actions = [],
+  returnFocus,
+  triggerTabIndex,
 }: {
   name: string;
   /** The workspace's own rebirth threshold; null takes the global one. */
@@ -502,11 +511,16 @@ export function WorkspaceMenu({
   cloud?: WorkspaceCloudControls;
   /** Its card's other actions, each with a pin. */
   actions?: MenuAction[];
+  /** Where focus goes when the menu closes; see `Menu`. */
+  returnFocus?: () => void;
+  triggerTabIndex?: number;
 }) {
   return (
     <Menu
       align="end"
       className="session-card-menu workspace-card-menu"
+      returnFocus={returnFocus}
+      triggerTabIndex={triggerTabIndex}
       label={`Settings of ${name}`}
       menuLabel={`Settings of ${name}`}
       placement="left"

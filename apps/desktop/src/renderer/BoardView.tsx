@@ -6,7 +6,8 @@
  * before it answers "what stage was this filed under". The lanes come from
  * `board-lanes.ts`; this file only draws them and forwards clicks.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { gridMove, gridTabStop } from "./navigation/board-grid";
 import { accountModelKey } from "./account-models";
 import { askConfirm } from "./dialogs";
 import {
@@ -709,6 +710,28 @@ export function BoardView(props: BoardViewProps) {
       group.tasks.map((task) => [task.id, group.lane] as const),
     ),
   );
+  // The cards are one Tab stop; the arrow keys move between them (see
+  // `gridMove`). Folded lanes are left out, as their cards are not shown.
+  const lanesRef = useRef<HTMLDivElement>(null);
+  const [focusedCardId, setFocusedCardId] = useState<string>();
+  const shownLanes =
+    tasks.length === 0
+      ? []
+      : groups
+          .filter(({ lane }) => !collapsed.has(lane))
+          .map(({ tasks: laneTasks }) => laneTasks.map((task) => task.id));
+  const cardTabStop = gridTabStop(
+    shownLanes,
+    focusedCardId,
+    props.selectedTaskId,
+  );
+  const focusCard = (id: string) => {
+    const card = lanesRef.current?.querySelector<HTMLElement>(
+      `.board-card[data-task-id="${CSS.escape(id)}"]`,
+    );
+    card?.focus();
+    card?.scrollIntoView({ block: "nearest" });
+  };
   const submitCapture = async () => {
     const title = capture.trim();
     if (!title || capturing) return;
@@ -785,19 +808,30 @@ export function BoardView(props: BoardViewProps) {
       <article
         aria-label={cardLabel}
         className={`board-card lane-${lane} ${task.id === props.selectedTaskId ? "selected" : ""}`}
+        data-task-id={task.id}
         data-task-number={task.number}
         data-workspace-id={task.workspaceId}
         key={task.id}
         onClick={() => props.onSelectTask(task)}
+        onFocus={(event) => {
+          if (event.target === event.currentTarget) setFocusedCardId(task.id);
+        }}
         onKeyDown={(event) => {
-          // Only the card itself: Enter on a button inside it is the
+          // Only the card itself: keys on a button inside it are the
           // button's.
           if (event.target !== event.currentTarget) return;
+          if (event.metaKey || event.ctrlKey || event.altKey) return;
+          const next = gridMove(shownLanes, task.id, event.key);
+          if (next) {
+            event.preventDefault();
+            focusCard(next);
+            return;
+          }
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();
           props.onSelectTask(task);
         }}
-        tabIndex={0}
+        tabIndex={task.id === cardTabStop ? 0 : -1}
       >
         <div className="board-card-title">
           {workspaceLabel !== undefined && (
@@ -1082,7 +1116,7 @@ export function BoardView(props: BoardViewProps) {
   };
 
   return (
-    <div className="board-view">
+    <div className="board-view" data-area="board">
       <div className="board-toolbar">
         <div>
           <strong>Tasks</strong>
@@ -1111,7 +1145,7 @@ export function BoardView(props: BoardViewProps) {
           </small>
         )}
       </div>
-      <div className="board-lanes">
+      <div className="board-lanes" ref={lanesRef}>
         {/* Deliberately not a <form>: Enter submitting through the browser's
             implicit-submission path is what wedged the explorer's renderer. */}
         {workspace && (

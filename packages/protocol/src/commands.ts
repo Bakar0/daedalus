@@ -11,9 +11,10 @@ import { formatAccelerator, normalizeKey } from "./keys";
  */
 
 /**
- * Where focus is. The four regions carry `data-area` on their root; the rest
- * are found inside them: `tabs` is the center's dockview, `terminal` any
- * xterm, `editor` a Monaco editor.
+ * Where focus is. The regions (sidebar, center, right panel, terminal panel,
+ * and toasts while any show) carry `data-area` on their root; the rest are
+ * found inside them: `tabs` is the center's dockview, `terminal` any xterm,
+ * `editor` a Monaco editor, `board` the task cards.
  */
 export const COMMAND_AREAS = [
   "sidebar",
@@ -25,11 +26,13 @@ export const COMMAND_AREAS = [
   "terminal",
   "board",
   "list",
+  "toasts",
 ] as const;
 
 export type CommandArea = (typeof COMMAND_AREAS)[number];
 
-export type CommandGroup = "App" | "View" | "Tabs" | "Terminal" | "Panels";
+export type CommandGroup =
+  "App" | "File" | "Go" | "View" | "Tabs" | "Terminal" | "Panels";
 
 /** The menus of the menu bar that hold commands. */
 export type CommandMenu = "Daedalus" | "View";
@@ -189,6 +192,108 @@ export const COMMAND_SPECS = [
     group: "Tabs",
     keys: ["mod+shift+["],
     when: { areas: ["tabs"] },
+  },
+  // Phase 2: moving between areas and inside them. None has a menu item yet
+  // (the File, Go and Help menus come later), so the dispatcher runs them.
+  // F6 is kept from the shell too, so it works from inside a terminal.
+  {
+    id: "area.next",
+    title: "Focus Next Area",
+    group: "Go",
+    keys: ["f6"],
+  },
+  {
+    id: "area.previous",
+    title: "Focus Previous Area",
+    group: "Go",
+    keys: ["shift+f6"],
+  },
+  {
+    id: "area.sidebar",
+    title: "Focus Workspaces",
+    group: "Go",
+    keys: ["mod+0"],
+  },
+  {
+    id: "panel.files",
+    title: "Show Files",
+    group: "Panels",
+    keys: ["mod+shift+e"],
+  },
+  {
+    id: "panel.repositories",
+    title: "Show Repositories",
+    group: "Panels",
+    keys: ["mod+shift+r"],
+  },
+  // ⌥⌘↑ / ⌥⌘↓ and ⌘[ / ⌘] are Monaco's add-cursor and indent keys, so they
+  // leave the editor alone.
+  {
+    id: "session.next",
+    title: "Next Session",
+    group: "Go",
+    keys: ["mod+alt+down"],
+    when: { not: ["editor"] },
+  },
+  {
+    id: "session.previous",
+    title: "Previous Session",
+    group: "Go",
+    keys: ["mod+alt+up"],
+    when: { not: ["editor"] },
+  },
+  {
+    id: "session.nextNeedsYou",
+    title: "Next Session That Needs You",
+    group: "Go",
+    keys: ["mod+shift+a"],
+  },
+  {
+    id: "history.back",
+    title: "Back",
+    group: "Go",
+    keys: ["mod+["],
+    when: { not: ["editor"] },
+  },
+  {
+    id: "history.forward",
+    title: "Forward",
+    group: "Go",
+    keys: ["mod+]"],
+    when: { not: ["editor"] },
+  },
+  {
+    id: "session.new",
+    title: "New Session…",
+    group: "File",
+    keys: ["mod+n"],
+  },
+  {
+    id: "task.new",
+    title: "New Task…",
+    group: "File",
+    keys: ["mod+shift+n"],
+  },
+  {
+    id: "terminal.new",
+    title: "New Terminal",
+    group: "File",
+    keys: ["mod+t"],
+  },
+  {
+    id: "app.settings",
+    title: "Settings…",
+    group: "App",
+    keys: ["mod+,"],
+  },
+  // The focused sidebar item's own menu: ⇧F10, or the menu key on a
+  // keyboard that has one.
+  {
+    id: "item.menu",
+    title: "Show Item Actions",
+    group: "Go",
+    keys: ["shift+f10", "contextmenu"],
+    when: { areas: ["sidebar"] },
   },
 ] as const satisfies readonly CommandSpec[];
 

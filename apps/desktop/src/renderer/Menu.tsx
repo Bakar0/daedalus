@@ -101,9 +101,11 @@ export function Menu({
   label,
   menuLabel,
   placement = "below",
+  returnFocus,
   summary,
   summaryClassName,
   title,
+  triggerTabIndex,
 }: {
   /** Which edge of the trigger the popover lines up with. */
   align?: "start" | "end";
@@ -117,9 +119,16 @@ export function Menu({
   menuLabel: string;
   /** Under the trigger, or beside it on its left. */
   placement?: "below" | "left";
+  /**
+   * Where focus goes when the menu closes by key or by an item, instead of
+   * the trigger: the sidebar item whose menu this is, say.
+   */
+  returnFocus?: () => void;
   summary: ReactNode;
   summaryClassName?: string;
   title?: string;
+  /** -1 keeps the trigger out of the Tab order, for a row reached by ⇧F10. */
+  triggerTabIndex?: number;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -129,11 +138,15 @@ export function Menu({
     [
       ...(ref.current?.querySelectorAll<HTMLElement>(ITEMS) ?? []),
     ] as HTMLElement[];
-  const close = (returnFocus: boolean) => {
+  const returnFocusRef = useRef(returnFocus);
+  returnFocusRef.current = returnFocus;
+  const close = (giveFocusBack: boolean) => {
     const details = ref.current;
     if (!details?.open) return;
     details.open = false;
-    if (returnFocus) details.querySelector("summary")?.focus();
+    if (!giveFocusBack) return;
+    if (returnFocusRef.current) returnFocusRef.current();
+    else details.querySelector("summary")?.focus();
   };
 
   // Into the top layer while open, placed against the trigger, and placed
@@ -235,6 +248,7 @@ export function Menu({
         aria-haspopup="menu"
         aria-label={label}
         className={summaryClassName}
+        tabIndex={triggerTabIndex}
         title={title}
       >
         {summary}

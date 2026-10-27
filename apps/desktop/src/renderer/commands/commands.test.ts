@@ -431,6 +431,36 @@ describe("the command table", () => {
     expect(run(optCmdB, xtermInput)).toBe("panel.toggleWorkspacePanel");
   });
 
+  test("the history and session keys leave Monaco's indent and cursor keys alone", () => {
+    const back = press("[", "BracketLeft", { metaKey: true });
+    const next = press("ArrowDown", "ArrowDown", {
+      metaKey: true,
+      altKey: true,
+    });
+    expect(run(back, monacoInput)).toBeUndefined();
+    expect(run(next, monacoInput)).toBeUndefined();
+    expect(run(back, xtermInput)).toBe("history.back");
+    expect(run(next, sidebarButton)).toBe("session.next");
+  });
+
+  test("F6 and the new-item keys act everywhere, typing included", () => {
+    expect(run(press("F6", "F6"), sidebarInput)).toBe("area.next");
+    expect(run(press("F6", "F6", { shiftKey: true }), monacoInput)).toBe(
+      "area.previous",
+    );
+    expect(run(cmd("n", "KeyN"), monacoInput)).toBe("session.new");
+    expect(
+      run(press("N", "KeyN", { metaKey: true, shiftKey: true }), preview),
+    ).toBe("task.new");
+    expect(run(cmd(",", "Comma"), xtermInput)).toBe("app.settings");
+  });
+
+  test("⇧F10 opens an item's menu in the sidebar only", () => {
+    const shiftF10 = press("F10", "F10", { shiftKey: true });
+    expect(run(shiftF10, sidebarButton)).toBe("item.menu");
+    expect(run(shiftF10, xtermInput)).toBeUndefined();
+  });
+
   test("the menu's keys are left to the menu", () => {
     expect(run(cmd("1", "Digit1"), sidebarButton)).toBeUndefined();
     expect(
@@ -466,13 +496,30 @@ describe("terminalKeepsKey", () => {
     expect(keeps(press("a", "KeyA"))).toBe(false);
     expect(keeps(press("Escape", "Escape"))).toBe(false);
     expect(keeps(press("Enter", "Enter"))).toBe(false);
-    // No command is bound to F6 yet, so htop and mc still get it.
-    expect(keeps(press("F6", "F6"))).toBe(false);
-    expect(keeps(press("F6", "F6", { shiftKey: true }))).toBe(false);
+    // The other function keys stay the program's (htop, mc).
+    expect(keeps(press("F5", "F5"))).toBe(false);
+    expect(keeps(press("F10", "F10"))).toBe(false);
     // ⌃§ on an international keyboard is not ⌃`.
     expect(keeps(press("§", "IntlBackslash", { ctrlKey: true }))).toBe(false);
     // ⌘S is no command in a terminal.
     expect(keeps(cmd("s", "KeyS"))).toBe(false);
+  });
+
+  test("F6 and ⇧F6 move between areas from inside a terminal", () => {
+    expect(keeps(press("F6", "F6"))).toBe(true);
+    expect(keeps(press("F6", "F6", { shiftKey: true }))).toBe(true);
+    expect(keeps(press("F6", "F6"), integratedInput)).toBe(true);
+  });
+
+  test("the session and history keys are kept, being ⌘ keys", () => {
+    expect(keeps(press("[", "BracketLeft", { metaKey: true }))).toBe(true);
+    expect(keeps(press("]", "BracketRight", { metaKey: true }))).toBe(true);
+    expect(
+      keeps(press("ArrowDown", "ArrowDown", { metaKey: true, altKey: true })),
+    ).toBe(true);
+    expect(keeps(cmd("n", "KeyN"))).toBe(true);
+    expect(keeps(cmd("t", "KeyT"))).toBe(true);
+    expect(keeps(cmd("0", "Digit0"))).toBe(true);
   });
 
   test("a command that is disabled leaves its key to the shell", () => {

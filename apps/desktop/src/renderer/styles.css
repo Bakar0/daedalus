@@ -35,6 +35,24 @@ button:disabled {
   outline: 2px solid #4596fe;
   outline-offset: 2px;
 }
+/* The area keys will act in, while the keyboard is driving (F6, Tab, the
+   arrows and the area keys set `data-keyboard-nav`; a pointer clears it): a
+   thin accent edge inside the region's border. */
+/* A task page opened by a key takes focus; its ring sits inside the page. */
+.task-page:focus-visible {
+  outline-offset: -2px;
+}
+html[data-keyboard-nav]
+  :is(
+    [data-area="sidebar"],
+    [data-area="center"],
+    [data-area="right-panel"],
+    [data-area="terminal-panel"],
+    [data-area="toasts"]
+  ):focus-within {
+  outline: 1px solid rgb(69 150 254 / 0.75);
+  outline-offset: -1px;
+}
 
 .app {
   --panel: rgb(14 19 33 / 0.88);

@@ -63,6 +63,35 @@ The chevron on a workspace card folds its list, and the fold button in the Works
 
 Opening a session switches to the session view: the terminal takes the center. Opening a file or a task from the side panel leaves it. A workspace remembered on the session view, or on the old Sessions tab, comes back to its last session, or to its board if it has none.
 
+## Keyboard
+
+Every key is a command in one table (`COMMAND_SPECS` in `packages/protocol/src/commands.ts`), matched by one dispatcher in the renderer (`apps/desktop/src/renderer/commands/`). A terminal keeps a key from the shell only when an enabled command is bound to it, so ⌃C, ⌃R and the ⌥ keys always reach the program.
+
+The window has five areas, each a labeled region: the sidebar, the center, the right panel, the integrated terminal panel while it is open, and the toasts while any show. Each remembers where focus was in it and goes back there; otherwise it focuses its natural default (the selected sidebar item, the center's terminal or editor, the panel's open tab, the active terminal). While the keyboard is driving, the focused area has a thin accent edge.
+
+| Key               | Does                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| F6 / ⇧F6          | Next / previous area, from a terminal or the editor too                              |
+| ⌘0                | Focus the sidebar                                                                    |
+| ⇧⌘E / ⇧⌘R         | Right panel's Files (focusing the tree) / Repositories tab, unfolding the panel      |
+| ⌃`                | Open the integrated terminal and focus it; from inside it, close it and return focus |
+| ⌘1 to ⌘4          | Workspace, Board, Session (focusing its terminal), World                             |
+| ⌥⌘↓ / ⌥⌘↑         | Next / previous session in sidebar order, across workspaces                          |
+| ⇧⌘A               | Next session that needs you, round them all                                          |
+| ⌘[ / ⌘]           | Back / forward through the sessions and tasks visited                                |
+| ⌘N / ⇧⌘N          | New session in the current workspace / new task                                      |
+| ⌘T                | New integrated terminal                                                              |
+| ⌘,                | Settings                                                                             |
+| ⇧F10              | The focused sidebar item's menu                                                      |
+| ⌥⌘B               | Fold the right panel                                                                 |
+| ⌘S, ⌘W, ⇧⌘[ / ⇧⌘] | Save, close, previous / next center tab                                              |
+
+⌥⌘↑/↓ and ⌘[ / ⌘] are left to Monaco in the editor, where they add cursors and indent. ⌘F is Monaco's own find; the other areas have no find yet.
+
+The sidebar is a tree and one Tab stop: ↑/↓ move, → unfolds a workspace or enters its first session, ← folds it or goes to the parent, Home/End, a letter jumps to the next item starting with it, Enter selects a workspace or opens a session with its terminal focused, and ⌥↑/↓ reorder. The board's cards are one Tab stop too: ↑/↓ move within a lane and on into the next, ←/→ change lane at the same position, Home/End go to the lane's ends, and Enter opens the task.
+
+Focus follows the user's intent: at start it is on the selected sidebar item (a restored session does not take the caret); opening a session by Enter, ⌥⌘↑/↓, ⇧⌘A or ⌘[ focuses its terminal; going to a workspace that comes back to its last session focuses that terminal, and otherwise stays on the sidebar item; archiving a sidebar item moves focus to its neighbour; a task created in the dialog opens with focus on its page.
+
 ## Agent status and attention
 
 Lifecycle status answers "is this session running". Activity answers "does it
