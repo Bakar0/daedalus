@@ -77,13 +77,17 @@ const GLOBAL_RANK = 1_000;
  * area it names (0 is the focused area itself), `GLOBAL_RANK` for a binding
  * that acts everywhere, or `undefined` when it does not act here at all.
  * A lower rank wins, so a key bound in the editor beats the same key bound in
- * the center, which beats it bound globally.
+ * the center, which beats it bound globally. For a key (`forKey`), the
+ * areas its `keysNot` leaves alone count as well.
  */
 export function rankIn(
   when: CommandWhen | undefined,
   areas: readonly CommandArea[],
+  { forKey = true }: { forKey?: boolean } = {},
 ): number | undefined {
   if (when?.not?.some((area) => areas.includes(area))) return undefined;
+  if (forKey && when?.keysNot?.some((area) => areas.includes(area)))
+    return undefined;
   if (!when?.areas) return GLOBAL_RANK;
   const index = areas.findIndex((area) => when.areas?.includes(area));
   return index < 0 ? undefined : index;

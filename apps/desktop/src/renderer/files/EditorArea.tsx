@@ -23,6 +23,7 @@ import type { DesktopClient } from "../client-types";
 import { type AppTheme, appearanceOf } from "../theme";
 import { askConfirm } from "../dialogs";
 import { type CommandContext, useCommand } from "../commands";
+import { Tooltip } from "../keyboard-ui";
 import {
   focusIsLost,
   restoreCandidates,
@@ -1179,13 +1180,11 @@ function HeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
         </button>
       )}
       {doc && isDirty(doc) && !isReadOnlyPath(params.path) && (
-        <button
-          onClick={() => void context.save(doc)}
-          title="Save (⌘S)"
-          type="button"
-        >
-          Save
-        </button>
+        <Tooltip command="tab.save" label="Save">
+          <button onClick={() => void context.save(doc)} type="button">
+            Save
+          </button>
+        </Tooltip>
       )}
       {focus}
     </div>

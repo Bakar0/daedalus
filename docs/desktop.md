@@ -69,22 +69,24 @@ Every key is a command in one table (`COMMAND_SPECS` in `packages/protocol/src/c
 
 The window has five areas, each a labeled region: the sidebar, the center, the right panel, the integrated terminal panel while it is open, and the toasts while any show. Each remembers where focus was in it and goes back there; otherwise it focuses its natural default (the selected sidebar item, the center's terminal or editor, the panel's open tab, the active terminal). While the keyboard is driving, the focused area has a thin accent edge.
 
-| Key               | Does                                                                                 |
-| ----------------- | ------------------------------------------------------------------------------------ |
-| F6 / ⇧F6          | Next / previous area, from a terminal or the editor too                              |
-| ⌘0                | Focus the sidebar                                                                    |
-| ⇧⌘E / ⇧⌘R         | Right panel's Files (focusing the tree) / Repositories tab, unfolding the panel      |
-| ⌃`                | Open the integrated terminal and focus it; from inside it, close it and return focus |
-| ⌘1 to ⌘4          | Workspace, Board, Session (focusing its terminal), World                             |
-| ⌥⌘↓ / ⌥⌘↑         | Next / previous session in sidebar order, across workspaces                          |
-| ⇧⌘A               | Next session that needs you, round them all                                          |
-| ⌘[ / ⌘]           | Back / forward through the sessions and tasks visited                                |
-| ⌘N / ⇧⌘N          | New session in the current workspace / new task                                      |
-| ⌘T                | New integrated terminal                                                              |
-| ⌘,                | Settings                                                                             |
-| ⇧F10              | The focused sidebar item's menu                                                      |
-| ⌥⌘B               | Fold the right panel                                                                 |
-| ⌘S, ⌘W, ⇧⌘[ / ⇧⌘] | Save, close, previous / next center tab                                              |
+| Key               | Does                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------- |
+| F6 / ⇧F6          | Next / previous area, from a terminal or the editor too                               |
+| ⌘0                | Focus the sidebar                                                                     |
+| ⇧⌘E / ⇧⌘R         | Right panel's Files (focusing the tree) / Repositories tab, unfolding the panel       |
+| ⌃`                | Open the integrated terminal and focus it; from inside it, close it and return focus  |
+| ⌘1 to ⌘4          | Workspace, Board, Session (focusing its terminal), World                              |
+| ⌥⌘↓ / ⌥⌘↑         | Next / previous session in sidebar order, across workspaces                           |
+| ⇧⌘A               | Next session that needs you, round them all                                           |
+| ⌘[ / ⌘]           | Back / forward through the sessions and tasks visited                                 |
+| ⌘N / ⇧⌘N          | New session in the current workspace / new task                                       |
+| ⌘T                | New integrated terminal                                                               |
+| ⌘,                | Settings                                                                              |
+| ⌘K                | Command palette, from anywhere (a terminal and the editor too)                        |
+| ⌘/                | Keyboard shortcuts sheet (in the editor ⌘/ stays Monaco's toggle comment)             |
+| ⇧F10              | The focused item's actions: a sidebar item's or a file's menu, a board card's palette |
+| ⌥⌘B               | Fold the right panel                                                                  |
+| ⌘S, ⌘W, ⇧⌘[ / ⇧⌘] | Save, close, previous / next center tab                                               |
 
 ⌥⌘↑/↓ and ⌘[ / ⌘] are left to Monaco in the editor, where they add cursors and indent. ⌘F is Monaco's own find; the other areas have no find yet.
 
@@ -92,7 +94,17 @@ The sidebar is a tree and one Tab stop: ↑/↓ move, → unfolds a workspace or
 
 Focus follows the user's intent: at start it is on the selected sidebar item (a restored session or terminal does not take the caret); opening a session by Enter, ⌥⌘↑/↓, ⇧⌘A or ⌘[ focuses its terminal; opening a workspace with Enter focuses its last session's terminal when it comes back to one, while a mouse click or a toast leaves the caret where it is; a terminal takes the caret when the user makes it or brings it to the front, never on its own; archiving a sidebar item moves focus to its neighbour; closing or deleting a task page returns focus to its card, or the center; a task created in the dialog opens with focus on its page. Keys that leave the page (⌥⌘↑/↓, ⇧⌘A, ⌘[ ⌘], ⌘N, ⇧⌘N) wait while text is typed outside a terminal or a brief is being edited, so no unsaved text is lost.
 
-In the tree, a failed launch is dismissed with Delete, the archived sessions list opens with →, and an archived session is restored with Enter or deleted with Delete (after a confirm). What a card shows only when it applies (Mark as seen, Revive, Add a member, cancelling a cloud move, dismissing a notice) is also in the item's ⇧F10 menu.
+### Learning the keys
+
+**Command palette (⌘K).** One field over everything: every command that would run where focus was when it opened, each with its key on the right; sessions (with their status and a dot when one needs you), tasks (number and title) and workspaces to go to; and, when it was opened with a sidebar item, a board card or a file focused, that item's actions first, the same list its ⇧F10 menu shows (`item-actions.ts`: the menus and the palette read one definition). A prefix narrows it: `>` commands, `#` tasks, `@` sessions. Rows are fuzzy-matched; the group with the best match comes first, the item's actions always first, and commands used lately float up (kept in local storage). Enter runs the active row after focus has gone back to where it was, so a command acts as its key would there; an action that asks for confirmation (archive) wants a second Enter. Escape or ⌘K closes it. It is a dialog with the app's focus scope. Built in-house (`palette/`) rather than on cmdk, whose Radix dialog brings a second focus trap.
+
+**Shortcuts sheet (⌘/, Help › Keyboard Shortcuts).** Every command with a key, grouped as the command table groups them, then the keys elements answer to themselves (the sidebar tree, the board, the file tree, the terminal, the task page, the tab strip). The groups for the area focus was in come first. The search matches every word against the name, the group and the glyphs, so `⌘[` finds Back.
+
+**Tooltips.** Controls tied to a command (new session, new task, Settings, the terminal toggle, World, the panel fold, the Files and Repositories tabs, Save, closing a task) show a tooltip on hover and on keyboard focus, with the key in `<kbd>`, and carry `aria-keyshortcuts` and `aria-describedby` (`Tooltip` in `keyboard-ui.tsx`). Empty states (no tab open, an empty board, no task open, no workspaces) end with a muted line of keys such as "⌘N new session · ⌘K jump anywhere · ⌘/ all shortcuts". Every glyph comes from the command table, so a rebound key shows rebound.
+
+**Menu bar.** File (New Session, New Task, New Terminal, Save, Close Tab), View (adds Fold Workspace Panel), Go (the areas, next/previous area, session and tab, Next Session That Needs You, Back/Forward, Command Palette) and Help (Keyboard Shortcuts), plus Settings… in the Daedalus menu, all generated from `COMMAND_SPECS`. A native accelerator fires wherever focus is, before a field, Monaco or a terminal sees the key, and Electrobun's `ApplicationMenu` (2.0.4) has no way to show a key without owning it. So a command whose key must still reach those where it does not act (⌘S, ⌘W, ⇧⌘[ / ⇧⌘], F6 / ⇧F6, ⌥⌘↑/↓, ⌘[ / ⌘], ⌘K, ⌘/) has `menu.showKeyOnly`: its item has no accelerator and its title carries the glyphs, as in "Close Tab (⌘W)", and the renderer's dispatcher keeps the key with its `when` and its dialog rule. Clicking such an item runs the command where focus is, like any menu item. The other menu keys (⌘N, ⇧⌘N, ⌘T, ⌘0, ⇧⌘E, ⇧⌘R, ⇧⌘A, ⌘,, ⌥⌘B and the View keys) are true accelerators. A command's `when.keysNot` keeps only its keys out of an area: ⌘/ is Monaco's in the editor, while Help › Keyboard Shortcuts and the palette still open the sheet from there.
+
+In the tree, a failed launch is dismissed with Delete, the archived sessions list opens with →, and an archived session is restored with Enter or deleted with Delete (after a confirm). What a card shows only when it applies (Mark as seen, Revive, Add a member, cancelling a cloud move, dismissing a notice) is also in the item's ⇧F10 menu. In the file tree ⇧F10 opens the focused file's menu under its row with its first item focused; the arrows move in it, and Escape or Tab closes it and returns focus to the row.
 
 ## Agent status and attention
 

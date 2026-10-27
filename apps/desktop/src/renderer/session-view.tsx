@@ -11,8 +11,10 @@ import type {
   AgentActivityDto,
   AgentSessionDto,
   AttentionReasonDto,
+  CommandId,
   SessionAttentionDto,
 } from "@daedalus/protocol";
+import { Tooltip } from "./keyboard-ui";
 
 export const sessionName = (session: AgentSessionDto) =>
   session.name ||
@@ -85,24 +87,27 @@ export function ToolIcon({ tool }: { tool: "codex" | "claude" | "terminal" }) {
 }
 
 export function CreateButton({
+  command,
   disabled,
   label,
   onClick,
   title,
 }: {
+  /** The command it does, whose key its tooltip shows. */
+  command?: CommandId;
   disabled?: boolean;
   label: string;
   onClick: () => void;
   /** Replaces the label as the tooltip, to say why the button is off. */
   title?: string;
 }) {
-  return (
+  const button = (
     <button
       aria-label={label}
       className="create-button"
       disabled={disabled}
       onClick={onClick}
-      title={title ?? label}
+      title={command && !title ? undefined : (title ?? label)}
       type="button"
     >
       <svg
@@ -117,6 +122,13 @@ export function CreateButton({
       </svg>
       <span>New</span>
     </button>
+  );
+  return command && !title ? (
+    <Tooltip command={command} label={label}>
+      {button}
+    </Tooltip>
+  ) : (
+    button
   );
 }
 

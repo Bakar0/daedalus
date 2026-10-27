@@ -13,6 +13,7 @@ import {
 } from "./context";
 import {
   KeyMatcher,
+  applicableBindings,
   compileBindings,
   findConflicts,
   matchChords,
@@ -389,9 +390,10 @@ describe("the command table", () => {
     // macOS delivers a menu accelerator wherever focus is, so a command that
     // owns one must not be limited to an area: it would fire from the menu
     // where its keys say it should not, or reach a terminal and fire too.
+    // A `showKeyOnly` item owns no accelerator, so it may be limited.
     const specs: readonly CommandSpec[] = COMMAND_SPECS;
     for (const entry of specs.filter(
-      (item) => item.menu && item.keys.length > 0,
+      (item) => item.menu && !item.menu.showKeyOnly && item.keys.length > 0,
     ))
       expect({ id: entry.id, when: entry.when }).toEqual({
         id: entry.id,
@@ -442,10 +444,21 @@ describe("the command table", () => {
     expect(run(cmd("w", "KeyW"), xtermInput)).toBe("tab.close");
   });
 
+  /** The command whose native menu item owns the key, if one does. */
+  const menuOwner = (event: ReturnType<typeof press>, target: ElementLike) =>
+    applicableBindings(
+      realBindings,
+      [chordFromEvent(event)],
+      contextFor(target, "key"),
+      { includeNative: true },
+    ).find((binding) => binding.native)?.id;
+
   test("⌥⌘B folds the panel from anywhere, typing included", () => {
+    // Its View menu item owns the key, which macOS delivers wherever focus is.
     const optCmdB = press("∫", "KeyB", { metaKey: true, altKey: true });
-    expect(run(optCmdB, sidebarInput)).toBe("panel.toggleWorkspacePanel");
-    expect(run(optCmdB, xtermInput)).toBe("panel.toggleWorkspacePanel");
+    expect(run(optCmdB, sidebarInput)).toBeUndefined();
+    expect(menuOwner(optCmdB, sidebarInput)).toBe("panel.toggleWorkspacePanel");
+    expect(menuOwner(optCmdB, xtermInput)).toBe("panel.toggleWorkspacePanel");
   });
 
   test("the history and session keys leave Monaco's indent and cursor keys alone", () => {
@@ -461,20 +474,81 @@ describe("the command table", () => {
   });
 
   test("F6 and the new-item keys act everywhere, typing included", () => {
+    // F6 stays the dispatcher's (its Go menu items only show it), so a
+    // dialog keeps it; the new-item keys are their File menu items'.
     expect(run(press("F6", "F6"), sidebarInput)).toBe("area.next");
     expect(run(press("F6", "F6", { shiftKey: true }), monacoInput)).toBe(
       "area.previous",
     );
-    expect(run(cmd("n", "KeyN"), monacoInput)).toBe("session.new");
+    expect(menuOwner(cmd("n", "KeyN"), monacoInput)).toBe("session.new");
     expect(
-      run(press("N", "KeyN", { metaKey: true, shiftKey: true }), preview),
+      menuOwner(press("N", "KeyN", { metaKey: true, shiftKey: true }), preview),
     ).toBe("task.new");
-    expect(run(cmd(",", "Comma"), xtermInput)).toBe("app.settings");
+    expect(menuOwner(cmd(",", "Comma"), xtermInput)).toBe("app.settings");
   });
 
-  test("⇧F10 opens an item's menu in the sidebar only", () => {
+  test("a key a menu item only shows stays the dispatcher's, with its when", () => {
+    const specs: readonly CommandSpec[] = COMMAND_SPECS;
+    const shown = specs.filter((entry) => entry.menu?.showKeyOnly);
+    expect(shown.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining([
+        "tab.save",
+        "tab.close",
+        "area.next",
+        "session.next",
+        "history.back",
+        "palette.open",
+        "help.shortcuts",
+      ]),
+    );
+    for (const entry of shown)
+      expect(
+        realBindings.filter(
+          (binding) => binding.id === entry.id && binding.native,
+        ),
+      ).toEqual([]);
+    // So ⌘W still reaches a field outside the tabs, and ⌘[ Monaco.
+    expect(menuOwner(cmd("w", "KeyW"), sidebarInput)).toBeUndefined();
+    expect(run(cmd("w", "KeyW"), sidebarInput)).toBeUndefined();
+    expect(
+      run(press("[", "BracketLeft", { metaKey: true }), monacoInput),
+    ).toBeUndefined();
+  });
+
+  test("⌘K opens the palette from anywhere, a terminal and Monaco included", () => {
+    expect(run(cmd("k", "KeyK"), xtermInput)).toBe("palette.open");
+    expect(run(cmd("k", "KeyK"), monacoInput)).toBe("palette.open");
+    expect(run(cmd("k", "KeyK"), sidebarButton)).toBe("palette.open");
+    expect(
+      terminalKeepsKey(
+        cmd("k", "KeyK"),
+        contextFor(xtermInput, "key"),
+        realBindings,
+        always,
+      ),
+    ).toBe(true);
+  });
+
+  test("⌘/ leaves Monaco its toggle comment, but the menu still opens the sheet there", () => {
+    const slash = cmd("/", "Slash");
+    expect(run(slash, monacoInput)).toBeUndefined();
+    expect(run(slash, sidebarButton)).toBe("help.shortcuts");
+    expect(run(slash, xtermInput)).toBe("help.shortcuts");
+    expect(rankIn({ keysNot: ["editor"] }, ["editor", "tabs"])).toBeUndefined();
+    expect(
+      rankIn({ keysNot: ["editor"] }, ["editor", "tabs"], { forKey: false }),
+    ).toBeDefined();
+  });
+
+  test("⇧F10 opens an item's actions in the sidebar, the board and the panel", () => {
     const shiftF10 = press("F10", "F10", { shiftKey: true });
+    const board = el("DIV", { "data-area": "board" });
+    const card = el("ARTICLE", {}, ["board-card"], board);
+    const panel = el("ASIDE", { "data-area": "right-panel" });
+    const row = el("DIV", {}, ["file-tree-row"], panel);
     expect(run(shiftF10, sidebarButton)).toBe("item.menu");
+    expect(run(shiftF10, card)).toBe("item.menu");
+    expect(run(shiftF10, row)).toBe("item.menu");
     expect(run(shiftF10, xtermInput)).toBeUndefined();
   });
 
@@ -571,6 +645,22 @@ describe("registry", () => {
     expect(ran).toBe(1);
     dispose();
     expect(runCommand("tab.close", where(["tabs", "center"]))).toBe(false);
+  });
+
+  test("a command whose keys leave an area still runs there from the menu", async () => {
+    const { registerCommand, isCommandEnabled } = await import("./registry");
+    const dispose = registerCommand("help.shortcuts", { run: () => {} });
+    const editor: CommandArea[] = ["editor", "tabs", "center"];
+    expect(isCommandEnabled("help.shortcuts", context(editor, true))).toBe(
+      false,
+    );
+    expect(
+      isCommandEnabled("help.shortcuts", context(editor, true, "menu")),
+    ).toBe(true);
+    expect(
+      isCommandEnabled("help.shortcuts", context(editor, true, "palette")),
+    ).toBe(true);
+    dispose();
   });
 
   test("host commands run through the host, which gets the keys too", async () => {

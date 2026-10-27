@@ -10,6 +10,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { gridMove, gridTabStop } from "./navigation/board-grid";
 import { accountModelKey } from "./account-models";
 import { askConfirm } from "./dialogs";
+import { type ItemAction, useItemActions } from "./item-actions";
+import { KeyHints } from "./keyboard-ui";
 import {
   ReportDetails,
   type ReportOwner,
@@ -50,6 +52,7 @@ import {
   CreateButton,
   providerLabel,
   sessionConfiguredModel,
+  sessionName,
   sessionStatusView,
   sessionTool,
   statusAriaLabel,
@@ -743,6 +746,147 @@ export function BoardView(props: BoardViewProps) {
     }
   };
 
+  /**
+   * What a card's buttons do, as one list: the ⌘K palette (and ⇧F10, which
+   * opens it on a card) offers these first when the card has focus. The
+   * same `taskActions` decide both, so a button and its row come and go
+   * together.
+   */
+  const cardItemActions = (task: TaskDto, lane: BoardLane): ItemAction[] => {
+    const {
+      lastAgent,
+      linked,
+      noAgent,
+      offersSecondOpinion,
+      otherProvider,
+      reviewPullRequest,
+      reviewWorktree,
+      startable,
+      starting,
+      waitingOn,
+      canPark,
+    } = taskActions(task, lane, {
+      ...inputs,
+      launches: props.launches,
+      availableProviders: props.availableProviders,
+      tasksById,
+    });
+    const cannotStart = !props.tmuxAvailable || starting;
+    return [
+      { id: "open", label: "Open task", run: () => props.onSelectTask(task) },
+      ...(startable
+        ? [
+            {
+              id: "start",
+              label: waitingOn.length
+                ? `Start, waiting on ${waitingOn.map((item) => `#${item.number}`).join(", ")}`
+                : "Start",
+              disabled: cannotStart,
+              run: () =>
+                void confirmStartDespite(task, waitingOn).then(
+                  (start) => start && props.onStart(task),
+                ),
+            },
+            {
+              id: "start-with",
+              label: "Start with…",
+              disabled: cannotStart,
+              run: () =>
+                void confirmStartDespite(task, waitingOn).then(
+                  (start) => start && props.onStartWith(task),
+                ),
+            },
+            ...(!task.description.trim()
+              ? [
+                  {
+                    id: "refine",
+                    label: "Refine",
+                    description:
+                      "Start a session that questions you about this task, then writes its brief",
+                    disabled: cannotStart,
+                    run: () => props.onDraftBrief(task),
+                  },
+                ]
+              : []),
+          ]
+        : []),
+      ...(offersSecondOpinion && otherProvider && lastAgent
+        ? [
+            {
+              id: "second-opinion",
+              label: `Second opinion from ${providerLabel(otherProvider)}`,
+              disabled: !props.tmuxAvailable || starting,
+              run: () => props.onSecondOpinion(task, otherProvider),
+            },
+          ]
+        : []),
+      ...(lane === "review" || noAgent
+        ? [
+            {
+              id: "mark-done",
+              label: "Mark done",
+              disabled: props.busy,
+              run: () => props.onMarkDone(task),
+            },
+          ]
+        : []),
+      ...(canPark
+        ? [
+            {
+              id: "park",
+              label: "Park",
+              disabled: props.busy,
+              run: () => props.onPark(task),
+            },
+          ]
+        : []),
+      ...(lane === "running" && task.status === "todo"
+        ? [
+            {
+              id: "set-in-progress",
+              label: "Set in progress",
+              disabled: props.busy,
+              run: () => props.onSetInProgress(task),
+            },
+          ]
+        : []),
+      ...(lane === "review" && reviewWorktree
+        ? [
+            {
+              id: "open-worktree",
+              label: "Open worktree",
+              run: () => props.onOpenWorktree(reviewWorktree),
+            },
+          ]
+        : []),
+      ...(lane === "review" && reviewPullRequest
+        ? [
+            {
+              id: "open-pr",
+              label: "Open PR",
+              run: () => props.onOpenLink(reviewPullRequest.url),
+            },
+          ]
+        : []),
+      ...linked.map((session) => ({
+        id: `session-${session.id}`,
+        label: `Open session ${sessionName(session)}`,
+        run: () => props.onOpenSession(session),
+      })),
+    ];
+  };
+  useItemActions((element) => {
+    const card = element.closest<HTMLElement>(".board-card[data-task-id]");
+    const task = card ? tasksById.get(card.dataset.taskId ?? "") : undefined;
+    const lane = task ? laneById.get(task.id) : undefined;
+    return task && lane
+      ? {
+          title: `#${task.number} ${task.title}`,
+          actions: cardItemActions(task, lane),
+        }
+      : undefined;
+  });
+
   const renderCard = (task: TaskDto, lane: BoardLane) => {
     const {
       agentEndedAt,
@@ -1136,7 +1280,11 @@ export function BoardView(props: BoardViewProps) {
               onUpdate={props.onUpdateSettings}
               workspace={workspace}
             />
-            <CreateButton label="Create task" onClick={props.onCreateTask} />
+            <CreateButton
+              command="task.new"
+              label="Create task"
+              onClick={props.onCreateTask}
+            />
           </div>
         ) : (
           <small className="board-scope-note">
@@ -1175,6 +1323,15 @@ export function BoardView(props: BoardViewProps) {
                 ? "Use New to create a task."
                 : "Pick a workspace and capture one."}
             </span>
+            <KeyHints
+              hints={[
+                ...(workspace
+                  ? [{ command: "task.new" as const, label: "new task" }]
+                  : []),
+                { command: "palette.open", label: "jump anywhere" },
+                { command: "help.shortcuts", label: "all shortcuts" },
+              ]}
+            />
           </div>
         )}
         {tasks.length > 0 &&

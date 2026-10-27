@@ -9,8 +9,13 @@ import {
   syncDataLoaderFeature,
 } from "@headless-tree/core";
 import { useTree } from "@headless-tree/react";
-import type { ChangedFileDto, WorkspaceFileEntryDto } from "@daedalus/protocol";
 import {
+  type ChangedFileDto,
+  type WorkspaceFileEntryDto,
+  formatKeyGlyphs,
+} from "@daedalus/protocol";
+import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -19,7 +24,9 @@ import {
   useState,
 } from "react";
 import type { DesktopClient } from "../client-types";
+import { useCommand } from "../commands";
 import { askConfirm, askText, plainLine } from "../dialogs";
+import { type ItemAction, useItemActions } from "../item-actions";
 import { FileTypeIcon } from "./file-icons";
 import {
   planExplorerRefresh,
@@ -198,7 +205,11 @@ export function FileTree({
     entry?: WorkspaceFileEntryDto;
     x: number;
     y: number;
+    /** Opened by ⇧F10: its first item takes focus. */
+    byKey?: boolean;
   }>();
+  // The row a menu opened from by key gets focus back when it closes.
+  const menuReturn = useRef<HTMLElement | null>(null);
 
   const entryByPath = useCallback((path: string) => {
     const parent = listingsRef.current[workspaceParentPath(path)];
@@ -755,7 +766,7 @@ export function FileTree({
   useEffect(() => {
     if (!menu) return;
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenu(undefined);
+      if (event.key === "Escape" && !event.defaultPrevented) setMenu(undefined);
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
@@ -828,19 +839,172 @@ export function FileTree({
       rows.push(pendingRow);
   }
 
-  const menuEntry = menu?.entry;
-  const menuTarget = menuEntry
-    ? menuEntry.kind === "directory"
-      ? menuEntry.path
-      : workspaceParentPath(menuEntry.path)
-    : "";
   const copy = (text: string) => void client.request.clipboardWrite({ text });
-  const menuTargets = () => {
-    if (!menuEntry) return [];
-    const selected = tree.getSelectedItems().map((item) => item.getItemData());
-    return selected.some((entry) => entry.path === menuEntry.path)
-      ? selected
-      : [menuEntry];
+  /**
+   * What the menu offers for `entry` (the explorer itself when none), as
+   * data: the right-click menu and ⇧F10 draw it, and the ⌘K palette lists
+   * it for the focused file. `section` divides the menu.
+   */
+  const fileMenuActions = (
+    entry: WorkspaceFileEntryDto | undefined,
+  ): (ItemAction & { section: number })[] => {
+    const target = folderOf(entry);
+    const targets = () => {
+      if (!entry) return [];
+      const selected = tree
+        .getSelectedItems()
+        .map((item) => item.getItemData());
+      return selected.some((item) => item.path === entry.path)
+        ? selected
+        : [entry];
+    };
+    const readOnly = isReadOnlyFolder(target);
+    return [
+      ...(entry?.kind === "file"
+        ? [
+            {
+              id: "open",
+              label: "Open",
+              section: 0,
+              run: () => onOpen(entry.path, { pinned: true }),
+            },
+          ]
+        : []),
+      {
+        id: "new-file",
+        label: "New File…",
+        section: 0,
+        disabled: readOnly,
+        run: () => startNewEntry("file", entry?.path ?? ROOT),
+      },
+      {
+        id: "new-folder",
+        label: "New Folder…",
+        section: 0,
+        disabled: readOnly,
+        run: () => startNewEntry("directory", entry?.path ?? ROOT),
+      },
+      ...(entry
+        ? [
+            {
+              id: "cut",
+              label: "Cut",
+              keys: "mod+x",
+              section: 1,
+              disabled: !entry.mutable,
+              run: () => void copyToPasteboard(targets(), true),
+            },
+            {
+              id: "copy",
+              label: "Copy",
+              keys: "mod+c",
+              section: 1,
+              run: () => void copyToPasteboard(targets(), false),
+            },
+          ]
+        : []),
+      {
+        id: "paste",
+        label: "Paste",
+        keys: "mod+v",
+        section: 1,
+        disabled: readOnly,
+        run: () => void paste(target),
+      },
+      ...(entry
+        ? [
+            {
+              id: "copy-path",
+              label: "Copy Path",
+              section: 2,
+              run: () => copy(`${workspacePath}/${entry.path}`),
+            },
+            {
+              id: "copy-relative-path",
+              label: "Copy Relative Path",
+              section: 2,
+              run: () => copy(entry.path),
+            },
+            {
+              id: "rename",
+              label: "Rename",
+              keys: "f2",
+              section: 3,
+              disabled: !entry.mutable,
+              run: () => tree.getItemInstance(entry.path).startRenaming(),
+            },
+            {
+              id: "move",
+              label: "Move to…",
+              section: 3,
+              disabled: !entry.mutable,
+              run: () =>
+                void askText({
+                  title: `Move ${entry.name}`,
+                  message:
+                    "Move into which folder? Leave empty for the workspace root.",
+                  initial: workspaceParentPath(entry.path),
+                  confirmLabel: "Move",
+                }).then((destination) => {
+                  if (destination === null) return;
+                  void move(
+                    [entry],
+                    destination.trim().replace(/^\/+|\/+$/g, ""),
+                  );
+                }),
+            },
+            {
+              id: "delete",
+              label: "Delete",
+              keys: "mod+backspace",
+              section: 3,
+              danger: true,
+              disabled: !entry.mutable,
+              run: () => void remove(targets()),
+            },
+          ]
+        : [
+            {
+              id: "collapse-all",
+              label: "Collapse All",
+              section: 3,
+              run: () => setExpanded([]),
+            },
+          ]),
+    ];
+  };
+  const entryOfRow = (element: Element) => {
+    const row = element.closest<HTMLElement>(".file-tree-row[data-path]");
+    if (!row) return undefined;
+    return entryByPath(row.dataset.path ?? "");
+  };
+  // The palette lists the focused file's actions first.
+  useItemActions((element) => {
+    const entry = entryOfRow(element);
+    return entry
+      ? { title: entry.name, actions: fileMenuActions(entry) }
+      : undefined;
+  });
+  // ⇧F10 or the menu key opens the focused file's menu under its row.
+  useCommand("item.menu", {
+    enabled: (context) => Boolean(context.target && entryOfRow(context.target)),
+    run: (context) => {
+      const row = context.target?.closest<HTMLElement>(".file-tree-row");
+      const entry = context.target ? entryOfRow(context.target) : undefined;
+      if (!row || !entry) return;
+      const box = row.getBoundingClientRect();
+      menuReturn.current = row;
+      setMenu({ entry, x: box.left + 24, y: box.bottom, byKey: true });
+    },
+  });
+
+  const menuEntry = menu?.entry;
+  const menuItems = menu ? fileMenuActions(menuEntry) : [];
+  const closeMenu = (giveFocusBack: boolean) => {
+    setMenu(undefined);
+    const back = menuReturn.current;
+    menuReturn.current = null;
+    if (giveFocusBack && back?.isConnected) back.focus();
   };
 
   return (
@@ -903,15 +1067,38 @@ export function FileTree({
             className="workspace-tree-menu-backdrop"
             onContextMenu={(event) => {
               event.preventDefault();
-              setMenu(undefined);
+              closeMenu(false);
             }}
-            onPointerDown={() => setMenu(undefined)}
+            onPointerDown={() => closeMenu(false)}
           />
           <div
             aria-label={
               menuEntry ? `Actions for ${menuEntry.name}` : "Explorer actions"
             }
             className="workspace-tree-menu"
+            onKeyDown={(event) => {
+              const items = [
+                ...event.currentTarget.querySelectorAll<HTMLElement>(
+                  '[role="menuitem"]:not(:disabled)',
+                ),
+              ];
+              const index = items.indexOf(
+                document.activeElement as HTMLElement,
+              );
+              const go = (next: number) => {
+                event.preventDefault();
+                items[(next + items.length) % items.length]?.focus();
+              };
+              if (event.key === "ArrowDown") go(index + 1);
+              else if (event.key === "ArrowUp") go(index < 0 ? -1 : index - 1);
+              else if (event.key === "Home") go(0);
+              else if (event.key === "End") go(-1);
+              else if (event.key === "Escape" || event.key === "Tab") {
+                event.preventDefault();
+                event.stopPropagation();
+                closeMenu(true);
+              }
+            }}
             ref={(node) => {
               if (!node) return;
               const box = node.getBoundingClientRect();
@@ -921,6 +1108,14 @@ export function FileTree({
                 node.style.left = `${Math.max(8, menu.x - overflowX)}px`;
               if (overflowY > 0)
                 node.style.top = `${Math.max(8, menu.y - overflowY)}px`;
+              // Opened from the keyboard, its first item takes focus so the
+              // arrow keys work straight away.
+              if (menu.byKey && !node.contains(document.activeElement))
+                node
+                  .querySelector<HTMLElement>(
+                    '[role="menuitem"]:not(:disabled)',
+                  )
+                  ?.focus();
             }}
             role="menu"
             style={{ left: menu.x, top: menu.y }}
@@ -930,161 +1125,25 @@ export function FileTree({
                 {menuEntry.immutableReason}
               </small>
             )}
-            {menuEntry?.kind === "file" && (
-              <button
-                onClick={() => {
-                  setMenu(undefined);
-                  onOpen(menuEntry.path, { pinned: true });
-                }}
-                role="menuitem"
-                type="button"
-              >
-                Open
-              </button>
-            )}
-            <button
-              disabled={isReadOnlyFolder(menuTarget)}
-              onClick={() => {
-                setMenu(undefined);
-                startNewEntry("file", menuEntry?.path ?? ROOT);
-              }}
-              role="menuitem"
-              type="button"
-            >
-              New File…
-            </button>
-            <button
-              disabled={isReadOnlyFolder(menuTarget)}
-              onClick={() => {
-                setMenu(undefined);
-                startNewEntry("directory", menuEntry?.path ?? ROOT);
-              }}
-              role="menuitem"
-              type="button"
-            >
-              New Folder…
-            </button>
-            <hr />
-            {menuEntry && (
-              <>
+            {menuItems.map((action, index) => (
+              <Fragment key={action.id}>
+                {index > 0 &&
+                  menuItems[index - 1]?.section !== action.section && <hr />}
                 <button
-                  disabled={!menuEntry.mutable}
+                  className={action.danger ? "destructive" : undefined}
+                  disabled={action.disabled}
                   onClick={() => {
-                    setMenu(undefined);
-                    void copyToPasteboard(menuTargets(), true);
+                    closeMenu(true);
+                    action.run();
                   }}
                   role="menuitem"
                   type="button"
                 >
-                  Cut <kbd>⌘X</kbd>
+                  {action.label}
+                  {action.keys && <kbd>{formatKeyGlyphs(action.keys)}</kbd>}
                 </button>
-                <button
-                  onClick={() => {
-                    setMenu(undefined);
-                    void copyToPasteboard(menuTargets(), false);
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  Copy <kbd>⌘C</kbd>
-                </button>
-              </>
-            )}
-            <button
-              disabled={isReadOnlyFolder(menuTarget)}
-              onClick={() => {
-                setMenu(undefined);
-                void paste(menuTarget);
-              }}
-              role="menuitem"
-              type="button"
-            >
-              Paste <kbd>⌘V</kbd>
-            </button>
-            {menuEntry && (
-              <>
-                <hr />
-                <button
-                  onClick={() => {
-                    setMenu(undefined);
-                    copy(`${workspacePath}/${menuEntry.path}`);
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  Copy Path
-                </button>
-                <button
-                  onClick={() => {
-                    setMenu(undefined);
-                    copy(menuEntry.path);
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  Copy Relative Path
-                </button>
-                <hr />
-                <button
-                  disabled={!menuEntry.mutable}
-                  onClick={() => {
-                    setMenu(undefined);
-                    tree.getItemInstance(menuEntry.path).startRenaming();
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  Rename
-                </button>
-                <button
-                  disabled={!menuEntry.mutable}
-                  onClick={() => {
-                    setMenu(undefined);
-                    void askText({
-                      title: `Move ${menuEntry.name}`,
-                      message:
-                        "Move into which folder? Leave empty for the workspace root.",
-                      initial: workspaceParentPath(menuEntry.path),
-                      confirmLabel: "Move",
-                    }).then((destination) => {
-                      if (destination === null) return;
-                      void move(
-                        [menuEntry],
-                        destination.trim().replace(/^\/+|\/+$/g, ""),
-                      );
-                    });
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  Move to…
-                </button>
-                <button
-                  className="destructive"
-                  disabled={!menuEntry.mutable}
-                  onClick={() => {
-                    setMenu(undefined);
-                    void remove(menuTargets());
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  Delete <kbd>⌘⌫</kbd>
-                </button>
-              </>
-            )}
-            {!menuEntry && (
-              <button
-                onClick={() => {
-                  setMenu(undefined);
-                  setExpanded([]);
-                }}
-                role="menuitem"
-                type="button"
-              >
-                Collapse All
-              </button>
-            )}
+              </Fragment>
+            ))}
           </div>
         </>
       )}

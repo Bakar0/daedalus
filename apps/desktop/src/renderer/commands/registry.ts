@@ -84,7 +84,10 @@ export function connectHost(bridge: HostBridge): () => void {
 const actsHere = (id: CommandId, context: CommandContext) => {
   const spec = commandSpec(id);
   if (context.modal && !spec.inModal) return false;
-  return rankIn(spec.when, context.areas) !== undefined;
+  return (
+    rankIn(spec.when, context.areas, { forKey: context.source === "key" }) !==
+    undefined
+  );
 };
 
 const handlerFor = (
