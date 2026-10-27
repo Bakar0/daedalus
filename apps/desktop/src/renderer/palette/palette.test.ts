@@ -171,6 +171,25 @@ describe("recent commands", () => {
       },
     };
     expect(loadRecent(throwing)).toEqual([]);
+    // Merely reading the window's storage can throw where it is denied.
+    const descriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "localStorage",
+    );
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get: () => {
+        throw new Error("SecurityError");
+      },
+    });
+    try {
+      expect(loadRecent()).toEqual([]);
+      expect(() => saveRecent(["x"])).not.toThrow();
+    } finally {
+      if (descriptor)
+        Object.defineProperty(globalThis, "localStorage", descriptor);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
     expect(() => saveRecent(["x"], throwing)).not.toThrow();
   });
 });

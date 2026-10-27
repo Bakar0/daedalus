@@ -7,7 +7,11 @@ import {
   menuItemLabel,
   menuKeyLabel,
 } from "@daedalus/protocol";
-import { APPLICATION_MENU, buildApplicationMenu } from "./menu";
+import {
+  APPLICATION_MENU,
+  buildApplicationMenu,
+  routeRendererCommand,
+} from "./menu";
 
 type Item = (typeof APPLICATION_MENU)[number];
 const actionsIn = (items: readonly Item[]): Item[] =>
@@ -246,5 +250,19 @@ describe("File, Go and Help menus", () => {
     );
     expect(labels["history.back"]).toBe("Back (⌥⌘←)");
     expect(labels["palette.open"]).toBe("Command Palette…");
+  });
+});
+
+describe("routeRendererCommand", () => {
+  test("a key pressed in the World window brings the main window forward", () => {
+    expect(routeRendererCommand({ mainOpen: true, worldKey: true })).toBe(
+      "raise-and-run",
+    );
+    expect(routeRendererCommand({ mainOpen: true, worldKey: false })).toBe(
+      "run",
+    );
+    expect(routeRendererCommand({ mainOpen: false, worldKey: true })).toBe(
+      "open-main",
+    );
   });
 });

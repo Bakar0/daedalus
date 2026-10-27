@@ -6815,12 +6815,23 @@ export function WorkspaceApp({
   });
   // The new terminal takes the caret when it arrives (see
   // `useArrivalFocus`); if it fails, focus stays where it was.
+  // One at a time: `busy` is state, so presses that come faster than a
+  // render (a held key, a double press) would each make a terminal.
+  const terminalCreating = useRef(false);
   useCommand("terminal.new", {
-    enabled: () => Boolean(snapshot?.settings.tmuxAvailable) && !busy,
-    run: () =>
-      void createIntegratedTerminal(
-        workspace?.available ? workspace : undefined,
-      ),
+    enabled: () =>
+      Boolean(snapshot?.settings.tmuxAvailable) &&
+      !busy &&
+      !terminalCreating.current,
+    run: () => {
+      if (terminalCreating.current) return;
+      terminalCreating.current = true;
+      void Promise.resolve(
+        createIntegratedTerminal(workspace?.available ? workspace : undefined),
+      ).finally(() => {
+        terminalCreating.current = false;
+      });
+    },
   });
   useCommand("app.settings", { run: () => setModal("settings") });
 
@@ -6828,15 +6839,14 @@ export function WorkspaceApp({
   // The palette is opened with the context focus was in, which decides the
   // commands it lists and the item whose actions come first; the context is
   // kept and every row runs in it, after focus has gone back there.
-  const [palette, setPalette] = useState<{
-    context: CommandContext;
-    item?: ItemActions;
-  }>();
-  const [recentCommands, setRecentCommands] = useState(loadRecent);
+  const [palette, setPalette] = useState<{ context: CommandContext }>();
+  const [recentCommands, setRecentCommands] = useState(() => loadRecent());
   const [shortcutsAreas, setShortcutsAreas] =
     useState<readonly CommandArea[]>();
+  // Kept as the palette's own context: it is what runs the rows, and a
+  // command whose keys leave an area (⌘/ in Monaco) still runs from it.
   const openPalette = (context: CommandContext) =>
-    setPalette({ context, item: itemActionsFor(context.target) });
+    setPalette({ context: { ...context, source: "palette" } });
   useCommand("palette.open", { run: openPalette });
   useCommand("help.shortcuts", {
     run: (context) => setShortcutsAreas(context.areas),
@@ -6886,12 +6896,44 @@ export function WorkspaceApp({
   const workspaceNames = new Map(
     (snapshot?.workspaces ?? []).map((item) => [item.id, item.name]),
   );
-  /** Every row the palette offers, built when it opens. */
-  const paletteRows = (open: {
-    context: CommandContext;
-    item?: ItemActions;
-  }): PaletteRow[] => [
-    ...(open.item?.actions ?? []).map((action): PaletteRow => ({
+  /**
+   * Every row the palette offers, for the context it was opened in. Built
+   * when it opens and again when the snapshot changes while it is open, so
+   * a status and an item's actions stay current; rows keep their keys, so
+   * the highlighted one stays highlighted. The focused item is resolved
+   * afresh each time, and has no actions once it has left the page.
+   */
+  const paletteContent = (
+    context: CommandContext,
+  ): { item?: ItemActions; rows: PaletteRow[] } => {
+    const target = context.target;
+    const item = target?.isConnected ? itemActionsFor(target) : undefined;
+    // Going somewhere waits, as the keys that leave the page do, while text
+    // is typed outside a terminal or a brief is being edited.
+    const stay = mayLeavePage(context)
+      ? undefined
+      : editingTask
+        ? "Save or cancel the brief first"
+        : "Leave the field you are typing in first";
+    const place = (row: PaletteRow): PaletteRow =>
+      stay
+        ? {
+            ...row,
+            disabled: true,
+            detail: [row.detail, stay].filter(Boolean).join(" · "),
+          }
+        : row;
+    return {
+      ...(item ? { item } : {}),
+      rows: paletteRows(context, item, place),
+    };
+  };
+  const paletteRows = (
+    context: CommandContext,
+    item: ItemActions | undefined,
+    place: (row: PaletteRow) => PaletteRow,
+  ): PaletteRow[] => [
+    ...(item?.actions ?? []).map((action): PaletteRow => ({
       key: `item:${action.id}`,
       section: "item",
       title: action.label,
@@ -6906,7 +6948,7 @@ export function WorkspaceApp({
       .filter(
         (command) =>
           command.id !== "palette.open" &&
-          isCommandEnabled(command.id, open.context),
+          isCommandEnabled(command.id, context),
       )
       .map((command): PaletteRow => ({
         key: `command:${command.id}`,
@@ -6916,7 +6958,7 @@ export function WorkspaceApp({
         ...(command.keys[0]
           ? { shortcut: formatKeyGlyphs(command.keys[0]) }
           : {}),
-        run: () => void runCommand(command.id, open.context),
+        run: () => void runCommand(command.id, context),
       })),
     ...sidebarSessionOrder.flatMap((id): PaletteRow[] => {
       const session = sessionsByIdForKeys.get(id);
@@ -6924,7 +6966,7 @@ export function WorkspaceApp({
       const status = statusViewFor(session);
       const workspaceName = workspaceNames.get(session.workspaceId) ?? "";
       return [
-        {
+        place({
           key: `session:${id}`,
           section: "sessions",
           title: sessionName(session),
@@ -6937,7 +6979,7 @@ export function WorkspaceApp({
           keywords: `${workspaceName} ${status.label}`,
           status: { tone: status.tone, attention: status.attention },
           run: () => goToSession(id),
-        },
+        }),
       ];
     }),
     ...(snapshot?.tasks ?? [])
@@ -6948,27 +6990,39 @@ export function WorkspaceApp({
             Number(b.status === "done" || b.status === "cancelled") ||
           b.number - a.number,
       )
-      .map((task): PaletteRow => ({
-        key: `task:${task.id}`,
-        section: "tasks",
-        title: `#${task.number} ${task.title}`,
-        detail: [
-          workspaceNames.get(task.workspaceId),
-          task.status.replace("_", " "),
-        ]
-          .filter(Boolean)
-          .join(" · "),
-        keywords: workspaceNames.get(task.workspaceId) ?? "",
-        run: () => openTask(task.id, task.workspaceId),
-      })),
-    ...orderedWorkspaces.map((item): PaletteRow => ({
-      key: `workspace:${item.id}`,
-      section: "workspaces",
-      title: item.name,
-      ...(item.id === workspaceId ? { detail: "current" } : {}),
-      run: () => selectWorkspace(item.id, { focusSession: true }),
-    })),
+      .map((task) =>
+        place({
+          key: `task:${task.id}`,
+          section: "tasks",
+          title: `#${task.number} ${task.title}`,
+          detail: [
+            workspaceNames.get(task.workspaceId),
+            task.status.replace("_", " "),
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          keywords: workspaceNames.get(task.workspaceId) ?? "",
+          run: () => openTask(task.id, task.workspaceId),
+        }),
+      ),
+    ...orderedWorkspaces.map((item) =>
+      place({
+        key: `workspace:${item.id}`,
+        section: "workspaces",
+        title: item.name,
+        ...(item.id === workspaceId ? { detail: "current" } : {}),
+        run: () => selectWorkspace(item.id, { focusSession: true }),
+      }),
+    ),
   ];
+  // Rebuilt when the palette opens and when the snapshot moves, not on every
+  // render, so typing in it does not re-rank everything for nothing.
+  const paletteShown = useMemo(
+    () => (palette ? paletteContent(palette.context) : undefined),
+    // `paletteContent` reads the snapshot and the state derived from it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [palette, snapshot, editingTask],
+  );
   /**
    * Closes the palette, puts focus back where it was, and then runs the
    * row there, so a command acts on what had focus, as its key would.
@@ -9532,10 +9586,10 @@ export function WorkspaceApp({
           </Modal>
         )}
 
-        {palette && (
+        {palette && paletteShown && (
           <CommandPalette
-            entries={paletteRows(palette)}
-            itemTitle={palette.item?.title}
+            entries={paletteShown.rows}
+            itemTitle={paletteShown.item?.title}
             onChoose={choosePaletteRow}
             onClose={() => setPalette(undefined)}
             recent={recentCommands}

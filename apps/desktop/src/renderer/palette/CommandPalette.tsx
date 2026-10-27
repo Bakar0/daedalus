@@ -13,6 +13,7 @@
  * anyway; see `palette-model.ts`.
  */
 import { useId, useMemo, useRef, useState } from "react";
+import { isComposingKey } from "../commands";
 import { useFocusScope } from "../use-focus-scope";
 import { KeyGlyphs } from "../keyboard-ui";
 import { flattenGroups, type PaletteEntry, rankPalette } from "./palette-model";
@@ -49,23 +50,27 @@ export function CommandPalette({
   useFocusScope(section);
   const listId = useId();
   const [query, setQuery] = useState(initialQuery);
-  const [active, setActive] = useState(0);
+  // The active row by its key, not its place: rows are rebuilt while the
+  // palette is open (a session's status changes), and Enter must run the
+  // row that is highlighted, wherever it moved.
+  const [activeKey, setActiveKey] = useState<string>();
   const [armed, setArmed] = useState<string>();
   const groups = useMemo(
     () => rankPalette(entries, query, recent),
     [entries, query, recent],
   );
   const rows = flattenGroups(groups);
-  const current = rows[Math.min(active, rows.length - 1)];
+  const current = rows.find((row) => row.key === activeKey) ?? rows[0];
+  const active = current ? rows.indexOf(current) : 0;
   const optionId = (row: PaletteRow) =>
     `${listId}-${row.key.replace(/[^\w-]/g, "_")}`;
 
   const move = (to: number) => {
     if (rows.length === 0) return;
     const next = (to + rows.length) % rows.length;
-    setActive(next);
-    setArmed(undefined);
     const row = rows[next];
+    setActiveKey(row?.key);
+    setArmed(undefined);
     if (row)
       document
         .getElementById(optionId(row))
@@ -106,11 +111,11 @@ export function CommandPalette({
           className="palette-input"
           onChange={(event) => {
             setQuery(event.target.value);
-            setActive(0);
+            setActiveKey(undefined);
             setArmed(undefined);
           }}
           onKeyDown={(event) => {
-            if (event.nativeEvent.isComposing) return;
+            if (isComposingKey(event.nativeEvent)) return;
             if (event.key === "ArrowDown") {
               event.preventDefault();
               move(active + 1);
@@ -180,9 +185,8 @@ export function CommandPalette({
                     onClick={() => choose(row)}
                     onMouseDown={(event) => event.preventDefault()}
                     onMouseMove={() => {
-                      const index = rows.indexOf(row);
-                      if (index !== active) {
-                        setActive(index);
+                      if (row.key !== current?.key) {
+                        setActiveKey(row.key);
                         setArmed(undefined);
                       }
                     }}

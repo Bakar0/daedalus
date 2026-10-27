@@ -188,3 +188,41 @@ export function taskActions(
     reviewPullRequest,
   };
 }
+
+/** Which of a board card's own buttons show; see `cardButtons`. */
+export interface CardButtons {
+  /** The card's row of actions under its sessions. */
+  actionRow: boolean;
+  markDone: boolean;
+  park: boolean;
+  setInProgress: boolean;
+}
+
+/**
+ * Which buttons a board card draws. The card and the palette's list of the
+ * card's actions both read it, so the palette never offers what the card
+ * does not show. Mark done is in the review row, and in the action row when
+ * no agent runs; Park and Set in progress are in the action row only.
+ */
+export function cardButtons(
+  task: Pick<TaskDto, "status">,
+  lane: BoardLane,
+  actions: Pick<
+    TaskActions,
+    "answerTarget" | "canPark" | "noAgent" | "offersSecondOpinion" | "startable"
+  >,
+): CardButtons {
+  const setInProgress = lane === "running" && task.status === "todo";
+  const actionRow =
+    actions.startable ||
+    (actions.offersSecondOpinion &&
+      lane !== "review" &&
+      !actions.answerTarget) ||
+    setInProgress;
+  return {
+    actionRow,
+    markDone: lane === "review" || (actionRow && actions.noAgent),
+    park: actionRow && actions.canPark,
+    setInProgress,
+  };
+}

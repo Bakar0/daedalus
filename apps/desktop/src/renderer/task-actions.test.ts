@@ -7,6 +7,7 @@ import type {
 } from "@daedalus/protocol";
 import { laneFor } from "./board-lanes";
 import {
+  cardButtons,
   taskActions,
   type BoardLaunch,
   type TaskActionInputs,
@@ -357,5 +358,48 @@ describe("taskActions", () => {
     const actions = actionsFor(target, inputs({ tasks: [blocker, target] }));
     expect(actions.startable).toBe(true);
     expect(actions.waitingOn.map((item) => item.id)).toEqual(["task-2"]);
+  });
+});
+
+describe("cardButtons", () => {
+  const flags = (
+    parts: Partial<Parameters<typeof cardButtons>[2]> = {},
+  ): Parameters<typeof cardButtons>[2] => ({
+    canPark: false,
+    noAgent: false,
+    offersSecondOpinion: false,
+    startable: false,
+    ...parts,
+  });
+
+  test("Park and Mark done are offered only where the card draws them", () => {
+    // canPark and noAgent alone do not make the action row appear.
+    expect(
+      cardButtons(task(1), "needs_me", flags({ canPark: true, noAgent: true })),
+    ).toEqual({
+      actionRow: false,
+      markDone: false,
+      park: false,
+      setInProgress: false,
+    });
+    expect(
+      cardButtons(
+        task(1),
+        "queued",
+        flags({ startable: true, canPark: true, noAgent: true }),
+      ),
+    ).toMatchObject({ actionRow: true, markDone: true, park: true });
+  });
+
+  test("review always offers Mark done; a running todo offers Set in progress", () => {
+    expect(cardButtons(task(1), "review", flags()).markDone).toBe(true);
+    expect(cardButtons(task(1), "running", flags())).toMatchObject({
+      actionRow: true,
+      setInProgress: true,
+    });
+    expect(
+      cardButtons(task(1, { status: "in_progress" }), "running", flags())
+        .setInProgress,
+    ).toBe(false);
   });
 });

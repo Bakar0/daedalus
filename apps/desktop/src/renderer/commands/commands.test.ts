@@ -16,8 +16,10 @@ import {
   applicableBindings,
   compileBindings,
   findConflicts,
+  isComposingKey,
   matchChords,
   rankIn,
+  swallowsNativeRepeat,
   terminalKeepsKey,
 } from "./dispatch";
 import { chordFromEvent } from "@daedalus/protocol";
@@ -557,6 +559,57 @@ describe("the command table", () => {
     expect(
       run(press("`", "Backquote", { ctrlKey: true }), sidebarButton),
     ).toBeUndefined();
+  });
+});
+
+describe("swallowsNativeRepeat", () => {
+  const held = (event: ReturnType<typeof press>) => ({
+    ...event,
+    repeat: true,
+  });
+
+  test("a held menu key is swallowed, so the menu does not run it again", () => {
+    expect(
+      swallowsNativeRepeat(
+        held(cmd("t", "KeyT")),
+        contextFor(sidebarButton, "key"),
+        realBindings,
+      ),
+    ).toBe(true);
+    expect(
+      swallowsNativeRepeat(
+        held(press("∫", "KeyB", { metaKey: true, altKey: true })),
+        contextFor(xtermInput, "key"),
+        realBindings,
+      ),
+    ).toBe(true);
+  });
+
+  test("the first press, a dispatcher key and a repeating command pass", () => {
+    const where = contextFor(sidebarButton, "key");
+    expect(swallowsNativeRepeat(cmd("t", "KeyT"), where, realBindings)).toBe(
+      false,
+    );
+    expect(
+      swallowsNativeRepeat(held(cmd("k", "KeyK")), where, realBindings),
+    ).toBe(false);
+    const repeating = compileBindings([
+      spec("x.zoom", ["mod+="], {
+        allowRepeat: true,
+        menu: { bar: "View", section: 0 },
+      }),
+    ]);
+    expect(
+      swallowsNativeRepeat(held(cmd("=", "Equal")), where, repeating),
+    ).toBe(false);
+  });
+});
+
+describe("isComposingKey", () => {
+  test("a key of an input method's composition is never a command's", () => {
+    expect(isComposingKey({ isComposing: true, keyCode: 13 })).toBe(true);
+    expect(isComposingKey({ isComposing: false, keyCode: 229 })).toBe(true);
+    expect(isComposingKey({ isComposing: false, keyCode: 13 })).toBe(false);
   });
 });
 

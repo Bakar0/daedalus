@@ -43,6 +43,7 @@ import {
   type LaneInputs,
 } from "./board-lanes";
 import {
+  cardButtons,
   taskActions,
   type BoardLaunch,
   type BoardProvider,
@@ -753,10 +754,15 @@ export function BoardView(props: BoardViewProps) {
    * together.
    */
   const cardItemActions = (task: TaskDto, lane: BoardLane): ItemAction[] => {
+    const actions = taskActions(task, lane, {
+      ...inputs,
+      launches: props.launches,
+      availableProviders: props.availableProviders,
+      tasksById,
+    });
     const {
       lastAgent,
       linked,
-      noAgent,
       offersSecondOpinion,
       otherProvider,
       reviewPullRequest,
@@ -764,13 +770,8 @@ export function BoardView(props: BoardViewProps) {
       startable,
       starting,
       waitingOn,
-      canPark,
-    } = taskActions(task, lane, {
-      ...inputs,
-      launches: props.launches,
-      availableProviders: props.availableProviders,
-      tasksById,
-    });
+    } = actions;
+    const shows = cardButtons(task, lane, actions);
     const cannotStart = !props.tmuxAvailable || starting;
     return [
       { id: "open", label: "Open task", run: () => props.onSelectTask(task) },
@@ -820,7 +821,7 @@ export function BoardView(props: BoardViewProps) {
             },
           ]
         : []),
-      ...(lane === "review" || noAgent
+      ...(shows.markDone
         ? [
             {
               id: "mark-done",
@@ -830,7 +831,7 @@ export function BoardView(props: BoardViewProps) {
             },
           ]
         : []),
-      ...(canPark
+      ...(shows.park
         ? [
             {
               id: "park",
@@ -840,7 +841,7 @@ export function BoardView(props: BoardViewProps) {
             },
           ]
         : []),
-      ...(lane === "running" && task.status === "todo"
+      ...(shows.setInProgress
         ? [
             {
               id: "set-in-progress",
@@ -909,6 +910,13 @@ export function BoardView(props: BoardViewProps) {
       launches: props.launches,
       availableProviders: props.availableProviders,
       tasksById,
+    });
+    const shows = cardButtons(task, lane, {
+      answerTarget,
+      canPark,
+      noAgent,
+      offersSecondOpinion,
+      startable,
     });
     const waiting =
       lane === "needs_me" ? taskWaitingSince(task, inputs) : undefined;
@@ -1150,9 +1158,7 @@ export function BoardView(props: BoardViewProps) {
             {secondOpinion}
           </div>
         )}
-        {(startable ||
-          (offersSecondOpinion && lane !== "review" && !answerTarget) ||
-          (lane === "running" && task.status === "todo")) && (
+        {shows.actionRow && (
           <div className="board-card-actions">
             {!answerTarget && secondOpinion}
             {noAgent && (
@@ -1169,7 +1175,7 @@ export function BoardView(props: BoardViewProps) {
                 Mark done
               </button>
             )}
-            {canPark && (
+            {shows.park && (
               <button
                 className="quiet"
                 disabled={props.busy}
@@ -1183,7 +1189,7 @@ export function BoardView(props: BoardViewProps) {
                 Park
               </button>
             )}
-            {lane === "running" && task.status === "todo" && (
+            {shows.setInProgress && (
               <button
                 className="quiet"
                 disabled={props.busy}

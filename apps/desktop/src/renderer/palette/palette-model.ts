@@ -202,11 +202,16 @@ export function recordRecent(
 const STORAGE_KEY = "daedalus.palette.recent";
 
 /** The recent commands kept in this window's storage, if it has any. */
-export function loadRecent(
-  storage: Pick<Storage, "getItem"> | undefined = globalThis.localStorage,
-): string[] {
+/**
+ * The window's storage, read inside the caller's `try`: merely touching
+ * `localStorage` throws where storage is denied.
+ */
+const windowStorage = (): Storage | undefined => globalThis.localStorage;
+
+export function loadRecent(storage?: Pick<Storage, "getItem">): string[] {
   try {
-    const parsed: unknown = JSON.parse(storage?.getItem(STORAGE_KEY) ?? "[]");
+    const store = storage ?? windowStorage();
+    const parsed: unknown = JSON.parse(store?.getItem(STORAGE_KEY) ?? "[]");
     return Array.isArray(parsed)
       ? parsed
           .filter((item): item is string => typeof item === "string")
@@ -219,10 +224,10 @@ export function loadRecent(
 
 export function saveRecent(
   recent: readonly string[],
-  storage: Pick<Storage, "setItem"> | undefined = globalThis.localStorage,
+  storage?: Pick<Storage, "setItem">,
 ): void {
   try {
-    storage?.setItem(STORAGE_KEY, JSON.stringify(recent));
+    (storage ?? windowStorage())?.setItem(STORAGE_KEY, JSON.stringify(recent));
   } catch {
     // Forgetting what was used lately costs an ordering, nothing more.
   }

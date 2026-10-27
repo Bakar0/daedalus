@@ -37,7 +37,7 @@ import type {
   TerminalServerMessage,
 } from "@daedalus/protocol";
 import { isHostCommandId, isRendererCommandId } from "@daedalus/protocol";
-import { buildApplicationMenu } from "./menu";
+import { buildApplicationMenu, routeRendererCommand } from "./menu";
 import { acceptFirstMouse } from "./first-mouse";
 import { daedalusCheckout } from "./checkout";
 import { installCliShim } from "./cli-shim";
@@ -595,6 +595,11 @@ let windowOpen = false;
 let worldRpc!: ReturnType<typeof createRpc>;
 let worldWindow!: BrowserWindow<ReturnType<typeof createRpc>>;
 let worldOpen = false;
+/**
+ * The World window is the key window: the menu bar's keys reach the app
+ * from there too, and must bring the main window forward to act.
+ */
+let worldKey = false;
 /** A session to select once a main window reopened for it can hear. */
 let pendingFocus: string | undefined;
 
@@ -626,7 +631,19 @@ ApplicationMenu.on("application-menu-clicked", (rawEvent) => {
     runHostCommand(command);
     return;
   }
-  if (isRendererCommandId(command)) rpc.send.command({ command });
+  if (!isRendererCommandId(command)) return;
+  switch (routeRendererCommand({ mainOpen: windowOpen, worldKey })) {
+    case "open-main":
+      openMainWindow();
+      return;
+    case "raise-and-run":
+      mainWindow.show();
+      mainWindow.focus();
+      rpc.send.command({ command });
+      return;
+    case "run":
+      rpc.send.command({ command });
+  }
 });
 
 function runHostCommand(command: HostCommandId) {
@@ -731,8 +748,16 @@ function openWorldWindow(): void {
     frame: { width: 1180, height: 780, x: 160, y: 120 },
   });
   worldOpen = true;
+  worldKey = true;
+  worldWindow.on("focus", () => {
+    worldKey = true;
+  });
+  worldWindow.on("blur", () => {
+    worldKey = false;
+  });
   worldWindow.on("close", () => {
     worldOpen = false;
+    worldKey = false;
     void context.logger.write("info", "world_window_closed", {});
   });
   void context.logger.write("info", "world_window_opened", {});

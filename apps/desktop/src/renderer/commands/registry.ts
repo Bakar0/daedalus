@@ -22,7 +22,9 @@ import {
   KeyMatcher,
   compileBindings,
   findConflicts,
+  isComposingKey,
   rankIn,
+  swallowsNativeRepeat,
   terminalKeepsKey,
 } from "./dispatch";
 
@@ -234,8 +236,13 @@ const elementTarget = (event: Event) =>
  * command for is stopped there; any other key goes on untouched.
  */
 function onKeyDown(event: KeyboardEvent) {
-  if (event.defaultPrevented || event.isComposing) return;
+  if (event.defaultPrevented || isComposingKey(event)) return;
   const context = currentContext(elementTarget(event), "key");
+  if (swallowsNativeRepeat(event, context, bindings)) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   const result = matcher.handle(event, context);
   if (!result) return;
   event.preventDefault();

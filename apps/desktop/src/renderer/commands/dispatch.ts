@@ -262,3 +262,32 @@ export function terminalKeepsKey(
     }).some((binding) => binding.native || isEnabled(binding.id, context)),
   );
 }
+
+/**
+ * Whether a held key repeating a native menu key should be swallowed:
+ * macOS fires a menu's key equivalent on every repeat, so a held ⌘T would
+ * make a terminal per repeat. The window sees the key first; marking it
+ * handled keeps WebKit from passing it on to the menu. A command that
+ * allows repeating keeps its repeats.
+ */
+export function swallowsNativeRepeat(
+  event: KeyEventLike & Partial<Pick<KeyboardEvent, "repeat">>,
+  context: CommandContext,
+  bindings: readonly Binding[],
+): boolean {
+  if (!event.repeat) return false;
+  return chordsFromEvent(event).some((chord) =>
+    applicableBindings(bindings, [chord], context, {
+      includeNative: true,
+    }).some((binding) => binding.native && !binding.allowRepeat),
+  );
+}
+
+/**
+ * A key pressed while an input method composes text (Japanese, Chinese,
+ * dead keys): it belongs to the composition, never to a command or a list.
+ * WebKit marks such keys with `isComposing`, or `keyCode` 229.
+ */
+export const isComposingKey = (
+  event: Partial<Pick<KeyboardEvent, "isComposing" | "keyCode">>,
+): boolean => Boolean(event.isComposing) || event.keyCode === 229;

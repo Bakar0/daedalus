@@ -115,3 +115,21 @@ export function buildApplicationMenu(
 
 export const APPLICATION_MENU: ApplicationMenuItemConfig[] =
   buildApplicationMenu();
+
+/**
+ * What the host does with a renderer command from the menu bar or one of
+ * its keys. Only the main window runs them, so with the World window in
+ * front the main window comes forward first and the command runs there,
+ * where it opens what it opens; with no main window, one is opened and the
+ * press is spent on that.
+ */
+export function routeRendererCommand({
+  mainOpen,
+  worldKey,
+}: {
+  mainOpen: boolean;
+  worldKey: boolean;
+}): "run" | "raise-and-run" | "open-main" {
+  if (!mainOpen) return "open-main";
+  return worldKey ? "raise-and-run" : "run";
+}

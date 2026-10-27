@@ -42,6 +42,7 @@ type TooltipChildProps = {
   "aria-keyshortcuts"?: string;
   onBlur?: (event: FocusEvent<HTMLElement>) => void;
   onFocus?: (event: FocusEvent<HTMLElement>) => void;
+  onMouseDown?: (event: MouseEvent<HTMLElement>) => void;
   onMouseEnter?: (event: MouseEvent<HTMLElement>) => void;
   onMouseLeave?: (event: MouseEvent<HTMLElement>) => void;
 };
@@ -60,7 +61,7 @@ const focusVisible = (element: Element) => {
  * rest of the pointer, and also when the control takes keyboard focus,
  * which `title` never does. It shows the command's key as `<kbd>` glyphs,
  * and gives the control `aria-keyshortcuts` and `aria-describedby`. Escape,
- * leaving and blurring hide it. `keys` is for a key that is not a command's
+ * a press, leaving and blurring hide it. `keys` is for a key that is not a command's
  * (Escape closing a page).
  */
 export function Tooltip({
@@ -119,6 +120,12 @@ export function Tooltip({
     },
     onMouseLeave: (event: MouseEvent<HTMLElement>) => {
       own.onMouseLeave?.(event);
+      hide();
+    },
+    // A press is the control being used: the tip goes, and the focus the
+    // press gives it is not keyboard focus, so it does not come back.
+    onMouseDown: (event: MouseEvent<HTMLElement>) => {
+      own.onMouseDown?.(event);
       hide();
     },
     onFocus: (event: FocusEvent<HTMLElement>) => {

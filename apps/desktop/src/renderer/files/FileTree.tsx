@@ -210,6 +210,15 @@ export function FileTree({
   }>();
   // The row a menu opened from by key gets focus back when it closes.
   const menuReturn = useRef<HTMLElement | null>(null);
+  // A right-click leaves focus where the pointer put it: nothing to return.
+  const openMenuByMouse = (next: {
+    entry?: WorkspaceFileEntryDto;
+    x: number;
+    y: number;
+  }) => {
+    menuReturn.current = null;
+    setMenu(next);
+  };
 
   const entryByPath = useCallback((path: string) => {
     const parent = listingsRef.current[workspaceParentPath(path)];
@@ -766,7 +775,9 @@ export function FileTree({
   useEffect(() => {
     if (!menu) return;
     const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) setMenu(undefined);
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      menuReturn.current = null;
+      setMenu(undefined);
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
@@ -831,7 +842,7 @@ export function FileTree({
         git={decorations.get(item.getId())}
         item={item}
         key={item.getKey()}
-        onMenu={setMenu}
+        onMenu={openMenuByMouse}
         onOpen={onOpen}
       />,
     );
@@ -967,7 +978,8 @@ export function FileTree({
             {
               id: "collapse-all",
               label: "Collapse All",
-              section: 3,
+              // Beside Paste, as the menu always had it.
+              section: 1,
               run: () => setExpanded([]),
             },
           ]),
@@ -1046,7 +1058,7 @@ export function FileTree({
         onContextMenu={(event) => {
           if (event.defaultPrevented) return;
           event.preventDefault();
-          setMenu({ x: event.clientX, y: event.clientY });
+          openMenuByMouse({ x: event.clientX, y: event.clientY });
         }}
       >
         {rootError ? (
