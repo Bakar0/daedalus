@@ -1,6 +1,6 @@
 /**
  * A page for checking the session abilities UI in a browser: the card menu,
- * the New session fields, the routine bar and the Routines drawer. The stub
+ * the New session fields, the routine bar, and the Routines and Team tabs. The stub
  * client keeps state, so a rename, a pin, a color, a grant, Pause and Run now
  * all come back through the snapshot the way the real adapter does it.
  * `window.routinesTest` moves the routine status on from a script.
@@ -243,7 +243,7 @@ const teamMessages: TeamMessageDto[] = [
   {
     id: 2,
     author: "api",
-    body: "@lead endpoints are done; the contract is in TEAM.md",
+    body: "@lead endpoints are done; the contract is in TEAM.md\n\n- POST /v2/tasks takes status as an enum\n- GET /v2/tasks pages with a cursor\n- errors follow RFC 9457\n- the old /v1 routes stay until the client moves",
     tags: ["lead"],
     createdAt: iso(-120),
   },
@@ -340,190 +340,273 @@ const updateAgent = (id: string, change: Partial<AgentSessionDto>) => {
 };
 
 const client = {
-  request: {
-    snapshot: async () => ok(current),
-    sessionUpdate: async ({
-      sessionId,
-      name,
-      pinned,
-      color,
-    }: {
-      sessionId: string;
-      name?: string;
-      pinned?: boolean;
-      color?: SessionColorDto | null;
-    }) => {
-      const session = updateAgent(sessionId, {
-        ...(name !== undefined ? { name } : {}),
-        ...(pinned !== undefined
-          ? { pinnedAt: pinned ? new Date().toISOString() : null }
-          : {}),
-        ...(color !== undefined ? { color } : {}),
-      });
-      publish();
-      return ok(session);
-    },
-    sessionAbility: async ({
-      sessionId,
-      granted,
-    }: {
-      sessionId: string;
-      granted: boolean;
-    }) => {
-      const existing = abilities.find((item) => item.sessionId === sessionId);
-      const row: SessionAbilityDto = existing
-        ? { ...existing, enabled: granted }
-        : {
-            id: `ability-${sessionId}`,
-            sessionId,
-            ability: "routines",
-            enabled: granted,
-            paused: false,
-            purpose: null,
-            noteWaiting: true,
-            grantedAt: new Date().toISOString(),
-          };
-      abilities = [
-        ...abilities.filter((item) => item.sessionId !== sessionId),
-        row,
-      ];
-      const others = current.routines.filter(
-        (item) => item.sessionId !== sessionId,
-      );
-      publish({
-        routines: granted
-          ? [
-              ...others,
-              {
-                ...status,
-                abilityId: row.id,
-                sessionId,
-                waiting: [],
-                hold: null,
-                nextRun: null,
-                routines: 0,
-              },
-            ]
-          : others,
-      });
-      return ok(row);
-    },
-    routinesDetail: async () =>
-      ok({ purpose, routines, templates: [], runs: [] }),
-    routinesControl: async ({ action }: { action: "pause" | "resume" }) => {
-      const paused = action === "pause";
-      abilities = abilities.map((item) => ({ ...item, paused }));
-      setStatus({
-        paused,
-        hold: paused ? { reason: "paused", text: "routines are paused" } : null,
-      });
-      return ok(abilities[0]);
-    },
-    routinesPurpose: async ({ purpose: next }: { purpose: string }) => {
-      purpose = next;
-      return ok({ ...abilities[0], purpose });
-    },
-    routineSetEnabled: async ({
-      name,
-      enabled,
-    }: {
-      name: string;
-      enabled: boolean;
-    }) => {
-      routines = routines.map((item) =>
-        item.name === name
-          ? { ...item, enabled, nextRunAt: enabled ? iso(600) : null }
-          : item,
-      );
-      setStatus({ routines: routines.length });
-      return ok({ name, enabled });
-    },
-    routineRunNow: async ({ name }: { name?: string }) => {
-      const [first, ...rest] = status.waiting;
-      if (!name && first && status.hold?.reason === "typing")
-        setStatus({
-          waiting: rest,
-          running: status.running + 1,
-          hold: null,
+  request: new Proxy(
+    {
+      snapshot: async () => ok(current),
+      sessionUpdate: async ({
+        sessionId,
+        name,
+        pinned,
+        color,
+      }: {
+        sessionId: string;
+        name?: string;
+        pinned?: boolean;
+        color?: SessionColorDto | null;
+      }) => {
+        const session = updateAgent(sessionId, {
+          ...(name !== undefined ? { name } : {}),
+          ...(pinned !== undefined
+            ? { pinnedAt: pinned ? new Date().toISOString() : null }
+            : {}),
+          ...(color !== undefined ? { color } : {}),
         });
-      else if (name)
-        setStatus({
-          waiting: [
-            ...status.waiting,
-            { runId: 99, routine: name, queuedAt: new Date().toISOString() },
+        publish();
+        return ok(session);
+      },
+      sessionAbility: async ({
+        sessionId,
+        granted,
+      }: {
+        sessionId: string;
+        granted: boolean;
+      }) => {
+        const existing = abilities.find((item) => item.sessionId === sessionId);
+        const row: SessionAbilityDto = existing
+          ? { ...existing, enabled: granted }
+          : {
+              id: `ability-${sessionId}`,
+              sessionId,
+              ability: "routines",
+              enabled: granted,
+              paused: false,
+              purpose: null,
+              noteWaiting: true,
+              grantedAt: new Date().toISOString(),
+            };
+        abilities = [
+          ...abilities.filter((item) => item.sessionId !== sessionId),
+          row,
+        ];
+        const others = current.routines.filter(
+          (item) => item.sessionId !== sessionId,
+        );
+        publish({
+          routines: granted
+            ? [
+                ...others,
+                {
+                  ...status,
+                  abilityId: row.id,
+                  sessionId,
+                  waiting: [],
+                  hold: null,
+                  nextRun: null,
+                  routines: 0,
+                },
+              ]
+            : others,
+        });
+        return ok(row);
+      },
+      routinesDetail: async () =>
+        ok({
+          purpose,
+          routines,
+          templates: [],
+          runs: [
+            {
+              id: 3,
+              routine: "ci-health",
+              status: "done" as const,
+              queuedAt: iso(-1900),
+              deliveredAt: iso(-1890),
+              startedAt: iso(-1880),
+              finishedAt: iso(-1800),
+              outcome: "task" as const,
+              summary: "main is red: lint fails in apps/cli",
+              missedMs: 0,
+            },
+            {
+              id: 2,
+              routine: "ci-health",
+              status: "done" as const,
+              queuedAt: iso(-2900),
+              deliveredAt: iso(-2890),
+              startedAt: iso(-2880),
+              finishedAt: iso(-2800),
+              outcome: "quiet" as const,
+              summary: "all green",
+              missedMs: 0,
+            },
           ],
+        }),
+      routinesControl: async ({ action }: { action: "pause" | "resume" }) => {
+        const paused = action === "pause";
+        abilities = abilities.map((item) => ({ ...item, paused }));
+        setStatus({
+          paused,
+          hold: paused
+            ? { reason: "paused", text: "routines are paused" }
+            : null,
         });
-      return ok({
-        id: first?.runId ?? 99,
-        routine: name ?? first?.routine ?? "ci-health",
-        status: "queued",
-        queuedAt: new Date().toISOString(),
-        deliveredAt: null,
-        startedAt: null,
-        finishedAt: null,
-        outcome: null,
-        summary: null,
-        missedMs: 0,
-      });
-    },
-    teamDetail: async () => ok(teamDetail()),
-    teamSay: async ({ body }: { body: string }) => {
-      const message: TeamMessageDto = {
-        id: teamMessages.length + 1,
-        author: "user",
-        body,
-        tags: [...body.matchAll(/@([a-z0-9-]+)/g)].map((match) => match[1]!),
-        createdAt: new Date().toISOString(),
-      };
-      teamMessages.push(message);
-      return ok({
-        message,
-        warnings: message.tags.length
-          ? []
-          : [
-              "The message tags no session, so nobody was notified; it waits in the team chat",
+        return ok(abilities[0]);
+      },
+      routinesPurpose: async ({ purpose: next }: { purpose: string }) => {
+        purpose = next;
+        return ok({ ...abilities[0], purpose });
+      },
+      routineSetEnabled: async ({
+        name,
+        enabled,
+      }: {
+        name: string;
+        enabled: boolean;
+      }) => {
+        routines = routines.map((item) =>
+          item.name === name
+            ? { ...item, enabled, nextRunAt: enabled ? iso(600) : null }
+            : item,
+        );
+        setStatus({ routines: routines.length });
+        return ok({ name, enabled });
+      },
+      routineRunNow: async ({ name }: { name?: string }) => {
+        const [first, ...rest] = status.waiting;
+        if (!name && first && status.hold?.reason === "typing")
+          setStatus({
+            waiting: rest,
+            running: status.running + 1,
+            hold: null,
+          });
+        else if (name)
+          setStatus({
+            waiting: [
+              ...status.waiting,
+              { runId: 99, routine: name, queuedAt: new Date().toISOString() },
             ],
-      });
+          });
+        return ok({
+          id: first?.runId ?? 99,
+          routine: name ?? first?.routine ?? "ci-health",
+          status: "queued",
+          queuedAt: new Date().toISOString(),
+          deliveredAt: null,
+          startedAt: null,
+          finishedAt: null,
+          outcome: null,
+          summary: null,
+          missedMs: 0,
+        });
+      },
+      workflowFiles: async () =>
+        ok({
+          root: "/tmp/daedalus-routines-test/workflows",
+          flows: [
+            {
+              name: "feature",
+              path: "flows/feature.md",
+              text: "---\nname: feature\ndescription: A feature that ships\nsteps: [plan, build]\n---\n",
+              description: "A feature that ships",
+              steps: ["plan", "build"],
+              problem: null,
+            },
+          ],
+          steps: [
+            {
+              name: "plan",
+              path: "steps/plan.md",
+              text: "---\nname: plan\ndescription: Write the plan\n---\nRead the code, then write the plan.\n",
+              description: "Write the plan",
+              body: "Read the code, then write the plan.",
+              problem: null,
+            },
+            {
+              name: "build",
+              path: "steps/build.md",
+              text: "---\nname: build\ndescription: Make the change\n---\nMake the change and test it.\n",
+              description: "Make the change",
+              body: "Make the change and test it.",
+              problem: null,
+            },
+          ],
+          choosing: { path: "CHOOSING.md", text: "# Choosing a workflow\n" },
+        }),
+      instructionFiles: async () =>
+        ok({
+          root: "/tmp/daedalus-routines-test/instructions",
+          index: { path: "INDEX.md", text: "# Custom instructions\n" },
+          topics: [],
+        }),
+      teamDetail: async () => ok(teamDetail()),
+      teamSay: async ({ body }: { body: string }) => {
+        const message: TeamMessageDto = {
+          id: teamMessages.length + 1,
+          author: "user",
+          body,
+          tags: [...body.matchAll(/@([a-z0-9-]+)/g)].map((match) => match[1]!),
+          createdAt: new Date().toISOString(),
+        };
+        teamMessages.push(message);
+        return ok({
+          message,
+          warnings: message.tags.length
+            ? []
+            : [
+                "The message tags no session, so nobody was notified; it waits in the team chat",
+              ],
+        });
+      },
+      teamGoal: async ({ goal }: { goal: string }) => {
+        const team = { ...current.teams[0]!, goal };
+        publish({ teams: [team] });
+        return ok(team);
+      },
+      agentSpawn: async (params: Record<string, unknown>) => {
+        spawns.push(params);
+        const session = agent(
+          `spawned-${spawns.length}`,
+          String(params.name ?? "New"),
+          (params.provider as "claude" | "codex") ?? "claude",
+          10 + spawns.length,
+          { color: (params.color as SessionColorDto | undefined) ?? null },
+        );
+        current = { ...current, agents: [...current.agents, session] };
+        publish();
+        return ok(session);
+      },
+      agentReorder: async () => ok(current.agents),
+      workspaceReorder: async () => ok(current.workspaces),
+      workspaceContentGet: async () =>
+        ok({
+          workspaceId: "routines-test-workspace",
+          brief: "# Brief",
+          journal: "# Journal",
+          files: [],
+          repositories: [],
+          worktrees: [],
+        }),
+      agentModels: async ({ provider }: { provider: "codex" | "claude" }) =>
+        ok({ provider, models: [], source: "aliases" }),
+      // Never answers. A socket that fails reconnects every few seconds, and
+      // each reconnect rebuilds the terminal and takes the focus, which closes
+      // any menu open at the time.
+      terminalEndpoint: () => new Promise(() => {}),
+      presencePublish: async () => ok({}),
+      toastsAcknowledge: async () => ok({ acknowledged: 0 }),
+      workspaceWatchSet: async () => ok({ watching: [] }),
+    } as Record<string, (params: never) => Promise<unknown>>,
+    {
+      // A request this page has no stub for fails the way the host's does,
+      // so a new request elsewhere in the app does not take the page down.
+      get: (target, name: string) =>
+        target[name] ??
+        (async () => ({
+          ok: false,
+          error: { code: "NOT_FOUND", message: `No stub for ${name}` },
+        })),
     },
-    teamGoal: async ({ goal }: { goal: string }) => {
-      const team = { ...current.teams[0]!, goal };
-      publish({ teams: [team] });
-      return ok(team);
-    },
-    agentSpawn: async (params: Record<string, unknown>) => {
-      spawns.push(params);
-      const session = agent(
-        `spawned-${spawns.length}`,
-        String(params.name ?? "New"),
-        (params.provider as "claude" | "codex") ?? "claude",
-        10 + spawns.length,
-        { color: (params.color as SessionColorDto | undefined) ?? null },
-      );
-      current = { ...current, agents: [...current.agents, session] };
-      publish();
-      return ok(session);
-    },
-    agentReorder: async () => ok(current.agents),
-    workspaceReorder: async () => ok(current.workspaces),
-    workspaceContentGet: async () =>
-      ok({
-        workspaceId: "routines-test-workspace",
-        brief: "# Brief",
-        journal: "# Journal",
-        files: [],
-        repositories: [],
-        worktrees: [],
-      }),
-    agentModels: async ({ provider }: { provider: "codex" | "claude" }) =>
-      ok({ provider, models: [], source: "aliases" }),
-    // Never answers. A socket that fails reconnects every few seconds, and
-    // each reconnect rebuilds the terminal and takes the focus, which closes
-    // any menu open at the time.
-    terminalEndpoint: () => new Promise(() => {}),
-    presencePublish: async () => ok({}),
-    toastsAcknowledge: async () => ok({ acknowledged: 0 }),
-    workspaceWatchSet: async () => ok({ watching: [] }),
-  },
+  ),
   subscribe: (listener: () => void) => {
     listeners.add(listener);
     return () => listeners.delete(listener);

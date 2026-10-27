@@ -47,7 +47,7 @@ daedal session abilities <session>
   anything. The session finds the `daedalus-routines` skill when the user
   asks for a routine, a run arrives as the run skill's own command, and the
   `routine` commands refuse a session without the ability. The app's
-  Routines panel tells the user how to ask instead.
+  Routines tab tells the user how to ask instead.
 - **Orchestration** adds one line to the launch prompt saying what the
   session holds and which skill to follow. Granted to a running session,
   Daedalus sends one note, as described under Delivery below; until then
@@ -183,6 +183,19 @@ why: "2 waiting · you typed 0:40 ago · resumes in 1:20", or busy, the input
 box has text, the runs in flight, a rebirth, or paused. Run now
 (`routineRunNow` over RPC) skips only the 2-minute wait for the next line.
 
+The bar's **Routines** button opens the session's Routines tab in the center
+tab strip. Like the Team, Workflows and Custom instructions tabs, it starts
+with one line saying what it is, how to ask for a routine, and a link to
+this section. It shows the purpose, edited in place, and Pause all or Resume.
+The routines are a table with one row each: schedule in words (`every 15m`
+reads "Every 15 min"; a cron or `at` schedule shows as written), next run,
+the last run's outcome and time, output, Run now and Enable or Disable. A
+routine with failures says why under its name, and three in a row mark the
+row red. A row opens to its time limit, model, end date and prompt. Under
+the table are the latest finished runs with their summaries, then the
+templates. The tab reads the routines again whenever the session's routine
+status in the snapshot moves, and after each action.
+
 ### Reports and tasks
 
 A report is what a run hands back: a key, a title, a body, an optional link,
@@ -240,17 +253,22 @@ In the app:
   its `@handle`. Members are listed right under their lead and indented. The
   grouping is only how the list is drawn; dragging changes the stored order
   as before.
-- A lead's or member's terminal has a **Team** bar. Its panel shows the
-  goal, which can be edited, each member with its status and any delivery
-  that failed, the newest 100 messages of the chat, and a box to post as
-  the user. The open panel reads the team again every 4 seconds.
+- A lead's or member's terminal has a **Team** bar. Its **Team** button
+  opens the team's tab in the center tab strip. It starts with one line
+  saying what a team is and a link to this section. Members are listed on
+  the left and the chat fills the right, as in the Workflows tab, and the
+  line between them drags to resize. It holds the goal, edited in place;
+  each member with a status dot, its unread count and any delivery that
+  failed, a click away from its session; the newest 100 messages of the
+  chat, where a message longer than four lines folds; and a box to post as
+  the user (⌘↵ sends). The open tab reads the team again every 4 seconds.
 
 ```
 daedal agent spawn --workspace <w> --provider claude --name "Checkout API" --ability orchestration
 daedal agent spawn --team --name server --message "<instructions>"   # inside the lead
 daedal agent spawn --team "Checkout API" --message "<instructions>"  # the user
 daedal team say "@server the token field is access_token"
-daedal team chat [--all]
+daedal team chat [--tagged | --all]
 daedal team list
 daedal team goal "<text>"
 ```
@@ -301,10 +319,17 @@ with a warning. The lead is not copied on members' messages to each other.
 
 Delivery runs in the process that posts, so it works with the app closed.
 Each reader has a row in `team_cursors`: `delivered_through`, the last tagged
-message that reached its session, and `read_through`, the last one `team
-chat` printed to it. One delivery carries every waiting message that tags the
-reader, as `[team "<name>"] <author>: <text>` blocks, and a footer counting
-the other new messages in the chat. The cursor moves under a write lock
+message that reached its session, `read_through`, the last one `team
+chat` printed to it, and `tagged_read_through`, the last message tagging it
+that `team chat --tagged` printed. A tagged read moves only that marker, so
+the rest of the chat stays unread, and a later full read skips what it
+printed. Each read updates only its own column, so it never undoes a
+delivery saved meanwhile. One delivery is a single line naming how many waiting
+messages tag the reader and who wrote them, and the command that reads them:
+`[team "<name>"] 2 new messages for you from lead and user. Read them with:
+daedal team chat --tagged`. The messages stay in the chat. Both providers show a
+command call as one folded row, so the conversation shows a line and a row
+per delivery instead of every message in full. The cursor moves under a write lock
 before the send, so two processes never send the same message, and moves
 back if the send fails. A failure is kept in `last_error`, shown by
 `team list`, and the send is tried again on the next post, on `team chat` and
@@ -330,6 +355,10 @@ only.
 <text>`, run with the session's account. A busy session runs it after its
   current turn, as a user turn; only the `[team ...]` prefix and the skill
   mark it as a teammate's.
+
+Claude adds its own paragraph under every message from another session,
+saying that it is not from the user. No setting or line field turns it off,
+which is one more reason the delivered line is short.
 
 Neither path types into the session's pane, so it never touches what the user
 is typing. Messages the user posts reach Claude members as peer messages too;

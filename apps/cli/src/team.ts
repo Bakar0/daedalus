@@ -2,7 +2,7 @@ import {
   DaedalusError,
   LEAD_HANDLE,
   USER_HANDLE,
-  splitLines,
+  teamChatText,
   type AgentSession,
   type ApplicationContext,
   type Team,
@@ -15,7 +15,7 @@ import { parseArguments, printResult } from "./arguments";
 
 export const teamHelp = `Team commands:
   daedal team say "<text>" [--team <lead>] [--user]
-  daedal team chat [--all] [--limit <n>] [--team <lead>] [--user]
+  daedal team chat [--tagged | --all] [--limit <n>] [--team <lead>] [--user]
   daedal team list [--team <lead>]
   daedal team goal [<text>] [--team <lead>]
   daedal agent spawn --team [<lead>] [--message <instructions>] [--name <name>]
@@ -38,11 +38,11 @@ either as the lead. Each member has a handle, made from --name or the
 task's title, that the chat uses.
 
 Everyone in the team, and the user, posts to one chat. Tags decide who is
-told: @<handle> pushes the message into that member's session, @lead into
-the lead's, @all into everyone's. A message that tags nobody is stored and
-only read with 'team chat'. Claude sessions get it through their inbox
-socket as a message from another session; Codex sessions through
-'codex queue'. A busy session gets it in or after its current turn, and
+told: @<handle> sends that member's session a one-line notice saying who
+wrote and to run 'team chat --tagged', @lead the lead's, @all everyone's.
+A message that tags nobody is stored and only read with 'team chat'. Claude
+sessions get the notice through their inbox socket as a message from
+another session; Codex sessions through 'codex queue'. A busy session gets it in or after its current turn, and
 nothing is typed into its pane. A session that is not running, or a send
 that fails, is tried again on the next post in the team, on 'team chat' and
 'team list', and when the session starts or ends a turn. 'team list' shows
@@ -54,7 +54,8 @@ signed with its handle. Outside a session the post is from the user, and
 from inside a session's folder.
 
 'team chat' prints what the reader has not read yet and marks it read; --all
-prints the newest messages whatever was read. 'team goal' sets the shared
+prints the newest messages whatever was read; --tagged prints only unread
+messages that tag the reader and leaves the rest unread. 'team goal' sets the shared
 goal that members are told at launch.`;
 
 /** The team a command is about: --team, else the caller's own. */
@@ -95,20 +96,6 @@ function readerHandle(
     : USER_HANDLE;
 }
 
-const time = (iso: string) => {
-  const date = new Date(iso);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
-
-/** A header line, then every line of the body indented under it. */
-const messageText = (message: TeamMessage, author: string) =>
-  `#${message.id} ${time(message.createdAt)} ${author}${message.tags.length ? ` → ${message.tags.map((tag) => `@${tag}`).join(" ")}` : ""}\n${splitLines(
-    message.body,
-  )
-    .map((line) => `  ${line}`)
-    .join("\n")}`;
-
 const deliveryText = (delivery: TeamDeliveryResult) =>
   delivery.delivered
     ? `  @${delivery.handle}: delivered`
@@ -139,7 +126,11 @@ export async function teamCommand(
   }
   if (!["say", "chat", "list", "goal"].includes(action))
     throw new DaedalusError("VALIDATION", `Unknown team command '${action}'`);
-  const parsed = parseArguments(args, ["team", "limit"], ["user", "all"]);
+  const parsed = parseArguments(
+    args,
+    ["team", "limit"],
+    ["user", "all", "tagged"],
+  );
   const asUser = parsed.flags.has("user");
   const caller = await callerSession(context);
   const team = await teamFor(context, parsed.values, caller);
@@ -163,7 +154,12 @@ export async function teamCommand(
     if (parsed.positionals.length)
       throw new DaedalusError(
         "VALIDATION",
-        "Usage: daedal team chat [--all] [--limit <n>] [--team <lead>]",
+        "Usage: daedal team chat [--tagged | --all] [--limit <n>] [--team <lead>]",
+      );
+    if (parsed.flags.has("all") && parsed.flags.has("tagged"))
+      throw new DaedalusError(
+        "VALIDATION",
+        "--all and --tagged do not go together",
       );
     const limit =
       parsed.values.limit === undefined
@@ -180,6 +176,7 @@ export async function teamCommand(
       readerHandle(context, team, caller, asUser),
       {
         ...(parsed.flags.has("all") ? { all: true } : {}),
+        ...(parsed.flags.has("tagged") ? { tagged: true } : {}),
         ...(limit !== undefined ? { limit } : {}),
       },
     );
@@ -194,9 +191,17 @@ export async function teamCommand(
           `(${result.skipped} older unread messages not shown; use --limit)`,
         );
       if (!result.messages.length)
-        console.log(`Nothing new in the team '${team.name}'.`);
+        console.log(
+          parsed.flags.has("tagged")
+            ? `Nothing new for you in the team '${team.name}'.`
+            : `Nothing new in the team '${team.name}'.`,
+        );
       for (const message of messages)
-        console.log(messageText(message, message.from));
+        console.log(teamChatText(message, message.from));
+      if (result.others)
+        console.log(
+          `(${result.others} other unread ${result.others === 1 ? "message" : "messages"} in the chat; 'daedal team chat' reads ${result.others === 1 ? "it" : "them"}.)`,
+        );
     });
     return 0;
   }

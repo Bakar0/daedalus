@@ -14,6 +14,7 @@ interface TeamCursorRow {
   team_id: string;
   handle: string;
   read_through: number;
+  tagged_read_through: number;
   delivered_through: number;
   last_error: string | null;
   last_attempt_at: string | null;
@@ -32,6 +33,7 @@ const cursorFromRow = (row: TeamCursorRow): TeamCursor => ({
   teamId: row.team_id,
   handle: row.handle,
   readThrough: row.read_through,
+  taggedReadThrough: row.tagged_read_through,
   deliveredThrough: row.delivered_through,
   lastError: row.last_error,
   lastAttemptAt: row.last_attempt_at,
@@ -105,20 +107,42 @@ export class TeamRepository {
           teamId,
           handle,
           readThrough: 0,
+          taggedReadThrough: 0,
           deliveredThrough: 0,
           lastError: null,
           lastAttemptAt: null,
         };
   }
 
+  /**
+   * Moves one read marker forward, and only that column, so a read never
+   * undoes a delivery another process saved meanwhile.
+   */
+  markRead(
+    teamId: string,
+    handle: string,
+    marker: "read" | "tagged",
+    through: number,
+  ): void {
+    const column = marker === "read" ? "read_through" : "tagged_read_through";
+    this.database
+      .query(
+        `INSERT INTO team_cursors (team_id, handle, ${column}) VALUES (?, ?, ?)
+         ON CONFLICT (team_id, handle) DO UPDATE SET
+           ${column} = MAX(${column}, excluded.${column})`,
+      )
+      .run(teamId, handle, through);
+  }
+
   saveCursor(cursor: TeamCursor): void {
     this.database
       .query(
         `INSERT INTO team_cursors
-         (team_id, handle, read_through, delivered_through, last_error, last_attempt_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+         (team_id, handle, read_through, tagged_read_through, delivered_through, last_error, last_attempt_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (team_id, handle) DO UPDATE SET
            read_through = excluded.read_through,
+           tagged_read_through = excluded.tagged_read_through,
            delivered_through = excluded.delivered_through,
            last_error = excluded.last_error,
            last_attempt_at = excluded.last_attempt_at`,
@@ -127,6 +151,7 @@ export class TeamRepository {
         cursor.teamId,
         cursor.handle,
         cursor.readThrough,
+        cursor.taggedReadThrough,
         cursor.deliveredThrough,
         cursor.lastError,
         cursor.lastAttemptAt,

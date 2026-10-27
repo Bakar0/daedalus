@@ -1,13 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  RpcResult,
   SessionColorDto,
   TeamDetailDto,
   TeamDto,
   TeamMemberDto,
+  TeamMessageDto,
 } from "@daedalus/protocol";
+import type { DesktopClient } from "../client-types";
 import { relativeTime } from "../routines/time";
-import { useOutsideDismiss } from "../use-outside-dismiss";
+import { DOCS_URL, Group, TabIntro } from "../FileEditorParts";
 import { sessionColorStyle } from "../session-color-style";
+import { SplitList } from "../SplitList";
 
 /**
  * The bar above the terminal of a team's lead or member: which team, and a
@@ -63,41 +67,163 @@ export function TeamBar({
   );
 }
 
-function memberState(member: TeamMemberDto): string {
-  const parts = [member.status];
+/** How often the open tab reads the chat; it moves without the snapshot. */
+const REFRESH_MS = 4_000;
+/** A message longer than this many lines folds until asked for. */
+const FOLD_LINES = 4;
+
+/** The dot and words for a member's state. */
+function memberState(member: TeamMemberDto): {
+  tone: "live" | "idle" | "off" | "failing";
+  text: string;
+} {
   if (member.undelivered > 0)
-    parts.push(
-      `${member.undelivered} not delivered${member.lastError ? `: ${member.lastError}` : ""}`,
-    );
-  return parts.join(" · ");
+    return {
+      tone: "failing",
+      text: `${member.undelivered} not delivered${member.lastError ? `: ${member.lastError}` : ""}`,
+    };
+  if (member.status === "archived") return { tone: "off", text: "archived" };
+  if (member.status === "running") return { tone: "live", text: "running" };
+  return { tone: "idle", text: member.status };
+}
+
+/** One chat message; a long body folds after a few lines. */
+function TeamMessage({
+  message,
+  now,
+}: {
+  message: TeamMessageDto;
+  now: number;
+}) {
+  const long = message.body.split("\n").length > FOLD_LINES;
+  const [open, setOpen] = useState(false);
+  return (
+    <article
+      className="team-message"
+      data-author={message.author}
+      data-folded={long && !open ? "true" : undefined}
+    >
+      <header className="team-message-head">
+        <strong>{message.author === "user" ? "you" : message.author}</strong>
+        {message.cloud && (
+          <span className="team-message-cloud">{message.cloud}</span>
+        )}
+        {message.tags.map((tag) => (
+          <span className="team-tag" key={tag}>
+            @{tag}
+          </span>
+        ))}
+        <time dateTime={message.createdAt}>
+          {relativeTime(message.createdAt, now)}
+        </time>
+      </header>
+      <p>{message.body}</p>
+      {long && (
+        <button
+          className="team-message-more"
+          onClick={() => setOpen((value) => !value)}
+          type="button"
+        >
+          {open ? "Show less" : "Show all"}
+        </button>
+      )}
+    </article>
+  );
+}
+
+/** The Team tab. It reads the team itself while in front, every few seconds. */
+export function TeamPage({
+  client,
+  teamId,
+  visible,
+  busy,
+  now,
+  run,
+  onOpenSession,
+}: {
+  client: DesktopClient;
+  teamId: string;
+  /** Whether the tab is in front; it reads the chat only then. */
+  visible: boolean;
+  busy: boolean;
+  now: number;
+  /** Sends a request the way the app's other actions do, with its errors. */
+  run: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
+  onOpenSession: (sessionId: string) => void;
+}) {
+  const [detail, setDetail] = useState<TeamDetailDto>();
+  const [error, setError] = useState<string>();
+  const load = useCallback(async () => {
+    try {
+      const response = await client.request.teamDetail({ teamId });
+      if (response.ok) {
+        setDetail(response.data);
+        setError(undefined);
+      } else setError(response.error.message);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [client, teamId]);
+  useEffect(() => {
+    if (!visible) return;
+    void load();
+    const timer = setInterval(() => void load(), REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [load, visible]);
+
+  return (
+    <TeamView
+      busy={busy}
+      detail={detail}
+      error={error}
+      now={now}
+      onOpenSession={onOpenSession}
+      onReadMore={() =>
+        void client.request.openExternal({
+          url: `${DOCS_URL}/abilities.md#orchestration-and-teams`,
+        })
+      }
+      onPost={async (body) => {
+        const said = await run(client.request.teamSay({ teamId, body }));
+        await load();
+        return said?.warnings;
+      }}
+      onSetGoal={async (goal) => {
+        await run(client.request.teamGoal({ teamId, goal }));
+        await load();
+      }}
+      teamId={teamId}
+    />
+  );
 }
 
 /**
- * The drawer on a team: its goal, who is in it, and the chat. The user posts
- * as `user`; tags decide whose session is told.
+ * What the Team tab shows: the goal, who is in the team, and the chat. The
+ * user posts as `user`; tags decide whose session is told.
  */
-export function TeamPanel({
+export function TeamView({
+  teamId,
   detail,
   error,
   busy,
   now,
-  onClose,
   onPost,
   onSetGoal,
   onOpenSession,
+  onReadMore,
 }: {
+  teamId: string;
   detail: TeamDetailDto | undefined;
   error: string | undefined;
   busy: boolean;
   now: number;
-  onClose: () => void;
   /** Resolves to the post's warnings, or undefined when it failed. */
   onPost: (body: string) => Promise<string[] | undefined>;
-  onSetGoal: (goal: string) => void;
+  onSetGoal: (goal: string) => Promise<void>;
   onOpenSession: (sessionId: string) => void;
+  /** Opens the teams docs. */
+  onReadMore: () => void;
 }) {
-  const panel = useRef<HTMLElement>(null);
-  useOutsideDismiss(panel, onClose);
   const [draft, setDraft] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [goal, setGoal] = useState(detail?.team.goal ?? "");
@@ -108,123 +234,111 @@ export function TeamPanel({
   useEffect(() => {
     chatEnd.current?.scrollIntoView({ block: "end" });
   }, [newest]);
-  const handles = detail?.members
+
+  if (!detail)
+    return (
+      <div className="ability-page">
+        <p className={error ? "ability-page-error" : "ability-page-empty"}>
+          {error ?? "Loading team…"}
+        </p>
+      </div>
+    );
+
+  const handles = detail.members
     .filter((member) => member.status !== "archived")
     .map((member) => `@${member.handle}`);
-
+  const memberCount = detail.members.length - 1;
   const post = async () => {
     const body = draft.trim();
     if (!body) return;
-    const result = await onPost(body);
-    if (!result) return;
+    const said = await onPost(body);
+    if (!said) return;
     setDraft("");
-    setWarnings(result);
+    setWarnings(said);
+  };
+  const saveGoal = async () => {
+    if (!goalChanged) return;
+    await onSetGoal(goal.trim());
   };
 
   return (
-    <aside
-      aria-label={`Team ${detail?.team.name ?? ""}`}
-      className="routines-panel team-panel"
-      ref={panel}
-      onKeyDown={(event) => {
-        if (event.key !== "Escape") return;
-        event.preventDefault();
-        onClose();
-      }}
-      role="dialog"
-    >
-      <div className="routines-panel-heading">
-        <div>
-          <span className="eyebrow">Team</span>
-          <h2>{detail?.team.name ?? "Team"}</h2>
-        </div>
-        <button className="quiet" onClick={onClose} type="button">
-          Close
-        </button>
-      </div>
-      {error && <p className="routines-panel-error">{error}</p>}
-      {!detail && !error && <p className="routines-panel-empty">Loading…</p>}
-      {detail && (
-        <>
+    <div className="workflows-tab team-tab">
+      <TabIntro onReadMore={onReadMore}>
+        A team is a lead session and the members it adds, working toward one
+        goal. Tag a member to send its session a one-line notice; it reads the
+        message with daedal team chat --tagged.
+      </TabIntro>
+      <SplitList
+        id="team"
+        label="Members"
+        list={
+          <Group title="Members">
+            {detail.members.map((member) => {
+              const state = memberState(member);
+              return (
+                <MemberRow
+                  key={member.sessionId}
+                  member={member}
+                  onOpen={() => onOpenSession(member.sessionId)}
+                  state={state}
+                />
+              );
+            })}
+          </Group>
+        }
+      >
+        <section aria-label="Chat" className="team-detail">
+          <header className="team-detail-heading">
+            <h2>{detail.team.name}</h2>
+            <small>
+              {memberCount === 0
+                ? "Only the lead"
+                : `Lead and ${memberCount} ${memberCount === 1 ? "member" : "members"}`}
+              {" · "}
+              {detail.messages.length}{" "}
+              {detail.messages.length === 1 ? "message" : "messages"}
+            </small>
+          </header>
+          {error && <p className="ability-page-error">{error}</p>}
           <form
-            className="routines-panel-purpose"
+            className="ability-page-field"
             onSubmit={(event) => {
               event.preventDefault();
-              if (goalChanged) onSetGoal(goal.trim());
+              void saveGoal();
             }}
           >
-            <label>
-              <strong>Goal</strong>
-              <small>Members are told it when they start.</small>
-              <textarea
-                maxLength={2000}
-                onChange={(event) => setGoal(event.target.value)}
-                placeholder="What the team is working toward"
-                rows={2}
-                value={goal}
-              />
-            </label>
+            <label htmlFor={`team-goal-${teamId}`}>Goal</label>
+            <textarea
+              id={`team-goal-${teamId}`}
+              maxLength={2000}
+              onChange={(event) => setGoal(event.target.value)}
+              placeholder="What the team is working toward. Members are told it when they start."
+              rows={1}
+              value={goal}
+            />
             {goalChanged && (
-              <button disabled={busy} type="submit">
-                Save goal
-              </button>
-            )}
-          </form>
-          <h3>
-            {detail.members.length === 1
-              ? "Only the lead"
-              : `${detail.members.length - 1} ${detail.members.length === 2 ? "member" : "members"}`}
-          </h3>
-          <ul className="routines-panel-list team-members">
-            {detail.members.map((member) => (
-              <li
-                data-enabled={member.status !== "archived" ? "true" : "false"}
-                data-failing={member.undelivered > 0 ? "true" : undefined}
-                key={member.sessionId}
-              >
+              <div className="ability-page-field-actions">
                 <button
-                  className="quiet team-member"
-                  onClick={() => onOpenSession(member.sessionId)}
-                  title={`Open ${member.name}`}
+                  className="quiet"
+                  onClick={() => setGoal(detail.team.goal ?? "")}
                   type="button"
                 >
-                  <span className="routine-row-head">
-                    <strong>@{member.handle}</strong>
-                    <code>{member.name}</code>
-                  </span>
-                  <small className="routine-row-meta">
-                    {memberState(member)}
-                  </small>
+                  Cancel
                 </button>
-              </li>
-            ))}
-          </ul>
-          <h3>Chat</h3>
+                <button disabled={busy} type="submit">
+                  Save goal
+                </button>
+              </div>
+            )}
+          </form>
           <div className="team-chat" role="log">
             {detail.messages.length === 0 && (
-              <p className="routines-panel-empty">No messages yet.</p>
+              <p className="ability-page-empty">
+                No messages yet. Tag a member to tell its session.
+              </p>
             )}
             {detail.messages.map((message) => (
-              <div
-                className="team-message"
-                data-author={message.author}
-                key={message.id}
-              >
-                <span className="team-message-head">
-                  <strong>{message.author}</strong>
-                  {message.cloud && (
-                    <span className="team-message-cloud">{message.cloud}</span>
-                  )}
-                  {message.tags.length > 0 && (
-                    <span>
-                      {" → "}
-                      {message.tags.map((tag) => `@${tag}`).join(" ")}
-                    </span>
-                  )}
-                  <small>{relativeTime(message.createdAt, now)}</small>
-                </span>
-                <p>{message.body}</p>
-              </div>
+              <TeamMessage key={message.id} message={message} now={now} />
             ))}
             <div ref={chatEnd} />
           </div>
@@ -244,21 +358,72 @@ export function TeamPanel({
                   void post();
                 }
               }}
-              placeholder={`Tag who should get it: ${[...(handles ?? []), "@all"].join(", ")}`}
-              rows={3}
+              placeholder={`Message the team. Tag who should get it: ${[...handles, "@all"].join(", ")}`}
+              rows={2}
               value={draft}
             />
-            {warnings.map((warning) => (
-              <small className="team-composer-warning" key={warning}>
-                {warning}
-              </small>
-            ))}
-            <button disabled={busy || !draft.trim()} type="submit">
-              Post as you
-            </button>
+            <div className="team-composer-row">
+              {warnings.map((warning) => (
+                <small className="team-composer-warning" key={warning}>
+                  {warning}
+                </small>
+              ))}
+              <small className="team-composer-hint">⌘↵ to send</small>
+              <button disabled={busy || !draft.trim()} type="submit">
+                Send
+              </button>
+            </div>
           </form>
-        </>
-      )}
-    </aside>
+        </section>
+      </SplitList>
+    </div>
+  );
+}
+
+/**
+ * A member in the list, laid out like a file in the Workflows tab: its
+ * handle and unread count on one line, its session and state under it.
+ * Clicking it opens the session.
+ */
+function MemberRow({
+  member,
+  state,
+  onOpen,
+}: {
+  member: TeamMemberDto;
+  state: ReturnType<typeof memberState>;
+  onOpen: () => void;
+}) {
+  return (
+    <li>
+      <button
+        className="workflows-file team-member-row"
+        data-tone={state.tone}
+        onClick={onOpen}
+        title={`Open ${member.name}`}
+        type="button"
+      >
+        <span className="workflows-file-line">
+          <span className="workflows-file-name">
+            <span aria-hidden="true" className="team-member-dot" />@
+            {member.handle}
+            {member.role === "lead" && (
+              <span className="workflow-gate">lead</span>
+            )}
+          </span>
+          {member.unread > 0 && (
+            <span
+              className="workflows-file-meta"
+              title={`${member.unread} unread`}
+            >
+              {member.unread} unread
+            </span>
+          )}
+        </span>
+        <small>
+          {member.name} · {state.text}
+        </small>
+      </button>
+    </li>
   );
 }

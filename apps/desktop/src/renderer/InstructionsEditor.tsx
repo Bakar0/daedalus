@@ -5,6 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { InstructionFilesDto } from "@daedalus/protocol";
+import { SplitList } from "./SplitList";
 import type { DesktopClient } from "./client-types";
 import { askConfirm } from "./dialogs";
 import {
@@ -194,33 +195,41 @@ export function InstructionsEditor({
         How you like things done, followed by every session in every workspace.
         Tell an agent "from now on…" and it adds the rule here.
       </TabIntro>
-      <div className="workflows-editor">
-        <nav aria-label="Instruction files" className="workflows-list">
-          <Group
-            onNew={() => void select({ kind: "topic", name: null })}
-            title="Custom instructions"
-          >
-            <FileRow
-              meta={plural(alwaysRules(instructions.index.text).length, "rule")}
-              name="Always"
-              onSelect={() => void select({ kind: "index" })}
-              selected={selection.kind === "index"}
-              summary="Every request, and the list of topics"
-            />
-            {topicFacts(instructions).map((topic) => (
+      <SplitList
+        id="instructions"
+        label="Instruction files"
+        list={
+          <>
+            <Group
+              onNew={() => void select({ kind: "topic", name: null })}
+              title="Custom instructions"
+            >
               <FileRow
-                key={topic.name}
-                meta={plural(topic.rules, "rule")}
-                name={topic.heading}
-                onSelect={() =>
-                  void select({ kind: "topic", name: topic.name })
-                }
-                selected={isTopic(topic.name)}
-                summary={topic.covers ?? topic.name}
+                meta={plural(
+                  alwaysRules(instructions.index.text).length,
+                  "rule",
+                )}
+                name="Always"
+                onSelect={() => void select({ kind: "index" })}
+                selected={selection.kind === "index"}
+                summary="Every request, and the list of topics"
               />
-            ))}
-          </Group>
-        </nav>
+              {topicFacts(instructions).map((topic) => (
+                <FileRow
+                  key={topic.name}
+                  meta={plural(topic.rules, "rule")}
+                  name={topic.heading}
+                  onSelect={() =>
+                    void select({ kind: "topic", name: topic.name })
+                  }
+                  selected={isTopic(topic.name)}
+                  summary={topic.covers ?? topic.name}
+                />
+              ))}
+            </Group>
+          </>
+        }
+      >
         <FileDetail
           alert={refusal}
           dirty={dirty}
@@ -265,7 +274,7 @@ export function InstructionsEditor({
             )
           }
         />
-      </div>
+      </SplitList>
     </div>
   );
 }

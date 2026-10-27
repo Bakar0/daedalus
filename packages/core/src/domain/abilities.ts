@@ -151,6 +151,11 @@ export interface TeamCursor {
   handle: string;
   /** The last message it read with `team chat`. */
   readThrough: number;
+  /**
+   * The last message that tags it and that it read with `team chat
+   * --tagged`. Messages up to `readThrough` count as read whatever this is.
+   */
+  taggedReadThrough: number;
   /** The last message that tags it and reached its session. */
   deliveredThrough: number;
   /** Why the last delivery failed, or null after one succeeded. */
