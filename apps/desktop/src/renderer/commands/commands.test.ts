@@ -716,15 +716,13 @@ describe("registry", () => {
     dispose();
   });
 
-  test("host commands run through the host, which gets the keys too", async () => {
+  test("host commands run through the host; the person's keys apply here", async () => {
     const { connectHost, runCommand, setKeyOverrides, commandKeys } =
       await import("./registry");
     const ran: string[] = [];
-    const sent: unknown[] = [];
     expect(runCommand("app.quit", context([], false, "palette"))).toBe(false);
     const disconnect = connectHost({
       run: (command) => ran.push(command),
-      setKeyOverrides: (overrides) => sent.push(overrides),
     });
     expect(runCommand("app.quit", context([], false, "palette"))).toBe(true);
     // Quit acts while a dialog is open.
@@ -743,7 +741,6 @@ describe("registry", () => {
       ["no.such", undefined],
     ]);
     expect(commandKeys("tab.close")).toEqual(["mod+shift+w"]);
-    expect(sent.at(-1)).toEqual({ "tab.close": ["mod+shift+w"] });
     setKeyOverrides({});
     expect(commandKeys("tab.close")).toEqual(["mod+w"]);
     disconnect();

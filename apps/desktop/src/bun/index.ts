@@ -31,7 +31,7 @@ import {
 import type {
   DesktopRpcSchema,
   HostCommandId,
-  KeyOverrides,
+  KeybindingsDto,
   DesktopSnapshotPart,
   DesktopWindowRole,
   TerminalServerMessage,
@@ -343,11 +343,9 @@ const rendererUrl = `views://mainview/index.html`;
 
 // WebKit text controls use the native responder chain for standard editing
 // commands on macOS. Defining these roles restores Cmd+C/V/X/A/Z everywhere.
-// The menu's items and keys come from the shared command table; the window
-// sends the person's rebound keys, and the menu is rebuilt with them.
+// The menu's items and keys come from the shared command table, rebuilt with
+// the person's keys once `keybindings.json` is read (see `applyKeybindings`).
 ApplicationMenu.setApplicationMenu(buildApplicationMenu());
-const setMenuKeyOverrides = (overrides: KeyOverrides) =>
-  ApplicationMenu.setApplicationMenu(buildApplicationMenu(overrides));
 
 let revision = 0;
 const readModel = new ReadModel(context);
@@ -561,7 +559,7 @@ const createRpc = (role: DesktopWindowRole = "main") =>
         },
         commands: {
           run: runHostCommand,
-          setKeyOverrides: setMenuKeyOverrides,
+          keybindingsChanged: applyKeybindings,
         },
         updates: {
           current: () => updates.update,
@@ -602,6 +600,44 @@ let worldOpen = false;
 let worldKey = false;
 /** A session to select once a main window reopened for it can hear. */
 let pendingFocus: string | undefined;
+
+/**
+ * The person's keys, from `keybindings.json` in the home. The host owns
+ * them: it reads the file at start and whenever it changes (Settings, `daedal
+ * keys`, or a hand edit), rebuilds the menu bar with them, and sends them to
+ * the windows, which match keys with the same overrides. Entries it cannot
+ * use are logged here and reported to the window; they never stop the app.
+ */
+let keybindings: KeybindingsDto | undefined;
+function applyKeybindings(next: KeybindingsDto): void {
+  const same =
+    keybindings !== undefined &&
+    JSON.stringify(keybindings) === JSON.stringify(next);
+  keybindings = next;
+  if (same) return;
+  ApplicationMenu.setApplicationMenu(buildApplicationMenu(next.overrides));
+  if (next.rejected.length)
+    void context.logger.write("warn", "keybindings_rejected", {
+      path: next.path,
+      rejected: next.rejected,
+    });
+  if (windowOpen) rpc.send.keybindingsChanged(next);
+  if (worldOpen) worldRpc.send.keybindingsChanged(next);
+}
+const reloadKeybindings = () =>
+  context.keybindings.read().then(applyKeybindings, (error: unknown) =>
+    context.logger.write("error", "keybindings_read_failed", {
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  );
+void reloadKeybindings();
+context.keybindings.watch(
+  () => void reloadKeybindings(),
+  (error) =>
+    void context.logger.write("error", "keybindings_watch_failed", {
+      message: error.message,
+    }),
+);
 
 /**
  * Filesystem changes go straight to the window rather than through

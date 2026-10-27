@@ -1,7 +1,7 @@
 import type {
   HostCommandId,
-  KeyOverrides,
-  RejectedKey,
+  KeybindingChange,
+  KeybindingsDto,
   RendererCommandId,
 } from "./commands";
 
@@ -1947,14 +1947,17 @@ export interface DesktopRpcSchema {
        */
       commandRun: Request<{ command: HostCommandId }, { ran: true }>;
       /**
-       * The keys the person rebound, so the host rebuilds the menu bar with
-       * them and a rebound menu command has one live key. Keys that do not
-       * parse are dropped and reported back.
+       * The person's keys as `keybindings.json` has them. The host owns
+       * them: it reads the file at start and on every change, rebuilds the
+       * menu bar, and sends `keybindingsChanged` to the windows.
        */
-      keyOverridesSet: Request<
-        { overrides: KeyOverrides },
-        { rejected: RejectedKey[] }
-      >;
+      keybindingsGet: Request<Record<string, never>, KeybindingsDto>;
+      /** Writes some commands' keys, for Settings › Keyboard. */
+      keybindingsSet: Request<{ changes: KeybindingChange[] }, KeybindingsDto>;
+      /** Every command back to its default keys. */
+      keybindingsReset: Request<Record<string, never>, KeybindingsDto>;
+      /** Shows `keybindings.json` in Finder, creating it when missing. */
+      keybindingsReveal: Request<Record<string, never>, { path: string }>;
       /**
        * The update prompt as it stands, for a window that opens after the
        * host's check already ran. Changes after that arrive as
@@ -2387,6 +2390,8 @@ export interface DesktopRpcSchema {
       quitRequested: { plan: ShutdownPlanDto };
       /** The update prompt changed; `null` hides it. */
       appUpdateChanged: { update: AppUpdateDto | null };
+      /** `keybindings.json` changed, from Settings, the CLI or by hand. */
+      keybindingsChanged: KeybindingsDto;
     };
   };
 }

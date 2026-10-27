@@ -1,5 +1,6 @@
 import type {
   AppUpdateDto,
+  KeybindingsDto,
   RendererCommandId,
   DesktopRpcSchema,
   ShutdownPlanDto,
@@ -41,5 +42,9 @@ export interface DesktopClient {
   /** The update prompt changed. See `appUpdateChanged`. */
   subscribeAppUpdate?(
     listener: (update: AppUpdateDto | null) => void,
+  ): () => void;
+  /** `keybindings.json` changed. See `keybindingsChanged`. */
+  subscribeKeybindings?(
+    listener: (keybindings: KeybindingsDto) => void,
   ): () => void;
 }

@@ -2,6 +2,7 @@ import { Electroview } from "electrobun/view";
 import type {
   AppUpdateDto,
   DesktopRpcSchema,
+  KeybindingsDto,
   ShutdownPlanDto,
   WorkspaceFileChangeDto,
 } from "@daedalus/protocol";
@@ -66,6 +67,11 @@ export function createElectrobunClient(): DesktopClient {
         listener(update);
       rpc.addMessageListener("appUpdateChanged", receive);
       return () => rpc.removeMessageListener("appUpdateChanged", receive);
+    },
+    subscribeKeybindings(listener) {
+      const receive = (keybindings: KeybindingsDto) => listener(keybindings);
+      rpc.addMessageListener("keybindingsChanged", receive);
+      return () => rpc.removeMessageListener("keybindingsChanged", receive);
     },
   };
 }

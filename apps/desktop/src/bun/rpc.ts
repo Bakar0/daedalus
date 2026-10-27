@@ -54,7 +54,7 @@ import type {
   DesktopWindowRole,
   HostCommandId,
   IntegratedTerminalDto,
-  KeyOverrides,
+  KeybindingsDto,
   PresenceStateDto,
   RepositoryLibraryDto,
   RoutineDto,
@@ -75,7 +75,7 @@ import type {
   SecretDto,
   WorkflowRunDto,
 } from "@daedalus/protocol";
-import { isHostCommandId, validateKeyOverrides } from "@daedalus/protocol";
+import { isHostCommandId } from "@daedalus/protocol";
 
 import type { DesktopRemoteHost } from "./remote";
 
@@ -91,13 +91,17 @@ export interface DesktopQuitHost {
 /** The host's commands and its menu bar, as the window reaches them. */
 export interface DesktopCommandHost {
   run(command: HostCommandId): void;
-  /** Rebuilds the menu bar with these keys. */
-  setKeyOverrides(overrides: KeyOverrides): void;
+  /**
+   * The person's keys changed: rebuild the menu bar with them and tell the
+   * windows. The file's watcher calls it too, so a change made here may
+   * arrive twice; the host ignores one that changes nothing.
+   */
+  keybindingsChanged(state: KeybindingsDto): void;
 }
 
 const NO_COMMANDS: DesktopCommandHost = {
   run: () => {},
-  setKeyOverrides: () => {},
+  keybindingsChanged: () => {},
 };
 
 /** The host's `UpdateController`, as far as the window can reach it. */
@@ -1154,11 +1158,24 @@ export function createDesktopRequestHandlers(
         commands.run(command);
         return { ran: true as const };
       }),
-    keyOverridesSet: ({ overrides }) =>
-      result(() => {
-        const valid = validateKeyOverrides(overrides);
-        commands.setKeyOverrides(valid.overrides);
-        return { rejected: valid.rejected };
+    keybindingsGet: () => result(() => context.keybindings.read()),
+    keybindingsSet: ({ changes }) =>
+      result(async () => {
+        const state = await context.keybindings.set(changes);
+        commands.keybindingsChanged(state);
+        return state;
+      }),
+    keybindingsReset: () =>
+      result(async () => {
+        const state = await context.keybindings.resetAll();
+        commands.keybindingsChanged(state);
+        return state;
+      }),
+    keybindingsReveal: () =>
+      result(async () => {
+        const path = await context.keybindings.ensureFile();
+        revealPath(path);
+        return { path };
       }),
     appUpdateGet: () => result(() => updates.current()),
     appUpdateCheck: () => result(() => updates.check()),

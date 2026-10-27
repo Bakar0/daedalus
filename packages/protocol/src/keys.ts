@@ -101,7 +101,8 @@ export function normalizeKey(text: string): string {
   return parseKey(text).map(chordText).join(" ");
 }
 
-function chordText(chord: KeyChord): string {
+/** One chord written as a keybindings file writes it: `shift+mod+]`. */
+export function chordText(chord: KeyChord): string {
   return [
     chord.ctrl && "ctrl",
     chord.alt && "alt",
@@ -346,4 +347,65 @@ export function formatAccelerator(text: string): string | undefined {
   ]
     .filter(Boolean)
     .join("+");
+}
+
+/**
+ * Chords macOS or the app's native menu roles take before the app could see
+ * them: app switching, Spotlight and input sources, screenshots, Force Quit,
+ * lock screen, Hide / Hide Others / Minimize, and the Edit menu's
+ * cut/copy/paste/select all/undo/redo. Binding one would either never fire
+ * or break that system key, so a keybindings file, Settings and the CLI all
+ * refuse them.
+ */
+const RESERVED_CHORDS: Record<string, string> = {
+  "mod+tab": "macOS switches apps with ⌘⇥",
+  "shift+mod+tab": "macOS switches apps with ⇧⌘⇥",
+  "mod+`": "macOS cycles an app's windows with ⌘`",
+  "mod+space": "Spotlight takes ⌘Space",
+  "alt+mod+space": "Finder search takes ⌥⌘Space",
+  "ctrl+space": "macOS switches input sources with ⌃Space",
+  "shift+mod+3": "macOS takes screenshots with ⇧⌘3",
+  "shift+mod+4": "macOS takes screenshots with ⇧⌘4",
+  "shift+mod+5": "macOS takes screenshots with ⇧⌘5",
+  "alt+mod+escape": "⌥⌘⎋ is Force Quit",
+  "ctrl+mod+q": "⌃⌘Q locks the screen",
+  "mod+h": "⌘H hides the app (Daedalus › Hide)",
+  "alt+mod+h": "⌥⌘H hides other apps",
+  "mod+m": "⌘M minimizes the window (Window › Minimize)",
+  "mod+c": "⌘C is Copy",
+  "mod+v": "⌘V is Paste",
+  "mod+x": "⌘X is Cut",
+  "mod+a": "⌘A is Select All",
+  "mod+z": "⌘Z is Undo",
+  "shift+mod+z": "⇧⌘Z is Redo",
+};
+
+/**
+ * Why a key cannot be bound, or undefined when it can. Only the first chord
+ * of a sequence matters: macOS takes it before the rest is typed.
+ */
+export function reservedKeyReason(text: string): string | undefined {
+  const first = parseKey(text)[0];
+  return first ? RESERVED_CHORDS[chordText(first)] : undefined;
+}
+
+/**
+ * Why a key that may be bound is still a risk, or undefined when it is not:
+ * ⌘Q (a slip quits), ⌃ and a letter (a terminal's control keys: ⌃C, ⌃D,
+ * ⌃R...; bound, the shell never gets it), and a key with no ⌘, ⌃ or ⌥ (it
+ * acts only outside text fields and terminals, and takes the key from lists
+ * and the tree, where letters and arrows move). Settings asks before
+ * binding one; a keybindings file and the CLI accept it.
+ */
+export function keyWarning(text: string): string | undefined {
+  const first = parseKey(text)[0];
+  if (!first) return undefined;
+  const written = chordText(first);
+  if (written === "mod+q")
+    return "⌘Q quits Daedalus everywhere else on a Mac; a slip would quit it here too.";
+  if (first.ctrl && !first.mod && !first.alt && /^[a-z]$/.test(first.key))
+    return `${formatKeyGlyphs(text)} is a terminal control key; bound, the shell and agents never get it.`;
+  if (isTypingChord(first))
+    return `${formatKeyGlyphs(text)} has no ⌘, ⌃ or ⌥: it acts only outside text fields and terminals, and lists and the sidebar tree lose it.`;
+  return undefined;
 }

@@ -372,3 +372,51 @@ describe("the shortcuts sheet", () => {
     expect(filterSheetSections(sections, "  ")).toHaveLength(sections.length);
   });
 });
+
+describe("the shortcuts sheet with the person's keys", () => {
+  test("shows a rebound key and marks it changed", async () => {
+    const { allCommands, setKeyOverrides } = await import("../commands");
+    setKeyOverrides({ "tab.close": ["mod+shift+w"], "view.board": [] });
+    try {
+      const rows = commandSheetSections(allCommands()).flatMap(
+        (section) => section.rows,
+      );
+      expect(rows.find((row) => row.label === "Close Tab")).toEqual({
+        label: "Close Tab",
+        keys: ["⇧⌘W"],
+        changed: true,
+      });
+      // Unbound, it leaves the sheet; untouched, it is not marked.
+      expect(rows.find((row) => row.label === "Board")).toBeUndefined();
+      expect(rows.find((row) => row.label === "Save")?.changed).toBeUndefined();
+    } finally {
+      setKeyOverrides({});
+    }
+  });
+});
+
+describe("Settings › Keyboard", () => {
+  test("lists every command, unbound ones too, grouped and searchable", async () => {
+    const { allCommands, setKeyOverrides } = await import("../commands");
+    const { keyboardSettingsGroups } = await import("../KeyboardSettings");
+    setKeyOverrides({ "view.board": [] });
+    try {
+      const all = keyboardSettingsGroups(allCommands(), "");
+      expect(all.flatMap((group) => group.rows).length).toBe(
+        COMMAND_SPECS.length,
+      );
+      expect(
+        keyboardSettingsGroups(allCommands(), "board")
+          .flatMap((group) => group.rows)
+          .map((row) => row.id),
+      ).toContain("view.board");
+      expect(
+        keyboardSettingsGroups(allCommands(), "⌘W").flatMap((group) =>
+          group.rows.map((row) => row.id),
+        ),
+      ).toEqual(["tab.close"]);
+    } finally {
+      setKeyOverrides({});
+    }
+  });
+});

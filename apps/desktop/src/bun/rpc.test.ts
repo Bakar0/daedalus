@@ -2,6 +2,7 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { createApplicationContext, ReadModel } from "@daedalus/core";
+import type { KeybindingsDto } from "@daedalus/protocol";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import {
   withoutProviderClis,
@@ -532,19 +533,21 @@ describe("desktop RPC handlers", () => {
     });
   });
 
-  test("runs host commands and rebuilds the menu with valid keys only", async () => {
+  test("runs host commands, and writes keybindings.json for the menu and windows", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const context = await createApplicationContext({
         env: { ...process.env, DAEDALUS_HOME: home },
         tmux: new FakeTmux(),
       });
       const ran: string[] = [];
-      const menus: unknown[] = [];
+      const told: KeybindingsDto[] = [];
+      const revealed: string[] = [];
       const rpc = createDesktopRequestHandlers(context, {
         commands: {
           run: (command) => ran.push(command),
-          setKeyOverrides: (overrides) => menus.push(overrides),
+          keybindingsChanged: (state) => told.push(state),
         },
+        revealPath: (path) => revealed.push(path),
       });
       try {
         expect(await rpc.commandRun({ command: "view.worldWindow" })).toEqual({
@@ -559,13 +562,64 @@ describe("desktop RPC handlers", () => {
         expect(refused.ok).toBe(false);
         expect(ran).toHaveLength(1);
 
-        const response = await rpc.keyOverridesSet({
-          overrides: { "view.board": ["mod+shift+b", "hyper+x"] },
+        const path = join(home, "keybindings.json");
+        const empty = await rpc.keybindingsGet({});
+        expect(empty).toEqual({
+          ok: true,
+          data: { path, overrides: {}, rejected: [] },
         });
-        expect(response.ok && response.data.rejected).toEqual([
-          expect.objectContaining({ id: "view.board", key: "hyper+x" }),
+
+        const set = await rpc.keybindingsSet({
+          changes: [
+            { id: "view.board", keys: ["mod+shift+b"] },
+            { id: "tab.close", keys: [] },
+          ],
+        });
+        expect(set.ok && set.data.overrides).toEqual({
+          "view.board": ["mod+shift+b"],
+          "tab.close": [],
+        });
+        expect(await Bun.file(path).json()).toEqual({
+          "view.board": ["mod+shift+b"],
+          "tab.close": [],
+        });
+        // The host is told, so it rebuilds the menu and tells the windows.
+        expect(told.at(-1)?.overrides).toEqual({
+          "view.board": ["mod+shift+b"],
+          "tab.close": [],
+        });
+
+        // A bad key or a reserved one writes nothing.
+        const bad = await rpc.keybindingsSet({
+          changes: [
+            { id: "view.board", keys: ["mod+1"] },
+            { id: "view.world", keys: ["hyper+x"] },
+          ],
+        });
+        expect(bad.ok).toBe(false);
+        const reserved = await rpc.keybindingsSet({
+          changes: [{ id: "view.board", keys: ["mod+c"] }],
+        });
+        expect(reserved.ok).toBe(false);
+        expect((await Bun.file(path).json())["view.board"]).toEqual([
+          "mod+shift+b",
         ]);
-        expect(menus).toEqual([{ "view.board": ["mod+shift+b"] }]);
+
+        // Back to the default leaves the file.
+        await rpc.keybindingsSet({
+          changes: [{ id: "view.board", keys: null }],
+        });
+        expect(await Bun.file(path).json()).toEqual({ "tab.close": [] });
+
+        const reset = await rpc.keybindingsReset({});
+        expect(reset.ok && reset.data.overrides).toEqual({});
+        expect(told.at(-1)?.overrides).toEqual({});
+
+        expect(await rpc.keybindingsReveal({})).toEqual({
+          ok: true,
+          data: { path },
+        });
+        expect(revealed).toEqual([path]);
       } finally {
         context.close();
       }

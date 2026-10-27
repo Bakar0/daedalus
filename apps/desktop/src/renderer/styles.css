@@ -10447,3 +10447,89 @@ dd {
 .shortcuts-or {
   color: var(--muted);
 }
+
+/* Settings › Keyboard: a row per command, its keys a button that records. */
+.shortcuts-sheet-actions {
+  display: flex;
+  gap: 6px;
+}
+.shortcuts-changed {
+  color: var(--muted);
+  font-size: 11px;
+}
+.keyboard-settings {
+  display: grid;
+  gap: 12px;
+}
+.keyboard-settings .settings-note {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+.keyboard-settings-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.keyboard-settings-actions .shortcuts-search {
+  flex: 1 1 220px;
+  margin: 0;
+}
+.keyboard-settings-group {
+  display: grid;
+  gap: 2px;
+}
+.keyboard-settings-group h3 {
+  margin: 6px 0 4px;
+}
+.keyboard-settings-row {
+  align-items: center;
+  display: grid;
+  gap: 4px 10px;
+  grid-template-columns: minmax(0, 1fr) auto 8.5em;
+  padding: 2px 0;
+}
+.keyboard-settings-title {
+  color: var(--text);
+  font-size: 12px;
+}
+.keyboard-settings-changed {
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  margin-left: 8px;
+  text-transform: uppercase;
+}
+.keyboard-settings-keys {
+  justify-self: end;
+  min-width: 7em;
+}
+.keyboard-settings-keys[aria-pressed="true"] {
+  outline: 2px solid var(--accent);
+}
+.keyboard-settings-none,
+.keyboard-settings-recording {
+  color: var(--muted);
+}
+.keyboard-settings-reset {
+  font-size: 11px;
+  justify-self: end;
+}
+.keyboard-settings-pending {
+  border-left: 2px solid var(--accent);
+  color: var(--secondary);
+  display: grid;
+  font-size: 12px;
+  gap: 6px;
+  grid-column: 1 / -1;
+  padding: 4px 0 6px 10px;
+}
+.keyboard-settings-pending p {
+  margin: 0;
+}
+.keyboard-settings-pending-actions {
+  display: flex;
+  gap: 6px;
+}

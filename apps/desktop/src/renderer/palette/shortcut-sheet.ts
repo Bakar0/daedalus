@@ -15,6 +15,8 @@ export interface SheetRow {
   label: string;
   /** Each alternative as glyphs: `["⌘S"]`, `["↑", "↓"]`. */
   keys: string[];
+  /** The person rebound it; its keys are theirs, not the defaults. */
+  changed?: boolean;
 }
 
 export interface SheetSection {
@@ -38,6 +40,7 @@ export interface SheetCommand {
   group: CommandGroup;
   keys: readonly string[];
   when?: CommandWhen;
+  changed?: boolean;
 }
 
 /**
@@ -62,7 +65,11 @@ export function commandSheetSections(
       areas: [...areas],
       rows: [
         ...section.rows,
-        { label: command.title, keys: command.keys.map(formatKeyGlyphs) },
+        {
+          label: command.title,
+          keys: command.keys.map(formatKeyGlyphs),
+          ...(command.changed ? { changed: true } : {}),
+        },
       ],
     });
   }

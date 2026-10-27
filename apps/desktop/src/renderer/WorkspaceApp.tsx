@@ -36,6 +36,7 @@ import type {
   PullRequestRefDto,
   RepositoryFetchOutcomeDto,
   IntegratedTerminalDto,
+  KeybindingsDto,
   ProviderModelCatalogDto,
   SessionTelemetryDto,
   SessionWorktreeDto,
@@ -260,6 +261,7 @@ import { nextNeedingYou, stepSession } from "./navigation/session-cycle";
 import {
   allCommands,
   type CommandContext,
+  applyKeybindings,
   connectHost,
   focusContext,
   isCommandEnabled,
@@ -3092,20 +3094,40 @@ export function WorkspaceApp({
       ),
     [client],
   );
-  // Host commands (quit, the World window) run in the host, and the menu bar
-  // it draws takes the same keys the dispatcher does.
+  // Host commands (quit, the World window) run in the host.
   useEffect(
     () =>
       connectHost({
         run: (command) => {
           void client.request.commandRun?.({ command }).catch(() => {});
         },
-        setKeyOverrides: (overrides) => {
-          void client.request.keyOverridesSet?.({ overrides }).catch(() => {});
-        },
       }),
     [client],
   );
+  // The person's keys are the host's (`keybindings.json`): read once, then
+  // every change it sends, from Settings, `daedal keys` or a hand edit. An
+  // entry the file has that cannot be used is said once, and skipped.
+  useEffect(() => {
+    let reported = "";
+    const take = (keybindings: KeybindingsDto) => {
+      applyKeybindings(keybindings);
+      const skipped = keybindings.rejected
+        .map((item) =>
+          [item.id || "file", item.key, item.reason].filter(Boolean).join(" "),
+        )
+        .join("; ");
+      if (skipped && skipped !== reported)
+        setError(`Some keys in keybindings.json were skipped: ${skipped}`);
+      reported = skipped;
+    };
+    void client.request
+      .keybindingsGet?.({})
+      .then((response) => {
+        if (response.ok) take(response.data);
+      })
+      .catch(() => {});
+    return client.subscribeKeybindings?.(take);
+  }, [client]);
   useCommand("view.board", { run: () => setView("board") });
   useCommand("view.world", {
     enabled: () => Boolean(workspaceId),
@@ -9599,6 +9621,11 @@ export function WorkspaceApp({
           <ShortcutsSheet
             focusedAreas={shortcutsAreas}
             onClose={() => setShortcutsAreas(undefined)}
+            onEditShortcuts={() => {
+              setShortcutsAreas(undefined);
+              setSettingsSection("keyboard");
+              setModal("settings");
+            }}
           />
         )}
 

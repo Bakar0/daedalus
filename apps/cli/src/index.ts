@@ -37,6 +37,7 @@ import {
   secretCommand,
   secretHelp,
 } from "./secrets";
+import { keysCommand, keysHelp } from "./keys";
 import { findTmuxExecutable, probeVersion } from "@daedalus/platform";
 import { relative, resolve } from "node:path";
 import type { DoctorCheck } from "@daedalus/protocol";
@@ -100,6 +101,7 @@ Usage:
   daedal team <say|chat|list|goal> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal secret <list|set|remove> ... [--json]
+  daedal keys <list|set|reset> ... [--json]
   daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
   daedal exec [--secret <NAME>]... -- <command> [<args>...]
   daedal attention "<reason>" [--session <agent-id>] [--clear] [--json]
@@ -116,6 +118,7 @@ const commandHelp: Record<string, string> = {
   workflow: workflowHelp,
   account: accountHelp,
   secret: secretHelp,
+  keys: keysHelp,
   exec: secretHelp,
   cloud: cloudHelp,
   workspace: `Workspace commands:
@@ -2546,6 +2549,7 @@ export async function runCli(
       "routine",
       "team",
       "secret",
+      "keys",
       "cloud",
       "workflow",
     ].includes(args[0]!)
@@ -2582,6 +2586,8 @@ export async function runCli(
       return await teamCommand(context, args.slice(1), json);
     if (args[0] === "secret")
       return await secretCommand(context, args.slice(1), json);
+    if (args[0] === "keys")
+      return await keysCommand(context, args.slice(1), json);
     if (args[0] === "cloud")
       return await cloudCommand(context, args.slice(1), json);
     if (args[0] === "workflow")

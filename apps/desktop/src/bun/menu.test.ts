@@ -1,4 +1,7 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
+import { KeybindingService, keybindingsPath } from "@daedalus/core";
+import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   COMMAND_SPECS,
   type CommandSpec,
@@ -160,6 +163,35 @@ describe("desktop application menu", () => {
     expect(accelerators["view.board"]).toBe("Command+Shift+B");
     expect(accelerators["terminal.toggle"]).toBeUndefined();
     expect(accelerators["view.session"]).toBe("Command+3");
+  });
+
+  test("is rebuilt from keybindings.json, its bad entries skipped", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      await mkdir(home, { recursive: true });
+      await writeFile(
+        keybindingsPath(home),
+        JSON.stringify({
+          "session.new": ["mod+shift+j"],
+          "terminal.new": [],
+          "task.new": ["mod+v"],
+          "view.board": ["nonsense+b"],
+        }),
+      );
+      const state = await new KeybindingService(keybindingsPath(home)).read();
+      expect(state.rejected.map((item) => item.id)).toEqual([
+        "task.new",
+        "view.board",
+      ]);
+      const items = actionsIn(buildApplicationMenu(state.overrides));
+      const accelerator = (id: string) =>
+        items.find((item) => "action" in item && item.action === id) as
+          { accelerator?: string } | undefined;
+      expect(accelerator("session.new")?.accelerator).toBe("Command+Shift+J");
+      expect(accelerator("terminal.new")?.accelerator).toBeUndefined();
+      // Skipped entries keep their defaults.
+      expect(accelerator("task.new")?.accelerator).toBe("Command+Shift+N");
+      expect(accelerator("view.board")?.accelerator).toBe("Command+2");
+    });
   });
 });
 

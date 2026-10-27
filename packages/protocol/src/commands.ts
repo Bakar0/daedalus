@@ -1,4 +1,9 @@
-import { formatAccelerator, formatKeyGlyphs, normalizeKey } from "./keys";
+import {
+  formatAccelerator,
+  formatKeyGlyphs,
+  normalizeKey,
+  reservedKeyReason,
+} from "./keys";
 
 /**
  * The app's commands as data: what each is called, its default keys, where
@@ -403,7 +408,8 @@ export interface RejectedKey {
 /**
  * Reads overrides from anywhere (a keybindings file, an RPC), keeping every
  * key that parses and reporting the rest, so one typo costs one key rather
- * than the whole file.
+ * than the whole file. A key macOS reserves (`reservedKeyReason`) is
+ * reported like a typo.
  */
 export function validateKeyOverrides(raw: unknown): {
   overrides: KeyOverrides;
@@ -430,6 +436,8 @@ export function validateKeyOverrides(raw: unknown): {
       try {
         if (typeof key !== "string") throw new Error("Not a string");
         normalizeKey(key);
+        const reserved = reservedKeyReason(key);
+        if (reserved) throw new Error(`Reserved: ${reserved}`);
         valid.push(key);
       } catch (error) {
         rejected.push({
@@ -439,9 +447,32 @@ export function validateKeyOverrides(raw: unknown): {
         });
       }
     }
-    overrides[id] = valid;
+    // An entry none of whose keys could be used keeps the defaults rather
+    // than unbinding the command: `[]` is how a file unbinds one.
+    if (valid.length > 0 || keys.length === 0) overrides[id] = valid;
   }
   return { overrides, rejected };
+}
+
+/**
+ * The person's keybindings as the host holds them: the file they live in,
+ * the overrides that took effect, and what in the file was skipped.
+ */
+export interface KeybindingsDto {
+  /** `keybindings.json` in the Daedalus home. */
+  path: string;
+  overrides: KeyOverrides;
+  /** Entries the file has that did not take effect, and why. */
+  rejected: RejectedKey[];
+}
+
+/**
+ * One command's keys to write: a list replaces its defaults (empty unbinds
+ * it), `null` goes back to the defaults.
+ */
+export interface KeybindingChange {
+  id: CommandId;
+  keys: readonly string[] | null;
 }
 
 /**

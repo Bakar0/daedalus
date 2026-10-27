@@ -5,6 +5,7 @@ import {
   type CommandId,
   type CommandSpec,
   type HostCommandId,
+  type KeybindingsDto,
   type KeyOverrides,
   type RejectedKey,
   type RendererCommandId,
@@ -65,10 +66,13 @@ export function registerCommand(
   };
 }
 
-/** How the window reaches the host: its commands and its menu bar's keys. */
+/**
+ * How the window reaches the host's commands. The person's keys go the other
+ * way: the host owns `keybindings.json` and its menu bar, and sends the keys
+ * here (`applyKeybindings`).
+ */
 export interface HostBridge {
   run(command: HostCommandId): void;
-  setKeyOverrides(overrides: KeyOverrides): void;
 }
 
 let host: HostBridge | undefined;
@@ -76,7 +80,6 @@ let host: HostBridge | undefined;
 /** Connects the host; returns the disconnect. */
 export function connectHost(bridge: HostBridge): () => void {
   host = bridge;
-  bridge.setKeyOverrides(overrides);
   return () => {
     if (host === bridge) host = undefined;
   };
@@ -186,9 +189,10 @@ function compile(next: KeyOverrides): Binding[] {
 export const currentBindings = (): readonly Binding[] => bindings;
 
 /**
- * Replaces the person's keys (from a keybindings file, say). Every key is
- * checked first; one that does not parse, or names no command, is dropped
- * and returned, and the rest take effect together, here and in the menu bar.
+ * Replaces the person's keys. Every key is checked first; one that does not
+ * parse, names no command or is reserved is dropped and returned, and the
+ * rest take effect together. The menu bar is the host's: it applies the same
+ * keys from `keybindings.json` itself.
  */
 export function setKeyOverrides(raw: unknown): RejectedKey[] {
   const { overrides: next, rejected } = validateKeyOverrides(raw);
@@ -196,9 +200,48 @@ export function setKeyOverrides(raw: unknown): RejectedKey[] {
   overrides = next;
   bindings = compiled;
   matcher.reset();
-  host?.setKeyOverrides(next);
+  keybindings = { ...keybindings, overrides: next };
+  for (const listener of keyListeners) listener();
   return rejected;
 }
+
+/** The person's keys as the window knows them, for Settings and the sheet. */
+export interface KeybindingsState {
+  /** `keybindings.json`; empty until the host has said. */
+  path: string;
+  overrides: KeyOverrides;
+  /** What the file has that did not take effect. */
+  rejected: readonly RejectedKey[];
+}
+
+let keybindings: KeybindingsState = { path: "", overrides, rejected: [] };
+const keyListeners = new Set<() => void>();
+
+/** Takes the keys the host read from `keybindings.json`. */
+export function applyKeybindings(dto: KeybindingsDto): void {
+  const rejected = setKeyOverrides(dto.overrides);
+  keybindings = {
+    path: dto.path,
+    overrides,
+    rejected: [...dto.rejected, ...rejected],
+  };
+  for (const listener of keyListeners) listener();
+}
+
+/** The person's keys, re-rendering when they change. */
+export function useKeybindings(): KeybindingsState {
+  return useSyncExternalStore(
+    (listener) => {
+      keyListeners.add(listener);
+      return () => keyListeners.delete(listener);
+    },
+    () => keybindings,
+  );
+}
+
+/** Whether the person changed a command's keys from its defaults. */
+export const isKeyChanged = (id: CommandId): boolean =>
+  overrides[id] !== undefined;
 
 /** A command's keys as they stand, overrides applied. */
 export const commandKeys = (id: CommandId): readonly string[] =>
@@ -218,9 +261,15 @@ export const ariaKeyShortcuts = (id: CommandId): string | undefined =>
 export const allCommands = (): (CommandSpec & {
   id: CommandId;
   keys: readonly string[];
+  /** The person changed its keys. */
+  changed: boolean;
 })[] =>
   (COMMAND_SPECS as readonly (CommandSpec & { id: CommandId })[]).map(
-    (spec) => ({ ...spec, keys: commandKeys(spec.id) }),
+    (spec) => ({
+      ...spec,
+      keys: commandKeys(spec.id),
+      changed: isKeyChanged(spec.id),
+    }),
   );
 
 // The dispatcher asks only whether the code is enabled: the bindings it
@@ -236,7 +285,7 @@ const elementTarget = (event: Event) =>
  * command for is stopped there; any other key goes on untouched.
  */
 function onKeyDown(event: KeyboardEvent) {
-  if (event.defaultPrevented || isComposingKey(event)) return;
+  if (suspended > 0 || event.defaultPrevented || isComposingKey(event)) return;
   const context = currentContext(elementTarget(event), "key");
   if (swallowsNativeRepeat(event, context, bindings)) {
     event.preventDefault();
@@ -248,6 +297,23 @@ function onKeyDown(event: KeyboardEvent) {
   event.preventDefault();
   event.stopPropagation();
   if (result.kind === "run") runCommand(result.binding.id, context);
+}
+
+let suspended = 0;
+
+/**
+ * Stops the dispatcher until the returned resume is called, while Settings
+ * records a key: the key pressed is the one being bound, not a command.
+ */
+export function suspendKeyDispatch(): () => void {
+  suspended += 1;
+  matcher.reset();
+  let resumed = false;
+  return () => {
+    if (resumed) return;
+    resumed = true;
+    suspended -= 1;
+  };
 }
 
 // Which area has focus, kept as focus moves, for whatever shows it (an area

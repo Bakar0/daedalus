@@ -6,7 +6,7 @@
  */
 import type { CommandArea } from "@daedalus/protocol";
 import { useMemo, useRef, useState } from "react";
-import { allCommands } from "../commands";
+import { allCommands, useKeybindings } from "../commands";
 import { KeyGlyphs } from "../keyboard-ui";
 import { useFocusScope } from "../use-focus-scope";
 import {
@@ -19,11 +19,16 @@ import {
 export function ShortcutsSheet({
   focusedAreas,
   onClose,
+  onEditShortcuts,
 }: {
   /** Where focus was when the sheet opened, innermost first. */
   focusedAreas: readonly CommandArea[];
   onClose: () => void;
+  /** Opens Settings › Keyboard. */
+  onEditShortcuts?: () => void;
 }) {
+  // Re-read when the keys change, by Settings or `keybindings.json`.
+  const keybindings = useKeybindings();
   const section = useRef<HTMLElement>(null);
   useFocusScope(section);
   const [query, setQuery] = useState("");
@@ -33,7 +38,7 @@ export function ShortcutsSheet({
         [...commandSheetSections(allCommands()), ...ELEMENT_KEY_SECTIONS],
         focusedAreas,
       ),
-    [focusedAreas],
+    [focusedAreas, keybindings],
   );
   const shown = filterSheetSections(ordered, query);
   return (
@@ -63,9 +68,16 @@ export function ShortcutsSheet({
             <span className="eyebrow">Daedalus</span>
             <h2>Keyboard shortcuts</h2>
           </div>
-          <button className="quiet" onClick={onClose} type="button">
-            Close
-          </button>
+          <div className="shortcuts-sheet-actions">
+            {onEditShortcuts && (
+              <button className="quiet" onClick={onEditShortcuts} type="button">
+                Edit shortcuts…
+              </button>
+            )}
+            <button className="quiet" onClick={onClose} type="button">
+              Close
+            </button>
+          </div>
         </div>
         <input
           aria-label="Search shortcuts"
@@ -87,7 +99,18 @@ export function ShortcutsSheet({
               <dl>
                 {group.rows.map((row) => (
                   <div className="shortcuts-row" key={row.label}>
-                    <dt>{row.label}</dt>
+                    <dt>
+                      {row.label}
+                      {row.changed && (
+                        <span
+                          className="shortcuts-changed"
+                          title="You changed this shortcut"
+                        >
+                          {" "}
+                          · changed
+                        </span>
+                      )}
+                    </dt>
                     <dd>
                       {row.keys.map((glyphs, index) => (
                         <span key={`${glyphs}-${index}`}>
