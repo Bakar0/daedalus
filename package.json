@@ -1,6 +1,6 @@
 {
   "name": "daedalus",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "license": "FSL-1.1-MIT",
   "private": true,
   "type": "module",
