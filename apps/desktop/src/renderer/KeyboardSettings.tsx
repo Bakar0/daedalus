@@ -276,7 +276,7 @@ export function KeyboardSettings({
                     command.keys.length ? "the first" : "none"
                   }.`}
                   aria-pressed={isRecording}
-                  className="keyboard-settings-keys"
+                  className="quiet keyboard-settings-keys"
                   data-keys-for={command.id}
                   onClick={() => {
                     setPending(undefined);

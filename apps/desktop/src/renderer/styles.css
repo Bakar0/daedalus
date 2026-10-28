@@ -10579,11 +10579,25 @@ dd {
   text-transform: uppercase;
 }
 .keyboard-settings-keys {
+  align-items: center;
+  background: var(--raised);
+  border-color: var(--line);
+  display: inline-flex;
+  justify-content: center;
   justify-self: end;
+  min-height: 26px;
   min-width: 7em;
+  padding: 3px 8px;
+}
+.keyboard-settings-keys:hover {
+  border-color: var(--line-strong);
 }
 .keyboard-settings-keys[aria-pressed="true"] {
-  outline: 2px solid var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.keyboard-settings-keys .key-glyphs kbd {
+  color: var(--text);
 }
 .keyboard-settings-none,
 .keyboard-settings-recording {
