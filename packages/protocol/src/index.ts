@@ -1,3 +1,10 @@
+import type {
+  HostCommandId,
+  KeybindingChange,
+  KeybindingsDto,
+  RendererCommandId,
+} from "./commands";
+
 export type ErrorCode =
   "VALIDATION" | "NOT_FOUND" | "CONFLICT" | "DEPENDENCY" | "INTERNAL";
 
@@ -1934,6 +1941,24 @@ export interface DesktopRpcSchema {
       /** The user's answer. `cancel` is the only one that does not quit. */
       quitDecision: Request<{ choice: QuitChoice }, { accepted: true }>;
       /**
+       * Runs a command the host owns (quit, the World window, the update
+       * check), for a key, the palette or anything else in the window that
+       * names it by id.
+       */
+      commandRun: Request<{ command: HostCommandId }, { ran: true }>;
+      /**
+       * The person's keys as `keybindings.json` has them. The host owns
+       * them: it reads the file at start and on every change, rebuilds the
+       * menu bar, and sends `keybindingsChanged` to the windows.
+       */
+      keybindingsGet: Request<Record<string, never>, KeybindingsDto>;
+      /** Writes some commands' keys, for Settings › Keyboard. */
+      keybindingsSet: Request<{ changes: KeybindingChange[] }, KeybindingsDto>;
+      /** Every command back to its default keys. */
+      keybindingsReset: Request<Record<string, never>, KeybindingsDto>;
+      /** Shows `keybindings.json` in Finder, creating it when missing. */
+      keybindingsReveal: Request<Record<string, never>, { path: string }>;
+      /**
        * The update prompt as it stands, for a window that opens after the
        * host's check already ran. Changes after that arrive as
        * `appUpdateChanged`.
@@ -2347,7 +2372,8 @@ export interface DesktopRpcSchema {
         changes: WorkspaceFileChangeDto[];
         overflow: boolean;
       };
-      command: { command: DesktopCommand };
+      /** A menu item was chosen: run this command. */
+      command: { command: RendererCommandId };
       windowResized: { width: number; height: number };
       /**
        * Raised by `daedal focus`, which is what a clicked notification runs.
@@ -2364,33 +2390,14 @@ export interface DesktopRpcSchema {
       quitRequested: { plan: ShutdownPlanDto };
       /** The update prompt changed; `null` hides it. */
       appUpdateChanged: { update: AppUpdateDto | null };
+      /** `keybindings.json` changed, from Settings, the CLI or by hand. */
+      keybindingsChanged: KeybindingsDto;
     };
   };
 }
 
-/**
- * Menu actions the host handles itself rather than forwarding to the window.
- * `{ role: "quit" }` is a native macOS role that never reaches our code, so
- * the quit item carries an action instead.
- */
-export const QUIT_MENU_ACTION = "quit-requested";
-export const SHUTDOWN_MENU_ACTION = "quit-and-shut-down";
-export const CHECK_FOR_UPDATES_MENU_ACTION = "check-for-updates";
-export const OPEN_WORLD_WINDOW_MENU_ACTION = "open-world-window";
-
-export const DESKTOP_COMMANDS = [
-  "view-board",
-  "view-session",
-  "view-workspace",
-  "view-world",
-  "toggle-terminal",
-] as const;
-
-export type DesktopCommand = (typeof DESKTOP_COMMANDS)[number];
-
-export const isDesktopCommand = (value: unknown): value is DesktopCommand =>
-  typeof value === "string" &&
-  (DESKTOP_COMMANDS as readonly string[]).includes(value);
+export * from "./commands";
+export * from "./keys";
 
 export type TerminalClientMessage =
   | { type: "input"; data: string }

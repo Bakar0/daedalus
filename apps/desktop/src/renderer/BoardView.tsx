@@ -6,9 +6,16 @@
  * before it answers "what stage was this filed under". The lanes come from
  * `board-lanes.ts`; this file only draws them and forwards clicks.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { gridMove, gridTabStop } from "./navigation/board-grid";
 import { accountModelKey } from "./account-models";
 import { askConfirm } from "./dialogs";
+import {
+  type ItemAction,
+  useItemActions,
+  useItemActionsById,
+} from "./item-actions";
+import { KeyHints } from "./keyboard-ui";
 import {
   ReportDetails,
   type ReportOwner,
@@ -40,6 +47,8 @@ import {
   type LaneInputs,
 } from "./board-lanes";
 import {
+  cardButtons,
+  startItemActions,
   taskActions,
   type BoardLaunch,
   type BoardProvider,
@@ -49,6 +58,7 @@ import {
   CreateButton,
   providerLabel,
   sessionConfiguredModel,
+  sessionName,
   sessionStatusView,
   sessionTool,
   statusAriaLabel,
@@ -709,6 +719,28 @@ export function BoardView(props: BoardViewProps) {
       group.tasks.map((task) => [task.id, group.lane] as const),
     ),
   );
+  // The cards are one Tab stop; the arrow keys move between them (see
+  // `gridMove`). Folded lanes are left out, as their cards are not shown.
+  const lanesRef = useRef<HTMLDivElement>(null);
+  const [focusedCardId, setFocusedCardId] = useState<string>();
+  const shownLanes =
+    tasks.length === 0
+      ? []
+      : groups
+          .filter(({ lane }) => !collapsed.has(lane))
+          .map(({ tasks: laneTasks }) => laneTasks.map((task) => task.id));
+  const cardTabStop = gridTabStop(
+    shownLanes,
+    focusedCardId,
+    props.selectedTaskId,
+  );
+  const focusCard = (id: string) => {
+    const card = lanesRef.current?.querySelector<HTMLElement>(
+      `.board-card[data-task-id="${CSS.escape(id)}"]`,
+    );
+    card?.focus();
+    card?.scrollIntoView({ block: "nearest" });
+  };
   const submitCapture = async () => {
     const title = capture.trim();
     if (!title || capturing) return;
@@ -719,6 +751,121 @@ export function BoardView(props: BoardViewProps) {
       setCapturing(false);
     }
   };
+
+  /**
+   * What a card's buttons do, as one list: the ⌘K palette's Actions panel
+   * for the task (and ⇧F10, which opens it on a card). The
+   * same `taskActions` decide both, so a button and its row come and go
+   * together.
+   */
+  const cardItemActions = (task: TaskDto, lane: BoardLane): ItemAction[] => {
+    const actions = taskActions(task, lane, {
+      ...inputs,
+      launches: props.launches,
+      availableProviders: props.availableProviders,
+      tasksById,
+    });
+    const {
+      lastAgent,
+      linked,
+      offersSecondOpinion,
+      otherProvider,
+      reviewPullRequest,
+      reviewWorktree,
+      starting,
+    } = actions;
+    const shows = cardButtons(task, lane, actions);
+    return [
+      { id: "open", label: "Open task", run: () => props.onSelectTask(task) },
+      ...startItemActions(task, actions, {
+        tmuxAvailable: props.tmuxAvailable,
+        confirmStart: confirmStartDespite,
+        onStart: props.onStart,
+        onStartWith: props.onStartWith,
+        onDraftBrief: props.onDraftBrief,
+      }),
+      ...(offersSecondOpinion && otherProvider && lastAgent
+        ? [
+            {
+              id: "second-opinion",
+              label: `Second opinion from ${providerLabel(otherProvider)}`,
+              disabled: !props.tmuxAvailable || starting,
+              run: () => props.onSecondOpinion(task, otherProvider),
+            },
+          ]
+        : []),
+      ...(shows.markDone
+        ? [
+            {
+              id: "mark-done",
+              label: "Mark done",
+              disabled: props.busy,
+              run: () => props.onMarkDone(task),
+            },
+          ]
+        : []),
+      ...(shows.park
+        ? [
+            {
+              id: "park",
+              label: "Park",
+              disabled: props.busy,
+              run: () => props.onPark(task),
+            },
+          ]
+        : []),
+      ...(shows.setInProgress
+        ? [
+            {
+              id: "set-in-progress",
+              label: "Set in progress",
+              disabled: props.busy,
+              run: () => props.onSetInProgress(task),
+            },
+          ]
+        : []),
+      ...(lane === "review" && reviewWorktree
+        ? [
+            {
+              id: "open-worktree",
+              label: "Open worktree",
+              run: () => props.onOpenWorktree(reviewWorktree),
+            },
+          ]
+        : []),
+      ...(lane === "review" && reviewPullRequest
+        ? [
+            {
+              id: "open-pr",
+              label: "Open PR",
+              run: () => props.onOpenLink(reviewPullRequest.url),
+            },
+          ]
+        : []),
+      ...linked.map((session) => ({
+        id: `session-${session.id}`,
+        label: `Open session ${sessionName(session)}`,
+        run: () => props.onOpenSession(session),
+      })),
+    ];
+  };
+  const cardActionsOf = (id: string) => {
+    const task = tasksById.get(id);
+    const lane = task ? laneById.get(task.id) : undefined;
+    return task && lane
+      ? {
+          title: `#${task.number} ${task.title}`,
+          actions: cardItemActions(task, lane),
+          ref: { kind: "task" as const, id: task.id },
+        }
+      : undefined;
+  };
+  useItemActions((element) => {
+    const card = element.closest<HTMLElement>(".board-card[data-task-id]");
+    return card ? cardActionsOf(card.dataset.taskId ?? "") : undefined;
+  });
+  // The palette's Actions panel for any task this board shows.
+  useItemActionsById("task", cardActionsOf);
 
   const renderCard = (task: TaskDto, lane: BoardLane) => {
     const {
@@ -742,6 +889,13 @@ export function BoardView(props: BoardViewProps) {
       launches: props.launches,
       availableProviders: props.availableProviders,
       tasksById,
+    });
+    const shows = cardButtons(task, lane, {
+      answerTarget,
+      canPark,
+      noAgent,
+      offersSecondOpinion,
+      startable,
     });
     const waiting =
       lane === "needs_me" ? taskWaitingSince(task, inputs) : undefined;
@@ -785,10 +939,30 @@ export function BoardView(props: BoardViewProps) {
       <article
         aria-label={cardLabel}
         className={`board-card lane-${lane} ${task.id === props.selectedTaskId ? "selected" : ""}`}
+        data-task-id={task.id}
         data-task-number={task.number}
         data-workspace-id={task.workspaceId}
         key={task.id}
         onClick={() => props.onSelectTask(task)}
+        onFocus={(event) => {
+          if (event.target === event.currentTarget) setFocusedCardId(task.id);
+        }}
+        onKeyDown={(event) => {
+          // Only the card itself: keys on a button inside it are the
+          // button's.
+          if (event.target !== event.currentTarget) return;
+          if (event.metaKey || event.ctrlKey || event.altKey) return;
+          const next = gridMove(shownLanes, task.id, event.key);
+          if (next) {
+            event.preventDefault();
+            focusCard(next);
+            return;
+          }
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          props.onSelectTask(task);
+        }}
+        tabIndex={task.id === cardTabStop ? 0 : -1}
       >
         <div className="board-card-title">
           {workspaceLabel !== undefined && (
@@ -963,9 +1137,7 @@ export function BoardView(props: BoardViewProps) {
             {secondOpinion}
           </div>
         )}
-        {(startable ||
-          (offersSecondOpinion && lane !== "review" && !answerTarget) ||
-          (lane === "running" && task.status === "todo")) && (
+        {shows.actionRow && (
           <div className="board-card-actions">
             {!answerTarget && secondOpinion}
             {noAgent && (
@@ -982,7 +1154,7 @@ export function BoardView(props: BoardViewProps) {
                 Mark done
               </button>
             )}
-            {canPark && (
+            {shows.park && (
               <button
                 className="quiet"
                 disabled={props.busy}
@@ -996,7 +1168,7 @@ export function BoardView(props: BoardViewProps) {
                 Park
               </button>
             )}
-            {lane === "running" && task.status === "todo" && (
+            {shows.setInProgress && (
               <button
                 className="quiet"
                 disabled={props.busy}
@@ -1073,7 +1245,7 @@ export function BoardView(props: BoardViewProps) {
   };
 
   return (
-    <div className="board-view">
+    <div className="board-view" data-area="board">
       <div className="board-toolbar">
         <div>
           <strong>Tasks</strong>
@@ -1093,7 +1265,11 @@ export function BoardView(props: BoardViewProps) {
               onUpdate={props.onUpdateSettings}
               workspace={workspace}
             />
-            <CreateButton label="Create task" onClick={props.onCreateTask} />
+            <CreateButton
+              command="task.new"
+              label="Create task"
+              onClick={props.onCreateTask}
+            />
           </div>
         ) : (
           <small className="board-scope-note">
@@ -1102,14 +1278,14 @@ export function BoardView(props: BoardViewProps) {
           </small>
         )}
       </div>
-      <div className="board-lanes">
+      <div className="board-lanes" ref={lanesRef}>
         {/* Deliberately not a <form>: Enter submitting through the browser's
             implicit-submission path is what wedged the explorer's renderer. */}
         {workspace && (
           <input
             aria-label="Quick capture: type a task title and press Enter"
+            aria-busy={capturing}
             className="board-capture"
-            disabled={capturing}
             onChange={(event) => setCapture(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -1118,6 +1294,9 @@ export function BoardView(props: BoardViewProps) {
               } else if (event.key === "Escape") setCapture("");
             }}
             placeholder="Capture a task… (Enter to add)"
+            // Read-only, not disabled, while it saves: disabling drops focus
+            // to the body, and the next task could not be typed straight on.
+            readOnly={capturing}
             value={capture}
           />
         )}
@@ -1129,6 +1308,14 @@ export function BoardView(props: BoardViewProps) {
                 ? "Use New to create a task."
                 : "Pick a workspace and capture one."}
             </span>
+            <KeyHints
+              hints={[
+                { command: "palette.open", label: "to do anything" },
+                ...(workspace
+                  ? [{ command: "task.new" as const, label: "new task" }]
+                  : []),
+              ]}
+            />
           </div>
         )}
         {tasks.length > 0 &&

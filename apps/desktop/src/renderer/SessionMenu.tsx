@@ -14,7 +14,8 @@ import {
 } from "@daedalus/protocol";
 import { useState, type ReactNode } from "react";
 import { ConfirmButton } from "./ConfirmButton";
-import { Menu, MenuDots } from "./Menu";
+import type { ItemAction } from "./item-actions";
+import { KEEP_OPEN, Menu, MenuDots } from "./Menu";
 import { PercentInput } from "./PercentInput";
 import { sessionColorStyle } from "./session-color-style";
 
@@ -230,8 +231,9 @@ export interface MenuAction {
   /** The icon it has on the card, shown beside its label here too. */
   icon?: ReactNode;
   /** Shown on the card as well as here. */
-  pinned: boolean;
-  onPin: (pinned: boolean) => void;
+  pinned?: boolean;
+  /** Omitted: the action has no pin (it shows on the card when it applies). */
+  onPin?: (pinned: boolean) => void;
   run: () => void;
   disabled?: boolean;
   /** Asks once more before running, with this as what confirming does. */
@@ -253,8 +255,9 @@ function PinIcon() {
 
 /**
  * The menu's own rows for a card's actions: each runs its action, and its
- * pin puts it on the card or takes it off. The pin is not a menuitem, so
- * choosing it leaves the menu open.
+ * pin puts it on the card or takes it off. Every button is a menu item, so
+ * the arrow keys reach it; the pin and a confirm's first click are marked to
+ * leave the menu open.
  */
 function MenuActions({ actions }: { actions: MenuAction[] }) {
   if (!actions.length) return null;
@@ -274,6 +277,8 @@ function MenuActions({ actions }: { actions: MenuAction[] }) {
               data-testid={`menu-action-${action.id}`}
               disabled={action.disabled}
               onConfirm={action.run}
+              role="menuitem"
+              {...{ [KEEP_OPEN]: "" }}
               title={`${action.label}. Asks once more.`}
               type="button"
             >
@@ -301,26 +306,144 @@ function MenuActions({ actions }: { actions: MenuAction[] }) {
               <span className="menu-item-label">{action.label}</span>
             </button>
           )}
-          <button
-            aria-label={`${action.pinned ? "Unpin" : "Pin"} ${action.label}`}
-            aria-pressed={action.pinned}
-            className="quiet menu-pin"
-            data-testid={`pin-${action.id}`}
-            onClick={() => action.onPin(!action.pinned)}
-            title={
-              action.pinned
-                ? "Pinned: also on the card. Click to keep it in this menu only."
-                : "Pin it to the card"
-            }
-            type="button"
-          >
-            <PinIcon />
-          </button>
+          {action.onPin && (
+            <button
+              aria-checked={Boolean(action.pinned)}
+              aria-label={`${action.pinned ? "Unpin" : "Pin"} ${action.label}`}
+              className="quiet menu-pin"
+              data-testid={`pin-${action.id}`}
+              onClick={() => action.onPin?.(!action.pinned)}
+              role="menuitemcheckbox"
+              {...{ [KEEP_OPEN]: "" }}
+              title={
+                action.pinned
+                  ? "Pinned: also on the card. Click to keep it in this menu only."
+                  : "Pin it to the card"
+              }
+              type="button"
+            >
+              <PinIcon />
+            </button>
+          )}
         </div>
       ))}
       <hr className="menu-separator" />
     </>
   );
+}
+
+/** A card action as the palette lists it. */
+const itemFromMenuAction = (action: MenuAction): ItemAction => ({
+  id: action.id,
+  label: action.label,
+  run: action.run,
+  ...(action.disabled ? { disabled: true } : {}),
+  ...(action.confirm ? { confirm: action.confirm, danger: true } : {}),
+});
+
+/** What a session's menu offers, whoever draws it. */
+export interface SessionMenuModel {
+  name: string;
+  pinned: boolean;
+  color: SessionColorDto | null;
+  routines: boolean;
+  orchestration: boolean;
+  offerAbilities: boolean;
+  offerOrchestration: boolean;
+  onRename: () => void;
+  onPin: (pinned: boolean) => void;
+  onColor: (color: SessionColorDto | null) => void;
+  onRoutines: (granted: boolean) => void;
+  onOrchestration: (granted: boolean) => void;
+  actions?: MenuAction[];
+}
+
+/**
+ * The session menu's own items as data, beside its card actions: rename
+ * and pin, and the ability switches on an agent that has them. The menu
+ * draws these; the palette lists them for the focused session.
+ */
+export function sessionMenuEntries(model: SessionMenuModel): {
+  base: ItemAction[];
+  abilities: ItemAction[];
+} {
+  return {
+    base: [
+      { id: "rename", label: "Rename…", run: model.onRename },
+      {
+        id: "pin",
+        label: model.pinned ? "Unpin" : "Pin to top",
+        run: () => model.onPin(!model.pinned),
+      },
+    ],
+    abilities: model.offerAbilities
+      ? [
+          {
+            id: "routines",
+            label: "Routines",
+            checked: model.routines,
+            description: model.routines
+              ? "Revoke routines. The routines are kept and come back on a new grant."
+              : "Grant routines. Ask the session for scheduled checks; nothing is sent to it.",
+            run: () => model.onRoutines(!model.routines),
+          },
+          ...(model.offerOrchestration
+            ? [
+                {
+                  id: "orchestration",
+                  label: "Orchestration",
+                  checked: model.orchestration,
+                  description: model.orchestration
+                    ? "End the team. Members keep running as ordinary sessions."
+                    : "Lead a team: this session plans the work and adds members.",
+                  run: () => model.onOrchestration(!model.orchestration),
+                },
+              ]
+            : []),
+        ]
+      : [],
+  };
+}
+
+/**
+ * Everything the session's menu does, as one list for the palette: its card
+ * actions, rename and pin, the ability switches, and each color. The
+ * rebirth threshold, which needs a number typed, stays in the menu.
+ */
+export function sessionItemActions(model: SessionMenuModel): ItemAction[] {
+  const { base, abilities } = sessionMenuEntries(model);
+  return [
+    ...(model.actions ?? []).map(itemFromMenuAction),
+    ...base,
+    ...abilities,
+    ...[null, ...SESSION_COLORS].map((color) => ({
+      id: `color-${color ?? "none"}`,
+      label: color ? `Color: ${capitalize(color)}` : "Color: None",
+      checked: model.color === color,
+      run: () => {
+        if (model.color !== color) model.onColor(color);
+      },
+    })),
+  ];
+}
+
+/** The workspace menu's own items, beside its card actions. */
+export const workspaceMenuEntries = (onRename: () => void): ItemAction[] => [
+  { id: "rename", label: "Rename…", run: onRename },
+];
+
+/**
+ * A workspace's menu as one list for the palette: its card actions and
+ * rename. The rebirth threshold stays in the menu.
+ */
+export function workspaceItemActions(model: {
+  actions?: MenuAction[];
+  onRename: () => void;
+}): ItemAction[] {
+  return [
+    ...(model.actions ?? []).map(itemFromMenuAction),
+    ...workspaceMenuEntries(model.onRename),
+  ];
 }
 
 export function SessionMenu({
@@ -340,6 +463,8 @@ export function SessionMenu({
   onRoutines,
   onOrchestration,
   actions = [],
+  returnFocus,
+  triggerTabIndex,
 }: {
   name: string;
   pinned: boolean;
@@ -363,11 +488,30 @@ export function SessionMenu({
   onOrchestration: (granted: boolean) => void;
   /** Its card's actions, each with a pin. */
   actions?: MenuAction[];
+  /** Where focus goes when the menu closes; see `Menu`. */
+  returnFocus?: () => void;
+  triggerTabIndex?: number;
 }) {
+  const { base, abilities } = sessionMenuEntries({
+    name,
+    pinned,
+    color,
+    routines,
+    orchestration,
+    offerAbilities,
+    offerOrchestration,
+    onRename,
+    onPin,
+    onColor,
+    onRoutines,
+    onOrchestration,
+  });
   return (
     <Menu
       align="end"
       className="session-card-menu"
+      returnFocus={returnFocus}
+      triggerTabIndex={triggerTabIndex}
       label={`More actions for ${name}`}
       menuLabel={`Actions for ${name}`}
       placement="left"
@@ -376,24 +520,17 @@ export function SessionMenu({
       title="Rename, pin, color, rebirth and abilities"
     >
       <MenuActions actions={actions} />
-      <button
-        className="quiet menu-item"
-        onClick={onRename}
-        role="menuitem"
-        type="button"
-      >
-        <span className="menu-item-label">Rename…</span>
-      </button>
-      <button
-        className="quiet menu-item"
-        onClick={() => onPin(!pinned)}
-        role="menuitem"
-        type="button"
-      >
-        <span className="menu-item-label">
-          {pinned ? "Unpin" : "Pin to top"}
-        </span>
-      </button>
+      {base.map((item) => (
+        <button
+          className="quiet menu-item"
+          key={item.id}
+          onClick={item.run}
+          role="menuitem"
+          type="button"
+        >
+          <span className="menu-item-label">{item.label}</span>
+        </button>
+      ))}
 
       <hr className="menu-separator" />
       <span className="menu-heading">Color</span>
@@ -418,47 +555,25 @@ export function SessionMenu({
           />
           <hr className="menu-separator" />
           <span className="menu-heading">Abilities</span>
-          <button
-            aria-checked={routines}
-            className="quiet menu-item"
-            onClick={() => onRoutines(!routines)}
-            role="menuitemcheckbox"
-            title={
-              routines
-                ? "Revoke routines. The routines are kept and come back on a new grant."
-                : "Grant routines. Ask the session for scheduled checks; nothing is sent to it."
-            }
-            type="button"
-          >
-            <span className="menu-item-label">Routines</span>
-            {/* The look of the skills switch; the item itself is the control. */}
-            <span
-              aria-hidden="true"
-              className="menu-switch"
-              data-on={routines ? "true" : undefined}
-            />
-          </button>
-          {offerOrchestration && (
+          {abilities.map((item) => (
             <button
-              aria-checked={orchestration}
+              aria-checked={Boolean(item.checked)}
               className="quiet menu-item"
-              onClick={() => onOrchestration(!orchestration)}
+              key={item.id}
+              onClick={item.run}
               role="menuitemcheckbox"
-              title={
-                orchestration
-                  ? "End the team. Members keep running as ordinary sessions."
-                  : "Lead a team: this session plans the work and adds members."
-              }
+              title={item.description}
               type="button"
             >
-              <span className="menu-item-label">Orchestration</span>
+              <span className="menu-item-label">{item.label}</span>
+              {/* The look of the skills switch; the item itself is the control. */}
               <span
                 aria-hidden="true"
                 className="menu-switch"
-                data-on={orchestration ? "true" : undefined}
+                data-on={item.checked ? "true" : undefined}
               />
             </button>
-          )}
+          ))}
         </>
       )}
     </Menu>
@@ -485,6 +600,8 @@ export function WorkspaceMenu({
   onAutoRebirth,
   cloud,
   actions = [],
+  returnFocus,
+  triggerTabIndex,
 }: {
   name: string;
   /** The workspace's own rebirth threshold; null takes the global one. */
@@ -497,11 +614,16 @@ export function WorkspaceMenu({
   cloud?: WorkspaceCloudControls;
   /** Its card's other actions, each with a pin. */
   actions?: MenuAction[];
+  /** Where focus goes when the menu closes; see `Menu`. */
+  returnFocus?: () => void;
+  triggerTabIndex?: number;
 }) {
   return (
     <Menu
       align="end"
       className="session-card-menu workspace-card-menu"
+      returnFocus={returnFocus}
+      triggerTabIndex={triggerTabIndex}
       label={`Settings of ${name}`}
       menuLabel={`Settings of ${name}`}
       placement="left"
@@ -510,14 +632,17 @@ export function WorkspaceMenu({
       title="Workspace settings"
     >
       <MenuActions actions={actions} />
-      <button
-        className="quiet menu-item"
-        onClick={onRename}
-        role="menuitem"
-        type="button"
-      >
-        <span className="menu-item-label">Rename…</span>
-      </button>
+      {workspaceMenuEntries(onRename).map((item) => (
+        <button
+          className="quiet menu-item"
+          key={item.id}
+          onClick={item.run}
+          role="menuitem"
+          type="button"
+        >
+          <span className="menu-item-label">{item.label}</span>
+        </button>
+      ))}
       <hr className="menu-separator" />
       <span className="menu-heading">
         Rebirth

@@ -23,7 +23,7 @@
  */
 import { watch, type FSWatcher } from "node:fs";
 import { stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 export type FileChangeKind = "added" | "updated" | "deleted";
 
@@ -244,6 +244,50 @@ export function watchFileTree(options: WatchFileTreeOptions): FileTreeWatcher {
     onError?.(error instanceof Error ? error : new Error(String(error)));
   }
 
+  return {
+    close() {
+      if (closed) return;
+      closed = true;
+      if (timer) clearTimeout(timer);
+      watcher?.close();
+    },
+  };
+}
+
+export interface WatchFileOptions {
+  path: string;
+  /** Called once per quiet period after the file was written, replaced or removed. */
+  onChange: () => void;
+  onError?: (error: Error) => void;
+  /** How long a quiet period ends a burst of events. Defaults to 150ms. */
+  debounceMs?: number;
+}
+
+/**
+ * Watches one file, however it is written. An editor or an atomic write
+ * replaces the file by renaming a new one over it, which ends a watch on the
+ * file itself, so the watch is on its folder (not recursive) and keeps only
+ * events that name the file. The folder must exist.
+ */
+export function watchFile(options: WatchFileOptions): FileTreeWatcher {
+  const { path, onChange, onError, debounceMs = 150 } = options;
+  const name = basename(path);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  let watcher: FSWatcher | undefined;
+  try {
+    watcher = watch(dirname(path), (_type, filename) => {
+      if (closed || !filename || basename(String(filename)) !== name) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = undefined;
+        if (!closed) onChange();
+      }, debounceMs);
+    });
+    watcher.on("error", (error) => onError?.(error));
+  } catch (error) {
+    onError?.(error instanceof Error ? error : new Error(String(error)));
+  }
   return {
     close() {
       if (closed) return;

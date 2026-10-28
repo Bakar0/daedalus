@@ -13,7 +13,8 @@
  * including components that have no route to the app's state, and gets a
  * promise for the answer. Requests queue, so two at once are asked in turn.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useFocusScope } from "./use-focus-scope";
 
 type Request = { id: number } & (
   | {
@@ -145,6 +146,20 @@ export function DialogHost() {
   useEffect(() => {
     if (request?.kind === "text") setText(request.initial);
   }, [request]);
+  // One scope across a queue of requests, so focus goes back to where it was
+  // before the first, not to the previous dialog's button.
+  const section = useRef<HTMLElement>(null);
+  useFocusScope(section, Boolean(request));
+  // The next request in the queue mounts a new dialog. One with no button
+  // that takes focus (every choice dangerous) would otherwise leave focus on
+  // the body, where Escape and Tab reach nothing.
+  const requestId = request?.id;
+  useEffect(() => {
+    const element = section.current;
+    if (requestId === undefined || !element) return;
+    if (!element.contains(document.activeElement))
+      element.focus({ preventScroll: true });
+  }, [requestId]);
   if (!request) return null;
 
   const answer = (accepted: boolean) => {
@@ -180,7 +195,9 @@ export function DialogHost() {
         aria-modal="true"
         className="modal app-dialog"
         data-dialog-kind={request.kind}
+        ref={section}
         role="alertdialog"
+        tabIndex={-1}
       >
         <div className="detail-title">
           <div>

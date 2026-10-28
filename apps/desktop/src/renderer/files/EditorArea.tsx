@@ -22,6 +22,15 @@ import {
 import type { DesktopClient } from "../client-types";
 import { type AppTheme, appearanceOf } from "../theme";
 import { askConfirm } from "../dialogs";
+import { type CommandContext, useCommand } from "../commands";
+import { Tooltip } from "../keyboard-ui";
+import { focusWhenReady, isShown } from "../navigation/area-focus";
+import {
+  focusIsLost,
+  restoreCandidates,
+  restoreFocus,
+} from "../use-focus-scope";
+import { deleteKeyCloses, tabCloseRequest } from "./tab-keys";
 import { MarkdownPreview } from "../markdown-preview";
 import { INSTRUCTIONS_ICON_PATH, WORKFLOW_ICON_PATH } from "../WorkflowPane";
 import {
@@ -552,14 +561,43 @@ export default function EditorArea({
   );
 
   /** The session, task and web tabs: one each for session and task. */
+  // Where focus was when a Team or Routines tab was opened, by panel id,
+  // so closing the tab gives it back.
+  const openers = useRef(new Map<string, HTMLElement[]>());
+  /**
+   * Puts focus in a Team or Routines tab that was just opened or brought to
+   * the front, so Tab and the keys start there and not where the opener
+   * was. The page mounts through dockview's portal, so it is looked for over
+   * a few frames.
+   */
+  const focusAbilityPanel = useCallback((id: string) => {
+    if (!openers.current.has(id))
+      openers.current.set(id, restoreCandidates(document.activeElement));
+    let tries = 5;
+    const attempt = () => {
+      const root = [
+        ...document.querySelectorAll<HTMLElement>(".ability-panel"),
+      ].find((element) => element.dataset.panelId === id);
+      if (root) {
+        if (!root.contains(document.activeElement))
+          root.focus({ preventScroll: true });
+        return;
+      }
+      if (--tries > 0) requestAnimationFrame(attempt);
+    };
+    requestAnimationFrame(attempt);
+  }, []);
+
   const placeApp = useCallback(
     (id: string, params: FilePanelParams, title: string) => {
       const api = apiRef.current;
       if (!api) return;
+      const takesFocus = params.kind === "team" || params.kind === "routines";
       const existing = api.getPanel(id);
       if (existing) {
         existing.api.updateParameters({ ...existing.params, ...params });
         existing.api.setActive();
+        if (takesFocus) focusAbilityPanel(id);
         return;
       }
       // The session tab leads the strip; the others open beside the tab in
@@ -588,8 +626,9 @@ export default function EditorArea({
               }
             : {}),
       });
+      if (takesFocus) focusAbilityPanel(id);
     },
-    [],
+    [focusAbilityPanel],
   );
 
   // A request that arrives before dockview is ready (the editor chunk has
@@ -749,37 +788,138 @@ export default function EditorArea({
     [client, closeImages, workspaceId],
   );
 
-  // Cmd+S saves and Cmd+W closes the active tab; Cmd+Shift+[ and ] move
-  // between tabs. Handled here rather than as Monaco commands so they also
-  // work on a Markdown preview.
+  // ⌘S saves and ⌘W closes the active tab; ⇧⌘[ and ⇧⌘] move between tabs,
+  // and ⌘1 to ⌘9 go to one.
+  // Commands in the shared table (`tab.*`), acting while focus is in this
+  // area; run by the app rather than as Monaco commands so they also work on
+  // a Markdown preview.
+  const areaRef = useRef<HTMLDivElement>(null);
+  const inThisArea = (context: CommandContext) =>
+    Boolean(
+      apiRef.current &&
+      areaRef.current &&
+      context.target &&
+      areaRef.current.contains(context.target),
+    );
+  // The tab a key means: the active one of the group focus is in (there may
+  // be a split), else the area's active tab.
+  const panelFor = (context: CommandContext) => {
+    const api = apiRef.current;
+    const target = context.target;
+    const group = target
+      ? api?.groups.find((item) => item.element.contains(target))
+      : undefined;
+    return group?.activePanel ?? api?.activePanel;
+  };
+  useCommand("tab.save", {
+    enabled: inThisArea,
+    run: (context) => {
+      const params = panelFor(context)?.params as FilePanelParams | undefined;
+      const doc = params?.path
+        ? getDocument(workspaceId, params.path)
+        : undefined;
+      if (doc) void save(doc);
+    },
+  });
+  useCommand("tab.close", {
+    enabled: inThisArea,
+    run: (context) => {
+      const panel = panelFor(context);
+      if (panel) void close(panel);
+    },
+  });
+  useCommand("tab.next", {
+    enabled: inThisArea,
+    run: () => apiRef.current?.activateNext(),
+  });
+  useCommand("tab.previous", {
+    enabled: inThisArea,
+    run: () => apiRef.current?.activatePrevious(),
+  });
+  // ⌘1 to ⌘8 pick a tab by its place in the strip, ⌘9 the last, as a
+  // browser does, from anywhere (a terminal too). The strip is the group
+  // focus is in, else the active one. Focus that was in the strip follows
+  // to the new tab's terminal or editor, so the caret is never dropped.
+  const groupFor = (context: CommandContext) => {
+    const api = apiRef.current;
+    const target = context.target;
+    return (
+      (target
+        ? api?.groups.find((item) => item.element.contains(target))
+        : undefined) ?? api?.activeGroup
+    );
+  };
+  const tabAt = (context: CommandContext, place: number | "last") => {
+    const panels = groupFor(context)?.panels ?? [];
+    return place === "last" ? panels.at(-1) : panels[place - 1];
+  };
+  const goToTab = (context: CommandContext, place: number | "last") => {
+    const group = groupFor(context);
+    const panel = tabAt(context, place);
+    if (!group || !panel) return;
+    const hadFocus = Boolean(
+      context.target && group.element.contains(context.target),
+    );
+    panel.api.setActive();
+    if (hadFocus)
+      focusWhenReady(() =>
+        [
+          ...group.element.querySelectorAll<HTMLElement>(
+            ".xterm-helper-textarea, .monaco-editor textarea",
+          ),
+        ].find(isShown),
+      );
+  };
+  const tabCommand = (place: number | "last") => ({
+    enabled: (context: CommandContext) => Boolean(tabAt(context, place)),
+    run: (context: CommandContext) => goToTab(context, place),
+  });
+  useCommand("tab.goTo1", tabCommand(1));
+  useCommand("tab.goTo2", tabCommand(2));
+  useCommand("tab.goTo3", tabCommand(3));
+  useCommand("tab.goTo4", tabCommand(4));
+  useCommand("tab.goTo5", tabCommand(5));
+  useCommand("tab.goTo6", tabCommand(6));
+  useCommand("tab.goTo7", tabCommand(7));
+  useCommand("tab.goTo8", tabCommand(8));
+  useCommand("tab.goToLast", tabCommand("last"));
+
+  // Delete and Backspace on a focused tab close it through `close`, which
+  // asks about unsaved changes, rather than through dockview's own handler,
+  // which would close the panel outright. Caught in the capture phase, before
+  // the tab strip's listener sees the key.
   useEffect(() => {
+    const area = areaRef.current;
+    if (!area) return;
     const onKey = (event: KeyboardEvent) => {
+      const id = tabCloseRequest(event);
       const api = apiRef.current;
-      if (!api || !event.metaKey) return;
-      const target = event.target as Node | null;
-      const root = document.querySelector(".editor-area");
-      if (!root || !target || !root.contains(target)) return;
-      if (event.key === "s" && !event.shiftKey) {
-        event.preventDefault();
-        const params = api.activePanel?.params as FilePanelParams | undefined;
-        const doc = params?.path
-          ? getDocument(workspaceId, params.path)
-          : undefined;
-        if (doc) void save(doc);
-      } else if (event.key === "w" && !event.shiftKey) {
-        event.preventDefault();
-        if (api.activePanel) void close(api.activePanel);
-      } else if (event.shiftKey && event.code === "BracketRight") {
-        event.preventDefault();
-        api.activateNext();
-      } else if (event.shiftKey && event.code === "BracketLeft") {
-        event.preventDefault();
-        api.activatePrevious();
-      }
+      if (!id || !api) return;
+      const panel = api.getPanel(id);
+      if (!panel) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const kind = (panel.params as FilePanelParams | undefined)?.kind;
+      if (!deleteKeyCloses(kind)) return;
+      const tab = event.target as HTMLElement;
+      const neighbour = [
+        tab.nextElementSibling,
+        tab.previousElementSibling,
+      ].find(
+        (element): element is HTMLElement =>
+          element instanceof HTMLElement &&
+          element.classList.contains("dv-tab"),
+      );
+      void close(panel).then(() => {
+        // Closed: focus stays in the strip, on the tab beside it, as
+        // dockview's own handler leaves it.
+        if (!api.getPanel(id) && focusIsLost() && neighbour?.isConnected)
+          neighbour.focus();
+      });
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [close, save, workspaceId]);
+    area.addEventListener("keydown", onKey, true);
+    return () => area.removeEventListener("keydown", onKey, true);
+  }, [close]);
 
   const onReady = useCallback(
     ({ api }: { api: DockviewApi }) => {
@@ -822,6 +962,17 @@ export default function EditorArea({
           queueMicrotask(() => {
             if (!api.getPanel(panel.id))
               callbacks.current.onTerminalTabClosed?.(terminalId);
+          });
+          return;
+        }
+        if (params.kind === "team" || params.kind === "routines") {
+          queueMicrotask(() => {
+            if (api.getPanel(panel.id)) return;
+            const opener = openers.current.get(panel.id);
+            openers.current.delete(panel.id);
+            // Only when the close dropped focus with the tab; a tab closed
+            // from elsewhere leaves focus where the user has it.
+            if (opener && focusIsLost()) restoreFocus(opener);
           });
           return;
         }
@@ -883,7 +1034,7 @@ export default function EditorArea({
 
   return (
     <EditorContext.Provider value={context}>
-      <div className="editor-area">
+      <div className="editor-area" data-area="tabs" ref={areaRef}>
         <DockviewReact
           className={
             appearanceOf(theme) === "dark"
@@ -971,6 +1122,7 @@ function FileTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
   return (
     <div
       className={`file-tab ${params.preview ? "preview" : ""} ${dirty ? "dirty" : ""}`}
+      data-panel-id={api.id}
       onClick={() =>
         requestFocus(
           params.diff
@@ -1077,13 +1229,11 @@ function HeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
         </button>
       )}
       {doc && isDirty(doc) && !isReadOnlyPath(params.path) && (
-        <button
-          onClick={() => void context.save(doc)}
-          title="Save (⌘S)"
-          type="button"
-        >
-          Save
-        </button>
+        <Tooltip command="tab.save" label="Save">
+          <button onClick={() => void context.save(doc)} type="button">
+            Save
+          </button>
+        </Tooltip>
       )}
       {focus}
     </div>
@@ -1125,6 +1275,7 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
   return (
     <div
       className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
+      data-panel-id={api.id}
       onAuxClick={(event) => {
         if (event.button === 1) api.close();
       }}
@@ -1220,16 +1371,25 @@ function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
     return () => subscription.dispose();
   }, [api]);
   return (
-    <div className="app-panel ability-panel">
+    // Focusable so opening the tab can put focus in it (`focusAbilityPanel`).
+    <div
+      className="app-panel ability-panel"
+      data-panel-id={api.id}
+      tabIndex={-1}
+    >
       {params.teamId && context.renderTeam?.(params.teamId, visible)}
     </div>
   );
 }
 
-function RoutinesPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+function RoutinesPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   const context = useEditorContext();
   return (
-    <div className="app-panel ability-panel">
+    <div
+      className="app-panel ability-panel"
+      data-panel-id={api.id}
+      tabIndex={-1}
+    >
       {params.sessionId && context.renderRoutines?.(params.sessionId)}
     </div>
   );

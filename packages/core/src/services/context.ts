@@ -33,6 +33,7 @@ import {
   workflowsEnabled,
 } from "./skills";
 import { InstructionService } from "./instruction-files";
+import { KeybindingService, keybindingsPath } from "./keybindings";
 import { AgentService } from "./agents";
 import { IntegratedTerminalService } from "./integrated-terminals";
 import { NotificationService } from "./notifications";
@@ -109,6 +110,8 @@ export interface ApplicationContext {
   workflows: WorkflowService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
   instructions: InstructionService;
+  /** The person's own keys, `keybindings.json` in the home. */
+  keybindings: KeybindingService;
   /** The routine clock; only the desktop host ticks it. */
   routineDelivery: RoutineDelivery;
   /** How Daedalus hands a line to a running session it did not get from the user. */
@@ -480,6 +483,7 @@ export async function createApplicationContext(
     routineReports,
     teams: teams!,
     instructions: new InstructionService(customInstructionsPath(config.home)),
+    keybindings: new KeybindingService(keybindingsPath(config.home)),
     workflows: new WorkflowService(
       repositories,
       config.home,

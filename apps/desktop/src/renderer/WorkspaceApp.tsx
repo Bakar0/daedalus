@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -30,12 +31,12 @@ import type {
   AgentActivityDto,
   AgentSessionDto,
   AttentionReasonDto,
-  DesktopCommand,
   DesktopSnapshotDto,
   GitStatusDto,
   PullRequestRefDto,
   RepositoryFetchOutcomeDto,
   IntegratedTerminalDto,
+  KeybindingsDto,
   ProviderModelCatalogDto,
   SessionTelemetryDto,
   SessionWorktreeDto,
@@ -52,10 +53,13 @@ import type {
   ToastDto,
 } from "@daedalus/protocol";
 import {
+  formatKeyGlyphs,
   resolveAutoRebirth,
   ROUTINES_REBIRTH_PERCENT,
   workspaceNameProblem,
   type AutoRebirthDto,
+  type CommandArea,
+  type TaskStatus,
 } from "@daedalus/protocol";
 import { LargeFileBar } from "./LargeFileBar";
 import { CloudPasteCodeBar, CloudSignInPanel } from "./CloudSignInBar";
@@ -67,7 +71,11 @@ import {
   PendingSnapshotParts,
 } from "./snapshot-parts";
 import type { DesktopClient } from "./client-types";
-import { SettingsModal, type SettingsSection } from "./SettingsModal";
+import {
+  SETTINGS_SECTIONS,
+  SettingsModal,
+  type SettingsSection,
+} from "./SettingsModal";
 import { UpdateBanner } from "./UpdateBanner";
 import { runWithConcurrency } from "./concurrency";
 import {
@@ -80,9 +88,14 @@ import { findPathCandidates } from "./terminal-file-links";
 import { repositoryFuzzyScore } from "./repository-search";
 import { ReorderGroup } from "./ReorderGroup";
 import { useListReorder, type ReorderHandles } from "./use-list-reorder";
-import { BoardView, TaskRelationsBlock, type BoardProvider } from "./BoardView";
+import {
+  BoardView,
+  confirmStartDespite,
+  TaskRelationsBlock,
+  type BoardProvider,
+} from "./BoardView";
 import { laneFor } from "./board-lanes";
-import { taskActions } from "./task-actions";
+import { startItemActions, taskActions } from "./task-actions";
 import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { WorkflowPane } from "./WorkflowPane";
 import { SidePanelDock } from "./SidePanelDock";
@@ -138,13 +151,59 @@ import {
 import type { DiffTarget } from "./files/EditorArea";
 import { MarkdownPreview } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
-import { TaskPriorityMenu, TaskStatusMenu } from "./TaskStatusMenu";
+import {
+  TASK_STATUS_LABEL,
+  TASK_STATUSES,
+  TaskPriorityMenu,
+  TaskStatusMenu,
+} from "./TaskStatusMenu";
 import {
   ColorSwatches,
   SessionMenu,
+  sessionItemActions,
+  type SessionMenuModel,
   WorkspaceMenu,
+  workspaceItemActions,
   type MenuAction,
 } from "./SessionMenu";
+import {
+  type ItemAction,
+  type ItemActions,
+  itemActionsById,
+  itemActionsFor,
+  useItemActions,
+} from "./item-actions";
+import { KeyHints, Tooltip } from "./keyboard-ui";
+import { CommandPalette, type PaletteRow } from "./palette/CommandPalette";
+import { ShortcutsSheet } from "./palette/ShortcutsSheet";
+import { loadRecent, recordRecent, saveRecent } from "./palette/palette-model";
+
+/** What the palette suggests when nothing is typed, as row keys. */
+const PALETTE_SUGGESTIONS = [
+  "command:session.new",
+  "command:task.new",
+  "command:session.nextNeedsYou",
+  "command:panel.toggleWorkspacePanel",
+];
+
+/**
+ * Commands the palette leaves out: itself, the switcher, which needs a held
+ * key, and the tab-by-number keys.
+ */
+const PALETTE_HIDDEN_COMMANDS = new Set<string>([
+  "palette.open",
+  "session.switch",
+  "session.switchBack",
+  "tab.goTo1",
+  "tab.goTo2",
+  "tab.goTo3",
+  "tab.goTo4",
+  "tab.goTo5",
+  "tab.goTo6",
+  "tab.goTo7",
+  "tab.goTo8",
+  "tab.goToLast",
+]);
 import { useCloudState } from "./CloudPanel";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPage } from "./teams/TeamPanel";
@@ -220,6 +279,52 @@ export {
 } from "./files/explorer-state";
 import { sessionColorStyle } from "./session-color-style";
 import { TerminalClipboardGate } from "./terminal-clipboard";
+import { isTopmostScope, useFocusScope } from "./use-focus-scope";
+import { onTabListKeyDown, rovingTabIndex } from "./tab-roving";
+import { areaDefault, focusWhenReady, isShown } from "./navigation/area-focus";
+import {
+  type TreeItem,
+  neighbourOf,
+  treeKeyAction,
+  treeTabStop,
+} from "./navigation/sidebar-tree";
+import {
+  moveSwitcher,
+  nextNeedingYou,
+  pruneSwitcher,
+  recordMru,
+  switcherOrder,
+  type SwitcherState,
+  switcherStart,
+} from "./navigation/session-cycle";
+import {
+  type HeldModifiers,
+  SessionSwitcher,
+  type SwitcherRow,
+} from "./navigation/SessionSwitcher";
+import {
+  allCommands,
+  type CommandContext,
+  applyKeybindings,
+  connectHost,
+  focusContext,
+  isCommandEnabled,
+  typingOutsideTerminal,
+  runCommand,
+  terminalKeyHandler,
+  useCommand,
+  useKeyDispatcher,
+} from "./commands";
+
+/** How the error bar starts when keybindings.json has entries it skipped. */
+const SKIPPED_KEYS = "Some keys in keybindings.json were skipped:";
+
+/** The side panel's tabs, in the order they are drawn. */
+const SIDE_PANEL_TABS = [
+  ["files", "Files"],
+  ["git", "Repositories"],
+  ["tasks", "Tasks"],
+] as const;
 
 /** The handle a member name becomes, as the core makes it. */
 function teamHandlePreview(name: string): string {
@@ -1011,9 +1116,13 @@ function ToastStack({
 
   return (
     <div
+      aria-label="Notifications"
       aria-live="polite"
       className="toast-stack"
+      // A region of its own while any show; it never takes focus by itself.
+      data-area="toasts"
       data-expanded={expanded}
+      role="region"
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node))
           resume();
@@ -1236,12 +1345,11 @@ function Modal({
   const error = useContext(DialogErrorContext);
   const close = useRef(onClose);
   close.current = onClose;
-  // A dialog opened from a session would otherwise leave the caret in the
-  // terminal, where xterm swallows Escape and sends it to the agent.
-  useEffect(() => {
-    const element = section.current;
-    if (element && !element.contains(document.activeElement)) element.focus();
-  }, []);
+  // The scope pulls focus in, so a dialog opened from a session does not
+  // leave the caret in the terminal, where xterm swallows Escape and sends it
+  // to the agent. It also keeps Tab inside, makes the page behind inert and
+  // gives focus back when the dialog closes.
+  useFocusScope(section);
   // Escape closes it, on the window like the task drawer, so a menu or a
   // confirm on top that handles Escape first (`preventDefault`, or a stopped
   // event) closes only itself.
@@ -1249,7 +1357,9 @@ function Modal({
     if (!dismissible) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (document.querySelector(".app-dialog-backdrop")) return;
+      // Only the dialog on top: another dialog, or one of the app's
+      // confirms, may be over this one, and it takes the key.
+      if (!isTopmostScope(section.current)) return;
       event.preventDefault();
       close.current();
     };
@@ -1583,6 +1693,10 @@ function TerminalSurface({
       });
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
+      // The shell gets every key except the few the app keeps: a key an
+      // enabled command is bound to in a terminal (⌘K, ⌃Tab, ⌃`). ⌃C, ⌃R, the ⌥ keys
+      // and typing all reach the program. See `terminalKeepsKey`.
+      terminal.attachCustomKeyEventHandler(terminalKeyHandler);
       terminal.loadAddon(
         new WebLinksAddon((event) => event.preventDefault(), {
           hover: (_event, url, range) => {
@@ -2004,6 +2118,81 @@ function TerminalSurface({
   );
 }
 
+/**
+ * Terminals the user just made (⌘T, a +, "Open in terminal"), by id. Such a
+ * terminal takes the caret when it mounts; one restored with the window, or
+ * mounted for any other reason, does not.
+ */
+const terminalArrivals = new Set<string>();
+const requestTerminalArrival = (id: string) => {
+  terminalArrivals.add(id);
+  // A request no terminal answers soon is dropped.
+  setTimeout(() => terminalArrivals.delete(id), 5_000);
+};
+
+/** How long a request for the caret stands before it lapses. */
+const ARRIVAL_MS = 2_000;
+
+/**
+ * When a terminal that is not a session's takes the caret: when it becomes
+ * the active one (the panel opened, its tab picked), when it mounts after
+ * the user made it, and again after a layout rebuild remounts it while it
+ * held the caret. Never on a mount at launch, and not on every layout
+ * change, which would take focus back from wherever the user moved it (a
+ * click, a panel). A request counts as met only once the caret is really
+ * inside, and lapses after a moment so a late refit cannot steal it.
+ */
+function useArrivalFocus(id: string, active: boolean, mountRevision: number) {
+  const holderRef = useRef<HTMLDivElement>(null);
+  const wantsUntil = useRef(0);
+  const previous = useRef<
+    { active: boolean; mountRevision: number } | undefined
+  >(undefined);
+  const ask = () => {
+    wantsUntil.current = Date.now() + ARRIVAL_MS;
+  };
+  // Asked for by whoever made it, on whichever render it is first active.
+  if (active && terminalArrivals.delete(id)) ask();
+  if (previous.current) {
+    if (active && !previous.current.active) ask();
+    if (
+      mountRevision !== previous.current.mountRevision &&
+      typeof document !== "undefined" &&
+      holderRef.current?.contains(document.activeElement)
+    )
+      ask();
+  }
+  previous.current = { active, mountRevision };
+  return {
+    holderRef,
+    focused: active && wantsUntil.current > Date.now(),
+    onFocused: () => {
+      if (holderRef.current?.contains(document.activeElement))
+        wantsUntil.current = 0;
+    },
+  };
+}
+
+/** A terminal in a center tab, which takes the caret when it opens. */
+function CenterTerminalSurface({
+  mountRevision,
+  ...props
+}: Omit<Parameters<typeof TerminalSurface>[0], "focused" | "onFocused"> & {
+  mountRevision: number;
+}) {
+  const arrival = useArrivalFocus(props.id, true, mountRevision);
+  return (
+    <div ref={arrival.holderRef} style={{ display: "contents" }}>
+      <TerminalSurface
+        {...props}
+        focused={arrival.focused}
+        key={`${props.id}:${mountRevision}`}
+        onFocused={arrival.onFocused}
+      />
+    </div>
+  );
+}
+
 function IntegratedTerminalSurface({
   active,
   fitRevision,
@@ -2024,6 +2213,7 @@ function IntegratedTerminalSurface({
   terminalEndpoint?: string;
 }) {
   const [activated, setActivated] = useState(active);
+  const arrival = useArrivalFocus(terminal.id, active, mountRevision);
 
   useEffect(() => {
     if (active) setActivated(true);
@@ -2033,11 +2223,13 @@ function IntegratedTerminalSurface({
     <div
       aria-hidden={!active}
       className={`integrated-terminal-surface ${active ? "active" : "hidden"}`}
+      ref={arrival.holderRef}
     >
       {activated && (
         <TerminalSurface
           terminalEndpoint={terminalEndpoint}
-          focused={active}
+          focused={arrival.focused}
+          onFocused={arrival.onFocused}
           fitRevision={fitRevision}
           id={terminal.id}
           key={`${terminal.id}:${mountRevision}`}
@@ -2690,17 +2882,10 @@ export function WorkspaceApp({
     });
   }, []);
 
-  // ⌥⌘B folds the workspace panel, the key VS Code gives its secondary side bar.
-  useEffect(() => {
-    if (!workspacePanelVisible) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (!event.metaKey || !event.altKey || event.code !== "KeyB") return;
-      event.preventDefault();
-      toggleBoardDetailPanel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggleBoardDetailPanel, workspacePanelVisible]);
+  useCommand("panel.toggleWorkspacePanel", {
+    enabled: () => workspacePanelVisible,
+    run: toggleBoardDetailPanel,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -2811,16 +2996,29 @@ export function WorkspaceApp({
   // Escape closes the open task, unless it is being edited (an unsaved brief
   // is not lost to a stray key) or a dialog is on top of it.
   useEffect(() => {
-    if (view !== "board" || !selectedTaskId || editingTask || modal) return;
+    if (
+      view !== "board" ||
+      !selectedTaskId ||
+      editingTask ||
+      modal ||
+      secretsWorkspace ||
+      quitRequest
+    )
+      return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
+      // Any dialog on top (Secrets, Quit, the app's confirms) takes this
+      // Escape; it may run after this listener, so it cannot be relied on to
+      // mark the event handled first.
+      if (document.querySelector(".modal-backdrop")) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable]")) return;
+      focusAfterTaskClose(selectedTaskId);
       setSelectedTaskId(undefined);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editingTask, modal, selectedTaskId, view]);
+  }, [editingTask, modal, quitRequest, secretsWorkspace, selectedTaskId, view]);
 
   const clearAttention = useCallback(
     async (sessionId: string) => {
@@ -2924,25 +3122,92 @@ export function WorkspaceApp({
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, [client]);
-  const runDesktopCommand = useCallback(
-    (command: DesktopCommand) => {
-      if (command === "view-board") setView("board");
-      else if (command === "view-world" && workspaceId)
-        setView((current) =>
-          current === "world" ? lastWorkspaceView.current : "world",
-        );
-      else if (command === "view-session" && workspaceId) setView("session");
-      else if (command === "view-workspace" && workspaceId)
-        setView("workspace");
-      else if (command === "toggle-terminal")
-        setTerminalPanelOpen((current) => !current);
-    },
-    [workspaceId],
-  );
+  // The app's commands: one dispatcher for their keys, and the menu bar's
+  // clicks arrive by command id. See `commands/`.
+  useKeyDispatcher();
   useEffect(
-    () => client.subscribeCommands(runDesktopCommand),
-    [client, runDesktopCommand],
+    () =>
+      client.subscribeCommands((command) =>
+        runCommand(command, focusContext("menu")),
+      ),
+    [client],
   );
+  // Host commands (quit, the World window) run in the host.
+  useEffect(
+    () =>
+      connectHost({
+        run: (command) => {
+          void client.request.commandRun?.({ command }).catch(() => {});
+        },
+      }),
+    [client],
+  );
+  // The person's keys are the host's (`keybindings.json`): read once, then
+  // every change it sends, from Settings, `daedal keys` or a hand edit. An
+  // entry the file has that cannot be used is said once, and skipped.
+  useEffect(() => {
+    let reported = "";
+    const take = (keybindings: KeybindingsDto) => {
+      applyKeybindings(keybindings);
+      const skipped = keybindings.rejected
+        .map((item) =>
+          [item.id || "file", item.key, item.reason].filter(Boolean).join(" "),
+        )
+        .join("; ");
+      if (skipped && skipped !== reported)
+        setError(`${SKIPPED_KEYS} ${skipped}`);
+      // Fixed: the error it raised goes, and no other.
+      if (!skipped && reported)
+        setError((current) =>
+          current?.startsWith(SKIPPED_KEYS) ? undefined : current,
+        );
+      reported = skipped;
+    };
+    void client.request
+      .keybindingsGet?.({})
+      .then((response) => {
+        if (response.ok) take(response.data);
+      })
+      .catch(() => {});
+    return client.subscribeKeybindings?.(take);
+  }, [client]);
+  useCommand("view.board", { run: () => setView("board") });
+  useCommand("view.world", {
+    enabled: () => Boolean(workspaceId),
+    run: () =>
+      setView((current) =>
+        current === "world" ? lastWorkspaceView.current : "world",
+      ),
+  });
+  // The session view gives its terminal the caret, as opening a session
+  // from the sidebar does; the session may only be picked once the view
+  // has switched, so the request waits for it.
+  useCommand("view.session", {
+    enabled: () => Boolean(workspaceId),
+    run: () => {
+      if (view === "session" && activeSession)
+        setFocusedSessionId(activeSession.id);
+      else if (workspaceId) requestSessionFocus(workspaceId);
+      setView("session");
+    },
+  });
+  useCommand("view.workspace", {
+    enabled: () => Boolean(workspaceId),
+    run: () => setView("workspace"),
+  });
+  // Closed from inside, focus would drop to the page: it goes to the
+  // center's terminal or editor instead.
+  useCommand("terminal.toggle", {
+    run: () => {
+      const inside = Boolean(
+        terminalPanelOpen &&
+        document.activeElement?.closest('[data-area="terminal-panel"]'),
+      );
+      setTerminalPanelOpen((current) => !current);
+      if (inside)
+        focusWhenReady(() => areaDefault("center") ?? areaDefault("sidebar"));
+    },
+  });
   // A clicked notification runs `daedal focus`, which raises the app and lands
   // here. Selecting the session is the whole point: an alert that only brings
   // the window forward still leaves the user hunting.
@@ -3225,6 +3490,8 @@ export function WorkspaceApp({
         data-moving={moving ? "true" : undefined}
         data-testid="workspace-cloud-action"
         disabled={moving || !signedIn || !item.available}
+        // In its menu too, which ⇧F10 opens; the tree is one Tab stop.
+        tabIndex={-1}
         onClick={() => void moveWorkspace(item, inCloud ? "mac" : "cloud")}
         title={
           moving
@@ -3300,7 +3567,44 @@ export function WorkspaceApp({
     const agent =
       session.kind === "agent" &&
       (session.provider === "claude" || session.provider === "codex");
+    // The buttons that show on the card only when they apply, here too so
+    // the keyboard reaches them through ⇧F10.
+    const status = statusViewFor(session);
+    const sleep = cloudSleep(session);
+    const team = teamOf(session);
     return [
+      ...(status.reasons.length > 0 && !sessionStartupErrors.get(session.id)
+        ? [
+            {
+              id: "clear-alert",
+              label: "Mark as seen",
+              disabled: busy,
+              run: () => void clearAttention(session.id),
+            },
+          ]
+        : []),
+      ...(session.status === "lost" && sleep !== "unavailable"
+        ? [
+            {
+              id: "revive",
+              label: sleep === "sleeping" ? "Wake and resume" : "Revive",
+              disabled: sessionActions.pending(session.id),
+              run: () =>
+                void (session.hostId
+                  ? wakeCloudSession(session)
+                  : reviveSession(session)),
+            },
+          ]
+        : []),
+      ...(team?.role === "lead" && session.status === "running"
+        ? [
+            {
+              id: "add-member",
+              label: "Add a member…",
+              run: () => openAddMember(session),
+            },
+          ]
+        : []),
       ...(agent
         ? [
             {
@@ -3326,6 +3630,32 @@ export function WorkspaceApp({
         run: () => void archiveSession(session),
       },
     ];
+  };
+
+  /**
+   * What a session's menu offers, for the menu and for the palette when
+   * the session has focus in the sidebar.
+   */
+  const sessionMenuModel = (session: AgentSessionDto): SessionMenuModel => {
+    const holdsRoutines = routinesBySession.has(session.id);
+    return {
+      actions: sessionMenuActions(session, holdsRoutines),
+      color: session.color,
+      name: sessionName(session),
+      offerAbilities:
+        session.kind === "agent" &&
+        (session.provider === "claude" || session.provider === "codex"),
+      offerOrchestration: !session.teamId,
+      onColor: (color) => void updateSession(session, { color }),
+      onOrchestration: (granted) =>
+        void setOrchestrationAbility(session, granted),
+      onPin: (pinned) => void updateSession(session, { pinned }),
+      onRename: () => void renameSession(session),
+      onRoutines: (granted) => void setRoutinesAbility(session, granted),
+      orchestration: teamsByLead.has(session.id),
+      pinned: Boolean(session.pinnedAt),
+      routines: holdsRoutines,
+    };
   };
 
   // Each cloud session's sign-in, by session.
@@ -4135,7 +4465,8 @@ export function WorkspaceApp({
       }),
     );
     if (created) {
-      setSelectedTaskId(created.id);
+      // Its page opens, with focus on it.
+      openTask(created.id, workspace.id);
       setTaskForm({ title: "", description: "" });
       setModal(undefined);
     }
@@ -4453,6 +4784,7 @@ export function WorkspaceApp({
   }
 
   async function archiveSession(session: AgentSessionDto) {
+    keepFocusInTree(`s:${session.id}`, treeShownIds);
     const wasActive = activeSessionId === session.id;
     archivingStartedAt.current = new Date().toISOString();
     setArchivingSessionIds((current) => new Set(current).add(session.id));
@@ -4684,6 +5016,7 @@ export function WorkspaceApp({
   }
 
   async function deleteSession(session: AgentSessionDto) {
+    keepFocusInArchive();
     setDeletingSessionIds((current) => new Set(current).add(session.id));
     await sessionActions.run(
       client.request.agentDelete({ id: session.id }),
@@ -4727,6 +5060,10 @@ export function WorkspaceApp({
   }
 
   async function archiveWorkspace(item: WorkspaceDto) {
+    keepFocusInTree(
+      `w:${item.id}`,
+      orderedWorkspaces.map((other) => `w:${other.id}`),
+    );
     const wasSelected = workspaceId === item.id;
     setArchivingWorkspaceIds((current) => new Set(current).add(item.id));
     if (wasSelected) {
@@ -4780,6 +5117,7 @@ export function WorkspaceApp({
   }
 
   async function deleteWorkspace(item: WorkspaceDto) {
+    keepFocusInArchive();
     setDeletingWorkspaceIds((current) => new Set(current).add(item.id));
     await perform(client.request.workspaceDelete({ reference: item.id }));
     setDeletingWorkspaceIds((current) => {
@@ -4811,7 +5149,8 @@ export function WorkspaceApp({
   ) {
     if (workspaceItem?.place === "cloud")
       return createCloudTerminal(workspaceItem);
-    setTerminalPanelOpen(true);
+    // The panel opens with the new terminal in front, not before: opening
+    // it first would hand the caret to the terminal that was there.
     const created = await perform(
       client.request.terminalCreate({
         workspace: workspaceItem?.id,
@@ -4819,7 +5158,12 @@ export function WorkspaceApp({
         workingDirectory: location?.workingDirectory,
       }),
     );
-    if (created) setActiveTerminalId(created.id);
+    if (created) {
+      // Made on purpose, so it takes the caret when it arrives.
+      requestTerminalArrival(created.id);
+      setActiveTerminalId(created.id);
+      setTerminalPanelOpen(true);
+    }
   }
 
   /**
@@ -4835,10 +5179,12 @@ export function WorkspaceApp({
         name: workspaceItem.name,
       }),
     );
-    if (created)
+    if (created) {
+      requestTerminalArrival(created.id);
       files.withEditor((handle) =>
         handle.openTerminal(created.id, created.name),
       );
+    }
   }
 
   async function removeSessionWorktree(
@@ -4870,7 +5216,10 @@ export function WorkspaceApp({
       setActiveTerminalId(next?.id);
   }
 
-  function selectWorkspace(id: string) {
+  function selectWorkspace(
+    id: string,
+    { focusSession = false }: { focusSession?: boolean } = {},
+  ) {
     setWorkspaceId(id);
     setSelectedTaskId(undefined);
     setActiveSessionId(undefined);
@@ -4879,6 +5228,15 @@ export function WorkspaceApp({
     // satisfied by a session the user never opened. Switching workspaces is
     // not an intent to type into whatever is restored.
     clearSessionFocusRequest();
+    // A mouse click or a toast leaves the caret where it is. Opening the
+    // workspace from the keyboard (Enter on its sidebar item) is an explicit
+    // open: when it comes back to its last session, that terminal takes the
+    // caret; otherwise focus stays on the sidebar item.
+    if (
+      focusSession &&
+      preferredWorkspaceView(rememberedWorkspaceView(id)) === "session"
+    )
+      requestSessionFocus(id);
     // The scope effect restores the workspace's remembered view, most often
     // its last session; the side panel holds its tasks, files and repositories.
   }
@@ -4899,10 +5257,19 @@ export function WorkspaceApp({
    * card, the World, a toast or a notification. It opens the session's
    * list in case it was collapsed (#55).
    */
-  function showSession(sessionId: string, sessionWorkspaceId: string) {
+  function showSession(
+    sessionId: string,
+    sessionWorkspaceId: string,
+    { focus = true }: { focus?: boolean } = {},
+  ) {
     expandWorkspace(sessionWorkspaceId);
     enterWorkspace(sessionWorkspaceId, "session");
-    openSession(sessionId);
+    if (focus) openSession(sessionId);
+    else {
+      // Shown, but the caret stays where it is (a toast's click).
+      setOpeningLaunchKey(undefined);
+      setActiveSessionId(sessionId);
+    }
   }
 
   // One repository with the working trees cut from it: the row the explorer
@@ -5301,6 +5668,7 @@ export function WorkspaceApp({
   }
 
   function closeTaskDrawer() {
+    focusAfterTaskClose(selectedTaskId);
     setSelectedTaskId(undefined);
     setEditingTask(false);
   }
@@ -5414,9 +5782,16 @@ export function WorkspaceApp({
         ref={reorder.registerCard(session.id)}
       >
         <button
+          {...treeItemProps(`s:${session.id}`)}
+          aria-level={2}
+          aria-selected={
+            view === "session" && session.id === highlightedSessionId
+          }
           className="session-card-main"
           data-provider={session.provider}
           data-session-id={session.id}
+          data-tree-label={sessionName(session)}
+          data-tree-parent={`w:${session.workspaceId}`}
           onClick={() => {
             showSession(session.id, session.workspaceId);
             if (resumesOnOpen(session)) void wakeCloudSession(session);
@@ -5547,6 +5922,8 @@ export function WorkspaceApp({
             className="session-attention-clear"
             data-no-drag
             disabled={busy}
+            // In the session's menu too (⇧F10); the tree is one Tab stop.
+            tabIndex={-1}
             onClick={() => void clearAttention(session.id)}
             title={
               statusView.reasons.length > 1
@@ -5569,6 +5946,7 @@ export function WorkspaceApp({
                 aria-label={`Revive ${sessionName(session)} session`}
                 className="session-card-action"
                 disabled={sessionActions.pending(session.id)}
+                tabIndex={-1}
                 onClick={() =>
                   void (session.hostId
                     ? wakeCloudSession(session)
@@ -5588,6 +5966,7 @@ export function WorkspaceApp({
               aria-label={`Add a member to ${team.team.name}`}
               className="session-card-action session-card-hover-action"
               onClick={() => openAddMember(session)}
+              tabIndex={-1}
               title="Add a member to this session's team"
               type="button"
             >
@@ -5604,6 +5983,7 @@ export function WorkspaceApp({
                   session.rebirthRequestedAt ? "true" : undefined
                 }
                 disabled={sessionActions.pending(session.id)}
+                tabIndex={-1}
                 onClick={() => void continueInNewAgent(session)}
                 title={
                   session.rebirthRequestedAt
@@ -5627,6 +6007,7 @@ export function WorkspaceApp({
               }
               className="session-card-action session-card-hover-action"
               onConfirm={() => void archiveSession(session)}
+              tabIndex={-1}
               title={
                 holdsRoutines
                   ? "Archive session and pause its routines"
@@ -5638,29 +6019,14 @@ export function WorkspaceApp({
           )}
           {/* Last, so rebirth and archive open to its left on hover. */}
           <SessionMenu
-            actions={sessionMenuActions(session, holdsRoutines)}
+            {...sessionMenuModel(session)}
             autoRebirth={session.autoRebirthPercent}
-            color={session.color}
             inheritedRebirth={inheritedRebirth}
-            name={sessionName(session)}
-            offerAbilities={
-              session.kind === "agent" &&
-              (session.provider === "claude" || session.provider === "codex")
-            }
             onAutoRebirth={(autoRebirthPercent) =>
               void updateSession(session, { autoRebirthPercent })
             }
-            onColor={(color) => void updateSession(session, { color })}
-            onPin={(pinned) => void updateSession(session, { pinned })}
-            onRename={() => void renameSession(session)}
-            onRoutines={(granted) => void setRoutinesAbility(session, granted)}
-            orchestration={teamsByLead.has(session.id)}
-            offerOrchestration={!session.teamId}
-            onOrchestration={(granted) =>
-              void setOrchestrationAbility(session, granted)
-            }
-            pinned={Boolean(session.pinnedAt)}
-            routines={holdsRoutines}
+            returnFocus={() => void focusTreeItem(`s:${session.id}`)}
+            triggerTabIndex={-1}
           />
         </span>
       </div>
@@ -5669,9 +6035,22 @@ export function WorkspaceApp({
   // A session asked for but not yet started, or that failed to start.
   const renderLaunchCard = (launch: SessionLaunchState) => (
     <div
+      {...treeItemProps(`l:${launch.key}`)}
       aria-busy={launch.status === "starting"}
+      aria-level={2}
       className={`session-card session-card-${launch.status} ${view === "session" && launch.key === openingLaunch?.key ? "selected" : ""}`}
+      data-tree-label={launch.name}
+      data-tree-parent={`w:${launch.workspaceId}`}
       key={launch.key}
+      // Delete dismisses a launch that failed, as its button does.
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (launch.status !== "error") return;
+        if (event.key !== "Delete" && event.key !== "Backspace") return;
+        event.preventDefault();
+        keepFocusInTree(`l:${launch.key}`, treeItemIdsShown());
+        dismissSessionLaunch(launch.key);
+      }}
     >
       <div className="session-card-main">
         <span className={`session-kind-icon tool-${launch.tool}`}>
@@ -5703,6 +6082,7 @@ export function WorkspaceApp({
           aria-label={`Dismiss failed ${launch.name} session`}
           className="session-card-action"
           onClick={() => dismissSessionLaunch(launch.key)}
+          tabIndex={-1}
           title="Dismiss"
           type="button"
         >
@@ -5723,8 +6103,44 @@ export function WorkspaceApp({
     onRestore: () => void;
     onDelete: () => void;
     deleteDisclosure: string;
+    /**
+     * The row is an item of the sidebar tree, under this one: Enter
+     * restores it and Delete asks, then deletes it; its buttons leave the
+     * Tab order.
+     */
+    treeParent?: string;
   }) => (
-    <div className="archived-item" key={row.id}>
+    <div
+      className="archived-item"
+      key={row.id}
+      {...(row.treeParent
+        ? {
+            ...treeItemProps(`r:${row.id}`),
+            "aria-label": `${row.name}, archived`,
+            "aria-level": 3,
+            "data-tree-label": row.name,
+            "data-tree-parent": row.treeParent,
+            onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
+              if (event.target !== event.currentTarget || row.disabled) return;
+              if (event.key === "Enter") {
+                event.preventDefault();
+                row.onRestore();
+              } else if (event.key === "Delete" || event.key === "Backspace") {
+                event.preventDefault();
+                void askConfirm({
+                  title: `Delete ${row.name} permanently?`,
+                  message: row.deleteDisclosure,
+                  confirmLabel: "Delete",
+                  danger: true,
+                  enterConfirms: true,
+                }).then((confirmed) => {
+                  if (confirmed) row.onDelete();
+                });
+              }
+            },
+          }
+        : {})}
+    >
       <span className="archived-item-text" title={row.name}>
         <strong>{row.name}</strong>
         <small>
@@ -5740,6 +6156,7 @@ export function WorkspaceApp({
           className="archived-item-action"
           disabled={row.disabled}
           onClick={row.onRestore}
+          tabIndex={row.treeParent ? -1 : undefined}
           title={row.restoreLabel}
           type="button"
         >
@@ -5751,6 +6168,7 @@ export function WorkspaceApp({
           className="archived-item-action danger"
           disabled={row.disabled}
           onConfirm={row.onDelete}
+          tabIndex={row.treeParent ? -1 : undefined}
           title="Delete permanently"
         >
           <TaskActionIcon name="delete" />
@@ -5803,6 +6221,7 @@ export function WorkspaceApp({
             <div
               aria-label={`Sessions in ${item.name}`}
               className="workspace-sessions"
+              id={`workspace-sessions-${item.id}`}
               role="group"
             >
               <div
@@ -5819,11 +6238,32 @@ export function WorkspaceApp({
                   data-in-focus={archiveInFocus ? "true" : undefined}
                   // Out of focus it is a closed, invisible placeholder.
                   {...(archiveInFocus ? {} : { open: false })}
+                  // An item of the tree, which → and ← open and close.
+                  onToggle={(event) =>
+                    event.currentTarget
+                      .querySelector(":scope > summary")
+                      ?.setAttribute(
+                        "aria-expanded",
+                        String(event.currentTarget.open),
+                      )
+                  }
+                  role="none"
                 >
-                  <summary tabIndex={archiveInFocus ? undefined : -1}>
+                  <summary
+                    {...treeItemProps(`a:${item.id}`)}
+                    aria-expanded="false"
+                    aria-level={2}
+                    data-tree-label="Archived sessions"
+                    data-tree-parent={`w:${item.id}`}
+                    {...(archiveInFocus ? {} : { tabIndex: -1 })}
+                  >
                     Archived sessions ({archived.length})
                   </summary>
-                  <div className="item-list">
+                  <div
+                    aria-label={`Archived sessions in ${item.name}`}
+                    className="item-list"
+                    role="group"
+                  >
                     {archived.map((session) =>
                       renderArchivedRow({
                         id: session.id,
@@ -5835,6 +6275,7 @@ export function WorkspaceApp({
                         onRestore: () => void restoreSession(session),
                         onDelete: () => void deleteSession(session),
                         deleteDisclosure: sessionDeleteDisclosure(session),
+                        treeParent: `a:${item.id}`,
                       }),
                     )}
                   </div>
@@ -5894,9 +6335,985 @@ export function WorkspaceApp({
     };
   });
 
+  /**
+   * What a workspace card's status rows do (a cloud move waiting, a move
+   * error, a notice), as handlers the rows and the card's menu share.
+   */
+  const workspaceStatusHandlers = (item: WorkspaceDto) => {
+    const moveEntry = moveByWorkspace.get(item.id);
+    const cancelMove = () =>
+      void workspaceMoveActions.run(
+        client.request.workspaceMoveCancel({ reference: item.id }),
+        `cancel:${item.id}`,
+      );
+    const dismissMoveError = () =>
+      setMoveErrors(({ [item.id]: _gone, ...rest }) => rest);
+    const dismissMoveNotice = () =>
+      void workspaceMoveActions.run(
+        client.request.workspaceMoveDismiss({ reference: item.id }),
+        `notice:${item.id}`,
+      );
+    const dismissCloudNotice = () =>
+      void workspaceMoveActions.run(
+        client.request.workspaceNoticeDismiss({
+          reference: item.id,
+        }),
+        `notice:${item.id}`,
+      );
+    const statusActions: MenuAction[] = [
+      ...(moveEntry?.phase === "waiting"
+        ? [
+            {
+              id: "cancel-move",
+              label: "Cancel move",
+              run: cancelMove,
+            },
+          ]
+        : []),
+      ...(!moveEntry && moveErrors[item.id]
+        ? [
+            {
+              id: "dismiss-move-error",
+              label: "Dismiss move error",
+              run: dismissMoveError,
+            },
+          ]
+        : []),
+      ...(moveEntry?.phase === "moved" && moveEntry.notice
+        ? [
+            {
+              id: "dismiss-move-notice",
+              label: "Dismiss move notice",
+              run: dismissMoveNotice,
+            },
+          ]
+        : []),
+      ...(item.cloudNotice
+        ? [
+            {
+              id: "dismiss-cloud-notice",
+              label: "Dismiss cloud notice",
+              run: dismissCloudNotice,
+            },
+          ]
+        : []),
+    ];
+    return {
+      moveEntry,
+      cancelMove,
+      dismissMoveError,
+      dismissMoveNotice,
+      dismissCloudNotice,
+      statusActions,
+    };
+  };
+  /**
+   * A workspace card's actions, each with its pin: its menu draws them, and
+   * the palette lists them when the workspace has focus.
+   */
+  const workspaceMenuActions = (item: WorkspaceDto): MenuAction[] => [
+    ...workspaceStatusHandlers(item).statusActions,
+    {
+      id: "terminal",
+      icon: <SessionLaunchIcon />,
+      label: "Open in terminal",
+      pinned: pins.workspace.has("terminal"),
+      onPin: (on) => pin("workspace", "terminal", on),
+      disabled: !item.available || busy,
+      run: () => void createIntegratedTerminal(item),
+    },
+    {
+      id: "secrets",
+      icon: <KeyIcon />,
+      label: "Secrets",
+      pinned: pins.workspace.has("secrets"),
+      onPin: (on) => pin("workspace", "secrets", on),
+      disabled: busy,
+      run: () => setSecretsWorkspace(item),
+    },
+    ...(item.place === "cloud" || cloudState.data?.signedIn
+      ? [
+          {
+            id: "cloud",
+            icon: <CloudActionIcon home={item.place === "cloud"} />,
+            label:
+              item.place === "cloud" ? "Move to this Mac" : "Move to cloud",
+            pinned: pins.workspace.has("cloud"),
+            onPin: (on: boolean) => pin("workspace", "cloud", on),
+            disabled:
+              workspaceMoving(item) ||
+              !cloudState.data?.signedIn ||
+              !item.available,
+            run: () =>
+              void moveWorkspace(
+                item,
+                item.place === "cloud" ? "mac" : "cloud",
+              ),
+          },
+        ]
+      : []),
+    {
+      id: "archive",
+      icon: <ArchiveIcon />,
+      label: "Archive workspace",
+      pinned: pins.workspace.has("archive"),
+      onPin: (on) => pin("workspace", "archive", on),
+      disabled: busy,
+      confirm:
+        "All its sessions stop and move to their archived list. The workspace and its sessions can be restored later.",
+      run: () => void archiveWorkspace(item),
+    },
+  ];
+
   const anyWorkspaceExpanded = activeWorkspaces.some(
     (item) => !collapsedWorkspaceIds.has(item.id),
   );
+
+  // ---- The keyboard: the sidebar tree, moving between sessions ----
+  // See `navigation/`.
+
+  /**
+   * Each workspace's live sessions in the order the sidebar lists them,
+   * worked out once per snapshot rather than per workspace per render.
+   */
+  const sidebarSessionsByWorkspace = useMemo(() => {
+    const byWorkspace = new Map<string, AgentSessionDto[]>();
+    for (const session of agents) {
+      if (session.archivedAt) continue;
+      const list = byWorkspace.get(session.workspaceId) ?? [];
+      list.push(session);
+      byWorkspace.set(session.workspaceId, list);
+    }
+    const teams = snapshot?.teams ?? [];
+    return new Map(
+      [...byWorkspace].map(([id, list]) => [
+        id,
+        sessionDisplayOrder(list, teams),
+      ]),
+    );
+    // `agents` is derived from these on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot?.agents, snapshot?.teams, archivingSessionIds]);
+  const sidebarSessionsOf = (item: WorkspaceDto) =>
+    sidebarSessionsByWorkspace.get(item.id) ?? [];
+  // Every live session in sidebar order, across workspaces, folded or not.
+  const sidebarSessionOrder = orderedWorkspaces.flatMap((item) =>
+    sidebarSessionsOf(item).map((session) => session.id),
+  );
+  // The tree's workspaces and sessions as shown: each workspace, then its
+  // sessions when open.
+  const treeShownIds = orderedWorkspaces.flatMap((item) => [
+    `w:${item.id}`,
+    ...(collapsedWorkspaceIds.has(item.id)
+      ? []
+      : sidebarSessionsOf(item).map((session) => `s:${session.id}`)),
+  ]);
+  const treeItemElement = (id: string) =>
+    workspaceColumnRef.current?.querySelector<HTMLElement>(
+      `[data-tree-id="${CSS.escape(id)}"]`,
+    ) ?? undefined;
+  /** Every tree item on screen, in order, launches and archives included. */
+  const treeItemNodes = () =>
+    [
+      ...(workspaceColumnRef.current?.querySelectorAll<HTMLElement>(
+        '[role="treeitem"][data-tree-id]',
+      ) ?? []),
+    ].filter(isShown);
+  const treeItemIdsShown = () =>
+    treeItemNodes().map((node) => node.dataset.treeId ?? "");
+  // The tree's one Tab stop: the item focus was last on, kept in a ref so
+  // moving through the tree does not re-render the app; a new selection
+  // resets it to the selected item.
+  const treeFocusRef = useRef<string | undefined>(undefined);
+  const treeSelectionKey = `${view}|${highlightedSessionId ?? ""}|${workspaceId ?? ""}`;
+  const treeSelectionRef = useRef(treeSelectionKey);
+  if (treeSelectionRef.current !== treeSelectionKey) {
+    treeSelectionRef.current = treeSelectionKey;
+    treeFocusRef.current = undefined;
+  }
+  const lastTreeFocus = treeFocusRef.current;
+  const treeTabStopId = treeTabStop(
+    lastTreeFocus &&
+      !treeShownIds.includes(lastTreeFocus) &&
+      treeItemElement(lastTreeFocus)
+      ? [...treeShownIds, lastTreeFocus]
+      : treeShownIds,
+    lastTreeFocus,
+    [
+      view === "session" && highlightedSessionId
+        ? `s:${highlightedSessionId}`
+        : undefined,
+      workspaceId ? `w:${workspaceId}` : undefined,
+    ],
+  );
+  /** Puts the Tab stop on `id` in the DOM, without a render. */
+  const moveTreeTabStop = (id: string | undefined) => {
+    for (const node of workspaceColumnRef.current?.querySelectorAll<HTMLElement>(
+      "[data-tree-id]",
+    ) ?? [])
+      node.tabIndex = node.dataset.treeId === id ? 0 : -1;
+  };
+  // Rendering may have kept a stop the DOM had already moved; the DOM is
+  // brought back in line with what was rendered.
+  useLayoutEffect(() => moveTreeTabStop(treeTabStopId));
+  const treeItemProps = (id: string) => ({
+    "data-tree-id": id,
+    onFocus: (event: React.FocusEvent<HTMLElement>) => {
+      if (event.target !== event.currentTarget) return;
+      treeFocusRef.current = id;
+      moveTreeTabStop(id);
+    },
+    role: "treeitem",
+    tabIndex: id === treeTabStopId ? 0 : -1,
+  });
+  const focusTreeItem = (id: string) => {
+    const element = treeItemElement(id);
+    if (!element) return false;
+    element.focus();
+    element.scrollIntoView({ block: "nearest" });
+    return true;
+  };
+  /**
+   * Folding a workspace whose sessions hold focus gives focus to the
+   * workspace first, so it is not dropped with the list.
+   */
+  const focusOutOfFoldedSessions = (onlyWorkspace?: string) => {
+    const active = document.activeElement;
+    const list = active?.closest<HTMLElement>(".workspace-sessions");
+    const id = list?.id.replace(/^workspace-sessions-/, "");
+    if (!id || (onlyWorkspace && id !== onlyWorkspace)) return;
+    focusTreeItem(`w:${id}`);
+  };
+  const foldWorkspace = (id: string, collapsed: boolean) => {
+    if (collapsed) focusOutOfFoldedSessions(id);
+    setWorkspaceCollapsed(id, collapsed);
+  };
+  const onSidebarTreeKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    // ⌥↑ / ⌥↓ are the items' own (reordering); ⌘ and ⌃ keys are commands.
+    if (event.altKey || event.metaKey || event.ctrlKey) return;
+    if (event.defaultPrevented) return;
+    const target = event.target as HTMLElement;
+    if (target.getAttribute("role") !== "treeitem") return;
+    const items: TreeItem[] = treeItemNodes().map((node) => ({
+      id: node.dataset.treeId ?? "",
+      level: Number(node.getAttribute("aria-level") ?? 1),
+      ...(node.dataset.treeParent ? { parent: node.dataset.treeParent } : {}),
+      expandable: node.hasAttribute("aria-expanded"),
+      expanded: node.getAttribute("aria-expanded") === "true",
+      label: node.dataset.treeLabel ?? node.textContent ?? "",
+    }));
+    const action = treeKeyAction(items, target.dataset.treeId ?? "", event.key);
+    if (!action) return;
+    event.preventDefault();
+    if (action.kind === "focus") focusTreeItem(action.id);
+    else if (action.id.startsWith("a:")) {
+      // The archived sessions' list is a <details>.
+      const details = treeItemElement(action.id)?.parentElement;
+      if (details instanceof HTMLDetailsElement)
+        details.open = action.kind === "expand";
+    } else foldWorkspace(action.id.slice(2), action.kind === "collapse");
+  };
+  // ⇧F10 (or the menu key) opens the focused item's own menu.
+  useCommand("item.menu", {
+    enabled: (context) =>
+      Boolean(
+        context.target
+          ?.closest('[role="treeitem"]')
+          ?.closest(".session-card, .workspace-card")
+          ?.querySelector("details.menu"),
+      ),
+    run: (context) => {
+      const menu = context.target
+        ?.closest(".session-card, .workspace-card")
+        ?.querySelector<HTMLDetailsElement>("details.menu");
+      if (menu) menu.open = true;
+    },
+  });
+  /** Where focus goes when the tree has nothing left to give it. */
+  const outsideTree = () =>
+    areaDefault("center") ??
+    workspaceColumnRef.current?.querySelector<HTMLElement>(
+      ".workspace-heading-create",
+    ) ??
+    undefined;
+  /**
+   * When the focused sidebar item is about to go (archived, dismissed),
+   * focus moves to its neighbour once it has: the next item, or the one
+   * before the last; with none, to the center.
+   */
+  const keepFocusInTree = (id: string, shown: readonly string[]) => {
+    const column = workspaceColumnRef.current;
+    if (!column?.contains(document.activeElement)) return;
+    const neighbour = neighbourOf(shown, id);
+    focusWhenReady(
+      () =>
+        !treeItemElement(id) &&
+        (!document.activeElement || document.activeElement === document.body)
+          ? ((neighbour ? treeItemElement(neighbour) : undefined) ??
+            outsideTree())
+          : undefined,
+      { frames: 20 },
+    );
+  };
+  /** The same for a row of an archived list being deleted. */
+  const keepFocusInArchive = () => {
+    const row = document.activeElement?.closest(".archived-item");
+    if (!row) return;
+    const list = row.parentElement;
+    const next = row.nextElementSibling ?? row.previousElementSibling;
+    const summary = row.closest("details")?.querySelector("summary");
+    const rowTarget = (element: Element) =>
+      element instanceof HTMLElement && element.matches('[role="treeitem"]')
+        ? element
+        : (element.querySelector<HTMLElement>("button") ?? undefined);
+    focusWhenReady(
+      () =>
+        row.isConnected
+          ? undefined
+          : ((next?.isConnected ? rowTarget(next) : undefined) ??
+            (list?.isConnected ? summary : undefined) ??
+            treeItemElement(treeTabStopId ?? "") ??
+            outsideTree()),
+      { frames: 30 },
+    );
+  };
+
+  /**
+   * Gives the caret to whichever session the session view of `forWorkspace`
+   * lands on, once it has: View › Session, and opening a workspace from the keyboard
+   * when it comes back to its last session.
+   */
+  const sessionFocusRequest = useRef<
+    { workspaceId: string; until: number } | undefined
+  >(undefined);
+  const requestSessionFocus = (forWorkspace: string) => {
+    sessionFocusRequest.current = {
+      workspaceId: forWorkspace,
+      until: Date.now() + 3_000,
+    };
+  };
+  useEffect(() => {
+    const request = sessionFocusRequest.current;
+    if (!request) return;
+    if (Date.now() > request.until) {
+      sessionFocusRequest.current = undefined;
+      return;
+    }
+    if (request.workspaceId !== workspaceId || view !== "session") return;
+    if (!activeSession) return;
+    sessionFocusRequest.current = undefined;
+    setFocusedSessionId(activeSession.id);
+  }, [activeSession, view, workspaceId]);
+
+  const activeWorkspaceIds = new Set(activeWorkspaces.map((item) => item.id));
+  /** Opens a session from a key, wakes it if asleep, and focuses it. */
+  const goToSession = (id: string) => {
+    const target = sessionsByIdForKeys.get(id);
+    if (!target) return;
+    showSession(target.id, target.workspaceId);
+    if (resumesOnOpen(target)) void wakeCloudSession(target);
+  };
+  const sessionsByIdForKeys = new Map(
+    agents.map((session) => [session.id, session]),
+  );
+  const workspaceNames = new Map(
+    (snapshot?.workspaces ?? []).map((item) => [item.id, item.name]),
+  );
+  const shownSessionId =
+    view === "session"
+      ? (activeSession?.id ?? highlightedSessionId)
+      : undefined;
+  /**
+   * Keys that leave the page wait while text is being typed outside a
+   * terminal, or a brief is open for editing, so no unsaved text is lost.
+   */
+  const mayLeavePage = (context: CommandContext) =>
+    !typingOutsideTerminal(context) && !editingTask;
+  // The same "needs you" the sidebar's dots and counts show.
+  useCommand("session.nextNeedsYou", {
+    enabled: mayLeavePage,
+    run: () => {
+      const id = nextNeedingYou(
+        sidebarSessionOrder,
+        (candidate) => {
+          const session = sessionsByIdForKeys.get(candidate);
+          return Boolean(
+            session && sessionNeedsAttention(statusViewFor(session)),
+          );
+        },
+        shownSessionId,
+      );
+      if (id) goToSession(id);
+    },
+  });
+
+  // A task opened by a key or the new-task dialog takes focus on its page,
+  // once it shows; going somewhere else first drops the request.
+  const [taskFocusRequest, setTaskFocusRequest] = useState<{
+    taskId: string;
+    workspaceId: string;
+  }>();
+  const openTask = (taskId: string, taskWorkspaceId: string) => {
+    enterWorkspace(taskWorkspaceId, "board");
+    setSelectedTaskId(taskId);
+    setEditingTask(false);
+    setTaskFocusRequest({ taskId, workspaceId: taskWorkspaceId });
+  };
+  useEffect(() => {
+    if (!taskFocusRequest) return;
+    if (view !== "board" || workspaceId !== taskFocusRequest.workspaceId) {
+      setTaskFocusRequest(undefined);
+      return;
+    }
+    if (selectedTask?.id !== taskFocusRequest.taskId) return;
+    setTaskFocusRequest(undefined);
+    focusWhenReady(
+      () =>
+        document.querySelector<HTMLElement>('[data-area="center"] .task-page'),
+      {},
+    );
+  }, [selectedTask?.id, taskFocusRequest, view, workspaceId]);
+  // New things, each through the flow its button already opens. A new
+  // session or task lands on its own page, so these wait while text is
+  // being typed too.
+  useCommand("session.new", {
+    enabled: (context) =>
+      mayLeavePage(context) &&
+      Boolean(
+        workspace?.available &&
+        snapshot?.settings.tmuxAvailable &&
+        !workspaceMoving(workspace),
+      ),
+    run: () => openSessionModal(undefined, workspace),
+  });
+  useCommand("task.new", {
+    enabled: (context) => mayLeavePage(context) && Boolean(workspace),
+    run: () => setModal("task"),
+  });
+  // The new terminal takes the caret when it arrives (see
+  // `useArrivalFocus`); if it fails, focus stays where it was.
+  // One at a time: `busy` is state, so presses that come faster than a
+  // render (a held key, a double press) would each make a terminal.
+  const terminalCreating = useRef(false);
+  useCommand("terminal.new", {
+    enabled: () =>
+      Boolean(snapshot?.settings.tmuxAvailable) &&
+      !busy &&
+      !terminalCreating.current,
+    run: () => {
+      if (terminalCreating.current) return;
+      terminalCreating.current = true;
+      void Promise.resolve(
+        createIntegratedTerminal(workspace?.available ? workspace : undefined),
+      ).finally(() => {
+        terminalCreating.current = false;
+      });
+    },
+  });
+  useCommand("app.settings", { run: () => setModal("settings") });
+
+  // ---- ⌃Tab: the session switcher ----
+  // Sessions in the order they were last shown, most recent first. Kept in
+  // a ref: the order matters only when the switcher opens.
+  const sessionMru = useRef<readonly string[]>([]);
+  useEffect(() => {
+    if (shownSessionId)
+      sessionMru.current = recordMru(sessionMru.current, shownSessionId);
+  }, [shownSessionId]);
+  const [switcher, setSwitcher] = useState<
+    SwitcherState & {
+      held?: HeldModifiers;
+      returnFocus: HTMLElement | null;
+    }
+  >();
+  // The live sessions, read by the switcher's steps, which may come faster
+  // than renders: one archived while it is open drops out of its rows.
+  const liveSessionIds = useRef<ReadonlySet<string>>(new Set());
+  liveSessionIds.current = new Set(sidebarSessionOrder);
+  const liveSessionKey = sidebarSessionOrder.join();
+  useEffect(() => {
+    setSwitcher((open) =>
+      open ? pruneSwitcher(open, liveSessionIds.current) : open,
+    );
+  }, [liveSessionKey]);
+  /**
+   * Switching sessions leaves the page, so it waits while a brief is being
+   * edited or a field (not a terminal or the editor, whose text stays in
+   * its tab) is being typed in.
+   */
+  const maySwitchSession = (context: CommandContext) =>
+    !editingTask &&
+    (!context.typing ||
+      context.areas.includes("terminal") ||
+      context.areas.includes("editor"));
+  const stepSessionSwitcher = (context: CommandContext, direction: 1 | -1) => {
+    if (switcher) {
+      moveSessionSwitcher(direction);
+      return;
+    }
+    const ids = switcherOrder(sessionMru.current, sidebarSessionOrder);
+    if (ids.length === 0) return;
+    const index = switcherStart(ids, shownSessionId, direction);
+    const active = document.activeElement;
+    setSwitcher({
+      ids,
+      index,
+      ...(context.held ? { held: context.held } : {}),
+      returnFocus:
+        active instanceof HTMLElement && active !== document.body
+          ? active
+          : null,
+    });
+  };
+  // Functional: a held Tab repeats faster than the window renders. Tab,
+  // ⇧Tab and the arrows all step over the live rows.
+  const moveSessionSwitcher = (direction: 1 | -1) =>
+    setSwitcher((open) =>
+      open ? moveSwitcher(open, liveSessionIds.current, direction) : open,
+    );
+  useCommand("session.switch", {
+    enabled: (context) =>
+      Boolean(switcher) ||
+      (maySwitchSession(context) && sidebarSessionOrder.length > 0),
+    run: (context) => stepSessionSwitcher(context, 1),
+  });
+  useCommand("session.switchBack", {
+    enabled: (context) =>
+      Boolean(switcher) ||
+      (maySwitchSession(context) && sidebarSessionOrder.length > 0),
+    run: (context) => stepSessionSwitcher(context, -1),
+  });
+  const switcherRows = (switcher?.ids ?? []).flatMap((id): SwitcherRow[] => {
+    const session = sessionsByIdForKeys.get(id);
+    if (!session || !liveSessionIds.current.has(id)) return [];
+    const status = statusViewFor(session);
+    const workspaceName = workspaceNames.get(session.workspaceId);
+    return [
+      {
+        id,
+        title: sessionName(session),
+        ...(workspaceName ? { subtitle: workspaceName } : {}),
+        status: {
+          tone: status.tone,
+          attention: status.attention,
+          label: status.attention ? `${status.label}, needs you` : status.label,
+        },
+      },
+    ];
+  });
+  const closeSwitcher = (open?: string) => {
+    const back = switcher?.returnFocus;
+    setSwitcher(undefined);
+    if (open) {
+      goToSession(open);
+      return;
+    }
+    if (back?.isConnected) back.focus({ preventScroll: true });
+  };
+
+  // ---- ⌘K: the palette ----
+  // The palette is opened with the context focus was in, which decides the
+  // commands it lists and the item it shows first; the context is kept and
+  // every row runs in it, after focus has gone back there.
+  const [palette, setPalette] = useState<{
+    context: CommandContext;
+    startInActions: boolean;
+  }>();
+  const [recentRows, setRecentRows] = useState(() => loadRecent());
+  const [shortcutsAreas, setShortcutsAreas] =
+    useState<readonly CommandArea[]>();
+  // A dialog or the palette opening on top ends the switcher.
+  useEffect(() => {
+    if (palette || modal || shortcutsAreas) setSwitcher(undefined);
+  }, [palette, modal, shortcutsAreas]);
+  // Kept as the palette's own context: it is what runs the rows.
+  const openPalette = (context: CommandContext, startInActions = false) =>
+    setPalette({ context: { ...context, source: "palette" }, startInActions });
+  useCommand("palette.open", { run: (context) => openPalette(context) });
+  useCommand("help.shortcuts", {
+    run: (context) => setShortcutsAreas(context.areas),
+  });
+  // A board card has no menu of its own: ⇧F10 there opens the palette on
+  // the card's Actions panel.
+  useCommand("item.menu", {
+    enabled: (context) =>
+      Boolean(
+        context.target?.closest(".board-card[data-task-id]") &&
+        itemActionsFor(context.target),
+      ),
+    run: (context) => openPalette(context, true),
+  });
+  /** A session's actions: its menu's, as one list. */
+  const sessionActionsOf = (id: string): ItemActions | undefined => {
+    const session = sessionsByIdForKeys.get(id);
+    return session
+      ? {
+          title: sessionName(session),
+          actions: sessionItemActions(sessionMenuModel(session)),
+          ref: { kind: "session", id },
+        }
+      : undefined;
+  };
+  /** A workspace's actions: its menu's, and starting something in it. */
+  const workspaceActionsOf = (id: string): ItemActions | undefined => {
+    const item = activeWorkspaces.find((entry) => entry.id === id);
+    return item
+      ? {
+          title: item.name,
+          actions: [
+            {
+              id: "new-session",
+              label: "New session…",
+              disabled:
+                !item.available ||
+                !snapshot?.settings.tmuxAvailable ||
+                workspaceMoving(item),
+              run: () => openSessionModal(undefined, item),
+            },
+            {
+              id: "board",
+              label: "Open board",
+              run: () => enterWorkspace(item.id, "board"),
+            },
+            ...workspaceItemActions({
+              actions: workspaceMenuActions(item),
+              onRename: () => void renameWorkspace(item),
+            }),
+          ],
+          ref: { kind: "workspace", id },
+        }
+      : undefined;
+  };
+  const setTaskStatus = (task: TaskDto, status: TaskStatus) =>
+    void perform(client.request.taskSetStatus({ id: task.id, status }));
+  /**
+   * Start, Start with… and Refine for a task whose board is not on screen,
+   * worked out as its card would (`taskActions` over its own workspace):
+   * only when it can start, asking about unfinished dependencies, and
+   * waiting while a Start is in flight.
+   */
+  const fallbackStartActions = (task: TaskDto): ItemAction[] => {
+    const sessions = agents.filter(
+      (item) => item.workspaceId === task.workspaceId,
+    );
+    const sessionIds = new Set(sessions.map((item) => item.id));
+    const inputs = {
+      sessions,
+      activity: activityById,
+      attention: attentionById,
+      worktrees: (snapshot?.worktrees ?? []).filter((item) =>
+        sessionIds.has(item.sessionId),
+      ),
+    };
+    const actions = taskActions(task, laneFor(task, inputs), {
+      ...inputs,
+      launches: sessionLaunches.filter(
+        (item) => item.workspaceId === task.workspaceId,
+      ),
+      availableProviders: availableBoardProviders,
+      tasksById: new Map(
+        (snapshot?.tasks ?? [])
+          .filter((item) => item.workspaceId === task.workspaceId)
+          .map((item) => [item.id, item]),
+      ),
+    });
+    return startItemActions(task, actions, {
+      tmuxAvailable: Boolean(snapshot?.settings.tmuxAvailable),
+      confirmStart: confirmStartDespite,
+      onStart: (item) => void startTaskSession(item),
+      onStartWith: (item) => openSessionModal(item),
+      onDraftBrief: (item) => void startTaskSession(item, { draftBrief: true }),
+    });
+  };
+  /**
+   * A task's actions: its board card's when its board is on screen (see
+   * `BoardView`), else starting it and opening it; then setting its status.
+   */
+  const taskActionsOf = (task: TaskDto): ItemAction[] => {
+    const card =
+      itemActionsById({ kind: "task", id: task.id })?.actions ??
+      fallbackStartActions(task);
+    return [
+      ...card,
+      ...TASK_STATUSES.filter((status) => status !== task.status).map(
+        (status) => ({
+          id: `status-${status}`,
+          label: `Set status: ${TASK_STATUS_LABEL[status]}`,
+          disabled: busy,
+          run: () => setTaskStatus(task, status),
+        }),
+      ),
+    ];
+  };
+  // The sidebar's focused item, for the palette to show first.
+  useItemActions((element) => {
+    if (!element.closest('[data-area="sidebar"]')) return undefined;
+    const node =
+      element.closest<HTMLElement>("[data-tree-id]") ??
+      element
+        .closest(".workspace-card, .session-card")
+        ?.querySelector<HTMLElement>("[data-tree-id]");
+    const id = node?.dataset.treeId ?? "";
+    if (id.startsWith("s:")) return sessionActionsOf(id.slice(2));
+    if (id.startsWith("w:")) return workspaceActionsOf(id.slice(2));
+    return undefined;
+  });
+  /**
+   * Every row the palette offers, for the context it was opened in. Built
+   * when it opens and again when the snapshot changes while it is open, so
+   * a status and an item's actions stay current; rows keep their keys, so
+   * the highlighted one stays highlighted. The focused item is resolved
+   * afresh each time, and is gone once it has left the page.
+   */
+  const paletteContent = (
+    context: CommandContext,
+  ): { selectedKey?: string; rows: PaletteRow[] } => {
+    const target = context.target;
+    const item = target?.isConnected ? itemActionsFor(target) : undefined;
+    // Going somewhere waits, as the keys that leave the page do, while text
+    // is typed outside a terminal or a brief is being edited.
+    const stay = mayLeavePage(context)
+      ? undefined
+      : editingTask
+        ? "Save or cancel the brief first"
+        : "Leave the field you are typing in first";
+    // Its Actions panel goes too: it offers the same ways off the page
+    // (Open board, Start) and the item's own menu, which can wait.
+    const place = (row: PaletteRow): PaletteRow => {
+      if (!stay) return row;
+      const { actions: _held, ...rest } = row;
+      return {
+        ...rest,
+        disabled: true,
+        subtitle: [row.subtitle, stay].filter(Boolean).join(" · "),
+      };
+    };
+    // A focused file is not a search result of its own: it gets a row.
+    const file: PaletteRow[] =
+      item?.ref?.kind === "file"
+        ? (() => {
+            const primary =
+              item.actions.find((action) => action.id === "open") ??
+              item.actions[0];
+            return primary
+              ? [
+                  place({
+                    key: `file:${item.ref.id}`,
+                    kind: "file",
+                    title: item.title,
+                    subtitle: item.ref.id,
+                    primary: primary.label,
+                    run: primary.run,
+                    actions: () => item.actions,
+                  }),
+                ]
+              : [];
+          })()
+        : [];
+    const rows: PaletteRow[] = [
+      ...file,
+      ...sidebarSessionOrder.flatMap((id): PaletteRow[] => {
+        const session = sessionsByIdForKeys.get(id);
+        if (!session) return [];
+        const status = statusViewFor(session);
+        const workspaceName = workspaceNames.get(session.workspaceId) ?? "";
+        return [
+          place({
+            key: `session:${id}`,
+            kind: "session",
+            title: sessionName(session),
+            subtitle: [
+              workspaceName,
+              status.attention ? `${status.label} · needs you` : status.label,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            status: { tone: status.tone, attention: status.attention },
+            primary: "Open Session",
+            run: () => goToSession(id),
+            actions: () => sessionActionsOf(id)?.actions ?? [],
+          }),
+        ];
+      }),
+      ...(snapshot?.tasks ?? [])
+        .filter((task) => activeWorkspaceIds.has(task.workspaceId))
+        .sort(
+          (a, b) =>
+            Number(a.status === "done" || a.status === "cancelled") -
+              Number(b.status === "done" || b.status === "cancelled") ||
+            b.number - a.number,
+        )
+        .map((task) =>
+          place({
+            key: `task:${task.id}`,
+            kind: "task",
+            title: `#${task.number} ${task.title}`,
+            subtitle: [
+              workspaceNames.get(task.workspaceId),
+              TASK_STATUS_LABEL[task.status],
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            primary: "Open Task",
+            run: () => openTask(task.id, task.workspaceId),
+            actions: () => taskActionsOf(task),
+          }),
+        ),
+      ...orderedWorkspaces.map((item) =>
+        place({
+          key: `workspace:${item.id}`,
+          kind: "workspace",
+          title: item.name,
+          ...(item.id === workspaceId ? { subtitle: "Current" } : {}),
+          primary: "Select Workspace",
+          run: () => selectWorkspace(item.id, { focusSession: true }),
+          actions: () => workspaceActionsOf(item.id)?.actions ?? [],
+        }),
+      ),
+      ...allCommands()
+        .filter(
+          (command) =>
+            !PALETTE_HIDDEN_COMMANDS.has(command.id) &&
+            isCommandEnabled(command.id, context),
+        )
+        .map((command): PaletteRow => {
+          const isView = command.id.startsWith("view.");
+          return {
+            key: `command:${command.id}`,
+            kind: isView ? "view" : "action",
+            title: command.title.replace(/…$/, ""),
+            keywords: command.group,
+            ...(command.keys[0]
+              ? { shortcut: formatKeyGlyphs(command.keys[0]) }
+              : {}),
+            primary: isView ? "Show View" : "Run Command",
+            run: () => void runCommand(command.id, context),
+          };
+        }),
+      ...SETTINGS_SECTIONS.filter((entry) => entry.id !== "remote").map(
+        (entry): PaletteRow => ({
+          key: `setting:${entry.id}`,
+          kind: "setting",
+          title: `${entry.label} Settings`,
+          keywords: "preferences",
+          primary: "Open Settings",
+          run: () => {
+            setSettingsSection(entry.id);
+            setModal("settings");
+          },
+        }),
+      ),
+    ];
+    const ref = item?.ref;
+    const selectedKey = ref ? `${ref.kind}:${ref.id}` : undefined;
+    return {
+      rows,
+      ...(selectedKey && rows.some((row) => row.key === selectedKey)
+        ? { selectedKey }
+        : {}),
+    };
+  };
+  // Rebuilt when the palette opens and when the snapshot moves, not on every
+  // render, so typing in it does not re-rank everything for nothing.
+  const paletteShown = useMemo(
+    () => (palette ? paletteContent(palette.context) : undefined),
+    // `paletteContent` reads the snapshot and the state derived from it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [palette, snapshot, editingTask],
+  );
+  // The sessions shown lately rank a little higher; read when it opens.
+  const paletteBoost = useMemo(
+    () =>
+      palette
+        ? sessionMru.current
+            // The session on screen would otherwise top every search.
+            .filter((id) => id !== shownSessionId)
+            .slice(0, 8)
+            .map((id) => `session:${id}`)
+        : [],
+    [palette],
+  );
+  /**
+   * Closes the palette, puts focus back where it was, and then runs the
+   * row there, so a command acts on what had focus, as its key would.
+   */
+  const closePaletteFor = (key: string, run: () => void) => {
+    const target = palette?.context.target;
+    flushSync(() => setPalette(undefined));
+    if (
+      (!document.activeElement || document.activeElement === document.body) &&
+      target instanceof HTMLElement &&
+      target.isConnected
+    )
+      target.focus({ preventScroll: true });
+    // A focused file's row is only there while the file has focus.
+    if (!key.startsWith("file:")) {
+      const next = recordRecent(recentRows, key);
+      setRecentRows(next);
+      saveRecent(next);
+    }
+    run();
+  };
+  // The side panel's tabs, opened (and unfolded).
+  const showPanelTab = (tab: SidePanelTab) => {
+    if (view === "world") setView(lastWorkspaceView.current);
+    if (workspacePanelCollapsed) toggleBoardDetailPanel();
+    setPanelTab(tab);
+  };
+  useCommand("panel.files", {
+    enabled: () => Boolean(workspaceId),
+    run: () => showPanelTab("files"),
+  });
+  useCommand("panel.repositories", {
+    enabled: () => Boolean(workspaceId),
+    run: () => showPanelTab("git"),
+  });
+  useCommand("panel.tasks", {
+    enabled: () => Boolean(workspaceId),
+    run: () => showPanelTab("tasks"),
+  });
+
+  /**
+   * After a task page closes (Escape, its close button, Delete), focus goes
+   * to the task's card when it is on screen, else to the center's default,
+   * so it is never dropped to the page. Only when it was on the page.
+   */
+  const focusAfterTaskClose = (taskId?: string) => {
+    const active = document.activeElement;
+    const fromPage =
+      !active ||
+      active === document.body ||
+      Boolean(active.closest(".task-page, .task-panel"));
+    if (!fromPage) return;
+    focusWhenReady(
+      () =>
+        document.querySelector(".task-page")
+          ? undefined
+          : ((taskId
+              ? document.querySelector<HTMLElement>(
+                  `.board-card[data-task-id="${CSS.escape(taskId)}"]`,
+                )
+              : null) ??
+            areaDefault("center") ??
+            areaDefault("sidebar")),
+      { frames: 20 },
+    );
+  };
+
+  // At start, the selected sidebar item takes focus so the first key goes
+  // somewhere. A restored session or terminal does not take the caret.
+  const startFocused = useRef(false);
+  useEffect(() => {
+    if (startFocused.current || !snapshotLoaded) return;
+    startFocused.current = true;
+    focusWhenReady(
+      () =>
+        !document.activeElement || document.activeElement === document.body
+          ? (areaDefault("sidebar") ?? undefined)
+          : undefined,
+      { frames: 10 },
+    );
+  }, [snapshotLoaded]);
 
   const taskInspector = !selectedTask ? (
     <div className="empty large">
@@ -6044,6 +7461,7 @@ export function WorkspaceApp({
 
   async function deleteTask(task: TaskDto) {
     await perform(client.request.taskRemove({ id: task.id, force: true }));
+    focusAfterTaskClose();
     setSelectedTaskId(undefined);
   }
 
@@ -6327,20 +7745,26 @@ export function WorkspaceApp({
 
   const taskPage =
     workspace && selectedTask ? (
-      <div aria-label={`Task #${selectedTask.number}`} className="task-page">
+      <div
+        aria-label={`Task #${selectedTask.number}`}
+        className="task-page"
+        // Opening a task from a key or the new-task dialog focuses its page.
+        tabIndex={-1}
+      >
         <div className="task-page-heading">
           <span className="eyebrow">
             {workspace.name} · Task #{selectedTask.number}
           </span>
-          <button
-            aria-label="Close task"
-            className="quiet task-drawer-close"
-            onClick={closeTaskDrawer}
-            title="Close (Esc)"
-            type="button"
-          >
-            <DismissIcon />
-          </button>
+          <Tooltip keys="escape" label="Close">
+            <button
+              aria-label="Close task"
+              className="quiet task-drawer-close"
+              onClick={closeTaskDrawer}
+              type="button"
+            >
+              <DismissIcon />
+            </button>
+          </Tooltip>
         </div>
         {taskInspector}
       </div>
@@ -6348,6 +7772,12 @@ export function WorkspaceApp({
       <div className="empty large">
         <strong>No task open</strong>
         <span>Pick one in the side panel&apos;s Tasks tab.</span>
+        <KeyHints
+          hints={[
+            { command: "palette.open", label: "to do anything" },
+            { command: "task.new", label: "new task" },
+          ]}
+        />
       </div>
     );
 
@@ -6364,13 +7794,15 @@ export function WorkspaceApp({
           : "Start a session, or open one from the left."}
       </span>
       <span className="center-empty-actions">
-        <button
-          disabled={!workspace.available || !snapshot?.settings.tmuxAvailable}
-          onClick={() => openSessionModal(undefined, workspace)}
-          type="button"
-        >
-          New session
-        </button>
+        <Tooltip command="session.new" label="New session">
+          <button
+            disabled={!workspace.available || !snapshot?.settings.tmuxAvailable}
+            onClick={() => openSessionModal(undefined, workspace)}
+            type="button"
+          >
+            New session
+          </button>
+        </Tooltip>
         {/* The Repositories tab comes to the front, so what is added shows
           at once instead of behind the Files explorer. */}
         <button
@@ -6384,6 +7816,12 @@ export function WorkspaceApp({
           Add repository
         </button>
       </span>
+      <KeyHints
+        hints={[
+          { command: "palette.open", label: "to do anything" },
+          { command: "session.new", label: "new session" },
+        ]}
+      />
     </div>
   ) : null;
 
@@ -6427,8 +7865,11 @@ export function WorkspaceApp({
               toast.workspaceId ??
               snapshot?.agents.find((item) => item.id === toast.sessionId)
                 ?.workspaceId;
+            // A toast shows its session but does not take the caret.
             if (toast.sessionId && sessionWorkspaceId)
-              showSession(toast.sessionId, sessionWorkspaceId);
+              showSession(toast.sessionId, sessionWorkspaceId, {
+                focus: false,
+              });
             else if (toast.workspaceId) selectWorkspace(toast.workspaceId);
           }}
           toasts={snapshot?.toasts ?? []}
@@ -6455,7 +7896,12 @@ export function WorkspaceApp({
         <div
           className={`workspace-shell mode-${view} ${workspacePanelVisible ? "has-workspace-panel" : ""}`}
         >
-          <aside className="workspace-column" ref={workspaceColumnRef}>
+          <aside
+            aria-label="Sidebar"
+            className="workspace-column"
+            data-area="sidebar"
+            ref={workspaceColumnRef}
+          >
             {/* The brand heads the left column, as the top bar it came from
               is gone. */}
             <div className="brand workspace-column-brand">
@@ -6510,13 +7956,14 @@ export function WorkspaceApp({
                         : "Expand all session lists"
                     }
                     className="quiet workspace-heading-action workspace-fold-all"
-                    onClick={() =>
+                    onClick={() => {
+                      if (anyWorkspaceExpanded) focusOutOfFoldedSessions();
                       setCollapsedWorkspaceIds(
                         anyWorkspaceExpanded
                           ? new Set(activeWorkspaces.map((item) => item.id))
                           : new Set(),
-                      )
-                    }
+                      );
+                    }}
                     title={
                       anyWorkspaceExpanded
                         ? "Collapse all session lists"
@@ -6548,6 +7995,10 @@ export function WorkspaceApp({
               aria-label="Workspaces"
               className="item-list"
               data-reordering={workspaceReorder.draggingId ? "true" : undefined}
+              onKeyDown={onSidebarTreeKeyDown}
+              // A tree only while it has items; the loading and empty states
+              // are not part of one.
+              role={orderedWorkspaces.length > 0 ? "tree" : undefined}
             >
               {!snapshot && !error && (
                 <div className="empty">Loading workspaces…</div>
@@ -6566,6 +8017,12 @@ export function WorkspaceApp({
                   <button onClick={() => setModal("workspace")} type="button">
                     Create workspace
                   </button>
+                  <KeyHints
+                    hints={[
+                      { command: "palette.open", label: "to do anything" },
+                      { command: "app.settings", label: "settings" },
+                    ]}
+                  />
                 </div>
               )}
               {orderedWorkspaces.map((item) => {
@@ -6589,6 +8046,15 @@ export function WorkspaceApp({
                 const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
                 const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need you`;
                 const sessionList = renderWorkspaceSessions(item);
+                // What the status rows under the card offer, also in its menu,
+                // so the sidebar tree stays one Tab stop.
+                const {
+                  moveEntry,
+                  cancelMove,
+                  dismissMoveError,
+                  dismissMoveNotice,
+                  dismissCloudNotice,
+                } = workspaceStatusHandlers(item);
                 const expanded = !collapsedWorkspaceIds.has(item.id);
 
                 return (
@@ -6624,7 +8090,9 @@ export function WorkspaceApp({
                         className="quiet workspace-disclosure"
                         data-no-drag
                         disabled={!sessionList}
-                        onClick={() => setWorkspaceCollapsed(item.id, expanded)}
+                        onClick={() => foldWorkspace(item.id, expanded)}
+                        // → and ← on the item fold it from the keyboard.
+                        tabIndex={-1}
                         title={
                           sessionList
                             ? `${expanded ? "Hide" : "Show"} sessions`
@@ -6637,8 +8105,28 @@ export function WorkspaceApp({
                         </svg>
                       </button>
                       <button
+                        {...treeItemProps(`w:${item.id}`)}
+                        aria-current={
+                          item.id === workspaceId ? "true" : undefined
+                        }
+                        aria-expanded={sessionList ? expanded : undefined}
+                        aria-level={1}
+                        // Its sessions' group sits beside it in the markup.
+                        aria-owns={
+                          expanded && sessionList
+                            ? `workspace-sessions-${item.id}`
+                            : undefined
+                        }
                         className="workspace-item"
-                        onClick={() => selectWorkspace(item.id)}
+                        data-tree-label={item.name}
+                        // Enter or Space (a click with no pointer, detail 0)
+                        // is a keyboard open, which may take the caret to its
+                        // last session; a mouse click leaves focus alone.
+                        onClick={(event) =>
+                          selectWorkspace(item.id, {
+                            focusSession: event.detail === 0,
+                          })
+                        }
                         onKeyDown={(event) => {
                           if (!event.altKey) return;
                           const direction =
@@ -6723,6 +8211,7 @@ export function WorkspaceApp({
                             aria-label={`Open ${item.name} in integrated terminal`}
                             className="session-card-action workspace-terminal-action"
                             disabled={!item.available || busy}
+                            tabIndex={-1}
                             onClick={() => void createIntegratedTerminal(item)}
                             title="Open in integrated terminal"
                             type="button"
@@ -6735,6 +8224,7 @@ export function WorkspaceApp({
                             aria-label={`Secrets of ${item.name}`}
                             className="session-card-action workspace-secrets-action"
                             disabled={busy}
+                            tabIndex={-1}
                             onClick={() => setSecretsWorkspace(item)}
                             title="Secrets"
                             type="button"
@@ -6748,6 +8238,7 @@ export function WorkspaceApp({
                             armedTitle="All its sessions stop and move to their archived list. The workspace and its sessions can be restored later."
                             className="session-card-action workspace-card-archive"
                             disabled={busy}
+                            tabIndex={-1}
                             onConfirm={() => void archiveWorkspace(item)}
                             title="Archive workspace"
                           >
@@ -6757,83 +8248,25 @@ export function WorkspaceApp({
                         {workspaceCloudAction(item)}
                         {/* Settings and the + always show, so the pinned
                           ones that come in on hover open to their left. */}
-                        <button
-                          aria-label={`Create session in ${item.name}`}
-                          className="session-card-action workspace-session-create"
-                          disabled={
-                            !item.available ||
-                            !snapshot?.settings.tmuxAvailable ||
-                            workspaceMoving(item)
-                          }
-                          onClick={() => openSessionModal(undefined, item)}
-                          title="New session"
-                          type="button"
-                        >
-                          +
-                        </button>
+                        {/* ⌘N, on the selected workspace. */}
+                        <Tooltip command="session.new" label="New session">
+                          <button
+                            aria-label={`Create session in ${item.name}`}
+                            className="session-card-action workspace-session-create"
+                            disabled={
+                              !item.available ||
+                              !snapshot?.settings.tmuxAvailable ||
+                              workspaceMoving(item)
+                            }
+                            onClick={() => openSessionModal(undefined, item)}
+                            tabIndex={-1}
+                            type="button"
+                          >
+                            +
+                          </button>
+                        </Tooltip>
                         <WorkspaceMenu
-                          actions={[
-                            {
-                              id: "terminal",
-                              icon: <SessionLaunchIcon />,
-                              label: "Open in terminal",
-                              pinned: pins.workspace.has("terminal"),
-                              onPin: (on) => pin("workspace", "terminal", on),
-                              disabled: !item.available || busy,
-                              run: () => void createIntegratedTerminal(item),
-                            },
-                            {
-                              id: "secrets",
-                              icon: <KeyIcon />,
-                              label: "Secrets",
-                              pinned: pins.workspace.has("secrets"),
-                              onPin: (on) => pin("workspace", "secrets", on),
-                              disabled: busy,
-                              run: () => setSecretsWorkspace(item),
-                            },
-                            ...(item.place === "cloud" ||
-                            cloudState.data?.signedIn
-                              ? [
-                                  {
-                                    id: "cloud",
-                                    icon: (
-                                      <CloudActionIcon
-                                        home={item.place === "cloud"}
-                                      />
-                                    ),
-                                    label:
-                                      item.place === "cloud"
-                                        ? "Move to this Mac"
-                                        : "Move to cloud",
-                                    pinned: pins.workspace.has("cloud"),
-                                    onPin: (on: boolean) =>
-                                      pin("workspace", "cloud", on),
-                                    disabled:
-                                      workspaceMoving(item) ||
-                                      !cloudState.data?.signedIn ||
-                                      !item.available,
-                                    run: () =>
-                                      void moveWorkspace(
-                                        item,
-                                        item.place === "cloud"
-                                          ? "mac"
-                                          : "cloud",
-                                      ),
-                                  },
-                                ]
-                              : []),
-                            {
-                              id: "archive",
-                              icon: <ArchiveIcon />,
-                              label: "Archive workspace",
-                              pinned: pins.workspace.has("archive"),
-                              onPin: (on) => pin("workspace", "archive", on),
-                              disabled: busy,
-                              confirm:
-                                "All its sessions stop and move to their archived list. The workspace and its sessions can be restored later.",
-                              run: () => void archiveWorkspace(item),
-                            },
-                          ]}
+                          actions={workspaceMenuActions(item)}
                           autoRebirth={item.autoRebirthPercent}
                           inheritedRebirth={
                             snapshot?.settings.autoRebirthPercent ?? null
@@ -6843,6 +8276,8 @@ export function WorkspaceApp({
                             void updateWorkspace(item, { autoRebirthPercent })
                           }
                           onRename={() => void renameWorkspace(item)}
+                          returnFocus={() => void focusTreeItem(`w:${item.id}`)}
+                          triggerTabIndex={-1}
                           cloud={
                             cloudState.data?.signedIn &&
                             cloudByWorkspace.get(item.id)
@@ -6875,54 +8310,33 @@ export function WorkspaceApp({
                         <>
                           {move ? (
                             <WorkspaceMoveState
+                              buttonTabIndex={-1}
                               move={move}
                               name={item.name}
-                              onCancel={() =>
-                                void workspaceMoveActions.run(
-                                  client.request.workspaceMoveCancel({
-                                    reference: item.id,
-                                  }),
-                                  `cancel:${item.id}`,
-                                )
-                              }
+                              onCancel={cancelMove}
                               onDismiss={() => undefined}
                             />
                           ) : !move && moveError ? (
                             <WorkspaceMoveState
+                              buttonTabIndex={-1}
                               error={moveError}
                               name={item.name}
                               onCancel={() => undefined}
-                              onDismiss={() =>
-                                setMoveErrors(
-                                  ({ [item.id]: _gone, ...rest }) => rest,
-                                )
-                              }
+                              onDismiss={dismissMoveError}
                             />
                           ) : null}
                           {move?.phase === "moved" && move.notice && (
                             <WorkspaceNotice
-                              onDismiss={() =>
-                                void workspaceMoveActions.run(
-                                  client.request.workspaceMoveDismiss({
-                                    reference: item.id,
-                                  }),
-                                  `notice:${item.id}`,
-                                )
-                              }
+                              buttonTabIndex={-1}
+                              onDismiss={dismissMoveNotice}
                               testId="workspace-move-notice"
                               text={move.notice}
                             />
                           )}
                           {item.cloudNotice && (
                             <WorkspaceNotice
-                              onDismiss={() =>
-                                void workspaceMoveActions.run(
-                                  client.request.workspaceNoticeDismiss({
-                                    reference: item.id,
-                                  }),
-                                  `notice:${item.id}`,
-                                )
-                              }
+                              buttonTabIndex={-1}
+                              onDismiss={dismissCloudNotice}
                               testId="workspace-cloud-notice"
                               text={item.cloudNotice}
                             />
@@ -6930,11 +8344,7 @@ export function WorkspaceApp({
                         </>
                       );
                     })()}
-                    {expanded && sessionList && (
-                      <div id={`workspace-sessions-${item.id}`}>
-                        {sessionList}
-                      </div>
-                    )}
+                    {expanded && sessionList}
                   </div>
                 );
               })}
@@ -6986,7 +8396,9 @@ export function WorkspaceApp({
           />
 
           <section
+            aria-label="Main"
             className={`workspace-main workspace-content-column ${view === "world" ? "world-column" : "center-column"}`}
+            data-area="center"
           >
             {!workspace ? (
               <div className="empty large">
@@ -7111,12 +8523,12 @@ export function WorkspaceApp({
                     (item) => item.id === terminalId,
                   );
                   return terminal ? (
-                    <TerminalSurface
+                    <CenterTerminalSurface
                       terminalEndpoint={terminalEndpoint}
-                      focused
                       fitRevision={terminalFitRevision}
                       id={terminal.id}
-                      key={`${terminal.id}:${terminalMountRevision}`}
+                      key={terminal.id}
+                      mountRevision={terminalMountRevision}
                       label={terminal.name}
                       onCopy={copyTerminalText}
                       onOpenLink={openTerminalLink}
@@ -7176,28 +8588,34 @@ export function WorkspaceApp({
             >
               {/* The panel's edge is its handle: drag to resize, click the tab
                 to fold it to a rail and back. */}
-              <button
-                aria-expanded={!workspacePanelCollapsed}
-                aria-label={
-                  workspacePanelCollapsed
-                    ? "Expand workspace panel"
-                    : "Collapse workspace panel"
-                }
-                className="panel-edge-toggle"
-                onClick={toggleBoardDetailPanel}
-                onDoubleClick={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-                title={`${workspacePanelCollapsed ? "Expand" : "Collapse"} workspace panel (⌥⌘B)`}
-                type="button"
+              <Tooltip
+                command="panel.toggleWorkspacePanel"
+                label={`${workspacePanelCollapsed ? "Open" : "Close"} side panel`}
               >
-                <svg aria-hidden="true" viewBox="0 0 8 14">
-                  <path
-                    d={
-                      workspacePanelCollapsed ? "M6 1 1 7l5 6" : "M2 1l5 6-5 6"
-                    }
-                  />
-                </svg>
-              </button>
+                <button
+                  aria-expanded={!workspacePanelCollapsed}
+                  aria-label={
+                    workspacePanelCollapsed
+                      ? "Expand workspace panel"
+                      : "Collapse workspace panel"
+                  }
+                  className="panel-edge-toggle"
+                  onClick={toggleBoardDetailPanel}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  type="button"
+                >
+                  <svg aria-hidden="true" viewBox="0 0 8 14">
+                    <path
+                      d={
+                        workspacePanelCollapsed
+                          ? "M6 1 1 7l5 6"
+                          : "M2 1l5 6-5 6"
+                      }
+                    />
+                  </svg>
+                </button>
+              </Tooltip>
             </div>
           )}
 
@@ -7207,24 +8625,30 @@ export function WorkspaceApp({
             <aside
               aria-label="Workspace panel"
               className={`board-detail-column side-panel ${workspacePanelCollapsed ? "panel-compact" : ""}`}
+              data-area="right-panel"
             >
               <div
                 aria-label="Workspace panel"
                 className="side-panel-tabs"
+                // Focus moves on the arrows; Enter or Space opens, since a
+                // click on the open tab folds the panel.
+                onKeyDown={(event) => onTabListKeyDown(event)}
                 role="tablist"
               >
-                {(
-                  [
-                    ["files", "Files"],
-                    ["git", "Repositories"],
-                    ["tasks", "Tasks"],
-                  ] as const
-                ).map(([tab, label]) => (
+                {SIDE_PANEL_TABS.map(([tab, label], index) => (
                   <button
                     aria-label={label}
                     aria-selected={!workspacePanelCollapsed && panelTab === tab}
                     className="side-panel-tab"
                     key={tab}
+                    tabIndex={rovingTabIndex(
+                      index,
+                      workspacePanelCollapsed
+                        ? -1
+                        : SIDE_PANEL_TABS.findIndex(
+                            ([item]) => item === panelTab,
+                          ),
+                    )}
                     onClick={() => {
                       if (workspacePanelCollapsed) toggleBoardDetailPanel();
                       else if (panelTab === tab) {
@@ -7369,6 +8793,8 @@ export function WorkspaceApp({
         <section
           aria-label="Integrated terminal"
           className={`integrated-terminal-panel ${terminalPanelOpen ? "open" : "collapsed"}`}
+          data-area="terminal-panel"
+          // Folded, it is a bar: ⌃` opens it.
         >
           {terminalPanelOpen && (
             <div
@@ -7401,62 +8827,83 @@ export function WorkspaceApp({
             />
           )}
           <div className="integrated-terminal-header">
-            <button
-              aria-label={
-                appUpdate?.state === "available"
-                  ? `Open settings. Daedalus ${appUpdate.version} is available`
-                  : "Open settings"
-              }
-              className="quiet settings-corner-button"
-              onClick={() => {
-                // An offer opens Settings on About, where its button is.
-                if (appUpdate?.state === "available")
-                  setSettingsSection("about");
-                setModal("settings");
-              }}
-              title={
+            <Tooltip
+              command="app.settings"
+              label={
                 appUpdate?.state === "available"
                   ? `Settings · Daedalus ${appUpdate.version} is available`
                   : "Settings"
               }
-              type="button"
             >
-              <SettingsIcon />
-              {appUpdate?.state === "available" ? (
-                <span aria-hidden="true" className="update-dot" />
-              ) : undefined}
-            </button>
-            <button
-              aria-expanded={terminalPanelOpen}
-              className="integrated-terminal-toggle"
-              onClick={() => setTerminalPanelOpen((current) => !current)}
-              type="button"
+              <button
+                aria-label={
+                  appUpdate?.state === "available"
+                    ? `Open settings. Daedalus ${appUpdate.version} is available`
+                    : "Open settings"
+                }
+                className="quiet settings-corner-button"
+                onClick={() => {
+                  // An offer opens Settings on About, where its button is.
+                  if (appUpdate?.state === "available")
+                    setSettingsSection("about");
+                  setModal("settings");
+                }}
+                type="button"
+              >
+                <SettingsIcon />
+                {appUpdate?.state === "available" ? (
+                  <span aria-hidden="true" className="update-dot" />
+                ) : undefined}
+              </button>
+            </Tooltip>
+            <Tooltip
+              command="terminal.toggle"
+              label={
+                terminalPanelOpen
+                  ? "Hide the integrated terminal"
+                  : "Show the integrated terminal"
+              }
             >
-              <SessionLaunchIcon />
-              <strong>Terminal</strong>
-              <span className="count-badge">{integratedTerminals.length}</span>
-            </button>
+              <button
+                aria-expanded={terminalPanelOpen}
+                className="integrated-terminal-toggle"
+                onClick={() => setTerminalPanelOpen((current) => !current)}
+                type="button"
+              >
+                <SessionLaunchIcon />
+                <strong>Terminal</strong>
+                <span className="count-badge">
+                  {integratedTerminals.length}
+                </span>
+              </button>
+            </Tooltip>
             {/* The bar the app had at the top is gone (Orca has none); the
                 World, every workspace at once, lives here beside Terminal. */}
-            <button
-              aria-pressed={view === "world"}
-              className={`integrated-terminal-toggle world-toggle ${view === "world" ? "active" : ""}`}
-              disabled={!workspace}
-              onClick={() =>
-                setView(view === "world" ? lastWorkspaceView.current : "world")
-              }
-              title={
+            <Tooltip
+              command="view.world"
+              label={
                 view === "world"
-                  ? "Back to the workspace (⌘4)"
-                  : "Every workspace's agents at once (⌘4)"
+                  ? "Back to the workspace"
+                  : "Every workspace's agents at once"
               }
-              type="button"
             >
-              <svg aria-hidden="true" viewBox="0 0 16 16">
-                <path d="M8 1.5h6.5v13h-13v-13H5M5 4.5h6.5v7h-7v-7M8 7.5h1v1" />
-              </svg>
-              <strong>World</strong>
-            </button>
+              <button
+                aria-pressed={view === "world"}
+                className={`integrated-terminal-toggle world-toggle ${view === "world" ? "active" : ""}`}
+                disabled={!workspace}
+                onClick={() =>
+                  setView(
+                    view === "world" ? lastWorkspaceView.current : "world",
+                  )
+                }
+                type="button"
+              >
+                <svg aria-hidden="true" viewBox="0 0 16 16">
+                  <path d="M8 1.5h6.5v13h-13v-13H5M5 4.5h6.5v7h-7v-7M8 7.5h1v1" />
+                </svg>
+                <strong>World</strong>
+              </button>
+            </Tooltip>
             {busy && <span className="syncing">Working…</span>}
             {(snapshot?.providerUsage.length ?? 0) > 0 && (
               <div className="provider-usage" aria-label="Provider usage">
@@ -7522,6 +8969,10 @@ export function WorkspaceApp({
               <button
                 aria-label="New terminal in Daedalus home"
                 className="quiet"
+                // With no terminal open, the panel's focus starts here.
+                data-area-default={
+                  integratedTerminals.length === 0 ? "" : undefined
+                }
                 disabled={busy || !snapshot?.settings.tmuxAvailable}
                 onClick={() => void createIntegratedTerminal()}
                 title={`New terminal in ${snapshot?.settings.home ?? "Daedalus home"}`}
@@ -7543,7 +8994,16 @@ export function WorkspaceApp({
             </div>
           </div>
           <div className="integrated-terminal-body">
-            <div className="integrated-terminal-stage">
+            <div
+              aria-labelledby={
+                activeIntegratedTerminal
+                  ? `integrated-terminal-tab-${activeIntegratedTerminal.id}`
+                  : undefined
+              }
+              className="integrated-terminal-stage"
+              id="integrated-terminal-stage"
+              role={activeIntegratedTerminal ? "tabpanel" : undefined}
+            >
               {activeIntegratedTerminal
                 ? integratedTerminals.map((terminal) => (
                     <IntegratedTerminalSurface
@@ -7575,20 +9035,32 @@ export function WorkspaceApp({
               <div
                 aria-label="Terminal tabs"
                 className="integrated-terminal-tabs"
+                // Arrows move focus only; Enter or Space selects. Selecting
+                // puts the caret in that terminal, which would take the next
+                // arrow key.
+                onKeyDown={(event) => onTabListKeyDown(event)}
                 role="tablist"
               >
-                {integratedTerminals.map((terminal) => (
+                {integratedTerminals.map((terminal, index) => (
                   <div
                     className={`integrated-terminal-tab ${terminal.id === activeIntegratedTerminal?.id ? "active" : ""}`}
                     key={terminal.id}
                   >
                     <button
+                      aria-controls="integrated-terminal-stage"
                       aria-label={`${terminal.name}, ${terminal.workingDirectory}`}
                       aria-selected={
                         terminal.id === activeIntegratedTerminal?.id
                       }
+                      id={`integrated-terminal-tab-${terminal.id}`}
                       onClick={() => setActiveTerminalId(terminal.id)}
                       role="tab"
+                      tabIndex={rovingTabIndex(
+                        index,
+                        integratedTerminals.findIndex(
+                          (item) => item.id === activeIntegratedTerminal?.id,
+                        ),
+                      )}
                       title={
                         terminal.revivedAt
                           ? `${terminal.workingDirectory} — reopened after a restart, scrollback not restored`
@@ -8293,6 +9765,43 @@ export function WorkspaceApp({
                 : { workspace: secretsWorkspace })}
             />
           </Modal>
+        )}
+
+        {palette && paletteShown && (
+          <CommandPalette
+            boost={paletteBoost}
+            entries={paletteShown.rows}
+            onChoose={(row) => closePaletteFor(row.key, row.run)}
+            onChooseAction={(row, action) =>
+              closePaletteFor(row.key, action.run)
+            }
+            onClose={() => setPalette(undefined)}
+            recent={recentRows}
+            selectedKey={paletteShown.selectedKey}
+            startInActions={palette.startInActions}
+            suggestions={PALETTE_SUGGESTIONS}
+          />
+        )}
+        {switcher && switcherRows.length > 0 && (
+          <SessionSwitcher
+            held={switcher.held}
+            index={Math.min(switcher.index, switcherRows.length - 1)}
+            onCancel={() => closeSwitcher()}
+            onCommit={(id) => closeSwitcher(id)}
+            onMove={moveSessionSwitcher}
+            rows={switcherRows}
+          />
+        )}
+        {shortcutsAreas && (
+          <ShortcutsSheet
+            focusedAreas={shortcutsAreas}
+            onClose={() => setShortcutsAreas(undefined)}
+            onEditShortcuts={() => {
+              setShortcutsAreas(undefined);
+              setSettingsSection("keyboard");
+              setModal("settings");
+            }}
+          />
         )}
 
         {modal === "settings" && snapshot && (

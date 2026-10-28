@@ -1412,3 +1412,46 @@ describe("cloud commands", () => {
     });
   });
 });
+
+describe("daedal keys", () => {
+  test("sets, lists and resets keybindings.json in the home", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const set = await cli(home, [
+        "keys",
+        "set",
+        "palette.open",
+        "mod+shift+p",
+      ]);
+      expect(set.exitCode).toBe(0);
+      expect(await Bun.file(join(home, "keybindings.json")).json()).toEqual({
+        "palette.open": ["mod+shift+p"],
+      });
+      expect((await cli(home, ["keys", "set", "tab.close"])).exitCode).toBe(2);
+      const unbound = await cli(home, ["keys", "unbind", "tab.close"]);
+      expect(unbound.stdout).toContain("tab.close: unbound");
+      const listed = await cli(home, ["keys", "list", "--json"]);
+      const rows = JSON.parse(listed.stdout).data.commands as {
+        id: string;
+        keys: string[];
+        changed: boolean;
+      }[];
+      expect(rows.find((row) => row.id === "palette.open")).toMatchObject({
+        keys: ["mod+shift+p"],
+        changed: true,
+      });
+      expect(rows.find((row) => row.id === "tab.close")?.keys).toEqual([]);
+      expect(
+        (await cli(home, ["keys", "set", "tab.close", "mod+c"])).exitCode,
+      ).toBe(2);
+      expect(
+        (await cli(home, ["keys", "set", "no.such", "mod+y"])).exitCode,
+      ).toBe(2);
+      await cli(home, ["keys", "reset", "tab.close"]);
+      expect(await Bun.file(join(home, "keybindings.json")).json()).toEqual({
+        "palette.open": ["mod+shift+p"],
+      });
+      await cli(home, ["keys", "reset"]);
+      expect(await Bun.file(join(home, "keybindings.json")).json()).toEqual({});
+    });
+  });
+});

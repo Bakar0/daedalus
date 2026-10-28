@@ -9,6 +9,15 @@ import { remember, remembered } from "./WorkflowPane";
 
 const HEIGHT_KEY = "daedalus.sidePanelDock.height";
 const MIN_HEIGHT = 72;
+/** How far one arrow key moves the edge, as the terminal's edge does. */
+const KEY_STEP = 24;
+
+const maxHeight = () =>
+  typeof window === "undefined"
+    ? 600
+    : Math.max(MIN_HEIGHT, window.innerHeight * 0.75);
+const clampHeight = (value: number) =>
+  Math.round(Math.min(maxHeight(), Math.max(MIN_HEIGHT, value)));
 
 export function SidePanelDock({ children }: { children: ReactNode }) {
   // Null fits the panes; a number is the height the user dragged to.
@@ -26,6 +35,9 @@ export function SidePanelDock({ children }: { children: ReactNode }) {
       <div
         aria-label="Resize workflow and custom instructions"
         aria-orientation="horizontal"
+        aria-valuemax={Math.round(maxHeight())}
+        aria-valuemin={MIN_HEIGHT}
+        aria-valuenow={height ?? undefined}
         className="side-panel-dock-edge"
         onDoubleClick={() => {
           setHeight(null);
@@ -38,19 +50,22 @@ export function SidePanelDock({ children }: { children: ReactNode }) {
             startHeight: dock.current?.getBoundingClientRect().height ?? 0,
           };
         }}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+          event.preventDefault();
+          // The edge is the dock's top, so up makes the dock taller.
+          const next = clampHeight(
+            (height ?? dock.current?.getBoundingClientRect().height ?? 0) +
+              (event.key === "ArrowUp" ? KEY_STEP : -KEY_STEP),
+          );
+          setHeight(next);
+          remember(HEIGHT_KEY, String(next));
+        }}
         onPointerMove={(event) => {
           if (!drag.current) return;
-          const limit = Math.max(MIN_HEIGHT, window.innerHeight * 0.75);
           setHeight(
-            Math.round(
-              Math.min(
-                limit,
-                Math.max(
-                  MIN_HEIGHT,
-                  drag.current.startHeight +
-                    (drag.current.startY - event.clientY),
-                ),
-              ),
+            clampHeight(
+              drag.current.startHeight + (drag.current.startY - event.clientY),
             ),
           );
         }}
@@ -59,6 +74,7 @@ export function SidePanelDock({ children }: { children: ReactNode }) {
           if (height !== null) remember(HEIGHT_KEY, String(height));
         }}
         role="separator"
+        tabIndex={0}
         title="Drag to resize; double-click to fit"
       />
       {children}

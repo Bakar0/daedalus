@@ -26,6 +26,7 @@ import {
 } from "@daedalus/protocol";
 import { AccountsPanel } from "./AccountsPanel";
 import { CloudPanel } from "./CloudPanel";
+import { KeyboardSettings } from "./KeyboardSettings";
 import type { DesktopClient } from "./client-types";
 import { AccountPanel, showsPro, useRemoteState } from "./ProPlan";
 import { RemotePanel } from "./RemotePanel";
@@ -36,6 +37,7 @@ import { APP_THEMES, type AppTheme } from "./theme";
 export const SETTINGS_SECTIONS = [
   { id: "account", label: "Account" },
   { id: "general", label: "General" },
+  { id: "keyboard", label: "Keyboard" },
   { id: "agents", label: "Agents" },
   { id: "skills", label: "Skills" },
   { id: "sessions", label: "Sessions" },
@@ -293,6 +295,13 @@ export function SettingsModal({
               }
               title="Create workspace agent guidance"
             />
+          </section>
+        ) : undefined}
+
+        {section === "keyboard" ? (
+          <section className="settings-section">
+            <h3>Keyboard shortcuts</h3>
+            <KeyboardSettings client={client} perform={perform} />
           </section>
         ) : undefined}
 

@@ -69,6 +69,11 @@ export async function removeDirectory(path: string): Promise<void> {
   await rm(path, { recursive: true, force: false });
 }
 
+/** Removes a file; one already gone is fine. */
+export async function removeFile(path: string): Promise<void> {
+  await rm(path, { force: true });
+}
+
 export async function readTextFile(path: string): Promise<string> {
   return readFile(path, "utf8");
 }

@@ -1,92 +1,135 @@
 import type { ApplicationMenuItemConfig } from "electrobun/bun";
 import {
-  CHECK_FOR_UPDATES_MENU_ACTION,
-  OPEN_WORLD_WINDOW_MENU_ACTION,
-  QUIT_MENU_ACTION,
-  SHUTDOWN_MENU_ACTION,
+  type CommandMenu,
+  type KeyOverrides,
+  type MenuCommandItem,
+  menuItemLabel,
+  menuSections,
 } from "@daedalus/protocol";
 
-export const APPLICATION_MENU: ApplicationMenuItemConfig[] = [
-  {
-    label: "Daedalus",
-    submenu: [
-      { role: "about" },
-      {
-        label: "Check for Updates…",
-        action: CHECK_FOR_UPDATES_MENU_ACTION,
-      },
-      { type: "divider" },
-      { role: "hide" },
-      { role: "hideOthers" },
-      { role: "showAll" },
-      { type: "divider" },
-      // The discoverable off switch, for people who never open a terminal.
-      // It archives every live session, closes the terminals and ends the
-      // Daedalus tmux server, which is exactly `daedal shutdown`.
-      {
-        label: "Quit and Shut Down Sessions",
-        action: SHUTDOWN_MENU_ACTION,
-        accelerator: "Command+Shift+Q",
-      },
-      // Deliberately not `{ role: "quit" }`. That is a native macOS role, so
-      // Cmd+Q would terminate the app without ever reaching our code and the
-      // user would never be told what keeps running.
-      {
-        label: "Quit Daedalus",
-        action: QUIT_MENU_ACTION,
-        accelerator: "Command+Q",
-      },
-    ],
-  },
-  {
-    label: "Edit",
-    submenu: [
-      { role: "undo" },
-      { role: "redo" },
-      { type: "divider" },
-      { role: "cut" },
-      { role: "copy" },
-      { role: "paste" },
-      { role: "pasteAndMatchStyle" },
-      { role: "delete" },
-      { role: "selectAll" },
-    ],
-  },
-  {
-    label: "View",
-    submenu: [
-      {
-        label: "Workspace",
-        action: "view-workspace",
-        accelerator: "Command+1",
-      },
-      { label: "Board", action: "view-board", accelerator: "Command+2" },
-      {
-        label: "Session",
-        action: "view-session",
-        accelerator: "Command+3",
-      },
-      { label: "World", action: "view-world", accelerator: "Command+4" },
-      {
-        label: "Open World in New Window",
-        action: OPEN_WORLD_WINDOW_MENU_ACTION,
-        accelerator: "Command+Option+4",
-      },
-      { type: "divider" },
-      {
-        label: "Toggle Integrated Terminal",
-        action: "toggle-terminal",
-        accelerator: "Control+`",
-      },
-    ],
-  },
-  {
-    label: "Window",
-    submenu: [
-      { role: "minimize" },
-      { role: "zoom" },
-      { type: "divider" },
-      { role: "bringAllToFront" },
-    ],
-  },
-];
+type Item = ApplicationMenuItemConfig;
+
+const commandItem = ({
+  id,
+  title,
+  accelerator,
+  keyLabel,
+}: MenuCommandItem): Item => ({
+  label: menuItemLabel(title, keyLabel),
+  action: id,
+  ...(accelerator ? { accelerator } : {}),
+});
+
+/**
+ * A menu's commands from the shared command table, by section number: the
+ * item's action is the command id, and its accelerator comes from the
+ * command's key, overrides applied. A `showKeyOnly` command has no
+ * accelerator (Electrobun's menu cannot show a key without taking it), so
+ * its key is written into its title and the renderer's dispatcher keeps it.
+ * A click reaches `application-menu-clicked` with that id (see `index.ts`).
+ */
+export function commandSections(
+  bar: CommandMenu,
+  overrides: KeyOverrides = {},
+): Map<number, Item[]> {
+  return new Map(
+    menuSections(bar, overrides).map(({ section, items }) => [
+      section,
+      items.map(commandItem),
+    ]),
+  );
+}
+
+/** Every section of a menu, a divider between each. */
+const divided = (sections: Map<number, Item[]>): Item[] =>
+  [...sections.values()].flatMap((section, index) =>
+    index === 0 ? section : [{ type: "divider" } as const, ...section],
+  );
+
+/** The menus the command table fills, in menu bar order. */
+const menuOf = (bar: CommandMenu, overrides: KeyOverrides): Item => ({
+  label: bar,
+  submenu: divided(commandSections(bar, overrides)),
+});
+
+/**
+ * The menu bar, in the order every Mac app keeps: the app menu, File, Edit,
+ * View, Go, Window, Help. Everything but the native roles comes from the
+ * command table.
+ */
+export function buildApplicationMenu(
+  overrides: KeyOverrides = {},
+): ApplicationMenuItemConfig[] {
+  const app = commandSections("Daedalus", overrides);
+  const updates = app.get(0) ?? [];
+  const quit = app.get(1) ?? [];
+  const settings = app.get(2) ?? [];
+  return [
+    {
+      label: "Daedalus",
+      submenu: [
+        { role: "about" },
+        ...updates,
+        { type: "divider" },
+        ...settings,
+        { type: "divider" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "showAll" },
+        { type: "divider" },
+        // Quit is deliberately a command, not `{ role: "quit" }`: that is a
+        // native macOS role, so ⌘Q would terminate the app without ever
+        // reaching our code. See `app.quit` in the command table.
+        ...quit,
+      ],
+    },
+    menuOf("File", overrides),
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "divider" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "pasteAndMatchStyle" },
+        { role: "delete" },
+        { role: "selectAll" },
+      ],
+    },
+    menuOf("View", overrides),
+    menuOf("Go", overrides),
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        { type: "divider" },
+        { role: "bringAllToFront" },
+      ],
+    },
+    menuOf("Help", overrides),
+  ];
+}
+
+export const APPLICATION_MENU: ApplicationMenuItemConfig[] =
+  buildApplicationMenu();
+
+/**
+ * What the host does with a renderer command from the menu bar or one of
+ * its keys. Only the main window runs them, so with the World window in
+ * front the main window comes forward first and the command runs there,
+ * where it opens what it opens; with no main window, one is opened and the
+ * press is spent on that.
+ */
+export function routeRendererCommand({
+  mainOpen,
+  worldKey,
+}: {
+  mainOpen: boolean;
+  worldKey: boolean;
+}): "run" | "raise-and-run" | "open-main" {
+  if (!mainOpen) return "open-main";
+  return worldKey ? "raise-and-run" : "run";
+}

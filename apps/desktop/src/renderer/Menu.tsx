@@ -29,6 +29,13 @@ const ITEMS = [
   '[role="menuitemcheckbox"]:not(:disabled)',
 ].join(", ");
 
+/**
+ * Marks an item the arrow keys reach that a click does not close the menu
+ * for: a pin that toggles in place, or a confirm that asks for a second
+ * click first. Such an item never takes the menu's first focus either.
+ */
+export const KEEP_OPEN = "data-menu-keep-open";
+
 export interface MenuRect {
   top: number;
   left: number;
@@ -94,9 +101,11 @@ export function Menu({
   label,
   menuLabel,
   placement = "below",
+  returnFocus,
   summary,
   summaryClassName,
   title,
+  triggerTabIndex,
 }: {
   /** Which edge of the trigger the popover lines up with. */
   align?: "start" | "end";
@@ -110,9 +119,16 @@ export function Menu({
   menuLabel: string;
   /** Under the trigger, or beside it on its left. */
   placement?: "below" | "left";
+  /**
+   * Where focus goes when the menu closes by key or by an item, instead of
+   * the trigger: the sidebar item whose menu this is, say.
+   */
+  returnFocus?: () => void;
   summary: ReactNode;
   summaryClassName?: string;
   title?: string;
+  /** -1 keeps the trigger out of the Tab order, for a row reached by ⇧F10. */
+  triggerTabIndex?: number;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -122,11 +138,15 @@ export function Menu({
     [
       ...(ref.current?.querySelectorAll<HTMLElement>(ITEMS) ?? []),
     ] as HTMLElement[];
-  const close = (returnFocus: boolean) => {
+  const returnFocusRef = useRef(returnFocus);
+  returnFocusRef.current = returnFocus;
+  const close = (giveFocusBack: boolean) => {
     const details = ref.current;
     if (!details?.open) return;
     details.open = false;
-    if (returnFocus) details.querySelector("summary")?.focus();
+    if (!giveFocusBack) return;
+    if (returnFocusRef.current) returnFocusRef.current();
+    else details.querySelector("summary")?.focus();
   };
 
   // Into the top layer while open, placed against the trigger, and placed
@@ -169,8 +189,11 @@ export function Menu({
     // straight away.
     const list = items();
     (
-      list.find((item) => item.getAttribute("aria-checked") === "true") ??
-      list[0]
+      list.find(
+        (item) =>
+          item.getAttribute("aria-checked") === "true" &&
+          !item.hasAttribute(KEEP_OPEN),
+      ) ?? list[0]
     )?.focus();
     const onPointerDown = (event: PointerEvent) => {
       if (!ref.current?.contains(event.target as Node)) close(false);
@@ -225,6 +248,7 @@ export function Menu({
         aria-haspopup="menu"
         aria-label={label}
         className={summaryClassName}
+        tabIndex={triggerTabIndex}
         title={title}
       >
         {summary}
@@ -236,7 +260,8 @@ export function Menu({
         // Choosing an item closes the menu; the item's own click has already
         // run by the time this sees the event.
         onClick={(event) => {
-          if ((event.target as Element).closest(ITEMS)) close(true);
+          const item = (event.target as Element).closest(ITEMS);
+          if (item && !item.hasAttribute(KEEP_OPEN)) close(true);
         }}
         ref={popoverRef}
         role="menu"

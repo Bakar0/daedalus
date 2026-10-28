@@ -29,20 +29,15 @@ import {
   startCommandWorker,
 } from "@daedalus/platform";
 import type {
-  DesktopCommand,
   DesktopRpcSchema,
+  HostCommandId,
+  KeybindingsDto,
   DesktopSnapshotPart,
   DesktopWindowRole,
   TerminalServerMessage,
 } from "@daedalus/protocol";
-import {
-  CHECK_FOR_UPDATES_MENU_ACTION,
-  OPEN_WORLD_WINDOW_MENU_ACTION,
-  isDesktopCommand,
-  QUIT_MENU_ACTION,
-  SHUTDOWN_MENU_ACTION,
-} from "@daedalus/protocol";
-import { APPLICATION_MENU } from "./menu";
+import { isHostCommandId, isRendererCommandId } from "@daedalus/protocol";
+import { buildApplicationMenu, routeRendererCommand } from "./menu";
 import { acceptFirstMouse } from "./first-mouse";
 import { daedalusCheckout } from "./checkout";
 import { installCliShim } from "./cli-shim";
@@ -348,7 +343,9 @@ const rendererUrl = `views://mainview/index.html`;
 
 // WebKit text controls use the native responder chain for standard editing
 // commands on macOS. Defining these roles restores Cmd+C/V/X/A/Z everywhere.
-ApplicationMenu.setApplicationMenu(APPLICATION_MENU);
+// The menu's items and keys come from the shared command table, rebuilt with
+// the person's keys once `keybindings.json` is read (see `applyKeybindings`).
+ApplicationMenu.setApplicationMenu(buildApplicationMenu());
 
 let revision = 0;
 const readModel = new ReadModel(context);
@@ -560,6 +557,14 @@ const createRpc = (role: DesktopWindowRole = "main") =>
           dialogShown: () => quitController.dialogShown(),
           decide: (choice) => quitController.decide(choice),
         },
+        commands: {
+          run: runHostCommand,
+          keybindingsChanged: (state) => {
+            // Newer than any read still in flight.
+            keybindingsGeneration += 1;
+            applyKeybindings(state);
+          },
+        },
         updates: {
           current: () => updates.update,
           check: () => updates.check({ manual: true }),
@@ -592,8 +597,60 @@ let windowOpen = false;
 let worldRpc!: ReturnType<typeof createRpc>;
 let worldWindow!: BrowserWindow<ReturnType<typeof createRpc>>;
 let worldOpen = false;
+/**
+ * The World window is the key window: the menu bar's keys reach the app
+ * from there too, and must bring the main window forward to act.
+ */
+let worldKey = false;
 /** A session to select once a main window reopened for it can hear. */
 let pendingFocus: string | undefined;
+
+/**
+ * The person's keys, from `keybindings.json` in the home. The host owns
+ * them: it reads the file at start and whenever it changes (Settings, `daedal
+ * keys`, or a hand edit), rebuilds the menu bar with them, and sends them to
+ * the windows, which match keys with the same overrides. Entries it cannot
+ * use are logged here and reported to the window; they never stop the app.
+ */
+let keybindings: KeybindingsDto | undefined;
+function applyKeybindings(next: KeybindingsDto): void {
+  const same =
+    keybindings !== undefined &&
+    JSON.stringify(keybindings) === JSON.stringify(next);
+  keybindings = next;
+  if (same) return;
+  ApplicationMenu.setApplicationMenu(buildApplicationMenu(next.overrides));
+  if (next.rejected.length)
+    void context.logger.write("warn", "keybindings_rejected", {
+      path: next.path,
+      rejected: next.rejected,
+    });
+  if (windowOpen) rpc.send.keybindingsChanged(next);
+  if (worldOpen) worldRpc.send.keybindingsChanged(next);
+}
+// Reads can overlap (a burst of edits, a write from Settings); only the
+// newest read's result is applied, so an older one never lands last.
+let keybindingsGeneration = 0;
+const reloadKeybindings = () => {
+  const generation = ++keybindingsGeneration;
+  return context.keybindings.read().then(
+    (next) => {
+      if (generation === keybindingsGeneration) applyKeybindings(next);
+    },
+    (error: unknown) =>
+      context.logger.write("error", "keybindings_read_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      }),
+  );
+};
+void reloadKeybindings();
+context.keybindings.watch(
+  () => void reloadKeybindings(),
+  (error) =>
+    void context.logger.write("error", "keybindings_watch_failed", {
+      message: error.message,
+    }),
+);
 
 /**
  * Filesystem changes go straight to the window rather than through
@@ -617,25 +674,43 @@ ApplicationMenu.on("application-menu-clicked", (rawEvent) => {
   void context.logger.write("info", "menu_action", {
     action: typeof command === "string" ? command : String(command),
   });
-  if (command === QUIT_MENU_ACTION) {
-    void quitController.requestQuit();
+  // Every item is a command from the shared table, by id: the host runs its
+  // own few and hands the rest to the window.
+  if (isHostCommandId(command)) {
+    runHostCommand(command);
     return;
   }
-  if (command === SHUTDOWN_MENU_ACTION) {
-    void quitController.requestShutdownAndQuit();
-    return;
+  if (!isRendererCommandId(command)) return;
+  switch (routeRendererCommand({ mainOpen: windowOpen, worldKey })) {
+    case "open-main":
+      openMainWindow();
+      return;
+    case "raise-and-run":
+      mainWindow.show();
+      mainWindow.focus();
+      rpc.send.command({ command });
+      return;
+    case "run":
+      rpc.send.command({ command });
   }
-  if (command === OPEN_WORLD_WINDOW_MENU_ACTION) {
-    openWorldWindow();
-    return;
-  }
-  if (command === CHECK_FOR_UPDATES_MENU_ACTION) {
-    void updates.check({ manual: true });
-    return;
-  }
-  if (isDesktopCommand(command))
-    rpc.send.command({ command: command satisfies DesktopCommand });
 });
+
+function runHostCommand(command: HostCommandId) {
+  switch (command) {
+    case "app.quit":
+      void quitController.requestQuit();
+      return;
+    case "app.quitAndShutDown":
+      void quitController.requestShutdownAndQuit();
+      return;
+    case "view.worldWindow":
+      openWorldWindow();
+      return;
+    case "app.checkForUpdates":
+      void updates.check({ manual: true });
+      return;
+  }
+}
 
 /**
  * Every `Utils.quit()` passes through `before-quit`, which makes it the one
@@ -722,8 +797,16 @@ function openWorldWindow(): void {
     frame: { width: 1180, height: 780, x: 160, y: 120 },
   });
   worldOpen = true;
+  worldKey = true;
+  worldWindow.on("focus", () => {
+    worldKey = true;
+  });
+  worldWindow.on("blur", () => {
+    worldKey = false;
+  });
   worldWindow.on("close", () => {
     worldOpen = false;
+    worldKey = false;
     void context.logger.write("info", "world_window_closed", {});
   });
   void context.logger.write("info", "world_window_opened", {});
