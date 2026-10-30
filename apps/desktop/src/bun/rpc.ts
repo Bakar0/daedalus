@@ -38,6 +38,10 @@ import {
   type WorkspaceRepository,
   isPartialReload,
   type WorkflowRun,
+  type WorkspaceRoutineRun,
+  type WorkspaceRoutineView,
+  describeSchedule,
+  parseWhen,
 } from "@daedalus/core";
 import type {
   DesktopSnapshotPart,
@@ -74,6 +78,8 @@ import type {
   WorkspaceRepositoryDto,
   SecretDto,
   WorkflowRunDto,
+  WorkspaceRoutineDto,
+  WorkspaceRoutineRunDto,
 } from "@daedalus/protocol";
 import { isHostCommandId } from "@daedalus/protocol";
 
@@ -450,6 +456,59 @@ const routineDto = (
   lastRun: lastRun ? routineRunDto(lastRun) : null,
 });
 
+function workspaceRoutineRunDto(
+  context: ApplicationContext,
+  run: WorkspaceRoutineRun,
+): WorkspaceRoutineRunDto {
+  return {
+    id: run.id,
+    routineId: run.routineId,
+    routineName:
+      context.repositories.workspaceRoutines.find(run.routineId)?.name ?? "",
+    trigger: run.trigger,
+    status: run.status,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    summary: run.summary,
+    workingDirectory: run.workingDirectory,
+    continuedSessionId: run.continuedSessionId,
+  };
+}
+
+function workspaceRoutineDto(
+  context: ApplicationContext,
+  view: WorkspaceRoutineView,
+): WorkspaceRoutineDto {
+  const { routine } = view;
+  return {
+    id: routine.id,
+    name: routine.name,
+    workspaceId: routine.workspaceId,
+    workspaceName: view.workspaceName,
+    schedule: routine.schedule,
+    scheduleText: view.scheduleText,
+    prompt: routine.prompt,
+    model: routine.model,
+    enabled: routine.enabled,
+    nextRunAt: routine.nextRunAt,
+    lastRunAt: routine.lastRunAt,
+    recentRuns: view.recentRuns.map((run) =>
+      workspaceRoutineRunDto(context, run),
+    ),
+  };
+}
+
+function routineViewDto(
+  context: ApplicationContext,
+  id: string,
+): WorkspaceRoutineDto {
+  const view = context.workspaceRoutines
+    .list()
+    .find((item) => item.routine.id === id);
+  if (!view) throw new DaedalusError("NOT_FOUND", "No such routine");
+  return workspaceRoutineDto(context, view);
+}
+
 function routinesDetail(
   context: ApplicationContext,
   sessionId: string,
@@ -652,6 +711,64 @@ export function createDesktopRequestHandlers(
             ? context.abilities.grant(sessionId, ability, { live: true })
             : context.abilities.revoke(sessionId, ability),
         ),
+      ),
+    routinesPage: () =>
+      result(() => ({
+        routines: context.workspaceRoutines
+          .list()
+          .map((view) => workspaceRoutineDto(context, view)),
+        runs: context.workspaceRoutines
+          .runs()
+          .map((run) => workspaceRoutineRunDto(context, run)),
+      })),
+    routineParseWhen: ({ when }) =>
+      result(() => {
+        const schedule = parseWhen(when);
+        return { schedule, text: describeSchedule(schedule) };
+      }),
+    routineCreate: ({ workspace, when, prompt, name }) =>
+      mutate(() =>
+        routineViewDto(
+          context,
+          context.workspaceRoutines.add({
+            workspace,
+            when,
+            prompt,
+            ...(name ? { name } : {}),
+          }).id,
+        ),
+      ),
+    routineUpdate: ({ id, ...change }) =>
+      mutate(() =>
+        routineViewDto(
+          context,
+          context.workspaceRoutines.update(id, change).id,
+        ),
+      ),
+    routineDelete: ({ id }) =>
+      mutate(() => {
+        context.workspaceRoutines.remove(id);
+        return { id };
+      }),
+    routineStart: ({ id }) =>
+      mutate(async () =>
+        workspaceRoutineRunDto(
+          context,
+          await context.workspaceRoutines.runNow(id),
+        ),
+      ),
+    routineTranscript: ({ runId }) =>
+      result(async () => {
+        const run = context.repositories.workspaceRoutines.findRun(runId);
+        if (!run) throw new DaedalusError("NOT_FOUND", "No such run");
+        return {
+          run: workspaceRoutineRunDto(context, run),
+          entries: await context.workspaceRoutines.transcript(runId),
+        };
+      }),
+    routineContinue: ({ runId }) =>
+      mutate(async () =>
+        agentDto(await context.workspaceRoutines.continueRun(runId)),
       ),
     routinesDetail: ({ sessionId }) =>
       result(() => routinesDetail(context, sessionId)),

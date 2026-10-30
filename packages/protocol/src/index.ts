@@ -888,6 +888,53 @@ export interface TeamSayResultDto {
   warnings: string[];
 }
 
+/** One run of a routine on the Routines page: a headless session. */
+export interface WorkspaceRoutineRunDto {
+  id: number;
+  routineId: string;
+  routineName: string;
+  trigger: "schedule" | "manual";
+  status: "running" | "done" | "failed" | "skipped";
+  startedAt: string;
+  finishedAt: string | null;
+  /** The last thing the agent said, or why the run failed or was skipped. */
+  summary: string | null;
+  workingDirectory: string;
+  /** The session a continue made from this run. */
+  continuedSessionId: string | null;
+}
+
+export interface WorkspaceRoutineDto {
+  id: string;
+  name: string;
+  /** Null runs across every workspace. */
+  workspaceId: string | null;
+  workspaceName: string | null;
+  /** As stored: `cron "0 9 * * 1-5"`, `every 30m` or `at …`. */
+  schedule: string;
+  /** The schedule in words, such as "Weekdays at 09:00". */
+  scheduleText: string;
+  prompt: string;
+  model: string | null;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  /** Oldest first, at most seven. */
+  recentRuns: WorkspaceRoutineRunDto[];
+}
+
+/** What the Routines page reads. */
+export interface RoutinesPageDto {
+  routines: WorkspaceRoutineDto[];
+  /** Newest first, across every routine. */
+  runs: WorkspaceRoutineRunDto[];
+}
+
+export interface RoutineTranscriptDto {
+  run: WorkspaceRoutineRunDto;
+  entries: Array<{ kind: "text" | "tool" | "result" | "error"; text: string }>;
+}
+
 export interface RoutinesDetailDto {
   purpose: string | null;
   routines: RoutineDto[];
@@ -1516,6 +1563,37 @@ export interface DesktopRpcSchema {
         { sessionId: string; ability: AbilityIdDto; granted: boolean },
         SessionAbilityDto
       >;
+      routinesPage: Request<Record<string, never>, RoutinesPageDto>;
+      /** Reads "weekdays 9:00" into a stored schedule and its words, for the form. */
+      routineParseWhen: Request<
+        { when: string },
+        { schedule: string; text: string }
+      >;
+      routineCreate: Request<
+        {
+          workspace: string | null;
+          when: string;
+          prompt: string;
+          name?: string;
+        },
+        WorkspaceRoutineDto
+      >;
+      routineUpdate: Request<
+        {
+          id: string;
+          name?: string;
+          workspace?: string | null;
+          when?: string;
+          prompt?: string;
+          enabled?: boolean;
+        },
+        WorkspaceRoutineDto
+      >;
+      routineDelete: Request<{ id: string }, { id: string }>;
+      routineStart: Request<{ id: string }, WorkspaceRoutineRunDto>;
+      routineTranscript: Request<{ runId: number }, RoutineTranscriptDto>;
+      /** Opens the run's conversation as a live session of its workspace. */
+      routineContinue: Request<{ runId: number }, AgentSessionDto>;
       routinesDetail: Request<{ sessionId: string }, RoutinesDetailDto>;
       /** Sends what is waiting, then reads the team as the user. */
       teamDetail: Request<{ teamId: string }, TeamDetailDto>;

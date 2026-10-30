@@ -94,6 +94,8 @@ export interface EditorAreaHandle {
   openWorkflows(): void;
   /** Shows the Custom instructions tab, adding it first if it is not open. */
   openInstructions(): void;
+  /** Shows the Routines page, adding it first if it is not open. */
+  openRoutinesPage(): void;
   /** Shows a team's tab, adding it first if it is not open. */
   openTeam(teamId: string, name: string): void;
   /** Shows a session's Routines tab, adding it first if it is not open. */
@@ -117,6 +119,7 @@ type AppPanelKind =
   | "terminal"
   | "workflows"
   | "instructions"
+  | "routinesPage"
   | "team"
   | "routines";
 
@@ -129,6 +132,7 @@ export type CenterPanelKind =
   | "terminal"
   | "workflows"
   | "instructions"
+  | "routinesPage"
   | "team"
   | "routines";
 
@@ -156,6 +160,8 @@ export interface EditorAreaProps {
   renderWorkflows?(): React.ReactNode;
   /** The Custom instructions tab's content, drawn by the app. */
   renderInstructions?(): React.ReactNode;
+  /** The Routines page, drawn by the app. */
+  renderRoutinesPage?(): React.ReactNode;
   /** A team tab's content, drawn by the app; `visible` while in front. */
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
   /** A session's Routines tab content, drawn by the app. */
@@ -231,6 +237,7 @@ interface EditorContextValue {
   renderTerminal?(terminalId: string): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
+  renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
   renderRoutines?(sessionId: string): React.ReactNode;
   abilityTabName?(kind: "team" | "routines", id: string): string | undefined;
@@ -326,6 +333,7 @@ export default function EditorArea({
   renderTerminal,
   renderWorkflows,
   renderInstructions,
+  renderRoutinesPage,
   renderTeam,
   renderRoutines,
   abilityTabName,
@@ -709,6 +717,14 @@ export default function EditorArea({
             "Custom instructions",
           ),
         ),
+      openRoutinesPage: () =>
+        whenReady(() =>
+          placeApp(
+            "routinesPage",
+            { path: "", kind: "routinesPage" },
+            "Routines",
+          ),
+        ),
       openTeam: (teamId, name) =>
         whenReady(() =>
           placeApp(
@@ -1017,6 +1033,7 @@ export default function EditorArea({
     renderTerminal,
     renderWorkflows,
     renderInstructions,
+    renderRoutinesPage,
     renderTeam,
     renderRoutines,
     abilityTabName,
@@ -1051,6 +1068,7 @@ export default function EditorArea({
             terminal: TerminalPanel,
             workflows: WorkflowsPanel,
             instructions: InstructionsPanel,
+            routinesPage: RoutinesPagePanel,
             team: TeamPanel,
             routines: RoutinesPanel,
           }}
@@ -1267,11 +1285,13 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
             ? "Workflows"
             : params.kind === "instructions"
               ? "Custom instructions"
-              : params.kind === "team"
-                ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
-                : params.kind === "routines"
-                  ? `Routines · ${context.abilityTabName?.("routines", params.sessionId ?? "") ?? params.title ?? ""}`
-                  : (params.url ?? "Web");
+              : params.kind === "routinesPage"
+                ? "Routines"
+                : params.kind === "team"
+                  ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
+                  : params.kind === "routines"
+                    ? `Routines · ${context.abilityTabName?.("routines", params.sessionId ?? "") ?? params.title ?? ""}`
+                    : (params.url ?? "Web");
   return (
     <div
       className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
@@ -1325,7 +1345,7 @@ function AppTabIcon({ kind }: { kind: AppPanelKind }) {
         <path d={INSTRUCTIONS_ICON_PATH} />
       ) : kind === "team" ? (
         <path d="M5.5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM1.5 13c0-2.2 1.8-4 4-4s4 1.8 4 4M11 7.5a1.75 1.75 0 1 0 0-3.5M11.5 9.2c1.7.3 3 1.8 3 3.8" />
-      ) : kind === "routines" ? (
+      ) : kind === "routines" || kind === "routinesPage" ? (
         <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM8 4.5V8l2.5 1.5" />
       ) : (
         <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM1.5 8h13M8 1.5c2 2 2 11 0 13M8 1.5c-2 2-2 11 0 13" />
@@ -1391,6 +1411,15 @@ function RoutinesPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
       tabIndex={-1}
     >
       {params.sessionId && context.renderRoutines?.(params.sessionId)}
+    </div>
+  );
+}
+
+function RoutinesPagePanel() {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel workflows-panel">
+      {context.renderRoutinesPage?.()}
     </div>
   );
 }

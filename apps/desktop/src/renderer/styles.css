@@ -6705,6 +6705,252 @@ dd {
   font-size: 11px;
 }
 
+/* The Routines page: routines across workspaces, each run a headless session. */
+.sidebar-routines-link {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 6px;
+  box-shadow: none !important;
+  color: var(--secondary) !important;
+  display: flex;
+  font-size: 13px !important;
+  gap: 8px;
+  margin: 0 8px 4px;
+  min-height: 0 !important;
+  padding: 6px 8px !important;
+  text-align: left;
+}
+.sidebar-routines-link:hover {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.sidebar-routines-link svg {
+  fill: none;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  width: 14px;
+}
+.routines-home-table td {
+  vertical-align: top;
+}
+.routines-home-table td small {
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+}
+.routines-home-table .routine-row-name small {
+  margin-top: 1px;
+}
+.routines-home-table .routine-row-name > span:last-child {
+  display: flex;
+  flex-direction: column;
+}
+.routines-home-table .routine-row-last {
+  display: table-cell;
+  max-width: 280px;
+  white-space: normal;
+}
+.routines-home-table .routine-row-last span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.routine-cron {
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.routine-next {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.routine-running {
+  color: var(--accent);
+}
+.routine-switch {
+  background: var(--success) !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  box-shadow: none !important;
+  height: 16px;
+  min-height: 0 !important;
+  padding: 0 !important;
+  position: relative;
+  width: 28px;
+}
+.routine-switch::after {
+  background: #fff;
+  border-radius: 50%;
+  content: "";
+  height: 12px;
+  left: 14px;
+  position: absolute;
+  top: 2px;
+  transition: left 120ms ease;
+  width: 12px;
+}
+.routine-switch[aria-pressed="false"] {
+  background: var(--line-strong, var(--line)) !important;
+}
+.routine-switch[aria-pressed="false"]::after {
+  left: 2px;
+}
+.routine-ticks {
+  display: inline-flex;
+  gap: 3px;
+}
+.routine-tick {
+  background: var(--line) !important;
+  border: 0 !important;
+  border-radius: 2px !important;
+  box-shadow: none !important;
+  display: inline-block;
+  height: 16px;
+  min-height: 0 !important;
+  padding: 0 !important;
+  width: 10px;
+}
+.routine-tick[data-tone="done"] {
+  background: var(--success) !important;
+}
+.routine-tick[data-tone="failed"] {
+  background: var(--danger) !important;
+}
+.routine-tick[data-tone="skipped"] {
+  background: transparent !important;
+  outline: 1px dashed var(--muted);
+  outline-offset: -1px;
+}
+.routine-tick[data-tone="running"] {
+  animation: routine-pulse 1s infinite alternate;
+  background: var(--accent) !important;
+}
+button.routine-tick:hover {
+  outline: 1px solid var(--text);
+}
+@keyframes routine-pulse {
+  to {
+    opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .routine-tick[data-tone="running"] {
+    animation: none;
+  }
+}
+.routine-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 820px;
+}
+.routine-prompt pre,
+.routine-row-detail .routine-prompt pre {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  max-height: 360px;
+}
+.routine-prompt textarea,
+.routine-form textarea {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  min-height: 180px;
+  resize: vertical;
+  width: 100%;
+}
+.routine-prompt-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.routine-form {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+}
+.routine-form label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.routine-form label > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.routine-form label small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.routine-form label small[data-error="true"] {
+  color: var(--danger);
+}
+.routine-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.routines-home-runs li {
+  display: block;
+  padding: 0;
+}
+.routines-home-runs li > button {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: inherit !important;
+  display: grid;
+  font-size: 12px !important;
+  gap: 10px;
+  grid-template-columns: 10px 80px minmax(80px, 160px) 1fr;
+  min-height: 0 !important;
+  padding: 7px 2px !important;
+  text-align: left;
+  width: 100%;
+}
+.routines-home-runs li > button:hover {
+  background: var(--raised) !important;
+}
+.routines-home-runs .routine-tick {
+  height: 10px;
+}
+.routine-transcript {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  gap: 10px;
+  line-height: 1.6;
+}
+.routine-entry {
+  color: var(--secondary);
+  white-space: pre-wrap;
+}
+.routine-entry[data-kind="tool"] {
+  color: var(--muted);
+  padding-left: 18px;
+}
+.routine-entry[data-kind="text"]::before,
+.routine-entry[data-kind="result"]::before {
+  color: #d97757;
+  content: "⏺ ";
+}
+.routine-entry[data-kind="result"] {
+  color: var(--text);
+}
+.routine-entry[data-kind="error"] {
+  color: var(--danger);
+}
+
 /* The line between a split tab's list and its content; drag to resize. */
 .split-list-handle {
   cursor: col-resize;

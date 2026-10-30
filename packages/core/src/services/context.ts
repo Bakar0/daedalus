@@ -19,6 +19,10 @@ import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
 import { sweepProviderActivity } from "./activity-detect";
 import { AbilityService } from "./abilities";
+import {
+  WorkspaceRoutineService,
+  type RoutineSpawner,
+} from "./workspace-routines";
 import { findAccount } from "./account-homes";
 import { AccountService } from "./accounts";
 import { DeliveryGate } from "./delivery";
@@ -114,6 +118,8 @@ export interface ApplicationContext {
   keybindings: KeybindingService;
   /** The routine clock; only the desktop host ticks it. */
   routineDelivery: RoutineDelivery;
+  /** Routines on their own page, each run a headless session; ticked by the desktop host. */
+  workspaceRoutines: WorkspaceRoutineService;
   /** How Daedalus hands a line to a running session it did not get from the user. */
   sessionChannel: SessionChannel;
   /** Keystrokes per session, and the rule for typing into a session. */
@@ -154,6 +160,8 @@ export interface ApplicationContextOptions {
   canDrawToasts?: () => boolean;
   /** Injected so tests never write to a real session's inbox. */
   teamTransport?: TeamTransport;
+  /** Starts routine runs; tests pass a fake provider. */
+  routineSpawner?: RoutineSpawner;
   /** Injected so tests stand in for a Claude session's inbox pipe. */
   sessionInbox?: (session: AgentSession, line: string) => Promise<boolean>;
   /** Injected so staleness decay is testable without waiting ten minutes. */
@@ -492,6 +500,13 @@ export async function createApplicationContext(
       options.now,
     ),
     routineDelivery,
+    workspaceRoutines: new WorkspaceRoutineService(
+      repositories,
+      config,
+      (input) => agents.continueConversation(input),
+      options.routineSpawner,
+      options.now,
+    ),
     sessionChannel,
     deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),

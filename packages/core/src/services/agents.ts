@@ -30,6 +30,7 @@ import {
   resolveAutoRebirth,
   SESSION_COLORS,
   type AgentActivityState,
+  type AgentProviderName,
   type AgentSession,
   type AutoRebirth,
   type SessionColor,
@@ -2411,6 +2412,55 @@ export class AgentService {
       (configured ? resolveAgentExecutable("codex", configured) : undefined) ??
       resolveAgentExecutable("codex", agent.command)
     );
+  }
+
+  /**
+   * Turns a conversation a headless routine run had into a session of the
+   * workspace, archived, and restores it: the user carries on where the run
+   * stopped, in the folder it ran in.
+   */
+  async continueConversation(input: {
+    workspaceId: string;
+    provider: AgentProviderName;
+    providerSessionId: string;
+    workingDirectory: string;
+    name: string;
+    startedAt: string;
+  }): Promise<AgentSession> {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    this.repositories.createAgent({
+      id,
+      workspaceId: input.workspaceId,
+      taskId: null,
+      name: input.name,
+      provider: input.provider,
+      kind: "agent",
+      tmuxSession: `daedalus_${id.replaceAll("-", "")}`,
+      command: input.provider,
+      args: [],
+      workingDirectory: input.workingDirectory,
+      status: "exited",
+      exitCode: 0,
+      startedAt: input.startedAt,
+      endedAt: now,
+      providerSessionId: input.providerSessionId,
+      archivedAt: now,
+      resumeCount: 0,
+      lostReason: null,
+      rebirthRequestedAt: null,
+      resumeOnStart: false,
+      position: this.repositories.nextAgentPosition(input.workspaceId),
+      pinnedAt: null,
+      color: null,
+      autoRebirthPercent: null,
+      account: null,
+      teamId: null,
+      teamHandle: null,
+      spawnedBy: null,
+      hostId: null,
+    });
+    return this.restore(id);
   }
 
   async restore(id: string): Promise<AgentSession> {

@@ -27,6 +27,7 @@ import type {
 import { accountModelKey, derivedDefaultModel } from "../domain";
 import { DaedalusError } from "../errors";
 import { AbilityRepository, RoutineRepository } from "./abilities";
+import { WorkspaceRoutineRepository } from "./workspace-routines";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
 import { WorkflowRepository } from "./workflows";
@@ -426,6 +427,7 @@ export class SqliteRepositories {
   readonly teams: TeamRepository;
   readonly secrets: SecretRepository;
   readonly workflows: WorkflowRepository;
+  readonly workspaceRoutines: WorkspaceRoutineRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -437,6 +439,7 @@ export class SqliteRepositories {
     this.teams = new TeamRepository(this.database);
     this.secrets = new SecretRepository(this.database);
     this.workflows = new WorkflowRepository(this.database);
+    this.workspaceRoutines = new WorkspaceRoutineRepository(this.database);
   }
 
   /**

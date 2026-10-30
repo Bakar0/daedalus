@@ -203,6 +203,7 @@ export interface FilesEditorProps {
   renderTerminal?(terminalId: string): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
+  renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
   renderRoutines?(sessionId: string): React.ReactNode;
   abilityTabName?(kind: "team" | "routines", id: string): string | undefined;

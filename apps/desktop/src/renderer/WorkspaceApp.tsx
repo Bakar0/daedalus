@@ -207,6 +207,7 @@ const PALETTE_HIDDEN_COMMANDS = new Set<string>([
 import { useCloudState } from "./CloudPanel";
 import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPage } from "./teams/TeamPanel";
+import { RoutinesHome } from "./routines/RoutinesHome";
 import { RoutinesPage } from "./routines/RoutinesPanel";
 import { ProBadge } from "./ProPlan";
 import { useMutation, useRpcQuery } from "./use-rpc";
@@ -7922,6 +7923,18 @@ export function WorkspaceApp({
                 }}
               />
             </div>
+            <button
+              className="sidebar-routines-link"
+              onClick={() =>
+                files.withEditor((handle) => handle.openRoutinesPage())
+              }
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 16 16">
+                <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM8 4.5V8l2.5 1.5" />
+              </svg>
+              <span>Routines</span>
+            </button>
             <div className="section-heading workspace-column-heading">
               <div className="workspace-column-title">
                 <h1>Workspaces</h1>
@@ -8481,6 +8494,20 @@ export function WorkspaceApp({
                 )}
                 renderInstructions={() => (
                   <InstructionsEditor client={client} onError={setError} />
+                )}
+                renderRoutinesPage={() => (
+                  <RoutinesHome
+                    client={client}
+                    onOpenSession={(sessionId) => {
+                      const target = sessionsById.get(sessionId);
+                      if (target) showSession(target.id, target.workspaceId);
+                    }}
+                    run={perform}
+                    workspaces={activeWorkspaces.map((item) => ({
+                      id: item.id,
+                      name: item.name,
+                    }))}
+                  />
                 )}
                 abilityTabName={(kind, id) => {
                   if (kind === "team")
