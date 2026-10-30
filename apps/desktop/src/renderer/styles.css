@@ -6740,12 +6740,12 @@ dd {
   font-size: 11px;
   margin-top: 2px;
 }
-.routines-home-table .routine-row-name small {
-  margin-top: 1px;
+.routines-home-table .routine-row-workspace {
+  color: var(--secondary);
+  white-space: nowrap;
 }
-.routines-home-table .routine-row-name > span:last-child {
-  display: flex;
-  flex-direction: column;
+.routines-home-runs li {
+  grid-template-columns: 96px minmax(80px, 160px) minmax(80px, 160px) 1fr auto;
 }
 .routines-home-table .routine-row-last {
   display: table-cell;

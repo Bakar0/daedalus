@@ -124,6 +124,9 @@ export function RoutinesHome({
       </div>
     );
 
+  const workspaceOf = new Map(
+    page.routines.map((item) => [item.id, item.workspaceName]),
+  );
   return (
     <div className="workflows-tab">
       <div className="ability-page routines-page routines-home">
@@ -168,6 +171,7 @@ export function RoutinesHome({
                   <tr>
                     <th aria-label="On" />
                     <th>Routine</th>
+                    <th>Workspace</th>
                     <th>Schedule</th>
                     <th>Last 7 runs</th>
                     <th>Last result</th>
@@ -233,6 +237,9 @@ export function RoutinesHome({
                         {relativeTime(item.startedAt, now)}
                       </time>
                       <strong>{item.routineName}</strong>
+                      <span className="routine-row-muted">
+                        {workspaceOf.get(item.routineId) ?? "All workspaces"}
+                      </span>
                       <span className="routine-run-summary">
                         {item.status === "running"
                           ? "running…"
@@ -298,13 +305,11 @@ function RoutineRows({
             <span aria-hidden="true" className="routine-row-caret">
               ▸
             </span>
-            <span>
-              <strong>{routine.name}</strong>
-              <small className="routine-row-muted">
-                {routine.workspaceName ?? "All workspaces"}
-              </small>
-            </span>
+            <strong>{routine.name}</strong>
           </button>
+        </td>
+        <td className="routine-row-workspace">
+          {routine.workspaceName ?? "All workspaces"}
         </td>
         <td>
           {routine.scheduleText}
@@ -366,7 +371,7 @@ function RoutineRows({
       {open && (
         <tr className="routine-row-detail">
           <td />
-          <td colSpan={6}>
+          <td colSpan={7}>
             {editing === undefined ? (
               <div className="routine-prompt">
                 <pre>{routine.prompt}</pre>
