@@ -7,6 +7,7 @@ import {
   describeSchedule,
   parseTranscript,
   parseWhen,
+  ROUTINE_RUN_SYSTEM_PROMPT,
   type ApplicationContext,
   type RoutineSpawner,
 } from "../index";
@@ -187,6 +188,7 @@ describe("WorkspaceRoutineService", () => {
         expect(started?.status).toBe("running");
         expect(started?.workingDirectory).toBe(workspace.path);
         expect(calls[0]).toContain("--permission-prompts");
+        expect(calls[0]).toContain(ROUTINE_RUN_SYSTEM_PROMPT);
         expect(calls[0]![1]).toContain("Check env health.");
 
         await settle();

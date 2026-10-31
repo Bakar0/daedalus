@@ -320,6 +320,8 @@ export class WorkspaceRoutineService {
           "auto",
           "--permission-prompts",
           "none",
+          "--append-system-prompt",
+          ROUTINE_RUN_SYSTEM_PROMPT,
           ...(routine.model ? ["--model", routine.model] : []),
         ],
         cwd: workingDirectory,
@@ -456,6 +458,14 @@ export function nameFromPrompt(prompt: string): string {
     .slice(0, 4);
   return routineName(words.join("-") || "routine");
 }
+
+/**
+ * A run has no Daedalus session, so the workspace's instructions to start a
+ * workflow, raise attention or post to a team would fail and take over the
+ * run's first line. Continuing a run in a session brings those back.
+ */
+export const ROUTINE_RUN_SYSTEM_PROMPT =
+  "This is a headless Daedalus routine run with no Daedalus session: DAEDALUS_SESSION_ID is unset. Skip every instruction that needs a session, such as starting or continuing a workflow, `daedal attention`, team messages and journal entries. Do not mention skipping them. Do only the routine's task.";
 
 function runPrompt(
   routine: WorkspaceRoutine,
