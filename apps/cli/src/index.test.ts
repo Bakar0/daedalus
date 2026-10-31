@@ -486,11 +486,23 @@ describe("daedal CLI contract", () => {
       expect(JSON.parse(color.stderr).error.message).toContain(
         "Color must be one of",
       );
-      // Outside a session there is no session to default to.
-      const none = await cli(home, ["routine", "list", "--json"], {
-        DAEDALUS_SESSION_ID: "",
-      });
-      expect(JSON.parse(none.stderr).error.message).toContain("Pass --session");
+      // Outside a session there is no workspace to default to.
+      const none = await cli(
+        home,
+        ["routine", "add", "--when", "every 1h", "--prompt", "Hi", "--json"],
+        { DAEDALUS_SESSION_ID: "" },
+      );
+      expect(JSON.parse(none.stderr).error.message).toContain(
+        "Pass --workspace",
+      );
+      const when = await cli(home, [
+        "routine",
+        "add",
+        "--prompt",
+        "Hi",
+        "--json",
+      ]);
+      expect(JSON.parse(when.stderr).error.message).toContain("--when");
       const missing = await cli(home, [
         "session",
         "grant",
@@ -502,7 +514,7 @@ describe("daedal CLI contract", () => {
         "Session 'Argus' was not found",
       );
       const help = await cli(home, ["routine", "--help"]);
-      expect(help.stdout).toContain("daedal routine report --run <run-id>");
+      expect(help.stdout).toContain("daedal routine add --when <when>");
       expect(help.stdout).not.toMatch(/finding|resident|routine agent/i);
       expect((await cli(home, ["session", "--help"])).stdout).toContain(
         "daedal session grant <session> <ability>",

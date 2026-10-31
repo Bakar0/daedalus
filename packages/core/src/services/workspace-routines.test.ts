@@ -36,7 +36,7 @@ describe("describeSchedule", () => {
     ['cron "0 8,10,13,16 * * 0-4"', "Sun to Thu at 08:00, 10:00, 13:00, 16:00"],
     ['cron "0 9 * * 1-5"', "Weekdays at 09:00"],
     ['cron "0 19 * * *"', "Every day at 19:00"],
-    ['cron "0 9 * * 5"', "Fris at 09:00"],
+    ['cron "0 9 * * 5"', "Fridays at 09:00"],
     ["every 30m", "Every 30 min"],
     ["every 2h", "Every 2 hours"],
     ['cron "*/15 9-18 * * 1-5"', 'cron "*/15 9-18 * * 1-5"'],
@@ -213,6 +213,32 @@ describe("WorkspaceRoutineService", () => {
         await settle();
       },
     );
+  });
+
+  test("a run asked for from another process starts on the next tick", async () => {
+    const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
+    await withRoutines(fakeClaude("Done."), clock, async (context) => {
+      await context.workspaces.create({ name: "Ops", slug: "ops" });
+      const routine = context.workspaceRoutines.add({
+        workspace: "ops",
+        when: "every day at 19:00",
+        prompt: "Clean up merged worktrees.",
+        name: "cleanup",
+      });
+      context.workspaceRoutines.update("cleanup", { enabled: false });
+      context.workspaceRoutines.requestRun("cleanup");
+
+      const [started] = await context.workspaceRoutines.tick();
+      expect(started?.trigger).toBe("manual");
+      const after = context.workspaceRoutines.get("cleanup");
+      expect(after.runRequestedAt).toBeNull();
+      expect(after.nextRunAt).toBe(routine.nextRunAt);
+      expect(() => context.workspaceRoutines.requestRun("cleanup")).toThrow(
+        "already running",
+      );
+      await settle();
+      expect(await context.workspaceRoutines.tick()).toEqual([]);
+    });
   });
 
   test("Run now leaves the schedule alone; a paused routine never runs", async () => {

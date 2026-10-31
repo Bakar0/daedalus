@@ -16,6 +16,8 @@ export interface WorkspaceRoutine {
   enabled: boolean;
   nextRunAt: string | null;
   lastRunAt: string | null;
+  /** Set by `daedal routine run`; the app's tick starts the run. */
+  runRequestedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

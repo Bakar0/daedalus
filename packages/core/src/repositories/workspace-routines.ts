@@ -16,6 +16,7 @@ interface WorkspaceRoutineRow {
   enabled: number;
   next_run_at: string | null;
   last_run_at: string | null;
+  run_requested_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +44,7 @@ const routineFromRow = (row: WorkspaceRoutineRow): WorkspaceRoutine => ({
   enabled: row.enabled === 1,
   nextRunAt: row.next_run_at,
   lastRunAt: row.last_run_at,
+  runRequestedAt: row.run_requested_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -86,8 +88,8 @@ export class WorkspaceRoutineRepository {
       .query(
         `INSERT INTO workspace_routines
          (id, name, workspace_id, schedule, prompt, model, enabled,
-          next_run_at, last_run_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          next_run_at, last_run_at, run_requested_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         routine.id,
@@ -99,6 +101,7 @@ export class WorkspaceRoutineRepository {
         routine.enabled ? 1 : 0,
         routine.nextRunAt,
         routine.lastRunAt,
+        routine.runRequestedAt,
         routine.createdAt,
         routine.updatedAt,
       );
@@ -109,7 +112,7 @@ export class WorkspaceRoutineRepository {
       .query(
         `UPDATE workspace_routines SET name = ?, workspace_id = ?, schedule = ?,
          prompt = ?, model = ?, enabled = ?, next_run_at = ?, last_run_at = ?,
-         updated_at = ? WHERE id = ?`,
+         run_requested_at = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         routine.name,
@@ -120,6 +123,7 @@ export class WorkspaceRoutineRepository {
         routine.enabled ? 1 : 0,
         routine.nextRunAt,
         routine.lastRunAt,
+        routine.runRequestedAt,
         routine.updatedAt,
         routine.id,
       );

@@ -26,7 +26,8 @@ import {
 } from "./arguments";
 import { callerSession } from "./caller";
 import { accountChecks, accountCommand, accountHelp } from "./accounts";
-import { routineCommand, routineHelp, sessionCommand } from "./routines";
+import { routineCommand, routineHelp } from "./routines";
+import { sessionCommand, sessionHelp } from "./sessions";
 import { workflowCommand, workflowHelp } from "./workflows";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
@@ -97,7 +98,7 @@ Usage:
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
   daedal account <list|status|add|rename|remove|login|logout> ... [--json]
   daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
-  daedal routine <add|list|get|enable|disable|run|remove|purpose|pause|resume|runs|start|done|fail|report|resolve|reports|feedback> ... [--json]
+  daedal routine <add|list|get|edit|pause|resume|run|remove|runs|log|when> ... [--json]
   daedal team <say|chat|list|goal> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal secret <list|set|remove> ... [--json]
@@ -113,7 +114,8 @@ Usage:
 Run 'daedal <command> --help' for command details.`;
 
 const commandHelp: Record<string, string> = {
-  ...routineHelp,
+  session: sessionHelp,
+  routine: routineHelp,
   team: teamHelp,
   workflow: workflowHelp,
   account: accountHelp,
@@ -2595,9 +2597,7 @@ export async function runCli(
         currentSessionId(context, explicit),
       );
     if (args[0] === "routine")
-      return await routineCommand(context, args.slice(1), json, (reference) =>
-        resolveTaskReference(context, reference),
-      );
+      return await routineCommand(context, args.slice(1), json);
     return await agentCommand(context, args.slice(1), json, options);
   } finally {
     context.close();

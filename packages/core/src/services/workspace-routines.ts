@@ -136,6 +136,7 @@ export class WorkspaceRoutineService {
       enabled: true,
       nextRunAt: null,
       lastRunAt: null,
+      runRequestedAt: null,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     };
@@ -196,6 +197,19 @@ export class WorkspaceRoutineService {
   }
 
   /**
+   * Asks the app for a run now. For a process other than the app, such as
+   * the CLI, which cannot watch the run to its end; the next tick starts it.
+   */
+  requestRun(idOrName: string): WorkspaceRoutine {
+    const routine = this.get(idOrName);
+    if (this.isRunning(routine.id))
+      throw new DaedalusError("CONFLICT", `${routine.name} is already running`);
+    const next = { ...routine, runRequestedAt: this.now().toISOString() };
+    this.repositories.workspaceRoutines.update(next);
+    return next;
+  }
+
+  /**
    * Called on the app's tick. Starts every routine that is due, up to the
    * limit of runs at once, and ends runs past their time limit.
    */
@@ -214,6 +228,11 @@ export class WorkspaceRoutineService {
     }
     const started: WorkspaceRoutineRun[] = [];
     for (const routine of this.repositories.workspaceRoutines.list()) {
+      if (routine.runRequestedAt && !this.isRunning(routine.id)) {
+        if (this.live.size >= MAX_ROUTINE_RUNS) break;
+        started.push(await this.start(routine, "manual"));
+        continue;
+      }
       if (!routine.enabled || !routine.nextRunAt) continue;
       if (Date.parse(routine.nextRunAt) > now.getTime()) continue;
       if (this.isRunning(routine.id)) {
@@ -281,12 +300,19 @@ export class WorkspaceRoutineService {
       routineId: routine.id,
       limit: 1,
     })[0];
-    // A scheduled run moves the clock on; Run now leaves the next slot as it is.
+    // A scheduled run moves the clock on; Run now leaves the next slot as it
+    // is. Either one answers a request for a run.
     if (trigger === "schedule")
       this.repositories.workspaceRoutines.update({
         ...routine,
         lastRunAt: now.toISOString(),
         nextRunAt: this.nextAt({ ...routine, lastRunAt: now.toISOString() }),
+        runRequestedAt: null,
+      });
+    else if (routine.runRequestedAt)
+      this.repositories.workspaceRoutines.update({
+        ...routine,
+        runRequestedAt: null,
       });
     const providerSessionId = crypto.randomUUID();
     const run = this.repositories.workspaceRoutines.createRun({

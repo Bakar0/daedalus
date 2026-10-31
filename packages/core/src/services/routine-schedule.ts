@@ -2,6 +2,15 @@ import { DaedalusError } from "../errors";
 import { parseSchedule } from "./routine-files";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAY_PLURALS = [
+  "Sundays",
+  "Mondays",
+  "Tuesdays",
+  "Wednesdays",
+  "Thursdays",
+  "Fridays",
+  "Saturdays",
+];
 const DAY_WORDS: Array<[RegExp, number]> = [
   [/^sun(day)?s?$/, 0],
   [/^mon(day)?s?$/, 1],
@@ -110,8 +119,10 @@ function describeDays(field: string): string | undefined {
   if (range)
     return `${DAY_NAMES[Number(range[1])]} to ${DAY_NAMES[Number(range[2])]}`;
   if (/^\d(,\d)*$/.test(field)) {
-    const days = field.split(",").map((day) => DAY_NAMES[Number(day) % 7]!);
-    return days.length === 1 ? `${days[0]}s` : days.join(", ");
+    const days = field.split(",").map((day) => Number(day) % 7);
+    return days.length === 1
+      ? DAY_PLURALS[days[0]!]
+      : days.map((day) => DAY_NAMES[day]).join(", ");
   }
   return undefined;
 }
