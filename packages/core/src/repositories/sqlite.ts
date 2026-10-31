@@ -26,7 +26,7 @@ import type {
 } from "../domain";
 import { accountModelKey, derivedDefaultModel } from "../domain";
 import { DaedalusError } from "../errors";
-import { AbilityRepository, RoutineRepository } from "./abilities";
+import { AbilityRepository } from "./abilities";
 import { WorkspaceRoutineRepository } from "./workspace-routines";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
@@ -423,7 +423,6 @@ export class SqliteRepositories {
   readonly database: Database;
 
   readonly abilities: AbilityRepository;
-  readonly routines: RoutineRepository;
   readonly teams: TeamRepository;
   readonly secrets: SecretRepository;
   readonly workflows: WorkflowRepository;
@@ -435,7 +434,6 @@ export class SqliteRepositories {
       "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
     );
     this.abilities = new AbilityRepository(this.database);
-    this.routines = new RoutineRepository(this.database);
     this.teams = new TeamRepository(this.database);
     this.secrets = new SecretRepository(this.database);
     this.workflows = new WorkflowRepository(this.database);

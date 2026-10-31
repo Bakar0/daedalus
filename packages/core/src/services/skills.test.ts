@@ -136,9 +136,9 @@ describe("SkillService", () => {
           `"${join(home, "bin", "daedal")}" task create --title`,
         );
         expect(handoff).toContain("agent spawn --task");
-        // The routine skills name this home's CLI by its full path.
+        // The routines skill names this home's CLI by its full path.
         const routine = await readFile(
-          join(claudeHome, "skills", "daedalus-routine", "SKILL.md"),
+          join(claudeHome, "skills", "daedalus-routines", "SKILL.md"),
           "utf8",
         );
         expect(routine).toContain(`"${join(home, "bin", "daedal")}"`);

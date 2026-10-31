@@ -291,7 +291,7 @@ const server = Bun.serve<SocketData>({
           createBridge,
           onInput: (data) => {
             // A real keystroke holds Daedalus's own typing into this
-            // session for a while, so a routine never lands in a draft.
+            // session for a while, so a note never lands in a draft.
             if (socket.data.targetKind === "agent" && isTyping(data)) {
               context.deliveryGate.noteKeystroke(target.id);
               const agent = context.repositories.findAgent(target.id);
@@ -974,23 +974,13 @@ setInterval(async () => {
         context.agents.sweepAutoRebirths(telemetry.sessionTelemetry),
       )
       .catch(() => undefined);
-    // Routines ride the tick too: the clock lives in the app, so nothing
-    // fires while it is closed. Grant and revoke notes go through the same
-    // delivery rule.
+    // Grant and revoke notes go in under the delivery rule.
     if (context.repositories.abilities.list().length) {
-      const telemetry = await context.telemetry.read().catch(() => undefined);
-      const contextUse = new Map(
-        (telemetry?.sessionTelemetry ?? []).map((item) => [
-          item.sessionId,
-          item.context?.usedPercent,
-        ]),
-      );
-      const routineTick = await context.routineDelivery.tick({
-        contextPercent: (sessionId) => contextUse.get(sessionId),
+      const notes = await context.abilityNotes.tick({
         activity: (sessionId) => context.activity.get(sessionId),
       });
-      for (const event of routineTick.events)
-        await context.logger.write("info", "routines", { event });
+      for (const event of notes.events)
+        await context.logger.write("info", "abilities", { event });
     }
     // Routines on the Routines page start headless runs; the clock is this
     // tick, like the rest.

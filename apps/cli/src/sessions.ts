@@ -20,20 +20,19 @@ export const sessionHelp = `Session commands:
 
 <session> is a session id, or a session's name when only one live session
 has it. Pinned sessions sit at the top of their workspace's list. The color
-marks the session's card, its World figure and the tasks its routines file.
+marks the session's card and its World figure.
 'rebirth-at' sets the context percent (10 to 100) at which this session is
 asked for a rebirth, or turns it off for this session; 'default' takes its
 workspace's setting (see 'daedal workspace --help').
 
 Abilities: ${ABILITY_IDS.join(", ")}. 'grant' gives a running session an
-ability. Routines say nothing to the session: ask it for a routine. For
-orchestration, the app sends one note: through a Claude session's inbox,
+ability. For orchestration, the app sends one note: through a Claude session's inbox,
 with nothing typed, or typed into a Codex session once it is idle, its
 input box is empty and nobody typed in it for 2 minutes. To start a session that holds
 one, use 'daedal agent spawn --ability <ability>'. 'revoke' stops what the
 ability does and keeps its data, so a later grant brings it back. A rebirth
-moves the abilities, the pin and the color to the successor; a session with
-routines keeps its exact name, any other gets ' · 2'.
+moves the abilities, the pin and the color to the successor, which is named
+with ' · 2'.
 Archiving a session pauses its abilities; restoring it resumes them.`;
 
 const sessionLine = (session: AgentSession) =>

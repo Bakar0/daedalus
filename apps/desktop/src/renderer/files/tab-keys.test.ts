@@ -64,7 +64,7 @@ describe("deleteKeyCloses", () => {
       "task",
       "web",
       "team",
-      "routines",
+      "routinesPage",
     ])
       expect(deleteKeyCloses(kind)).toBe(true);
   });

@@ -170,7 +170,7 @@ export async function claudeDaedalusSettingsArgs(
   sessionId?: string,
   options: { acceptPeerMessages?: boolean; workingDirectory?: string } = {},
 ): Promise<string[]> {
-  // Every Claude session gets an inbox, so routines granted later reach it
+  // Every Claude session gets an inbox, so notes sent later reach it
   // without typing. A pipe that cannot be made leaves the session without
   // one; delivery then falls back to typing.
   const inbox = sessionId

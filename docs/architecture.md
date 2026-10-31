@@ -65,8 +65,7 @@ touches `Task.status`: the board is a third thing again.
   `developer_instructions`).
 - `done`: the turn ended on its own, with a result to look at. The `Stop` hook
   and Codex's `task_complete` both say so. Claude's `idle_prompt`, sent a minute
-  after every turn, is ignored because `Stop` already decided. Sessions holding
-  routines end their turns `idle`, since a run is not a result to review.
+  after every turn, is ignored because `Stop` already decided.
 
 **Lifecycle dominates on conflict.** A session that becomes `exited` has its
 activity cleared rather than preserved, because "working" is the most damaging

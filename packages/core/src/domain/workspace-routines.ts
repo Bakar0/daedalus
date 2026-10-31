@@ -1,5 +1,11 @@
 import type { UUID } from "./index";
 
+/** A routine's stored schedule text, parsed. */
+export type RoutineSchedule =
+  | { kind: "every"; everyMs: number; text: string }
+  | { kind: "cron"; expression: string; text: string }
+  | { kind: "at"; at: string; text: string };
+
 /**
  * A prompt that runs on a schedule in a workspace folder, as a headless
  * provider session that no live session holds.

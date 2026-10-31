@@ -2,8 +2,12 @@
 
 Every agent in Daedalus is an ordinary session. A session can be named,
 pinned and colored, and it can hold abilities: things Daedalus adds to it on
-top of being a session. There are two: routines, and orchestration, which
-makes a session the lead of a team.
+top of being a session. There is one: orchestration, which makes a session
+the lead of a team.
+
+Routines are not an ability. They live on the Routines page in the app's
+sidebar: a prompt that runs on a schedule in a workspace, each run a headless
+session of its own. See `daedal routine --help`.
 
 ## Name, pin and color
 
@@ -18,12 +22,10 @@ daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|#rrg
 `<session>` is a session id, or a session's name when exactly one live
 session has it. Pinned sessions sit at the top of their workspace's list, in
 the order they were pinned. The color marks the session's card on its left
-edge, and the chip on tasks its routines file. Besides the eight named colors,
-a session can take any `#rrggbb`; in the app, the rainbow swatch at the end
-of the color row opens a grid of 50 more. A rebirth successor keeps the
-pin and the color, and a session that holds routines also keeps its exact
-name rather than gaining a ` · 2`, because its routines' tasks are signed
-with it. A team's lead is numbered like any other session; the team's name
+edge. Besides the eight named colors, a session can take any `#rrggbb`; in
+the app, the rainbow swatch at the end of the color row opens a grid of 50
+more. A rebirth successor keeps the pin and the color, and its name gains a
+` · 2`. A team's lead is numbered like any other session; the team's name
 leaves the counter out, so it stays the same.
 
 `agent spawn` takes the same choices at creation: `--color <color>` and
@@ -32,29 +34,22 @@ leaves the counter out, so it stays the same.
 ## Abilities
 
 An ability is a definition in Daedalus's code. A session holds one through a
-row in `session_abilities`. The ability's data, such as routines, hangs off
-that row's id, so a rebirth moves everything with one update.
+row in `session_abilities`. The ability's data, such as a team's goal, hangs
+off that row's id, so a rebirth moves everything with one update.
 
 ```
-daedal agent spawn --workspace <w> --provider claude --name Argus --ability routines
-daedal session grant <session> routines
-daedal session revoke <session> routines
+daedal agent spawn --workspace <w> --provider claude --name Argus --ability orchestration
+daedal session grant <session> orchestration
+daedal session revoke <session> orchestration
 daedal session abilities <session>
 ```
 
-- **Routines tell the session nothing**, at creation or on a grant. A line
-  in the first prompt made the agent act before the user asked for
-  anything. The session finds the `daedalus-routines` skill when the user
-  asks for a routine, a run arrives as the run skill's own command, and the
-  `routine` commands refuse a session without the ability. The app's
-  Routines tab tells the user how to ask instead.
 - **Orchestration** adds one line to the launch prompt saying what the
   session holds and which skill to follow. Granted to a running session,
   Daedalus sends one note, as described under Delivery below; until then
   `session abilities` shows the note as waiting.
-- **Revoke** stops what the ability does; orchestration also sends a note
-  saying so. The row and its data stay, so granting it again brings
-  everything back. Tasks already filed stay on the board.
+- **Revoke** stops what the ability does and sends a note saying so. The row
+  and its data stay, so granting it again brings everything back.
 - **Archive** pauses what a session holds; **restore** resumes it.
 - Abilities work on Claude and Codex sessions. A terminal or a custom command
   cannot hold one.
@@ -65,169 +60,40 @@ nothing into a session's folder, which is usually a repository worktree.
 Sessions without the ability can see the skills, but its commands refuse to
 work for them.
 
-## Routines
-
-A session holding the routines ability runs routines: checks on a schedule
-the desktop app keeps. The user creates them by talking to the session, which
-follows the `daedalus-routines` skill and stores them with `daedal routine
-add`. Daedalus ships none. A routine is a schedule and a prompt; everything
-specific to the user is in the prompt and in the session's purpose.
-
-Everything lives in SQLite under the ability's id: the routines, their runs,
-their reports, and the purpose (`daedal routine purpose "<text>"`), which
-every run prints.
-
-### A routine
-
-The session writes a routine as Markdown and Daedalus stores it parsed.
-`daedal routine get <name> --text` prints it back in the same form.
-
-```markdown
----
-name: ci-health
-schedule: every 30m
-model: sonnet
-timeout: 10m
-output: task
-enabled: true
----
-
-Check CI for the repositories in the purpose ...
-For each problem give a key, a title, a link and the evidence.
-Return {"reports": []} when nothing needs attention.
-```
-
-| Field      | Meaning                                                                                                                      | Example                  |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| `name`     | Unique within the session's routines, also the key prefix                                                                    | `ci-health`              |
-| `schedule` | `every <n>m` or `every <n>h`, `cron "<5 fields>"` (local time), or `at <local datetime>` (one-shot)                          | `cron "50 8 * * 1-5"`    |
-| `until`    | The routine deletes itself after this time                                                                                   | `2026-09-30T15:40`       |
-| `model`    | Model for a Claude session's subagent                                                                                        | `sonnet`, `haiku`        |
-| `timeout`  | A run with no result after this is marked failed                                                                             | `10m`                    |
-| `output`   | `task`: each report becomes a tagged task and a notification. `notify`: notification only. `none`: the routine cannot report | `task`                   |
-| `enabled`  | Pause one routine without deleting it                                                                                        | `true`                   |
-| `vars`     | Values filled into `{{name}}` in the body                                                                                    | `pr: Bakar0/daedalus#57` |
-
-Daedalus fills `{{last_run}}`, `{{run_id}}`, `{{now}}` and `{{missed}}` into
-every body. A template (`routine add --file - --template`) never fires;
-`routine add --from <template> --var k=v --until +60m` copies one into a live
-routine.
-
 ### Delivery
 
-The host tick, every 1.2 seconds while the app is open, queues due runs. At
-most one run per routine waits: a slot that comes due while a run waits adds
-nothing, and the run counts the wait in `{{missed}}`. A slot that comes due
-while the routine's run is running is skipped.
+The host tick, every 1.2 seconds while the app is open, hands each waiting
+grant or revoke note to its session.
 
-Daedalus sends the oldest waiting run to the session when all of these
-hold:
-
-1. The ability is enabled and not paused, and the session is running.
-2. The session is idle. Activity comes from the provider's hooks; when it is
-   unknown, the pane decides (an input box and no "esc to interrupt"). For
-   Claude, a `needs_input` badge with the input box showing does not count as
-   a question: Claude draws a real question or permission dialog in place of
-   the box. Such a badge comes from the agent's own `daedal attention` or
-   from one of the session's background agents. The badge stays on the card.
-3. Its input box is empty (typed runs only). Daedalus reads the pane with its escape codes just
-   before typing and ignores dim text, which is a placeholder: Claude's
-   suggested next prompt, or Codex's "Ask Codex to do anything".
-4. Nobody pressed a key in the session's terminal in the last 2 minutes
-   (typed runs only).
-   Scrolling and selecting are not keystrokes. The host keeps this in memory,
-   so after an app restart nothing holds.
-5. No rebirth is pending.
-6. The same routine has no run in flight.
-7. Fewer runs are in flight than the provider takes: 3 for Claude, whose
-   session hands each run to a background subagent, and 1 for Codex, which
-   does each run itself.
-
-A Claude session gets the run through its inbox, nothing typed: "Daedalus:
-routine run <id> is due. Carry it out now with the daedalus-routine skill,
-for run id <id>." Every Claude session Daedalus launches has an inbox: a
-named pipe at `<home>/inbox/<session>.fifo`, readable only by the user, and
-a hook on `Stop` and `SessionStart` with `asyncRewake` that waits on it in a
-`/bin/sh` of about 2 MB. Daedalus writes the line without blocking; when no
-waiter is reading, the session is in a turn and the run waits. The waiter
-prints the line to stderr and exits 2, and Claude wakes with it as a hook
-note, so it never shows as something the user sent and never touches their
-draft. A waiter stays alive through a turn the user starts, so rule 2 still
-applies. Rules 3 and 4 do not: nothing is typed.
+A Claude session gets it through its inbox, nothing typed. Every Claude
+session Daedalus launches has an inbox: a named pipe at
+`<home>/inbox/<session>.fifo`, readable only by the user, and a hook on
+`Stop` and `SessionStart` with `asyncRewake` that waits on it in a `/bin/sh`
+of about 2 MB. Notes and the rebirth request go to the mailbox file beside
+the pipe (`<session>.fifo.mail`), because they must arrive whatever the
+session is doing. Daedalus appends the note and pokes the pipe. A waiter that
+is reading prints the mailbox at once; otherwise the session is in a turn,
+and the waiter that `Stop` starts when the turn ends prints it. The waiter
+prints to stderr and exits 2, and Claude wakes with it as a hook note, so it
+never shows as something the user sent and never touches their draft.
 
 A Codex session, or a Claude session launched before inboxes existed, gets
-the line typed: `$daedalus-routine <run-id>` for Codex, followed by a second
-Enter that Codex's skill popup needs, and `/daedalus-routine <run-id>` for
-Claude. A dev build's skills carry its channel suffix.
+the note typed, when all of these hold:
 
-The grant and revoke notes and the rebirth request below go to a Claude
-session's inbox too, but to the mailbox file beside the pipe
-(`<session>.fifo.mail`), because they must arrive whatever the session is
-doing. Daedalus appends the note and pokes the pipe. A waiter that is
-reading prints the mailbox at once; otherwise the session is in a turn,
-and the waiter that `Stop` starts when the turn ends prints it. None of the
-delivery rules hold them. A Codex session, or an older Claude session, gets
-them typed under the same rules as a run.
-
-Each change in why a session's runs are held is logged as a `routines` event
-in the app log, such as "Argus: holding, you typed in this session".
+1. The session is running and idle. Activity comes from the provider's
+   hooks; when it is unknown, the pane decides (an input box and no "esc to
+   interrupt").
+2. Its input box is empty. Daedalus reads the pane with its escape codes just
+   before typing and ignores dim text, which is a placeholder: Claude's
+   suggested next prompt, or Codex's "Ask Codex to do anything".
+3. Nobody pressed a key in the session's terminal in the last 2 minutes.
+   Scrolling and selecting are not keystrokes. The host keeps this in memory,
+   so after an app restart nothing holds.
 
 The skills never take the session or the CLI from the environment, which
 Claude can swap for another session's (see "The calling session" in
 `docs/cli.md`). They call this home's `bin/daedal` by full path, and the CLI
-finds the session from the working directory. The run commands also find it
-from the run id.
-
-The routine bar above the session's terminal shows what waits and
-why: "2 waiting · you typed 0:40 ago · resumes in 1:20", or busy, the input
-box has text, the runs in flight, a rebirth, or paused. Run now
-(`routineRunNow` over RPC) skips only the 2-minute wait for the next line.
-
-The bar's **Routines** button opens the session's Routines tab in the center
-tab strip. Like the Team, Workflows and Custom instructions tabs, it starts
-with one line saying what it is, how to ask for a routine, and a link to
-this section. It shows the purpose, edited in place, and Pause all or Resume.
-The routines are a table with one row each: schedule in words (`every 15m`
-reads "Every 15 min"; a cron or `at` schedule shows as written), next run,
-the last run's outcome and time, output, Run now and Enable or Disable. A
-routine with failures says why under its name, and three in a row mark the
-row red. A row opens to its time limit, model, end date and prompt. Under
-the table are the latest finished runs with their summaries, then the
-templates. The tab reads the routines again whenever the session's routine
-status in the snapshot moves, and after each action.
-
-### Reports and tasks
-
-A report is what a run hands back: a key, a title, a body, an optional link,
-and an urgent flag. Only the session calls `daedal routine report`.
-
-- One task per key. While a task for a key is open, a new report adds an
-  "Update <time>" section to it and sends no second notification. The check
-  and the insert happen in one SQLite transaction.
-- `--same-as <key>` adds a report with another key to that key's task.
-- `daedal routine resolve <key>` adds "Resolved at <time>". If no agent was
-  ever started on the task, Daedalus moves it to done 24 hours later.
-- A key reported again within 14 days reopens its last task. After that it
-  opens a new task that names the old one.
-- An urgent report notifies even in Focus mode.
-- Tagged task cards have Useful and Noise buttons. Noise on a key stops it
-  from raising anything until the verdict is removed. A task the user moves
-  to done counts as useful.
-
-### Rebirth, failures and missed runs
-
-- A session holding routines is reborn once its context passes its
-  auto-rebirth threshold (its own, its workspace's or the global default),
-  or 60% when that comes to off. The
-  generic rebirth sweep leaves it alone. Delivery stops, runs in flight get up
-  to 10 minutes to finish, and the rebirth request goes in under the delivery
-  rule. A rebirth not completed in 15 minutes is finished by Daedalus without
-  a note; the routines live outside the conversation.
-- Nothing fires while the app is closed. On open, each overdue routine fires
-  once, with `{{missed}}` set.
-- A run with no `routine done` before its timeout fails. After 3 failures in
-  a row the session's card gets an attention badge.
-- A session holding routines ends each turn `idle`, not `done`.
+finds the session from the working directory.
 
 ## Orchestration and teams
 
@@ -239,7 +105,7 @@ answer and be reborn. The user is above the lead and can add a member too.
 In the app:
 
 - **Orchestration** is a switch in Create session and in a session's card
-  menu, like Routines. A member's menu does not offer it.
+  menu. A member's menu does not offer it.
 - A lead's card has a **+** that adds a member: a name, which becomes its
   `@handle`, Claude or Codex (the lead's provider is chosen at first), a
   model, and optional **Instructions**. The member runs in the lead's

@@ -238,10 +238,10 @@ workspace's --start-sets-in-progress setting is on, which is the default.
 the task and write the brief back with 'task update --description-file -'
 instead of doing the task, and leaves the status alone.
 
-'agent spawn --ability routines' starts a session that holds the routines
-ability: the user asks it for routines and Daedalus types their runs into
-it. --color and --pin mark the session's card. See 'daedal session --help'
-and 'daedal routine --help'.
+'agent spawn --ability orchestration' starts a session that leads a team.
+--color and --pin mark the session's card. See 'daedal session --help'.
+Routines are not an ability: they live on the Routines page; see
+'daedal routine --help'.
 
 'agent spawn --workflow <name>' starts the session with that workflow's run
 already open, so the agent spends nothing choosing one.

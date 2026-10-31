@@ -6040,19 +6040,6 @@ dd {
 .session-card[data-team-member="true"] {
   margin-left: 14px;
 }
-.session-routines-badge {
-  color: var(--session-color, var(--muted));
-  font-weight: 600;
-}
-
-.session-waiting-badge {
-  background: var(--accent-wash);
-  border-radius: 999px;
-  color: var(--accent);
-  font-size: 10px;
-  margin-left: 6px;
-  padding: 1px 6px;
-}
 
 /* The card menu: rename, pin, color and abilities. It opens beside the
    card, in the top layer, so neither the card nor the list clips it. */
@@ -6317,8 +6304,9 @@ dd {
   transform: translateX(12px);
 }
 
-/* The routine bar above the terminal of a session holding routines. */
-.routine-bar {
+/* A notice bar above a session's terminal: its team, a large file, a
+   cloud sign-in. */
+.notice-bar {
   background: var(--raised);
   border: 1px solid var(--line);
   border-left: 3px solid var(--session-color, var(--line-strong));
@@ -6327,17 +6315,13 @@ dd {
   margin-bottom: 8px;
   padding: 6px 8px 6px 10px;
 }
-.routine-bar[data-held="true"] {
-  border-color: rgb(240 180 76 / 0.45);
-  border-left-color: var(--session-color, var(--session-gold));
-}
-.routine-bar-row {
+.notice-bar-row {
   align-items: center;
   display: flex;
   gap: 8px;
   min-width: 0;
 }
-.routine-bar-text {
+.notice-bar-text {
   color: var(--secondary);
   flex: 1;
   font-variant-numeric: tabular-nums;
@@ -6346,20 +6330,12 @@ dd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.routine-bar[data-paused="true"] .routine-bar-text {
-  color: var(--muted);
-}
-.routine-bar-notice {
-  color: var(--danger);
-  font-size: 11px;
-  white-space: nowrap;
-}
-.routine-bar-actions {
+.notice-bar-actions {
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
 }
-.routine-bar-actions button {
+.notice-bar-actions button {
   font-size: 11px !important;
   padding: 3px 8px !important;
 }
@@ -6378,34 +6354,11 @@ dd {
   white-space: nowrap;
 }
 /* The size sentence wraps rather than cutting off the command beside it. */
-.large-file-bar .routine-bar-text {
+.large-file-bar .notice-bar-text {
   white-space: normal;
 }
-.routine-bar-waiting {
-  margin-top: 4px;
-}
-.routine-bar-waiting > summary {
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 11px;
-  width: max-content;
-}
-.routine-bar-waiting ul {
-  display: grid;
-  gap: 2px;
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0;
-}
-.routine-bar-waiting li {
-  display: flex;
-  gap: 8px;
-}
-.routine-bar-waiting small {
-  color: var(--muted);
-}
 
-/* The terminal and whatever sits over it, under the routine bar. */
+/* The terminal and whatever sits over it, under the notice bars. */
 .terminal-stage {
   display: flex;
   flex: 1;
@@ -6460,8 +6413,7 @@ dd {
   margin: 0;
   padding: 8px 10px;
 }
-.ability-page-empty,
-.ability-page-hint {
+.ability-page-empty {
   color: var(--muted);
   font-size: 12px;
   margin: 0;
@@ -6603,13 +6555,6 @@ dd {
 .routine-row[data-open="true"] .routine-row-caret {
   transform: rotate(90deg);
 }
-.routine-row-failures {
-  color: var(--danger);
-  display: block;
-  font-size: 11px;
-  margin-top: 2px;
-  padding-left: 20px;
-}
 .routine-row-last {
   align-items: center;
   display: inline-flex;
@@ -6647,27 +6592,6 @@ dd {
   padding: 8px 10px;
   white-space: pre-wrap;
 }
-.routine-chip {
-  border-radius: 999px;
-  display: inline-block;
-  font-size: 11px;
-  line-height: 1;
-  padding: 3px 8px;
-  background: var(--raised-hover);
-  color: var(--secondary);
-}
-.routine-chip[data-tone="good"] {
-  background: color-mix(in srgb, var(--success) 16%, transparent);
-  color: var(--success);
-}
-.routine-chip[data-tone="bad"] {
-  background: color-mix(in srgb, var(--danger) 16%, transparent);
-  color: var(--danger);
-}
-.routine-chip[data-tone="busy"] {
-  background: var(--accent-wash);
-  color: var(--accent);
-}
 .routine-runs {
   display: flex;
   flex-direction: column;
@@ -6683,9 +6607,6 @@ dd {
   gap: 10px;
   grid-template-columns: 96px minmax(80px, 160px) 1fr auto;
   padding: 7px 2px;
-}
-.routine-runs li .routine-chip {
-  justify-self: start;
 }
 .routine-runs strong {
   color: var(--text);
@@ -7136,57 +7057,6 @@ button.routine-tick:hover {
 .team-composer-hint {
   color: var(--muted);
   font-size: 11px;
-}
-
-/* A routine report's strip on a board card */
-.report-details {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 11px;
-  gap: 6px;
-  justify-content: space-between;
-  margin-top: 4px;
-}
-.report-source,
-.report-verdict {
-  align-items: center;
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.report-session {
-  border: 1px solid var(--session-color, var(--muted));
-  border-radius: 4px;
-  color: var(--session-color, var(--muted));
-  font-weight: 650;
-  padding: 0 5px;
-}
-.report-urgent {
-  background: var(--danger);
-  border-radius: 4px;
-  color: #fff;
-  font-weight: 650;
-  padding: 0 5px;
-  text-transform: uppercase;
-}
-.report-routine {
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.report-resolved {
-  color: var(--success);
-}
-.report-reopened {
-  color: var(--session-gold);
-}
-.report-details button {
-  font-size: 11px;
-  margin: 0;
-  padding: 2px 8px;
-}
-.report-verdict-label {
-  color: var(--muted);
 }
 
 .changes-view {
@@ -9166,7 +9036,7 @@ button.routine-tick:hover {
 .session-card[data-cloud-state="waking"] .session-status-label {
   font-style: italic;
 }
-.cloud-sign-in-bar .routine-bar-text {
+.cloud-sign-in-bar .notice-bar-text {
   white-space: normal;
 }
 .session-cloud-signin {

@@ -251,9 +251,12 @@ describe("ingestHook", () => {
           return { ...context, close: () => undefined };
         },
       });
-      // The routines check failed; the reading and the flush share the retry.
+      // The reading's open failed, so it went to the record; the team flush
+      // opened again rather than skipping.
       expect(attempts).toBe(2);
-      expect(context.activity.get(sessionId)?.activity).toBe("done");
+      expect((await readActivityRecord(home, sessionId))?.activity).toBe(
+        "done",
+      );
     });
   });
 
@@ -297,7 +300,7 @@ describe("ingestHook", () => {
     });
   });
 
-  test("a Stop opens one context for the routines check, the reading and the team flush", async () => {
+  test("a Stop opens one context for the reading and the team flush", async () => {
     await withSession(
       async ({ context, sessionId, ingest, opened, closed }) => {
         await ingest("UserPromptSubmit", {});

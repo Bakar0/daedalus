@@ -222,19 +222,19 @@ describe("the Actions panel", () => {
   test("its field filters the actions by label and description", () => {
     const actions = [
       { id: "rename", label: "Rename…" },
-      { id: "routines", label: "Routines", description: "Grant routines." },
+      { id: "team", label: "Orchestration", description: "Lead a team." },
       { id: "archive", label: "Archive" },
     ];
     expect(filterActions(actions, "").map((action) => action.id)).toEqual([
       "rename",
-      "routines",
+      "team",
       "archive",
     ]);
     expect(filterActions(actions, "arch").map((action) => action.id)).toEqual([
       "archive",
     ]);
-    expect(filterActions(actions, "grant").map((action) => action.id)).toEqual([
-      "routines",
+    expect(filterActions(actions, "lead").map((action) => action.id)).toEqual([
+      "team",
     ]);
   });
 
@@ -314,14 +314,12 @@ describe("item actions", () => {
       name: "api",
       pinned: false,
       color: null,
-      routines: true,
       orchestration: false,
       offerAbilities: true,
       offerOrchestration: true,
       onRename: () => calls.push("rename"),
       onPin: (pinned) => calls.push(`pin:${pinned}`),
       onColor: (color) => calls.push(`color:${color}`),
-      onRoutines: (granted) => calls.push(`routines:${granted}`),
       onOrchestration: (granted) => calls.push(`team:${granted}`),
       actions: [
         {
@@ -353,19 +351,13 @@ describe("item actions", () => {
       "Pin to top",
     ]);
     expect(abilities.map((action) => [action.id, action.checked])).toEqual([
-      ["routines", true],
       ["orchestration", false],
     ]);
     // A card action keeps its confirmation in the palette.
     expect(listed[0]).toMatchObject({ confirm: "Running work stops." });
-    for (const id of ["pin", "routines", "orchestration", "color-red"])
+    for (const id of ["pin", "orchestration", "color-red"])
       listed.find((action) => action.id === id)?.run();
-    expect(calls).toEqual([
-      "pin:true",
-      "routines:false",
-      "team:true",
-      "color:red",
-    ]);
+    expect(calls).toEqual(["pin:true", "team:true", "color:red"]);
   });
 
   test("a terminal, or a team's member, offers no abilities it cannot hold", () => {
@@ -376,7 +368,7 @@ describe("item actions", () => {
       sessionMenuEntries(
         model({ offerOrchestration: false }).value,
       ).abilities.map((action) => action.id),
-    ).toEqual(["routines"]);
+    ).toEqual([]);
   });
 
   test("a workspace lists its card actions, then rename", () => {

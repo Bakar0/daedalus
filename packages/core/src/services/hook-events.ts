@@ -283,11 +283,6 @@ export function pendingBackgroundAgents(
 export interface ClaudeHookContext {
   /** Background agents still out, from `pendingBackgroundAgents`. */
   backgroundAgents?: number;
-  /**
-   * The session holds routines. It sits at its prompt after every run, and a
-   * run ending is not a result to review, so its turns end `idle`.
-   */
-  routines?: boolean;
 }
 
 /**
@@ -334,11 +329,10 @@ export function raisesAttention(
 function turnEnded(
   payload: Record<string, unknown>,
   source: AgentActivitySource,
-  routines: boolean,
 ): ActivityObservation {
   const last = text(payload.last_assistant_message);
   return {
-    activity: routines ? "idle" : "done",
+    activity: "done",
     source,
     ...(last ? { detail: shorten(last) } : {}),
     ifActivity: TURN_END,
@@ -493,7 +487,7 @@ export function observeClaudeHook(
           detail: backgroundWaitDetail(background),
           ifActivity: RUNNING,
         };
-      return turnEnded(payload, source, Boolean(context.routines));
+      return turnEnded(payload, source);
     }
     case "StopFailure":
       return {
@@ -518,7 +512,6 @@ export function observeClaudeHook(
 export function observeCodexHook(
   event: string,
   payload: Record<string, unknown>,
-  context: Pick<ClaudeHookContext, "routines"> = {},
 ): ActivityObservation | undefined {
   if (isSubagentPayload(payload)) return undefined;
   const source: AgentActivitySource = "hook";
@@ -566,9 +559,7 @@ export function observeCodexHook(
     case "PostCompact":
       return { activity: "working", source, detail: "Compacting context" };
     case "Stop":
-      return isCodexTitleTurn(payload)
-        ? undefined
-        : turnEnded(payload, source, Boolean(context.routines));
+      return isCodexTitleTurn(payload) ? undefined : turnEnded(payload, source);
     case "Interrupt":
       // Codex's Interrupt has no Claude equivalent. The turn is over and
       // nothing is blocked, so it retracts a badge the way a new prompt does.

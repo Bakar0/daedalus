@@ -346,14 +346,12 @@ export interface SessionMenuModel {
   name: string;
   pinned: boolean;
   color: SessionColorDto | null;
-  routines: boolean;
   orchestration: boolean;
   offerAbilities: boolean;
   offerOrchestration: boolean;
   onRename: () => void;
   onPin: (pinned: boolean) => void;
   onColor: (color: SessionColorDto | null) => void;
-  onRoutines: (granted: boolean) => void;
   onOrchestration: (granted: boolean) => void;
   actions?: MenuAction[];
 }
@@ -376,32 +374,20 @@ export function sessionMenuEntries(model: SessionMenuModel): {
         run: () => model.onPin(!model.pinned),
       },
     ],
-    abilities: model.offerAbilities
-      ? [
-          {
-            id: "routines",
-            label: "Routines",
-            checked: model.routines,
-            description: model.routines
-              ? "Revoke routines. The routines are kept and come back on a new grant."
-              : "Grant routines. Ask the session for scheduled checks; nothing is sent to it.",
-            run: () => model.onRoutines(!model.routines),
-          },
-          ...(model.offerOrchestration
-            ? [
-                {
-                  id: "orchestration",
-                  label: "Orchestration",
-                  checked: model.orchestration,
-                  description: model.orchestration
-                    ? "End the team. Members keep running as ordinary sessions."
-                    : "Lead a team: this session plans the work and adds members.",
-                  run: () => model.onOrchestration(!model.orchestration),
-                },
-              ]
-            : []),
-        ]
-      : [],
+    abilities:
+      model.offerAbilities && model.offerOrchestration
+        ? [
+            {
+              id: "orchestration",
+              label: "Orchestration",
+              checked: model.orchestration,
+              description: model.orchestration
+                ? "End the team. Members keep running as ordinary sessions."
+                : "Lead a team: this session plans the work and adds members.",
+              run: () => model.onOrchestration(!model.orchestration),
+            },
+          ]
+        : [],
   };
 }
 
@@ -452,7 +438,6 @@ export function SessionMenu({
   color,
   autoRebirth,
   inheritedRebirth,
-  routines,
   orchestration,
   offerAbilities,
   offerOrchestration,
@@ -460,7 +445,6 @@ export function SessionMenu({
   onPin,
   onColor,
   onAutoRebirth,
-  onRoutines,
   onOrchestration,
   actions = [],
   returnFocus,
@@ -473,8 +457,6 @@ export function SessionMenu({
   autoRebirth: AutoRebirthDto;
   /** The threshold Default comes to, or null for off. */
   inheritedRebirth: number | null;
-  /** Whether the session holds the routines ability now. */
-  routines: boolean;
   /** Whether the session leads a team. */
   orchestration: boolean;
   offerAbilities: boolean;
@@ -484,7 +466,6 @@ export function SessionMenu({
   onPin: (pinned: boolean) => void;
   onColor: (color: SessionColorDto | null) => void;
   onAutoRebirth: (value: AutoRebirthDto) => void;
-  onRoutines: (granted: boolean) => void;
   onOrchestration: (granted: boolean) => void;
   /** Its card's actions, each with a pin. */
   actions?: MenuAction[];
@@ -496,14 +477,12 @@ export function SessionMenu({
     name,
     pinned,
     color,
-    routines,
     orchestration,
     offerAbilities,
     offerOrchestration,
     onRename,
     onPin,
     onColor,
-    onRoutines,
     onOrchestration,
   });
   return (

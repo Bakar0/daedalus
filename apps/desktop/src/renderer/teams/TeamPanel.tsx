@@ -40,19 +40,19 @@ export function TeamBar({
   return (
     <section
       aria-label="Team"
-      className="routine-bar team-bar"
+      className="notice-bar team-bar"
       data-color={color ?? undefined}
       style={sessionColorStyle(color)}
     >
-      <div className="routine-bar-row">
-        <span className="routine-bar-text">
+      <div className="notice-bar-row">
+        <span className="notice-bar-text">
           {role === "lead"
             ? `Leads ${team.name} · ${members} ${members === 1 ? "member" : "members"}`
             : leadArchived
               ? `@${handle} in ${team.name} · lead archived, restore it to continue`
               : `@${handle} in ${team.name}`}
         </span>
-        <span className="routine-bar-actions">
+        <span className="notice-bar-actions">
           <button
             className="quiet"
             data-panel-toggle

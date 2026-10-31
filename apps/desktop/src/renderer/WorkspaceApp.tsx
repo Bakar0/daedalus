@@ -42,8 +42,6 @@ import type {
   SessionWorktreeDto,
   QuitChoice,
   RepositoryDiscoveryDto,
-  RoutinesDetailDto,
-  RpcResult,
   SessionColorDto,
   SessionAttentionDto,
   ShutdownPlanDto,
@@ -55,7 +53,6 @@ import type {
 import {
   formatKeyGlyphs,
   resolveAutoRebirth,
-  ROUTINES_REBIRTH_PERCENT,
   workspaceNameProblem,
   type AutoRebirthDto,
   type CommandArea,
@@ -205,10 +202,8 @@ const PALETTE_HIDDEN_COMMANDS = new Set<string>([
   "tab.goToLast",
 ]);
 import { useCloudState } from "./CloudPanel";
-import { RoutineBar } from "./routines/RoutineBar";
 import { TeamBar, TeamPage } from "./teams/TeamPanel";
 import { RoutinesHome } from "./routines/RoutinesHome";
-import { RoutinesPage } from "./routines/RoutinesPanel";
 import { ProBadge } from "./ProPlan";
 import { useMutation, useRpcQuery } from "./use-rpc";
 import { RemoteMenu } from "./RemoteMenu";
@@ -2486,7 +2481,6 @@ export function WorkspaceApp({
     /** The workspace whose card's + opened the dialog. */
     workspaceId?: string;
     color?: SessionColorDto;
-    routines?: boolean;
     orchestration?: boolean;
     /** The team the new session joins as a member the user added. */
     teamId?: string;
@@ -3222,7 +3216,7 @@ export function WorkspaceApp({
       }),
     [client, openSession],
   );
-  // A clicked routine notification lands on its task, on its board.
+  // A clicked notification about a task lands on it, on its board.
   useEffect(
     () =>
       client.subscribeFocusTask?.((taskId) => {
@@ -3561,10 +3555,7 @@ export function WorkspaceApp({
   };
 
   /** A session's card actions, for its menu with their pins. */
-  const sessionMenuActions = (
-    session: AgentSessionDto,
-    holdsRoutines: boolean,
-  ): MenuAction[] => {
+  const sessionMenuActions = (session: AgentSessionDto): MenuAction[] => {
     const agent =
       session.kind === "agent" &&
       (session.provider === "claude" || session.provider === "codex");
@@ -3625,9 +3616,8 @@ export function WorkspaceApp({
         label: "Archive",
         pinned: pins.session.has("archive"),
         onPin: (on: boolean) => pin("session", "archive", on),
-        confirm: holdsRoutines
-          ? "Running work stops and its routines pause. Restoring the session resumes both."
-          : "Running work stops. Its conversation can be restored and resumed later.",
+        confirm:
+          "Running work stops. Its conversation can be restored and resumed later.",
         run: () => void archiveSession(session),
       },
     ];
@@ -3638,9 +3628,8 @@ export function WorkspaceApp({
    * the session has focus in the sidebar.
    */
   const sessionMenuModel = (session: AgentSessionDto): SessionMenuModel => {
-    const holdsRoutines = routinesBySession.has(session.id);
     return {
-      actions: sessionMenuActions(session, holdsRoutines),
+      actions: sessionMenuActions(session),
       color: session.color,
       name: sessionName(session),
       offerAbilities:
@@ -3652,10 +3641,8 @@ export function WorkspaceApp({
         void setOrchestrationAbility(session, granted),
       onPin: (pinned) => void updateSession(session, { pinned }),
       onRename: () => void renameSession(session),
-      onRoutines: (granted) => void setRoutinesAbility(session, granted),
       orchestration: teamsByLead.has(session.id),
       pinned: Boolean(session.pinnedAt),
-      routines: holdsRoutines,
     };
   };
 
@@ -3774,10 +3761,6 @@ export function WorkspaceApp({
   // is the bug, not the feature. The card tone and the workspace roll-up
   // count still surface a blocked session in place.
   const sessions = workspaceSessions.filter((item) => !item.archivedAt);
-  // Sessions holding routines, which their cards and archive dialog mark.
-  const routinesBySession = new Map(
-    (snapshot?.routines ?? []).map((status) => [status.sessionId, status]),
-  );
   // Teams by lead and by id: a lead's card and bar, and a member's.
   const teamsByLead = new Map(
     (snapshot?.teams ?? []).map((team) => [team.leadId, team]),
@@ -3876,27 +3859,18 @@ export function WorkspaceApp({
   const activeSessionRepository = workspaceContent?.repositories.find(
     (item) => item.id === activeSessionWorktree?.repositoryId,
   );
-  const activeSessionRoutines = snapshot?.routines.find(
-    (status) => status.sessionId === activeSession?.id,
-  );
   const activeSessionTeam = activeSession ? teamOf(activeSession) : undefined;
-  // A Team or Routines tab goes once its team or routines do, however that
-  // happened: revoked here or from the CLI, or its session archived.
+  // A Team tab goes once its team does, however that happened: revoked
+  // here or from the CLI, or its lead archived.
   const teamIds = (snapshot?.teams ?? []).map((team) => team.id).join(" ");
-  const routineSessionIds = (snapshot?.routines ?? [])
-    .map((status) => status.sessionId)
-    .join(" ");
   const snapshotLoaded = Boolean(snapshot);
   useEffect(() => {
     if (!snapshotLoaded) return;
     const ids = (text: string) => new Set(text ? text.split(" ") : []);
     files.withEditor((handle) =>
-      handle.closeAbilityTabsExcept({
-        teams: ids(teamIds),
-        routines: ids(routineSessionIds),
-      }),
+      handle.closeAbilityTabsExcept({ teams: ids(teamIds) }),
     );
-  }, [files, snapshotLoaded, teamIds, routineSessionIds]);
+  }, [files, snapshotLoaded, teamIds]);
   const activeSessionWorkspace = activeSession
     ? workspaceById.get(activeSession.workspaceId)
     : undefined;
@@ -4477,13 +4451,10 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
-    const { color, routines, orchestration, teamId, instructions, workflow } =
+    const { color, orchestration, teamId, instructions, workflow } =
       sessionForm;
     const cloud = sessionInCloud;
-    const abilities = [
-      ...(routines ? (["routines"] as const) : []),
-      ...(orchestration ? (["orchestration"] as const) : []),
-    ];
+    const abilities = orchestration ? ["orchestration" as const] : [];
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: sessionWorkspace.id,
@@ -4934,29 +4905,6 @@ export function WorkspaceApp({
       await updateSession(session, { name: trimmed });
   }
 
-  async function setRoutinesAbility(
-    session: AgentSessionDto,
-    granted: boolean,
-  ) {
-    if (
-      !granted &&
-      !(await askConfirm({
-        title: `Revoke routines from ${sessionName(session)}?`,
-        message:
-          "No more runs go in and waiting runs are dropped. The routines and their purpose are kept, and come back if routines are granted again.",
-        confirmLabel: "Revoke",
-      }))
-    )
-      return;
-    await perform(
-      client.request.sessionAbility({
-        sessionId: session.id,
-        ability: "routines",
-        granted,
-      }),
-    );
-  }
-
   async function setOrchestrationAbility(
     session: AgentSessionDto,
     granted: boolean,
@@ -4977,17 +4925,6 @@ export function WorkspaceApp({
         ability: "orchestration",
         granted,
       }),
-    );
-  }
-
-  /** A routines request from the bar; an open tab reads it from the snapshot. */
-  async function routinesAction<T>(operation: Promise<RpcResult<T>>) {
-    return perform(operation);
-  }
-
-  function openRoutinesTab(session: AgentSessionDto) {
-    files.withEditor((handle) =>
-      handle.openRoutines(session.id, sessionName(session)),
     );
   }
 
@@ -5706,8 +5643,6 @@ export function WorkspaceApp({
     const timestamp = session.endedAt ?? session.startedAt;
     const startupError = sessionStartupErrors.get(session.id);
     const statusView = statusViewFor(session);
-    const holdsRoutines = routinesBySession.has(session.id);
-    const waitingRuns = routinesBySession.get(session.id)?.waiting.length ?? 0;
     const team = teamOf(session);
     const context = telemetryById.get(session.id)?.context;
     const workspaceRebirth =
@@ -5723,10 +5658,7 @@ export function WorkspaceApp({
       workspaceRebirth,
       snapshot?.settings.autoRebirthPercent ?? null,
     );
-    // A session with routines is reborn at 60% when nothing sets a threshold,
-    // so its routines keep running (see the routine delivery rule).
-    const rebirthAt =
-      ownRebirth ?? (holdsRoutines ? ROUTINES_REBIRTH_PERCENT : null);
+    const rebirthAt = ownRebirth;
     // An archived lead pauses its team; its members stand on their own.
     const leadArchived =
       team?.role === "member" &&
@@ -5863,19 +5795,6 @@ export function WorkspaceApp({
                     : `@${team.handle}${leadArchived ? " · lead archived" : ""}`}
                 </span>
               )}
-              {holdsRoutines && (
-                <span className="session-routines-badge">
-                  Routines
-                  {waitingRuns > 0 && (
-                    <span
-                      className="session-waiting-badge"
-                      title="Routine runs waiting to go in"
-                    >
-                      {waitingRuns} waiting
-                    </span>
-                  )}
-                </span>
-              )}
             </span>
             {/* A failed start takes the status line. */}
             <em
@@ -6001,19 +5920,11 @@ export function WorkspaceApp({
           {pins.session.has("archive") && (
             <ConfirmButton
               aria-label={`Archive ${sessionName(session)} session`}
-              armedTitle={
-                holdsRoutines
-                  ? "Running work stops and its routines pause. Restoring the session resumes both."
-                  : "Running work stops. Its conversation can be restored and resumed later."
-              }
+              armedTitle="Running work stops. Its conversation can be restored and resumed later."
               className="session-card-action session-card-hover-action"
               onConfirm={() => void archiveSession(session)}
               tabIndex={-1}
-              title={
-                holdsRoutines
-                  ? "Archive session and pause its routines"
-                  : "Archive session"
-              }
+              title="Archive session"
             >
               <ArchiveIcon />
             </ConfirmButton>
@@ -7466,20 +7377,7 @@ export function WorkspaceApp({
     setSelectedTaskId(undefined);
   }
 
-  const reportsByTask = new Map(
-    (snapshot?.routineReports ?? []).flatMap((report) =>
-      report.taskId ? [[report.taskId, report] as const] : [],
-    ),
-  );
   const sessionsById = new Map(agents.map((session) => [session.id, session]));
-  const routineOwners = new Map(
-    (snapshot?.abilities ?? []).flatMap((ability) => {
-      const session = sessionsById.get(ability.sessionId);
-      return session
-        ? [[ability.id, { name: session.name, color: session.color }] as const]
-        : [];
-    }),
-  );
   const boardView = workspace ? (
     <BoardView
       accounts={snapshot?.settings.accounts}
@@ -7510,16 +7408,6 @@ export function WorkspaceApp({
           client.request.sessionWorktreeOpen({
             session: worktree.sessionId,
             repository: worktree.repositoryId,
-          }),
-        )
-      }
-      routineReports={reportsByTask}
-      routineOwners={routineOwners}
-      onReportVerdict={(report, verdict) =>
-        void perform(
-          client.request.routineReportVerdict({
-            id: report.id,
-            verdict,
           }),
         )
       }
@@ -7611,29 +7499,6 @@ export function WorkspaceApp({
   // The session tab shows whichever session the left column has open.
   const sessionPane = workspace ? (
     <section className="terminal-column">
-      {activeSessionRoutines && activeSession && (
-        <RoutineBar
-          busy={busy}
-          color={activeSession.color}
-          onOpenPanel={() => openRoutinesTab(activeSession)}
-          onRunNow={() =>
-            void routinesAction(
-              client.request.routineRunNow({
-                sessionId: activeSession.id,
-              }),
-            )
-          }
-          onTogglePause={() =>
-            void routinesAction(
-              client.request.routinesControl({
-                sessionId: activeSession.id,
-                action: activeSessionRoutines.paused ? "resume" : "pause",
-              }),
-            )
-          }
-          status={activeSessionRoutines}
-        />
-      )}
       {activeSessionTeam && activeSession && (
         <TeamBar
           color={activeSession.color}
@@ -7677,8 +7542,8 @@ export function WorkspaceApp({
           />
         )}
       {activeSession ? (
-        // The drawer sits over the terminal, below the routine bar, so
-        // the bar's buttons stay in reach while it is open.
+        // The drawer sits over the terminal, below the bars above it, so
+        // their buttons stay in reach while it is open.
         <div className="terminal-stage">
           {(() => {
             const signIn = signInBySession.get(activeSession.id);
@@ -8509,12 +8374,9 @@ export function WorkspaceApp({
                     }))}
                   />
                 )}
-                abilityTabName={(kind, id) => {
-                  if (kind === "team")
-                    return snapshot?.teams.find((team) => team.id === id)?.name;
-                  const owner = sessionsById.get(id);
-                  return owner ? sessionName(owner) : undefined;
-                }}
+                abilityTabName={(_kind, id) =>
+                  snapshot?.teams.find((team) => team.id === id)?.name
+                }
                 renderTeam={(teamId, visible) => (
                   <TeamPage
                     busy={busy}
@@ -8529,22 +8391,6 @@ export function WorkspaceApp({
                     visible={visible}
                   />
                 )}
-                renderRoutines={(sessionId) => {
-                  const owner = sessionsById.get(sessionId);
-                  return (
-                    <RoutinesPage
-                      busy={busy}
-                      client={client}
-                      now={now}
-                      run={perform}
-                      sessionId={sessionId}
-                      sessionName={owner ? sessionName(owner) : "Session"}
-                      status={snapshot?.routines.find(
-                        (status) => status.sessionId === sessionId,
-                      )}
-                    />
-                  );
-                }}
                 renderTerminal={(terminalId) => {
                   const terminal = integratedTerminals.find(
                     (item) => item.id === terminalId,
@@ -9715,12 +9561,6 @@ export function WorkspaceApp({
                       <legend>Agent abilities</legend>
                       {(
                         [
-                          {
-                            key: "routines",
-                            label: "Routines",
-                            description:
-                              "Give the agent the ability to run routines",
-                          },
                           {
                             key: "orchestration",
                             label: "Orchestration",

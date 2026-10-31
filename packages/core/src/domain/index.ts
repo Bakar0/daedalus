@@ -156,7 +156,7 @@ export interface AgentSession {
   position: number;
   /** When the user pinned it to the top of its workspace's list, or null. */
   pinnedAt: string | null;
-  /** The mark on its card, its World figure and its routines' tasks. */
+  /** The mark on its card and its World figure. */
   color: SessionColor | null;
   /**
    * This session's own rebirth threshold. Null takes its workspace's.

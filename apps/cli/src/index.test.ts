@@ -507,7 +507,7 @@ describe("daedal CLI contract", () => {
         "session",
         "grant",
         "Argus",
-        "routines",
+        "orchestration",
         "--json",
       ]);
       expect(JSON.parse(missing.stderr).error.message).toContain(

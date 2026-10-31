@@ -71,8 +71,6 @@ const snapshot: DesktopSnapshotDto = {
   toasts: [],
   abilities: [],
   teams: [],
-  routines: [],
-  routineReports: [],
   settings: {
     version: "0.6.0",
     channel: "stable",

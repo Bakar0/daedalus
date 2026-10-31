@@ -1,4 +1,3 @@
-import type { RoutinesStatus } from "./routine-delivery";
 import type { ApplicationContext } from "./context";
 import { largeFiles } from "./context-files";
 
@@ -110,39 +109,15 @@ function sources(context: ApplicationContext) {
       () => context.notifications.pending("toast"),
       () => repositories.listPendingNotifications(),
     ),
-    // A run starting or ending, or a hold changing, changes what the
-    // session's bar says, so it reloads too. A team is its lead's
-    // orchestration ability, so this covers `teams` as well.
+    // A team is its lead's orchestration ability, so this covers `teams`
+    // as well.
     abilities: rows(
       () => repositories.abilities.list(),
-      () =>
-        repositories.abilities.list().map((ability) => ({
-          ability,
-          ...(ability.enabled && ability.ability === "routines"
-            ? {
-                status: statusVersion(context.routineDelivery.status(ability)),
-                routines: repositories.routines.list(ability.id),
-                reports: repositories.routines.listReports(ability.id, {
-                  states: ["open", "resolved"],
-                }),
-              }
-            : {}),
-        })),
-    ),
-    routines: rows(
-      () =>
-        context.abilities
-          .holders("routines")
-          .map((ability) => context.routineDelivery.status(ability)),
-      unwatched("covered by abilities"),
+      () => repositories.abilities.list(),
     ),
     teams: rows(
       () => context.teams.list(),
       unwatched("covered by abilities: a team is its lead's ability"),
-    ),
-    routineReports: rows(
-      () => repositories.routines.listReportsWithTasks(),
-      unwatched("covered by abilities: a report's task moves with the report"),
     ),
     // An agent reports a step a few times an hour at most, so a change
     // reloads the whole window rather than earning a partial part.
@@ -277,21 +252,3 @@ export const isPartialReload = (
   names.every((name) =>
     (PARTIAL_READ_MODEL_SOURCES as readonly string[]).includes(name),
   );
-
-/**
- * A routines status as the version sees it. Every keystroke moves the quiet
- * time, so the times are rounded to ten seconds: a reload per tick while the
- * user types would resend the whole snapshot for nothing.
- */
-const statusVersion = (status: RoutinesStatus) => ({
-  ...status,
-  lastKeystrokeAt: null,
-  hold: status.hold
-    ? {
-        ...status.hold,
-        until: status.hold.until
-          ? Math.floor(Date.parse(status.hold.until) / 10_000)
-          : undefined,
-      }
-    : null,
-});

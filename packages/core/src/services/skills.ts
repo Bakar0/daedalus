@@ -68,7 +68,6 @@ import refinementSkillTemplate from "../../../../skills/daedalus-refinement/SKIL
 import refinementOpenAiMetadata from "../../../../skills/daedalus-refinement/agents/openai.yaml" with { type: "text" };
 import unslopStyleTemplate from "../../../../styles/Unslop.md" with { type: "text" };
 import routinesSkillTemplate from "../../../../skills/daedalus-routines/SKILL.md" with { type: "text" };
-import routineRunSkillTemplate from "../../../../skills/daedalus-routine/SKILL.md" with { type: "text" };
 import orchestrationSkillTemplate from "../../../../skills/daedalus-orchestration/SKILL.md" with { type: "text" };
 import teamSkillTemplate from "../../../../skills/daedalus-team/SKILL.md" with { type: "text" };
 import instructionsSkillTemplate from "../../../../skills/daedalus-instructions/SKILL.md" with { type: "text" };
@@ -187,21 +186,11 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     id: "daedalus-routines",
     title: "Routines",
     summary:
-      "Lets a session that holds the routines ability create and change its routines when the user asks for them. Sessions without the ability cannot use it.",
+      "Lets a session create and change routines on the Routines page when the user asks for something on a schedule.",
     supportsAlways: false,
     defaultEnabled: true,
     defaultMode: "on-demand",
     skillFiles: [{ path: "SKILL.md", contents: routinesSkillTemplate }],
-  },
-  {
-    id: "daedalus-routine",
-    title: "Routine run",
-    summary:
-      "What a session with the routines ability does when Daedalus types a routine run into it: run the check, file what it finds as tasks, and close the run.",
-    supportsAlways: false,
-    defaultEnabled: true,
-    defaultMode: "on-demand",
-    skillFiles: [{ path: "SKILL.md", contents: routineRunSkillTemplate }],
   },
   {
     id: "daedalus-orchestration",

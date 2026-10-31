@@ -98,17 +98,11 @@ export interface EditorAreaHandle {
   openRoutinesPage(): void;
   /** Shows a team's tab, adding it first if it is not open. */
   openTeam(teamId: string, name: string): void;
-  /** Shows a session's Routines tab, adding it first if it is not open. */
-  openRoutines(sessionId: string, name: string): void;
   /**
-   * Closes every Team tab whose team is not in `teams` and every Routines
-   * tab whose session is not in `routines`, including tabs the saved layout
-   * brought back for something that has since gone.
+   * Closes every Team tab whose team is not in `teams`, including tabs the
+   * saved layout brought back for a team that has since gone.
    */
-  closeAbilityTabsExcept(keep: {
-    teams: ReadonlySet<string>;
-    routines: ReadonlySet<string>;
-  }): void;
+  closeAbilityTabsExcept(keep: { teams: ReadonlySet<string> }): void;
 }
 
 /** The tabs the app draws rather than the editor. */
@@ -120,8 +114,7 @@ type AppPanelKind =
   | "workflows"
   | "instructions"
   | "routinesPage"
-  | "team"
-  | "routines";
+  | "team";
 
 /** What a center tab holds, for the app to follow which one is in front. */
 export type CenterPanelKind =
@@ -133,8 +126,7 @@ export type CenterPanelKind =
   | "workflows"
   | "instructions"
   | "routinesPage"
-  | "team"
-  | "routines";
+  | "team";
 
 export interface EditorAreaProps {
   client: DesktopClient;
@@ -164,10 +156,8 @@ export interface EditorAreaProps {
   renderRoutinesPage?(): React.ReactNode;
   /** A team tab's content, drawn by the app; `visible` while in front. */
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
-  /** A session's Routines tab content, drawn by the app. */
-  renderRoutines?(sessionId: string): React.ReactNode;
-  /** The current name for a Team or Routines tab, so renames show. */
-  abilityTabName?(kind: "team" | "routines", id: string): string | undefined;
+  /** The current name for a Team tab, so renames show. */
+  abilityTabName?(kind: "team", id: string): string | undefined;
   /** The + in the tab strip: a new terminal in a tab. */
   onNewTerminal?(): void;
   /** A terminal tab was closed by the user, so its shell should end. */
@@ -193,8 +183,6 @@ interface FilePanelParams {
   terminalId?: string;
   /** The team a team tab shows. */
   teamId?: string;
-  /** The session a Routines tab shows. */
-  sessionId?: string;
   title?: string;
   preview?: boolean;
   mode?: "edit" | "preview";
@@ -239,8 +227,7 @@ interface EditorContextValue {
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
-  renderRoutines?(sessionId: string): React.ReactNode;
-  abilityTabName?(kind: "team" | "routines", id: string): string | undefined;
+  abilityTabName?(kind: "team", id: string): string | undefined;
   onNewTerminal?(): void;
   onOpenExternal?(url: string): void;
   load(path: string): Promise<OpenDocument | undefined>;
@@ -335,7 +322,6 @@ export default function EditorArea({
   renderInstructions,
   renderRoutinesPage,
   renderTeam,
-  renderRoutines,
   abilityTabName,
   onNewTerminal,
   onTerminalTabClosed,
@@ -569,11 +555,11 @@ export default function EditorArea({
   );
 
   /** The session, task and web tabs: one each for session and task. */
-  // Where focus was when a Team or Routines tab was opened, by panel id,
+  // Where focus was when a Team tab was opened, by panel id,
   // so closing the tab gives it back.
   const openers = useRef(new Map<string, HTMLElement[]>());
   /**
-   * Puts focus in a Team or Routines tab that was just opened or brought to
+   * Puts focus in a Team tab that was just opened or brought to
    * the front, so Tab and the keys start there and not where the opener
    * was. The page mounts through dockview's portal, so it is looked for over
    * a few frames.
@@ -600,7 +586,7 @@ export default function EditorArea({
     (id: string, params: FilePanelParams, title: string) => {
       const api = apiRef.current;
       if (!api) return;
-      const takesFocus = params.kind === "team" || params.kind === "routines";
+      const takesFocus = params.kind === "team";
       const existing = api.getPanel(id);
       if (existing) {
         existing.api.updateParameters({ ...existing.params, ...params });
@@ -733,24 +719,11 @@ export default function EditorArea({
             name,
           ),
         ),
-      openRoutines: (sessionId, name) =>
-        whenReady(() =>
-          placeApp(
-            `routines:${sessionId}`,
-            { path: "", kind: "routines", sessionId, title: name },
-            name,
-          ),
-        ),
       closeAbilityTabsExcept: (keep) =>
         whenReady(() => {
           for (const panel of [...(apiRef.current?.panels ?? [])]) {
             const params = panel.params as FilePanelParams | undefined;
-            if (
-              (params?.kind === "team" &&
-                !keep.teams.has(params.teamId ?? "")) ||
-              (params?.kind === "routines" &&
-                !keep.routines.has(params.sessionId ?? ""))
-            )
+            if (params?.kind === "team" && !keep.teams.has(params.teamId ?? ""))
               panel.api.close();
           }
         }),
@@ -945,6 +918,13 @@ export default function EditorArea({
         const raw = window.localStorage.getItem(layoutKey(workspaceId));
         if (raw) {
           api.fromJSON(JSON.parse(raw));
+          // A session's Routines tab is gone; a saved layout may still hold one.
+          for (const panel of [...api.panels])
+            if (
+              (panel.params as { kind?: string } | undefined)?.kind ===
+              "routines"
+            )
+              panel.api.close();
           restored = api.totalPanels > 0;
         }
       } catch {
@@ -981,7 +961,7 @@ export default function EditorArea({
           });
           return;
         }
-        if (params.kind === "team" || params.kind === "routines") {
+        if (params.kind === "team") {
           queueMicrotask(() => {
             if (api.getPanel(panel.id)) return;
             const opener = openers.current.get(panel.id);
@@ -1035,7 +1015,6 @@ export default function EditorArea({
     renderInstructions,
     renderRoutinesPage,
     renderTeam,
-    renderRoutines,
     abilityTabName,
     onNewTerminal,
     onOpenExternal,
@@ -1070,7 +1049,9 @@ export default function EditorArea({
             instructions: InstructionsPanel,
             routinesPage: RoutinesPagePanel,
             team: TeamPanel,
-            routines: RoutinesPanel,
+            // A session's Routines tab is gone; a saved layout may still
+            // name it, and is restored with it closed.
+            routines: RetiredPanel,
           }}
           dndStrategy="pointer"
           getTabContextMenuItems={({ panel, group, api }) =>
@@ -1289,9 +1270,7 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
                 ? "Routines"
                 : params.kind === "team"
                   ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
-                  : params.kind === "routines"
-                    ? `Routines · ${context.abilityTabName?.("routines", params.sessionId ?? "") ?? params.title ?? ""}`
-                    : (params.url ?? "Web");
+                  : (params.url ?? "Web");
   return (
     <div
       className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
@@ -1345,7 +1324,7 @@ function AppTabIcon({ kind }: { kind: AppPanelKind }) {
         <path d={INSTRUCTIONS_ICON_PATH} />
       ) : kind === "team" ? (
         <path d="M5.5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM1.5 13c0-2.2 1.8-4 4-4s4 1.8 4 4M11 7.5a1.75 1.75 0 1 0 0-3.5M11.5 9.2c1.7.3 3 1.8 3 3.8" />
-      ) : kind === "routines" || kind === "routinesPage" ? (
+      ) : kind === "routinesPage" ? (
         <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM8 4.5V8l2.5 1.5" />
       ) : (
         <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM1.5 8h13M8 1.5c2 2 2 11 0 13M8 1.5c-2 2-2 11 0 13" />
@@ -1402,17 +1381,8 @@ function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   );
 }
 
-function RoutinesPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
-  const context = useEditorContext();
-  return (
-    <div
-      className="app-panel ability-panel"
-      data-panel-id={api.id}
-      tabIndex={-1}
-    >
-      {params.sessionId && context.renderRoutines?.(params.sessionId)}
-    </div>
-  );
+function RetiredPanel() {
+  return null;
 }
 
 function RoutinesPagePanel() {

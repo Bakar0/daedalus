@@ -247,7 +247,7 @@ export class PresenceService {
     return this.parkFocus({ sessionId, requestedAt: new Date().toISOString() });
   }
 
-  /** The same for a task, which is what a routine's notification opens. */
+  /** The same for a task, which is what a notification about one opens. */
   async requestTaskFocus(taskId: string): Promise<{ raised: boolean }> {
     return this.parkFocus({ taskId, requestedAt: new Date().toISOString() });
   }
