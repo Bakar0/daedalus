@@ -129,6 +129,33 @@ export class WorkspaceRoutineRepository {
       );
   }
 
+  /** The Routines agent's session, if one was ever opened. */
+  agentSessionId(): string | null {
+    return (
+      this.database
+        .query<{ session_id: string | null }, []>(
+          "SELECT session_id FROM routines_agent WHERE id = 1",
+        )
+        .get()?.session_id ?? null
+    );
+  }
+
+  setAgentSession(sessionId: string): void {
+    this.database
+      .query(
+        `INSERT INTO routines_agent (id, session_id) VALUES (1, ?)
+         ON CONFLICT (id) DO UPDATE SET session_id = excluded.session_id`,
+      )
+      .run(sessionId);
+  }
+
+  /** A rebirth hands the Routines agent to the successor. */
+  moveAgent(from: string, to: string): void {
+    this.database
+      .query("UPDATE routines_agent SET session_id = ? WHERE session_id = ?")
+      .run(to, from);
+  }
+
   delete(id: string): void {
     this.database.query("DELETE FROM workspace_routines WHERE id = ?").run(id);
   }

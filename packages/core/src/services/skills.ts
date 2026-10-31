@@ -186,7 +186,7 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     id: "daedalus-routines",
     title: "Routines",
     summary:
-      "Lets a session create and change routines on the Routines page when the user asks for something on a schedule.",
+      "How the Routines agent, or any session, writes, runs and fixes routines: a time and a prompt that run headless in a workspace.",
     supportsAlways: false,
     defaultEnabled: true,
     defaultMode: "on-demand",

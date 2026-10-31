@@ -8367,6 +8367,18 @@ export function WorkspaceApp({
                       const target = sessionsById.get(sessionId);
                       if (target) showSession(target.id, target.workspaceId);
                     }}
+                    onOpenAgent={async () => {
+                      const home = workspace?.id ?? activeWorkspaces[0]?.id;
+                      if (!home) return;
+                      const agent = await perform(
+                        client.request.routinesAgent({ workspaceId: home }),
+                      );
+                      if (!agent) return;
+                      showSession(agent.id, agent.workspaceId);
+                      files.withEditor((handle) =>
+                        handle.showSessionBesideRoutines(),
+                      );
+                    }}
                     run={perform}
                     workspaces={activeWorkspaces.map((item) => ({
                       id: item.id,

@@ -1863,6 +1863,7 @@ export class AgentService {
       this.repositories.abilities.moveToSession(predecessor.id, session.id);
       // So is the workflow run: the successor carries on at the same step.
       this.repositories.workflows.moveToSession(predecessor.id, session.id);
+      this.repositories.workspaceRoutines.moveAgent(predecessor.id, session.id);
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });

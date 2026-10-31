@@ -96,6 +96,11 @@ export interface EditorAreaHandle {
   openInstructions(): void;
   /** Shows the Routines page, adding it first if it is not open. */
   openRoutinesPage(): void;
+  /**
+   * Shows the Routines page with the session tab in a pane to its right, as
+   * the Routines agent opens.
+   */
+  showSessionBesideRoutines(): void;
   /** Shows a team's tab, adding it first if it is not open. */
   openTeam(teamId: string, name: string): void;
   /**
@@ -711,6 +716,31 @@ export default function EditorArea({
             "Routines",
           ),
         ),
+      showSessionBesideRoutines: () =>
+        whenReady(() => {
+          const api = apiRef.current;
+          if (!api) return;
+          placeApp(
+            "routinesPage",
+            { path: "", kind: "routinesPage" },
+            "Routines",
+          );
+          const page = api.getPanel("routinesPage");
+          if (!page) return;
+          const session = api.getPanel(SESSION_PANEL);
+          if (!session)
+            api.addPanel({
+              id: SESSION_PANEL,
+              component: "session",
+              tabComponent: "app",
+              title: "Session",
+              params: { path: "", kind: "session" },
+              position: { referencePanel: page.id, direction: "right" },
+            });
+          else if (session.group.id === page.group.id)
+            session.api.moveTo({ group: page.group, position: "right" });
+          else session.api.setActive();
+        }),
       openTeam: (teamId, name) =>
         whenReady(() =>
           placeApp(

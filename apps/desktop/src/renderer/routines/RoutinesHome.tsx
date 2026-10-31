@@ -54,12 +54,15 @@ export function RoutinesHome({
   workspaces,
   run,
   onOpenSession,
+  onOpenAgent,
 }: {
   client: DesktopClient;
   workspaces: Array<{ id: string; name: string }>;
   /** Sends a request the way the app's other actions do, with its errors. */
   run: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
   onOpenSession(sessionId: string): void;
+  /** Opens the Routines agent's session beside this page. */
+  onOpenAgent(): void;
 }) {
   const [page, setPage] = useState<RoutinesPageDto>();
   const [error, setError] = useState<string>();
@@ -139,6 +142,9 @@ export function RoutinesHome({
             </small>
           </div>
           <div className="ability-page-actions">
+            <button className="quiet" onClick={onOpenAgent} type="button">
+              Routines agent
+            </button>
             <button onClick={() => setAdding(true)} type="button">
               + New
             </button>

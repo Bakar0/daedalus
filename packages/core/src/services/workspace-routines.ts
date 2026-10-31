@@ -12,7 +12,8 @@ import type {
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import { accountEnvironment } from "./account-homes";
-import { resolveAgentExecutable } from "./providers";
+import { installedSkill } from "./installed-skills";
+import { buildSkillInvocation, resolveAgentExecutable } from "./providers";
 import {
   describeSchedule,
   nextRunTime,
@@ -53,6 +54,32 @@ export const spawnRoutineProcess: RoutineSpawner = (input) => {
   return { exited: child.exited, kill: () => child.kill() };
 };
 
+/** The session actions routines need, from the agent service. */
+export interface RoutineSessions {
+  /** Opens a run's conversation as an archived session, then restores it. */
+  continueConversation(input: {
+    workspaceId: string;
+    provider: AgentProviderName;
+    providerSessionId: string;
+    workingDirectory: string;
+    name: string;
+    startedAt: string;
+  }): Promise<AgentSession>;
+  spawn(input: {
+    workspace: string;
+    name: string;
+    provider: string;
+    message: string;
+  }): Promise<AgentSession>;
+  restore(id: string): Promise<AgentSession>;
+}
+
+/** The skill the Routines agent starts with. */
+export const ROUTINES_SKILL = "daedalus-routines";
+
+const ROUTINES_AGENT_PROMPT =
+  "You are the Routines agent. You write and keep the user's Daedalus routines in every workspace, and read their runs. Run `daedal routine list`. If a routine's recent runs failed or gave a weak result, read its runs and suggest one concrete change to its prompt or schedule. Then say in one line what you can do and wait for the user.";
+
 export interface WorkspaceRoutineView {
   routine: WorkspaceRoutine;
   workspaceName: string | null;
@@ -86,17 +113,36 @@ export class WorkspaceRoutineService {
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly config: DaedalusConfig,
-    private readonly continueConversation: (input: {
-      workspaceId: string;
-      provider: AgentProviderName;
-      providerSessionId: string;
-      workingDirectory: string;
-      name: string;
-      startedAt: string;
-    }) => Promise<AgentSession>,
+    private readonly sessions: RoutineSessions,
     private readonly spawn: RoutineSpawner = spawnRoutineProcess,
     private readonly now: () => Date = () => new Date(),
   ) {}
+
+  /**
+   * The Routines agent: one Claude session that writes and keeps routines in
+   * every workspace. The first call starts it in `workspace`; later calls
+   * return it, restoring it when it was archived.
+   */
+  async agent(workspace: string): Promise<AgentSession> {
+    const id = this.repositories.workspaceRoutines.agentSessionId();
+    const existing = id ? this.repositories.findAgent(id) : undefined;
+    if (existing)
+      return existing.archivedAt
+        ? this.sessions.restore(existing.id)
+        : existing;
+    const skill = await installedSkill(this.config, "claude", ROUTINES_SKILL);
+    const session = await this.sessions.spawn({
+      workspace,
+      name: "Routines",
+      provider: "claude",
+      message: [
+        ...(skill ? [buildSkillInvocation("claude", skill)] : []),
+        ROUTINES_AGENT_PROMPT,
+      ].join("\n\n"),
+    });
+    this.repositories.workspaceRoutines.setAgentSession(session.id);
+    return session;
+  }
 
   list(): WorkspaceRoutineView[] {
     return this.repositories.workspaceRoutines.list().map((routine) => ({
@@ -277,7 +323,7 @@ export class WorkspaceRoutineService {
         "CONFLICT",
         "A run across all workspaces cannot be continued in one yet",
       );
-    const session = await this.continueConversation({
+    const session = await this.sessions.continueConversation({
       workspaceId,
       provider: "claude",
       providerSessionId: run.providerSessionId,

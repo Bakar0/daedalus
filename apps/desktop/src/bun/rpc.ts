@@ -694,6 +694,10 @@ export function createDesktopRequestHandlers(
       mutate(async () =>
         agentDto(await context.workspaceRoutines.continueRun(runId)),
       ),
+    routinesAgent: ({ workspaceId }) =>
+      mutate(async () =>
+        agentDto(await context.workspaceRoutines.agent(workspaceId)),
+      ),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
     teamSay: ({ teamId, body }) =>
       mutate(async () => {

@@ -83,18 +83,32 @@ class NoTmux {
   async probe() {
     return "tmux 3.7c";
   }
-  async createSession() {}
-  async hasSession() {
-    return false;
+  // Sessions start and stay up, as the Routines agent needs.
+  readonly sessions = new Set<string>();
+  async createSession(launch: { session: string }) {
+    this.sessions.add(launch.session);
+  }
+  async hasSession(session: string) {
+    return this.sessions.has(session);
   }
   async listSessions() {
-    return [];
+    return [...this.sessions];
+  }
+  async stop(session: string) {
+    this.sessions.delete(session);
   }
   async attach() {
     return 0;
   }
+  // Claude at its prompt, so a launch counts as started.
   async capture() {
-    return "";
+    return [
+      "⏺ Ready.",
+      "─".repeat(32),
+      "❯ ",
+      "─".repeat(32),
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+    ].join("\n");
   }
   async sendText() {}
   async sendKeys() {}
@@ -128,6 +142,8 @@ async function withRoutines(
       tmux: new NoTmux() as unknown as TmuxClient,
       reconcile: false,
       routineSpawner: spawner,
+      // The Routines agent's first message reaches it through its inbox.
+      sessionInbox: async () => true,
       now: () => clock.now,
     });
     try {
@@ -213,6 +229,34 @@ describe("WorkspaceRoutineService", () => {
         await settle();
       },
     );
+  });
+
+  test("the Routines agent is one session, kept through archive and rebirth", async () => {
+    const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
+    await withRoutines(fakeClaude("Done."), clock, async (context) => {
+      await context.workspaces.create({ name: "Ops", slug: "ops" });
+      await context.workspaces.create({ name: "Web", slug: "web" });
+      const first = await context.workspaceRoutines.agent("ops");
+      expect(first).toMatchObject({ name: "Routines", provider: "claude" });
+      // Asked from another workspace, it is still the same session.
+      expect((await context.workspaceRoutines.agent("web")).id).toBe(first.id);
+
+      await context.agents.archive(first.id);
+      const restored = await context.workspaceRoutines.agent("web");
+      expect(restored.id).toBe(first.id);
+      expect(restored.archivedAt).toBeNull();
+
+      // A rebirth hands it to the successor, as it does abilities.
+      const successor = await context.agents.spawn({
+        workspace: "ops",
+        provider: "claude",
+        name: "Routines · 2",
+      });
+      context.repositories.workspaceRoutines.moveAgent(first.id, successor.id);
+      expect((await context.workspaceRoutines.agent("ops")).id).toBe(
+        successor.id,
+      );
+    });
   });
 
   test("a run asked for from another process starts on the next tick", async () => {

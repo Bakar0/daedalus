@@ -1490,6 +1490,8 @@ export interface DesktopRpcSchema {
       routineTranscript: Request<{ runId: number }, RoutineTranscriptDto>;
       /** Opens the run's conversation as a live session of its workspace. */
       routineContinue: Request<{ runId: number }, AgentSessionDto>;
+      /** The Routines agent's session, started in the workspace on first use. */
+      routinesAgent: Request<{ workspaceId: string }, AgentSessionDto>;
       /** Sends what is waiting, then reads the team as the user. */
       teamDetail: Request<{ teamId: string }, TeamDetailDto>;
       /** Posts to the team chat as the user. */

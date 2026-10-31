@@ -478,7 +478,11 @@ export async function createApplicationContext(
     workspaceRoutines: new WorkspaceRoutineService(
       repositories,
       config,
-      (input) => agents.continueConversation(input),
+      {
+        continueConversation: (input) => agents.continueConversation(input),
+        spawn: (input) => agents.spawn(input),
+        restore: (id) => agents.restore(id),
+      },
       options.routineSpawner,
       options.now,
     ),
