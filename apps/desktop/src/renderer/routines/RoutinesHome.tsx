@@ -179,10 +179,10 @@ export function RoutinesHome({
                   <tr>
                     <th aria-label="On" />
                     <th>Routine</th>
-                    <th>Workspace</th>
+                    <th className="routine-col-workspace">Workspace</th>
                     <th>Schedule</th>
-                    <th>Last 7 runs</th>
-                    <th>Last result</th>
+                    <th className="routine-col-ticks">Last 7 runs</th>
+                    <th className="routine-col-last">Last result</th>
                     <th>Next run</th>
                     <th aria-label="Actions" />
                   </tr>
@@ -245,7 +245,7 @@ export function RoutinesHome({
                         {relativeTime(item.startedAt, now)}
                       </time>
                       <strong>{item.routineName}</strong>
-                      <span className="routine-row-muted">
+                      <span className="routine-row-muted routine-run-workspace">
                         {workspaceOf.get(item.routineId) ?? "All workspaces"}
                       </span>
                       <span className="routine-run-summary">
@@ -313,10 +313,16 @@ function RoutineRows({
             <span aria-hidden="true" className="routine-row-caret">
               ▸
             </span>
-            <strong>{routine.name}</strong>
+            <span className="routine-row-title">
+              <strong>{routine.name}</strong>
+              {/* Shown here once the page is too narrow for its column. */}
+              <small className="routine-row-muted routine-row-workspace-inline">
+                {routine.workspaceName ?? "All workspaces"}
+              </small>
+            </span>
           </button>
         </td>
-        <td className="routine-row-workspace">
+        <td className="routine-row-workspace routine-col-workspace">
           {routine.workspaceName ?? "All workspaces"}
         </td>
         <td>
@@ -325,7 +331,7 @@ function RoutineRows({
             {routine.schedule.replace(/^cron\s+/, "")}
           </small>
         </td>
-        <td>
+        <td className="routine-col-ticks">
           <span className="routine-ticks">
             {routine.recentRuns.map((item) => (
               <button
@@ -340,7 +346,7 @@ function RoutineRows({
             ))}
           </span>
         </td>
-        <td className="routine-row-last">
+        <td className="routine-row-last routine-col-last">
           {last ? (
             <>
               <span>{last.summary ?? last.status}</span>

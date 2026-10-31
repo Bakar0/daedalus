@@ -6688,9 +6688,52 @@ dd {
   color: var(--secondary);
   white-space: nowrap;
 }
-.routines-home-table .routine-row-last {
+/* The page sizes itself to its pane, which a split can make narrow. The
+   switch, name, schedule, next run and Run now always show; the rest give
+   way, widest first, so the table never scrolls sideways. */
+.routines-home {
+  container-type: inline-size;
+}
+.routines-home-table .routine-row-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.routines-home-table .routine-row-workspace-inline {
+  display: none;
+}
+/* Last result takes what room is left and cuts its text there. */
+.routines-home-table td.routine-row-last {
   display: table-cell;
-  max-width: 280px;
+  max-width: 0;
+  width: 100%;
+}
+.routines-home-table .routine-row-last span,
+.routines-home-table .routine-row-last small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container (max-width: 860px) {
+  .routines-home-table :is(th, td).routine-col-workspace {
+    display: none;
+  }
+  .routines-home-table .routine-row-workspace-inline {
+    display: block;
+  }
+  .routines-home-runs li > button {
+    grid-template-columns: 10px 72px minmax(80px, 160px) 1fr;
+  }
+  .routines-home-runs .routine-run-workspace {
+    display: none;
+  }
+}
+@container (max-width: 620px) {
+  .routines-home-table :is(th, td).routine-col-ticks,
+  .routines-home-table :is(th, td).routine-col-last {
+    display: none;
+  }
+}
+.routines-home-table .routine-row-last {
   white-space: normal;
 }
 .routines-home-table .routine-row-last span {
