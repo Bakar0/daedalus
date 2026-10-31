@@ -132,26 +132,28 @@ export function RoutinesHome({
   );
   return (
     <div className="workflows-tab">
+      <p className="workflows-intro">
+        A routine is a time and a prompt. Each run is a headless Claude session
+        in the routine's workspace; open a run to read it or carry on from it.
+      </p>
       <div className="ability-page routines-page routines-home">
-        <header className="ability-page-header">
-          <div className="ability-page-title">
-            <h2>Routines</h2>
-            <small>
-              A time and a prompt. Each run is a headless Claude session in the
-              routine's workspace; open a run to read it or carry on from it.
-            </small>
-          </div>
-          <div className="ability-page-actions">
-            <button className="quiet" onClick={onOpenAgent} type="button">
-              Routines agent
-            </button>
-            <button onClick={() => setAdding(true)} type="button">
-              + New
-            </button>
-          </div>
-          {error && <p className="ability-page-error">{error}</p>}
-        </header>
+        {error && <p className="ability-page-error">{error}</p>}
         <div className="ability-page-scroll">
+          <header className="routines-section-head">
+            <h3>Routines</h3>
+            <div>
+              <button className="quiet" onClick={onOpenAgent} type="button">
+                Ask the Routines agent
+              </button>
+              <button
+                className="quiet"
+                onClick={() => setAdding(true)}
+                type="button"
+              >
+                + New
+              </button>
+            </div>
+          </header>
           {adding && (
             <RoutineForm
               client={client}

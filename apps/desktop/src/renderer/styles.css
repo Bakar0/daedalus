@@ -6481,6 +6481,29 @@ dd {
   gap: 8px;
 }
 
+/* The Routines page's heading row, like a Workflows group's: a small
+   uppercase title with quiet actions at its end. */
+.routines-section-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.routines-section-head h3 {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.routines-section-head div {
+  display: flex;
+  gap: 4px;
+}
+.routines-section-head button {
+  padding: 2px 6px;
+}
+
 /* Routines: one row per routine; a row opens to its prompt and limits. */
 .routines-table {
   border-collapse: collapse;
