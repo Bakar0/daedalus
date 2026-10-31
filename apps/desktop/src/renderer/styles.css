@@ -6706,12 +6706,14 @@ dd {
 .routines-home-table td.routine-row-last {
   display: table-cell;
   max-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
   width: 100%;
 }
-.routines-home-table .routine-row-last span,
 .routines-home-table .routine-row-last small {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 @container (max-width: 860px) {
   .routines-home-table :is(th, td).routine-col-workspace {
