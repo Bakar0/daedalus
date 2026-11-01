@@ -1,21 +1,13 @@
-import type {
-  RoutineDefinition,
-  RoutineOutput,
-  RoutineSchedule,
-} from "../domain";
+import type { RoutineSchedule } from "../domain";
 import { DaedalusError } from "../errors";
 
 /**
- * The text form of a routine: the schedule and limits in YAML frontmatter
- * and the prompt as the body. A session writes this to add a routine, and
- * `routine get --text` prints it back. Daedalus stores the parsed routine in
- * SQLite and knows nothing about what it checks; that is all in the body.
+ * Routine schedules: the stored text (`every 30m`, `cron "…"`, `at …`), when
+ * a routine is next due, and the plain words a user types for one.
  */
 
 const ROUTINE_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 const MIN_EVERY_MS = 60_000;
-const OUTPUTS: readonly RoutineOutput[] = ["task", "notify", "none"];
 
 export function routineName(value: string): string {
   const name = value.trim();
@@ -49,22 +41,6 @@ export function localTime(iso: string | null | undefined): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-export function formatDuration(milliseconds: number): string {
-  const minutes = Math.round(milliseconds / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48)
-    return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
-
-/** A duration as `parseDuration` reads it back, exactly. */
-function durationText(milliseconds: number): string {
-  if (milliseconds % 3_600_000 === 0) return `${milliseconds / 3_600_000}h`;
-  if (milliseconds % 60_000 === 0) return `${milliseconds / 60_000}m`;
-  return `${Math.round(milliseconds / 1_000)}s`;
-}
-
 /**
  * A local date and time, `2026-09-30T15:40` or `2026-09-30 15:40`, read in
  * the machine's time zone the way the user wrote it. An explicit offset or
@@ -95,14 +71,6 @@ export function parseLocalDateTime(value: string): Date {
       `'${value}' is not a date and time; use 2026-09-30T15:40`,
     );
   return date;
-}
-
-/** `+60m` from now, or an absolute local date and time. */
-export function parseUntil(value: string, now: Date): Date {
-  const text = value.trim();
-  return text.startsWith("+")
-    ? new Date(now.getTime() + parseDuration(text.slice(1)))
-    : parseLocalDateTime(text);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -295,152 +263,159 @@ export function nextRunTime(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Files                                                                       */
+/* Plain words                                                                 */
 /* -------------------------------------------------------------------------- */
 
-export const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAY_PLURALS = [
+  "Sundays",
+  "Mondays",
+  "Tuesdays",
+  "Wednesdays",
+  "Thursdays",
+  "Fridays",
+  "Saturdays",
+];
+const DAY_WORDS: Array<[RegExp, number]> = [
+  [/^sun(day)?s?$/, 0],
+  [/^mon(day)?s?$/, 1],
+  [/^tue(s|sday)?s?$/, 2],
+  [/^wed(nesday)?s?$/, 3],
+  [/^thu(r|rs|rsday)?s?$/, 4],
+  [/^fri(day)?s?$/, 5],
+  [/^sat(urday)?s?$/, 6],
+];
 
-export const stringValue = (value: unknown): string | undefined => {
-  if (value === undefined || value === null) return undefined;
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean")
-    return String(value);
-  return undefined;
-};
+const dayNumber = (word: string): number | undefined =>
+  DAY_WORDS.find(([pattern]) => pattern.test(word))?.[1];
 
 /**
- * Parses a routine's text. Throws a `VALIDATION` error that names the field.
- * `fallbackName` names a routine whose frontmatter has no `name`, such as
- * one read from a file named after it.
+ * Reads when a routine runs, as the user typed it, into the stored schedule
+ * text. Takes the stored forms as they are (`every 30m`, `cron "…"`, `at …`)
+ * and plain words: "weekdays 9:00", "every day at 19:00", "fridays 9",
+ * "sun to thu at 8, 10, 13, 16", "hourly".
  */
-export function parseRoutineFile(
-  text: string,
-  fallbackName?: string,
-): RoutineDefinition {
-  const match = FRONTMATTER.exec(text);
-  if (!match)
-    throw new DaedalusError(
-      "VALIDATION",
-      "A routine file starts with frontmatter between two '---' lines",
-    );
-  let data: unknown;
-  try {
-    data = Bun.YAML.parse(match[1]!);
-  } catch (error) {
-    throw new DaedalusError(
-      "VALIDATION",
-      `Frontmatter is not valid YAML: ${error instanceof Error ? error.message : String(error)}`,
-    );
+export function parseWhen(value: string): string {
+  const text = value.trim();
+  if (/^(every\s+\d|cron\s|at\s)/i.test(text)) {
+    parseSchedule(text);
+    return text;
   }
-  if (!data || typeof data !== "object" || Array.isArray(data))
+  const lower = text.toLowerCase().replace(/\s+/g, " ");
+  if (lower === "hourly" || lower === "every hour") return 'cron "0 * * * *"';
+  const timeMatch = /(?:at )?((?:\d{1,2}(?::\d{2})?(?:, ?| and )?)+)\s*$/.exec(
+    lower,
+  );
+  if (!timeMatch)
     throw new DaedalusError(
       "VALIDATION",
-      "Frontmatter must be a set of fields",
+      `Add a time to '${value}', such as "weekdays 9:00" or "every day at 19:00"`,
     );
-  const fields = data as Record<string, unknown>;
-  const nameText = stringValue(fields.name) ?? fallbackName;
-  if (!nameText)
-    throw new DaedalusError("VALIDATION", "The 'name' field is required");
-  const name = routineName(nameText);
-  const scheduleText = stringValue(fields.schedule);
-  if (!scheduleText)
-    throw new DaedalusError("VALIDATION", "The 'schedule' field is required");
-  const schedule = parseSchedule(scheduleText);
-  const untilText = stringValue(fields.until);
-  const until = untilText ? parseLocalDateTime(untilText).toISOString() : null;
-  const timeoutText = stringValue(fields.timeout);
-  const output = (stringValue(fields.output) ?? "none") as RoutineOutput;
-  if (!OUTPUTS.includes(output))
-    throw new DaedalusError(
-      "VALIDATION",
-      `'output' must be one of: ${OUTPUTS.join(", ")}`,
-    );
-  const enabled = fields.enabled === undefined ? true : fields.enabled;
-  if (typeof enabled !== "boolean")
-    throw new DaedalusError("VALIDATION", "'enabled' must be true or false");
-  const vars: Record<string, string> = {};
-  if (fields.vars !== undefined) {
-    if (
-      !fields.vars ||
-      typeof fields.vars !== "object" ||
-      Array.isArray(fields.vars)
+  const times = timeMatch[1]!
+    .split(/, ?| and /)
+    .filter(Boolean)
+    .map((part) => {
+      const [hour, minute = "0"] = part.split(":");
+      return { hour: Number(hour), minute: Number(minute) };
+    });
+  if (
+    times.some(
+      (time) =>
+        time.hour > 23 ||
+        time.minute > 59 ||
+        Number.isNaN(time.hour + time.minute),
     )
-      throw new DaedalusError(
-        "VALIDATION",
-        "'vars' must be a set of name: value pairs",
-      );
-    for (const [key, value] of Object.entries(fields.vars)) {
-      const text = stringValue(value);
-      if (text === undefined)
+  )
+    throw new DaedalusError(
+      "VALIDATION",
+      `'${value}' has a time that does not exist`,
+    );
+  const minutes = new Set(times.map((time) => time.minute));
+  if (minutes.size > 1)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Times on one schedule must share their minutes, such as 8:30 and 13:30",
+    );
+  const daysText = lower
+    .slice(0, timeMatch.index)
+    .replace(/\b(every|on|at)\b/g, " ")
+    .trim();
+  let weekdays = "*";
+  if (/^(day|days|daily)?$/.test(daysText)) weekdays = "*";
+  else if (/^weekdays?$/.test(daysText)) weekdays = "1-5";
+  else if (/^weekends?$/.test(daysText)) weekdays = "0,6";
+  else {
+    const range = /^(\w+) (?:to|-) (\w+)$/.exec(daysText);
+    if (range) {
+      const from = dayNumber(range[1]!);
+      const to = dayNumber(range[2]!);
+      if (from === undefined || to === undefined)
         throw new DaedalusError(
           "VALIDATION",
-          `Var '${key}' must be a single value`,
+          `Cannot read the days in '${value}'`,
         );
-      vars[key] = text;
+      weekdays = `${from}-${to}`;
+    } else {
+      const days = daysText
+        .split(/, ?| and | /)
+        .filter(Boolean)
+        .map(dayNumber);
+      if (!days.length || days.some((day) => day === undefined))
+        throw new DaedalusError(
+          "VALIDATION",
+          `Cannot read the days in '${value}'`,
+        );
+      weekdays = days.join(",");
     }
   }
-  const body = match[2]!.trim();
-  if (!body)
-    throw new DaedalusError(
-      "VALIDATION",
-      "The routine has no prompt below its frontmatter",
-    );
-  return {
-    name,
-    schedule,
-    until,
-    model: stringValue(fields.model) ?? null,
-    timeoutMs: timeoutText ? parseDuration(timeoutText) : DEFAULT_TIMEOUT_MS,
-    output,
-    enabled,
-    vars,
-    body,
-  };
+  const expression = `${times[0]!.minute} ${times.map((time) => time.hour).join(",")} * * ${weekdays}`;
+  const stored = `cron "${expression}"`;
+  parseSchedule(stored);
+  return stored;
 }
 
-/** Quotes a scalar for frontmatter only when YAML would misread it bare. */
-const yamlScalar = (value: string): string =>
-  /^[\w./@#+-][\w ./@#:+-]*$/.test(value) && !/:\s|\s#|:$/.test(value)
-    ? value
-    : JSON.stringify(value);
+const pad = (value: number): string => String(value).padStart(2, "0");
 
-/** Renders a routine back to its text form. */
-export function renderRoutineFile(routine: RoutineDefinition): string {
-  const lines = [
-    "---",
-    `name: ${routine.name}`,
-    `schedule: ${yamlScalar(routine.schedule.text)}`,
-    ...(routine.until ? [`until: ${routine.until}`] : []),
-    ...(routine.model ? [`model: ${yamlScalar(routine.model)}`] : []),
-    `timeout: ${durationText(routine.timeoutMs)}`,
-    `output: ${routine.output}`,
-    `enabled: ${routine.enabled}`,
-    ...(Object.keys(routine.vars).length
-      ? [
-          "vars:",
-          ...Object.entries(routine.vars).map(
-            ([key, value]) => `  ${key}: ${yamlScalar(value)}`,
-          ),
-        ]
-      : []),
-    "---",
-    routine.body.trim(),
-    "",
-  ];
-  return lines.join("\n");
+function describeDays(field: string): string | undefined {
+  if (field === "*") return "Every day";
+  if (field === "1-5") return "Weekdays";
+  if (field === "0,6" || field === "6,0") return "Weekends";
+  const range = /^(\d)-(\d)$/.exec(field);
+  if (range)
+    return `${DAY_NAMES[Number(range[1])]} to ${DAY_NAMES[Number(range[2])]}`;
+  if (/^\d(,\d)*$/.test(field)) {
+    const days = field.split(",").map((day) => Number(day) % 7);
+    return days.length === 1
+      ? DAY_PLURALS[days[0]!]
+      : days.map((day) => DAY_NAMES[day]).join(", ");
+  }
+  return undefined;
 }
 
 /**
- * Fills `{{name}}` from the routine's vars and Daedalus's own values. An
- * unknown name is left as it is, so a typo shows in the prompt rather than
- * silently becoming an empty string.
+ * A stored schedule in words for the Routines table, such as "Sun to Thu at
+ * 8:00, 10:00, 13:00, 16:00". Falls back to the stored text when the
+ * expression has no short reading.
  */
-export function fillPlaceholders(
-  body: string,
-  values: Record<string, string>,
-): string {
-  return body.replace(/\{\{\s*([\w-]+)\s*\}\}/g, (whole, key: string) =>
-    Object.hasOwn(values, key) ? values[key]! : whole,
-  );
+export function describeSchedule(stored: string): string {
+  const schedule = parseSchedule(stored);
+  if (schedule.kind === "at")
+    return `Once, ${new Date(schedule.at).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}`;
+  if (schedule.kind === "every") {
+    const minutes = schedule.everyMs / 60_000;
+    return minutes % 60 === 0
+      ? `Every ${minutes / 60 === 1 ? "hour" : `${minutes / 60} hours`}`
+      : `Every ${minutes} min`;
+  }
+  const [minute, hour, day, month, weekday] = schedule.expression.split(/\s+/);
+  if (day !== "*" || month !== "*" || !/^\d+$/.test(minute ?? ""))
+    return stored;
+  const days = describeDays(weekday!);
+  if (!days) return stored;
+  if (hour === "*") return `${days}, every hour at :${pad(Number(minute))}`;
+  if (!/^\d+(,\d+)*$/.test(hour ?? "")) return stored;
+  const times = hour!
+    .split(",")
+    .map((value) => `${pad(Number(value))}:${pad(Number(minute))}`);
+  return `${days} at ${times.join(", ")}`;
 }

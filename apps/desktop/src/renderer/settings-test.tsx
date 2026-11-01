@@ -51,8 +51,6 @@ const snapshot = {
   toasts: [],
   abilities: [],
   teams: [],
-  routines: [],
-  routineReports: [],
   settings: {
     version: "0.7.0",
     channel: "stable",

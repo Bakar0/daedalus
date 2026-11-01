@@ -14,7 +14,17 @@ import {
   type WorkflowStepDefinition,
 } from "../domain";
 import { DaedalusError } from "../errors";
-import { FRONTMATTER, stringValue } from "./routine-files";
+
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
+
+const stringValue = (value: unknown): string | undefined => {
+  if (value === undefined || value === null) return undefined;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
+  return undefined;
+};
 
 /**
  * Steps and workflows, a Daedalus capability kept apart from the user's

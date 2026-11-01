@@ -91,7 +91,7 @@ daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] 
 daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
 daedal agent spawn --workspace <workspace> --provider <codex|claude> --task <task-ref> --refine
-daedal agent spawn ... [--ability routines|orchestration] [--color <color>] [--pin]
+daedal agent spawn ... [--ability orchestration] [--color <color>] [--pin]
 daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--provider claude|codex] [--model <model>] [--account <account>] [--user]
 daedal agent spawn ... [--workflow <name>]
 daedal agent list [--workspace <workspace>] [--running]
@@ -198,7 +198,7 @@ daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
 ```
 
-Names, pins, colors and abilities, for any session. `<session>` is an id, or a name that only one live session has. The `routines` and `orchestration` abilities and the `daedal routine` and `daedal team` commands are in [abilities.md](abilities.md).
+Names, pins, colors and abilities, for any session. `<session>` is an id, or a name that only one live session has. The `orchestration` ability and the `daedal team` commands are in [abilities.md](abilities.md). Routines are not an ability; see `daedal routine --help`.
 
 ## Team
 

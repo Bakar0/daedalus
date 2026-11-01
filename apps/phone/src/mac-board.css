@@ -724,55 +724,6 @@
 .rebirth-choices .percent-input {
   margin-left: 2px;
 }
-.report-details {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 11px;
-  gap: 6px;
-  justify-content: space-between;
-  margin-top: 4px;
-}
-.report-source,
-.report-verdict {
-  align-items: center;
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.report-session {
-  border: 1px solid var(--session-color, var(--muted));
-  border-radius: 4px;
-  color: var(--session-color, var(--muted));
-  font-weight: 650;
-  padding: 0 5px;
-}
-.report-urgent {
-  background: var(--danger);
-  border-radius: 4px;
-  color: #fff;
-  font-weight: 650;
-  padding: 0 5px;
-  text-transform: uppercase;
-}
-.report-routine {
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.report-resolved {
-  color: var(--success);
-}
-.report-reopened {
-  color: var(--session-gold);
-}
-.report-details button {
-  font-size: 11px;
-  margin: 0;
-  padding: 2px 8px;
-}
-.report-verdict-label {
-  color: var(--muted);
-}
 .quiet.pro-badge,
 .quiet.pro-badge:hover {
   background: linear-gradient(135deg, #5b8cff, #9a6bff);

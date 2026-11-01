@@ -114,7 +114,7 @@ export function paneAtPrompt(
  * Whether the session is at its prompt, where a typed line starts a turn
  * rather than landing in the middle of one. A Claude session that ended its
  * turn with background agents still running reports `working`, and that is
- * exactly the state routines are delivered in: the typed line starts a turn
+ * exactly the state lines are delivered in: the typed line starts a turn
  * alongside them. A badge the agent raised on itself is not a prompt to
  * answer, so it does not hold delivery; a real question or permission
  * dialog does, because a typed line would answer it.

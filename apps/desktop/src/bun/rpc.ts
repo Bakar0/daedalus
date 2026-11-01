@@ -10,6 +10,7 @@ import {
   cloudMcpChoices,
   setCloudMcpServer,
   DaedalusError,
+  isUnseenRun,
   INSTALL_COMMANDS,
   normalizeError,
   ReadModel,
@@ -23,9 +24,6 @@ import {
   type PendingNotification,
   type PresenceState,
   type RepositoryLibraryEntry,
-  type Routine,
-  type RoutineRun,
-  type RoutinesStatus,
   type SessionAbility,
   type Team,
   type TeamMessage,
@@ -38,6 +36,10 @@ import {
   type WorkspaceRepository,
   isPartialReload,
   type WorkflowRun,
+  type RoutineRun,
+  type RoutineView,
+  describeSchedule,
+  parseWhen,
 } from "@daedalus/core";
 import type {
   DesktopSnapshotPart,
@@ -57,10 +59,6 @@ import type {
   KeybindingsDto,
   PresenceStateDto,
   RepositoryLibraryDto,
-  RoutineDto,
-  RoutineRunDto,
-  RoutinesDetailDto,
-  RoutinesStatusDto,
   SessionAbilityDto,
   TeamDetailDto,
   TeamDto,
@@ -74,6 +72,8 @@ import type {
   WorkspaceRepositoryDto,
   SecretDto,
   WorkflowRunDto,
+  RoutineDto,
+  RoutineRunDto,
 } from "@daedalus/protocol";
 import { isHostCommandId } from "@daedalus/protocol";
 
@@ -317,8 +317,7 @@ export async function desktopSnapshot(
     teams: view.teams.map(teamDto),
     largeFiles: view.largeFiles.map((file) => ({ ...file })),
     workflowRuns: view.workflowRuns.map(workflowRunDto),
-    routines: view.routines.map(routinesStatusDto),
-    routineReports: view.routineReports.map((report) => ({ ...report })),
+    unseenRoutineRuns: view.unseenRoutineRuns.length,
     settings: {
       version: packageJson.version,
       channel: buildChannel(config.home),
@@ -344,7 +343,6 @@ const sessionAbilityDto = (ability: SessionAbility): SessionAbilityDto => ({
   ability: ability.ability,
   enabled: ability.enabled,
   paused: ability.paused,
-  purpose: ability.config.purpose ?? null,
   noteWaiting: Boolean(ability.pendingNote),
   grantedAt: ability.grantedAt,
 });
@@ -400,70 +398,64 @@ async function teamDetail(
   };
 }
 
-const routinesStatusDto = (status: RoutinesStatus): RoutinesStatusDto => ({
-  abilityId: status.ability.id,
-  sessionId: status.ability.sessionId,
-  paused: status.ability.paused,
-  waiting: status.waiting.map((run) => ({
-    runId: run.id,
-    routine: run.routine,
-    queuedAt: run.queuedAt,
-  })),
-  running: status.running,
-  hold: status.hold ? { ...status.hold } : null,
-  nextRun: status.nextRun ? { ...status.nextRun } : null,
-  lastKeystrokeAt: status.lastKeystrokeAt,
-  routines: status.routines,
-  openReports: status.openReports,
-  openUrgentReports: status.openUrgentReports,
-  openReportTasks: status.openReportTasks,
-});
-
-const routineRunDto = (run: RoutineRun): RoutineRunDto => ({
-  id: run.id,
-  routine: run.routine,
-  status: run.status,
-  queuedAt: run.queuedAt,
-  deliveredAt: run.deliveredAt,
-  startedAt: run.startedAt,
-  finishedAt: run.finishedAt,
-  outcome: run.outcome,
-  summary: run.summary,
-  missedMs: run.missedMs,
-});
-
-const routineDto = (
-  routine: Routine,
-  lastRun: RoutineRun | null,
-): RoutineDto => ({
-  name: routine.name,
-  prompt: routine.body,
-  schedule: routine.schedule.text,
-  until: routine.until,
-  model: routine.model,
-  timeoutMs: routine.timeoutMs,
-  output: routine.output,
-  enabled: routine.enabled,
-  nextRunAt: routine.enabled ? routine.nextRunAt : null,
-  lastRunAt: routine.lastRunAt,
-  consecutiveFailures: routine.consecutiveFailures,
-  lastRun: lastRun ? routineRunDto(lastRun) : null,
-});
-
-function routinesDetail(
+function routineRunDto(
   context: ApplicationContext,
-  sessionId: string,
-): RoutinesDetailDto {
-  const ability = context.abilities.require(sessionId, "routines");
-  const { routines, templates } = context.routines.list(ability);
+  run: RoutineRun,
+): RoutineRunDto {
   return {
-    purpose: ability.config.purpose ?? null,
-    routines: routines.map(({ routine, lastRun }) =>
-      routineDto(routine, lastRun),
-    ),
-    templates: templates.map((template) => routineDto(template, null)),
-    runs: context.routines.runs(ability, { limit: 100 }).map(routineRunDto),
+    id: run.id,
+    routineId: run.routineId,
+    routineName: context.repositories.routines.find(run.routineId)?.name ?? "",
+    trigger: run.trigger,
+    status: run.status,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    summary: run.summary,
+    workingDirectory: run.workingDirectory,
+    continuedSessionId: run.continuedSessionId,
+    unseen: isUnseenRun(run),
   };
+}
+
+function routineDto(
+  context: ApplicationContext,
+  view: RoutineView,
+): RoutineDto {
+  const { routine } = view;
+  return {
+    id: routine.id,
+    name: routine.name,
+    workspaceId: routine.workspaceId,
+    workspaceName: view.workspaceName,
+    schedule: routine.schedule,
+    scheduleText: view.scheduleText,
+    prompt: routine.prompt,
+    model: routine.model,
+    enabled: routine.enabled,
+    nextRunAt: routine.nextRunAt,
+    lastRunAt: routine.lastRunAt,
+    recentRuns: view.recentRuns.map((run) => routineRunDto(context, run)),
+  };
+}
+
+/** Runs the Routines page shows before "Show older". */
+const LATEST_RUNS = 10;
+
+/** One page of runs, asking for one more to know whether older ones exist. */
+function runsPage(
+  context: ApplicationContext,
+  limit: number,
+  beforeId?: number,
+): { runs: RoutineRunDto[]; moreRuns: boolean } {
+  const runs = context.routines.runs(limit + 1, beforeId);
+  return {
+    runs: runs.slice(0, limit).map((run) => routineRunDto(context, run)),
+    moreRuns: runs.length > limit,
+  };
+}
+
+function routineViewDto(context: ApplicationContext, id: string): RoutineDto {
+  return routineDto(context, context.routines.view(id));
 }
 
 /**
@@ -653,8 +645,62 @@ export function createDesktopRequestHandlers(
             : context.abilities.revoke(sessionId, ability),
         ),
       ),
-    routinesDetail: ({ sessionId }) =>
-      result(() => routinesDetail(context, sessionId)),
+    routinesPage: () =>
+      result(() => ({
+        routines: context.routines
+          .list()
+          .map((view) => routineDto(context, view)),
+        ...runsPage(context, LATEST_RUNS),
+      })),
+    routineRuns: ({ beforeId, limit }) =>
+      result(() => runsPage(context, limit, beforeId)),
+    routineParseWhen: ({ when }) =>
+      result(() => {
+        const schedule = parseWhen(when);
+        return { schedule, text: describeSchedule(schedule) };
+      }),
+    routineCreate: ({ workspace, when, prompt, name }) =>
+      mutate(() =>
+        routineViewDto(
+          context,
+          context.routines.add({
+            workspace,
+            when,
+            prompt,
+            ...(name ? { name } : {}),
+          }).id,
+        ),
+      ),
+    routineUpdate: ({ id, ...change }) =>
+      mutate(() =>
+        routineViewDto(context, context.routines.update(id, change).id),
+      ),
+    routineDelete: ({ id }) =>
+      mutate(() => {
+        context.routines.remove(id);
+        return { id };
+      }),
+    routineStart: ({ id }) =>
+      mutate(async () =>
+        routineRunDto(context, await context.routines.runNow(id)),
+      ),
+    routineTranscript: ({ runId }) =>
+      result(async () => {
+        // Reading a finished run is what makes it read.
+        context.routines.markSeen(runId);
+        const run = context.repositories.routines.findRun(runId);
+        if (!run) throw new DaedalusError("NOT_FOUND", "No such run");
+        return {
+          run: routineRunDto(context, run),
+          entries: await context.routines.transcript(runId),
+        };
+      }),
+    routineContinue: ({ runId, workspaceId }) =>
+      mutate(async () =>
+        agentDto(await context.routines.continueRun(runId, workspaceId)),
+      ),
+    routinesAgent: ({ workspaceId }) =>
+      mutate(async () => agentDto(await context.routines.agent(workspaceId))),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
     teamSay: ({ teamId, body }) =>
       mutate(async () => {
@@ -671,57 +717,6 @@ export function createDesktopRequestHandlers(
       }),
     teamGoal: ({ teamId, goal }) =>
       mutate(() => teamDto(context.teams.setGoal(teamId, goal))),
-    routinesControl: ({ sessionId, action }) =>
-      mutate(() =>
-        sessionAbilityDto(
-          context.abilities.setPaused(
-            sessionId,
-            "routines",
-            action === "pause",
-          ),
-        ),
-      ),
-    routinesPurpose: ({ sessionId, purpose }) =>
-      mutate(() =>
-        sessionAbilityDto(
-          context.abilities.configure(
-            sessionId,
-            "routines",
-            "purpose",
-            purpose,
-          ),
-        ),
-      ),
-    routineSetEnabled: ({ sessionId, name, enabled }) =>
-      mutate(() => {
-        const routine = context.routines.setEnabled(
-          context.abilities.require(sessionId, "routines"),
-          name,
-          enabled,
-        );
-        return { name: routine.name, enabled: routine.enabled };
-      }),
-    routineRunNow: ({ sessionId, name }) =>
-      mutate(() => {
-        const run = context.routineDelivery.runNow(
-          context.abilities.require(sessionId, "routines"),
-          name,
-        );
-        return {
-          ...routineRunDto(run),
-          ...(run.alreadyQueued ? { alreadyQueued: true } : {}),
-        };
-      }),
-    routineReportVerdict: ({ id, verdict }) =>
-      mutate(() => {
-        const report = context.repositories.routines.findReport(id);
-        const ability = report
-          ? context.repositories.abilities.find(report.abilityId)
-          : undefined;
-        if (!ability)
-          throw new DaedalusError("NOT_FOUND", `Report '${id}' was not found`);
-        return { ...context.routineReports.verdict(ability, id, verdict) };
-      }),
     windowRole: () => result(() => ({ role: windows.role })),
     worldWindowOpen: () =>
       result(() => {

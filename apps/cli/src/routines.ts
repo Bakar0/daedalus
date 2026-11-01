@@ -1,22 +1,15 @@
-import { callerSession } from "./caller";
-import { basename, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
-  ABILITY_IDS,
   DaedalusError,
-  formatDuration,
+  describeSchedule,
   localTime,
-  parseDuration,
-  SESSION_COLORS,
-  type AgentSession,
+  parseWhen,
   type ApplicationContext,
   type Routine,
-  type RoutineReport,
-  type RoutineReportState,
   type RoutineRun,
   type RoutineView,
-  type SessionAbility,
-  type Task,
 } from "@daedalus/core";
+import { callerSession } from "./caller";
 import {
   expectPositionals,
   parseArguments,
@@ -24,135 +17,83 @@ import {
   required,
 } from "./arguments";
 
-export const routineHelp = {
-  session: `Session commands:
-  daedal session rename <session> <name>
-  daedal session pin|unpin <session>
-  daedal session color <session> <${SESSION_COLORS.join("|")}|#rrggbb|none>
-  daedal session rebirth-at <session> <percent>|off|default
-  daedal session abilities <session>
-  daedal session grant <session> <ability>
-  daedal session revoke <session> <ability>
+export const routineHelp = `Routine commands:
+  daedal routine add --when <when> (--prompt <text> | --prompt-file <path|->)
+      [--name <name>] [--workspace <workspace> | --all] [--model <model>]
+  daedal routine list
+  daedal routine get <routine>
+  daedal routine edit <routine> [--when <when>] [--prompt <text> | --prompt-file <path|->]
+      [--name <name>] [--workspace <workspace> | --all] [--model <model>|default]
+  daedal routine pause|resume <routine>
+  daedal routine run <routine>
+  daedal routine remove|rm <routine>
+  daedal routine runs [<routine>] [--limit <n>]
+  daedal routine log <run-id>
+  daedal routine when <when>
 
-<session> is a session id, or a session's name when only one live session
-has it. Pinned sessions sit at the top of their workspace's list. The color
-marks the session's card, its World figure and the tasks its routines file.
-'rebirth-at' sets the context percent (10 to 100) at which this session is
-asked for a rebirth, or turns it off for this session; 'default' takes its
-workspace's setting (see 'daedal workspace --help').
+A routine is a time and a prompt. Each run is a headless Claude session
+(claude -p) in the routine's workspace folder, or in the workspaces root
+with --all, for chores across every workspace. A run has no Daedalus
+session, so it skips workflows and attention; its last reply is its result,
+and its first line is what the Routines page shows. Each run is told what
+the previous one said. Open a run on the Routines page to read it or carry
+on from it in a session.
 
-Abilities: ${ABILITY_IDS.join(", ")}. 'grant' gives a running session an
-ability. Routines say nothing to the session: ask it for a routine. For
-orchestration, the app sends one note: through a Claude session's inbox,
-with nothing typed, or typed into a Codex session once it is idle, its
-input box is empty and nobody typed in it for 2 minutes. To start a session that holds
-one, use 'daedal agent spawn --ability <ability>'. 'revoke' stops what the
-ability does and keeps its data, so a later grant brings it back. A rebirth
-moves the abilities, the pin and the color to the successor; a session with
-routines keeps its exact name, any other gets ' · 2'.
-Archiving a session pauses its abilities; restoring it resumes them.`,
-  routine: `Routine commands:
-  daedal routine add --file <path|-> [--template] [--replace] [--session <s>]
-  daedal routine add --from <template> [--name <name>] [--var <key>=<value>]...
-      [--until <+60m|date>] [--schedule <schedule>] [--disabled] [--session <s>]
-  daedal routine list [--session <s>]
-  daedal routine get <name> [--template] [--text] [--session <s>]
-  daedal routine enable|disable|run <name> [--session <s>]
-  daedal routine remove <name> [--template] [--session <s>]
-  daedal routine purpose [<text>] [--session <s>]
-  daedal routine pause|resume [--session <s>]
-  daedal routine runs [--routine <name>] [--limit <n>] [--session <s>]
-  daedal routine start <run-id>
-  daedal routine done <run-id> --outcome quiet|notified|task --summary <text>
-  daedal routine fail <run-id> --summary <text>
-  daedal routine report --run <run-id> --key <key> --title <title> [--urgent]
-      [--url <url>] [--same-as <key>] (--body <text> | --body-file <path|->)
-  daedal routine resolve <key> [--run <run-id> | --session <s>]
-  daedal routine reports [--state open|resolved|closed|all] [--since <7d>] [--session <s>]
-  daedal routine feedback <task-ref> useful|noise|none [--note <text>]
+<when> is plain words: "every 30m", "every 2h", "every day at 9:00",
+"weekdays 9:00", "sun to thu at 8, 10, 13, 16", "mondays at 7:30", a
+5-field cron such as "cron 0 9 * * 1-5", or "at 2026-11-02 14:00" for once.
+'when' prints how a <when> reads without saving anything.
 
-These work on a session that holds the routines ability. Inside that
-session, --session defaults to it.
+--workspace defaults to the workspace of the session running the command.
+<routine> is a routine's name or id.
 
-A routine is written as Markdown: frontmatter with name, schedule
-(every <n>m|h, cron "<5 fields>", at <date and time>), until, model, timeout,
-output (task, notify or none), enabled and vars, and the prompt as the body.
-'add --file' stores it in Daedalus; nothing is written into the session's
-folder. 'get --text' prints it back in the same form, so a change is
-'get --text', edit, then 'add --file - --replace'. A template (--template)
-never fires; 'add --from' copies one with its vars filled in.
-'purpose' sets what the session's routines are for; every run prints it.
+The desktop app keeps the clock: routines run only while it is open, at
+most 2 at once, each stopped after 30 minutes. 'run' asks the app for a run
+now, which starts within a few seconds and leaves the schedule alone, even
+for a paused routine. A run keeps going when the app quits, and the app
+picks it up again when it opens. A due run while the previous one is still going is
+skipped.`;
 
-The desktop app keeps the clock: routines run only while it is open. A due
-run goes to a Claude session's inbox once it is idle, as a hook note with
-nothing typed. A Codex session gets '$daedalus-routine <run-id>' typed in
-once it is idle, its input box is empty, and nobody typed in it for 2
-minutes. Until then it waits, at most one per routine, and the bar above the
-session's terminal says why. 'run' queues a run now. 'start', 'done', 'fail',
-'report' and 'resolve' are for the session itself, during a run.
-
-'report' is the only way a routine raises something. The key identifies what
-is reported, so a key that is open becomes an update to its task and sends no
-second notification; one that comes back within 14 days reopens its task;
---same-as adds the report to another open report's task. A routine with
-output: task opens a task on the workspace's board; output: notify only
-notifies. --urgent gets through Focus mode.
-'resolve' marks a key gone. A resolved report closes after 24 hours, and its
-task moves to done if no agent was ever started on it.
-'feedback noise' closes the task's reports and stops their keys from raising
-anything again; 'feedback none' undoes it. A task the user moves to done
-counts as useful. 'reports --since 7d --state all' is what a weekly review
-reads.`,
-};
-
-/** The routines ability of the session named, or of the one running this. */
-async function routinesFor(
-  context: ApplicationContext,
+/** The workspace the flags name: an id or slug, null for --all, or none. */
+function workspaceFlag(
   values: Record<string, string>,
-): Promise<{ session: AgentSession; ability: SessionAbility }> {
-  const session = values.session
-    ? context.agents.resolve(values.session)
-    : await callerSession(context);
-  if (!session)
+  flags: Set<string>,
+): string | null | undefined {
+  if (!flags.has("all")) return values.workspace;
+  if (values.workspace)
     throw new DaedalusError(
       "VALIDATION",
-      "Pass --session <session>; outside a session there is no default",
+      "Use either --workspace or --all, not both",
     );
-  return {
-    session,
-    ability: context.abilities.require(session.id, "routines"),
-  };
+  return null;
 }
 
-/** The ability a run belongs to, which must still be granted. */
-function abilityForRun(
+/** A new routine's workspace: the flags, else the calling session's. */
+async function newRoutineWorkspace(
   context: ApplicationContext,
-  run: RoutineRun,
-): SessionAbility {
-  const ability = context.repositories.abilities.find(run.abilityId);
-  if (!ability?.enabled)
-    throw new DaedalusError(
-      "CONFLICT",
-      "The routines ability this run belongs to was revoked",
-    );
-  return ability;
+  values: Record<string, string>,
+  flags: Set<string>,
+): Promise<string | null> {
+  const named = workspaceFlag(values, flags);
+  if (named !== undefined) return named;
+  const session = await callerSession(context).catch(() => undefined);
+  if (session) return session.workspaceId;
+  throw new DaedalusError(
+    "VALIDATION",
+    "Pass --workspace <workspace> or --all; outside a session there is no default",
+  );
 }
 
-async function textOption(
+async function promptOption(
   values: Record<string, string>,
-  name: string,
 ): Promise<string | undefined> {
-  const file = values[`${name}-file`];
-  if (file === undefined) return values[name];
-  if (values[name] !== undefined)
+  const file = values["prompt-file"];
+  if (file === undefined) return values.prompt;
+  if (values.prompt !== undefined)
     throw new DaedalusError(
       "VALIDATION",
-      `Use either --${name} or --${name}-file, not both`,
+      "Use either --prompt or --prompt-file, not both",
     );
-  return readTextFile(file);
-}
-
-async function readTextFile(file: string): Promise<string> {
   if (file === "-") return Bun.stdin.text();
   const source = Bun.file(resolve(file));
   if (!(await source.exists()))
@@ -160,502 +101,224 @@ async function readTextFile(file: string): Promise<string> {
   return source.text();
 }
 
-function runId(value: string | undefined, usage: string): number {
+function runId(value: string | undefined): number {
   const id = Number(value);
   if (!value || !Number.isInteger(id) || id < 1)
-    throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
+    throw new DaedalusError("VALIDATION", "Usage: daedal routine log <run-id>");
   return id;
 }
 
-/** `--var` repeats, which the shared parser refuses, so it is taken first. */
-function takeVars(args: string[]): {
-  rest: string[];
-  vars: Record<string, string>;
-} {
-  const rest: string[] = [];
-  const vars: Record<string, string> = {};
-  for (let index = 0; index < args.length; index += 1) {
-    if (args[index] !== "--var") {
-      rest.push(args[index]!);
-      continue;
-    }
-    const pair = args[index + 1];
-    const split = pair?.indexOf("=") ?? -1;
-    if (!pair || split < 1)
-      throw new DaedalusError("VALIDATION", "--var takes <key>=<value>");
-    vars[pair.slice(0, split)] = pair.slice(split + 1);
-    index += 1;
-  }
-  return { rest, vars };
-}
+const view = (context: ApplicationContext, routine: Routine): RoutineView =>
+  context.routines.view(routine.id);
 
-const sessionLine = (session: AgentSession) =>
-  `${session.id}\t${session.name}\t${session.pinnedAt ? "pinned" : "—"}\t${session.color ?? "—"}`;
+const runLine = (run: RoutineRun, routineName: string) =>
+  [
+    run.id,
+    routineName,
+    run.status,
+    run.trigger === "manual" ? "run now" : "scheduled",
+    localTime(run.startedAt),
+    run.summary ?? "",
+  ].join("\t");
 
-const abilityLine = (ability: SessionAbility) =>
-  `${ability.ability}\t${ability.enabled ? (ability.paused ? "paused" : "on") : "revoked"}\tgranted ${localTime(ability.grantedAt)}${ability.pendingNote ? "\tnote waiting to be typed" : ""}`;
-
-const runLine = (run: RoutineRun) =>
-  `${run.id}\t${run.routine}\t${run.status}${run.outcome ? ` (${run.outcome})` : ""}\t${localTime(run.queuedAt)}${run.summary ? `\t${run.summary}` : ""}`;
-
-const reportLine = (report: RoutineReport, taskNumber?: number) =>
-  `${report.id}\t${report.state}${report.urgent ? "\turgent" : ""}\t${report.verdict ?? "—"}\t${report.key}${taskNumber ? `\ttask #${taskNumber}` : ""}\t${report.title}`;
-
-function routineLine({ routine, lastRun }: RoutineView): string {
+function routineLine(item: RoutineView): string {
+  const { routine } = item;
+  const last = item.recentRuns.at(-1);
   return [
     routine.name,
-    routine.enabled ? "on" : "off",
-    routine.schedule.text,
-    `next ${routine.enabled ? localTime(routine.nextRunAt) : "—"}`,
-    `last ${lastRun ? `${localTime(lastRun.queuedAt)} ${lastRun.status}${lastRun.outcome ? ` (${lastRun.outcome})` : ""}` : "never"}`,
+    routine.enabled ? "on" : "paused",
+    item.workspaceName ?? "All workspaces",
+    item.scheduleText,
+    `next ${routine.enabled && routine.nextRunAt ? localTime(routine.nextRunAt) : "—"}`,
+    `last ${last ? `${localTime(last.startedAt)} ${last.status}` : "never"}`,
   ].join("\t");
 }
 
-const routineSummary = (routine: Routine) =>
-  `${routine.name} (${routine.schedule.text}, ${routine.isTemplate ? "template" : routine.enabled ? "enabled" : "disabled"})`;
-
-export async function sessionCommand(
-  context: ApplicationContext,
-  args: string[],
-  json: boolean,
-): Promise<number> {
-  const action = args.shift();
-  if (!action || action === "help") {
-    console.log(routineHelp.session);
-    return 0;
-  }
-  const parsed = parseArguments(args, []);
-  const reference = parsed.positionals[0];
-  if (action === "rename") {
-    const usage = "daedal session rename <session> <name>";
-    expectPositionals(parsed.positionals, 2, usage);
-    const session = await context.agents.rename(
-      context.agents.resolve(reference!).id,
-      parsed.positionals[1]!,
-    );
-    printResult({ session }, json, () => console.log(sessionLine(session)));
-    return 0;
-  }
-  if (action === "pin" || action === "unpin") {
-    expectPositionals(
-      parsed.positionals,
-      1,
-      `daedal session ${action} <session>`,
-    );
-    const session = await context.agents.setPinned(
-      context.agents.resolve(reference!).id,
-      action === "pin",
-    );
-    printResult({ session }, json, () => console.log(sessionLine(session)));
-    return 0;
-  }
-  if (action === "color") {
-    const usage = `daedal session color <session> <${SESSION_COLORS.join("|")}|#rrggbb|none>`;
-    expectPositionals(parsed.positionals, 2, usage);
-    const value = parsed.positionals[1]!;
-    const session = await context.agents.setColor(
-      context.agents.resolve(reference!).id,
-      value === "none" ? null : value,
-    );
-    printResult({ session }, json, () => console.log(sessionLine(session)));
-    return 0;
-  }
-  if (action === "rebirth-at") {
-    const usage = "daedal session rebirth-at <session> <percent>|off|default";
-    expectPositionals(parsed.positionals, 2, usage);
-    const value = parsed.positionals[1]!;
-    if (value !== "off" && value !== "default" && !/^\d+$/.test(value))
-      throw new DaedalusError(
-        "VALIDATION",
-        "The rebirth threshold must be a percent from 10 to 100, 'off' or 'default'",
-      );
-    const session = await context.agents.setAutoRebirth(
-      context.agents.resolve(reference!).id,
-      value === "default" ? null : value === "off" ? "off" : Number(value),
-    );
-    printResult({ session }, json, () => console.log(sessionLine(session)));
-    return 0;
-  }
-  if (action === "abilities") {
-    expectPositionals(
-      parsed.positionals,
-      1,
-      "daedal session abilities <session>",
-    );
-    const session = context.agents.resolve(reference!);
-    const abilities = context.abilities.list(session.id);
-    printResult({ abilities }, json, () => {
-      if (!abilities.length) console.log("No abilities.");
-      for (const ability of abilities) console.log(abilityLine(ability));
-    });
-    return 0;
-  }
-  if (action === "grant" || action === "revoke") {
-    const usage = `daedal session ${action} <session> <ability>`;
-    expectPositionals(parsed.positionals, 2, usage);
-    const session = context.agents.resolve(reference!);
-    const ability =
-      action === "grant"
-        ? context.abilities.grant(session.id, parsed.positionals[1]!, {
-            live: true,
-          })
-        : context.abilities.revoke(session.id, parsed.positionals[1]!);
-    printResult({ ability }, json, () =>
-      console.log(
-        `${action === "grant" ? "Granted" : "Revoked"} ${ability.ability} ${action === "grant" ? "to" : "from"} ${session.name}${ability.pendingNote ? "; the app tells the session once it is idle and nobody is typing" : ""}`,
-      ),
-    );
-    return 0;
-  }
-  throw new DaedalusError("VALIDATION", `Unknown session command '${action}'`);
+function printRoutine(item: RoutineView): void {
+  const { routine } = item;
+  console.log(`${routine.name}\t${routine.id}`);
+  console.log(`Workspace: ${item.workspaceName ?? "All workspaces"}`);
+  console.log(`When: ${item.scheduleText} (${routine.schedule})`);
+  console.log(`Model: ${routine.model ?? "default"}`);
+  console.log(
+    routine.enabled
+      ? `Next run: ${routine.nextRunAt ? localTime(routine.nextRunAt) : "—"}`
+      : "Paused",
+  );
+  console.log(`\n${routine.prompt}`);
 }
 
 export async function routineCommand(
   context: ApplicationContext,
   inputArgs: string[],
   json: boolean,
-  resolveTask: (reference: string) => Promise<Task>,
 ): Promise<number> {
   const action = inputArgs.shift();
   if (!action || action === "help") {
-    console.log(routineHelp.routine);
+    console.log(routineHelp);
     return 0;
   }
+  const service = context.routines;
   if (action === "add") {
-    const { rest, vars } = takeVars(inputArgs);
     const parsed = parseArguments(
-      rest,
-      ["session", "file", "from", "name", "until", "schedule"],
-      ["replace", "disabled", "template"],
+      inputArgs,
+      ["when", "prompt", "prompt-file", "name", "workspace", "model"],
+      ["all"],
     );
     expectPositionals(parsed.positionals, 0, "daedal routine add ...");
-    const { ability } = await routinesFor(context, parsed.values);
-    const file = parsed.values.file;
-    const template = parsed.values.from;
-    if (Boolean(file) === Boolean(template))
-      throw new DaedalusError(
-        "VALIDATION",
-        "Pass exactly one of --file <path|-> or --from <template>",
-      );
-    const routine = file
-      ? context.routines.add(ability, {
-          text: await readTextFile(file),
-          replace: parsed.flags.has("replace"),
-          template: parsed.flags.has("template"),
-          // A file named after its routine needs no `name:` line.
-          ...(file === "-"
-            ? {}
-            : { name: basename(file).replace(/\.md$/, "") }),
-        })
-      : context.routines.add(ability, {
-          from: template!,
-          ...(parsed.values.name ? { name: parsed.values.name } : {}),
-          vars,
-          ...(parsed.values.until ? { until: parsed.values.until } : {}),
-          ...(parsed.values.schedule
-            ? { schedule: parsed.values.schedule }
-            : {}),
-          enabled: !parsed.flags.has("disabled"),
-        });
-    printResult({ routine }, json, () =>
+    const routine = service.add({
+      when: required(parsed.values.when, "--when"),
+      prompt: required(
+        await promptOption(parsed.values),
+        "--prompt or --prompt-file",
+      ),
+      workspace: await newRoutineWorkspace(
+        context,
+        parsed.values,
+        parsed.flags,
+      ),
+      ...(parsed.values.name ? { name: parsed.values.name } : {}),
+      ...(parsed.values.model ? { model: parsed.values.model } : {}),
+    });
+    const added = view(context, routine);
+    printResult({ routine: added }, json, () =>
       console.log(
-        `Added ${routineSummary(routine)}${routine.nextRunAt ? `; next run ${localTime(routine.nextRunAt)}` : ""}`,
+        `Added ${routine.name}: ${added.scheduleText} in ${added.workspaceName ?? "all workspaces"}; next run ${localTime(routine.nextRunAt)}`,
       ),
     );
     return 0;
   }
   if (action === "list") {
-    const parsed = parseArguments(inputArgs, ["session"]);
+    const parsed = parseArguments(inputArgs, []);
     expectPositionals(parsed.positionals, 0, "daedal routine list");
-    const { ability } = await routinesFor(context, parsed.values);
-    const result = context.routines.list(ability);
-    printResult(
-      { ...result, purpose: ability.config.purpose ?? null },
-      json,
-      () => {
-        if (ability.config.purpose)
-          console.log(`Purpose: ${ability.config.purpose}`);
-        if (ability.paused) console.log("Paused.");
-        if (!result.routines.length) console.log("No routines.");
-        for (const view of result.routines) console.log(routineLine(view));
-        for (const template of result.templates)
-          console.log(`${template.name}\ttemplate\t${template.schedule.text}`);
-      },
-    );
+    const routines = service.list();
+    printResult({ routines }, json, () => {
+      if (!routines.length) console.log("No routines.");
+      for (const item of routines) console.log(routineLine(item));
+    });
     return 0;
   }
-  if (action === "purpose") {
-    const parsed = parseArguments(inputArgs, ["session"]);
-    const { session, ability } = await routinesFor(context, parsed.values);
-    const text = parsed.positionals.join(" ");
-    const updated = text
-      ? context.abilities.configure(session.id, "routines", "purpose", text)
-      : ability;
-    printResult({ purpose: updated.config.purpose ?? null }, json, () =>
-      console.log(updated.config.purpose ?? "No purpose is set."),
+  if (action === "get") {
+    const parsed = parseArguments(inputArgs, []);
+    expectPositionals(parsed.positionals, 1, "daedal routine get <routine>");
+    const found = view(context, service.get(parsed.positionals[0]!));
+    printResult({ routine: found }, json, () => printRoutine(found));
+    return 0;
+  }
+  if (action === "edit") {
+    const parsed = parseArguments(
+      inputArgs,
+      ["when", "prompt", "prompt-file", "name", "workspace", "model"],
+      ["all"],
     );
+    expectPositionals(
+      parsed.positionals,
+      1,
+      "daedal routine edit <routine> ...",
+    );
+    const workspace = workspaceFlag(parsed.values, parsed.flags);
+    const prompt = await promptOption(parsed.values);
+    const model = parsed.values.model;
+    const routine = service.update(parsed.positionals[0]!, {
+      ...(parsed.values.when !== undefined ? { when: parsed.values.when } : {}),
+      ...(prompt !== undefined ? { prompt } : {}),
+      ...(parsed.values.name !== undefined ? { name: parsed.values.name } : {}),
+      ...(workspace !== undefined ? { workspace } : {}),
+      ...(model !== undefined
+        ? { model: model === "default" ? null : model }
+        : {}),
+    });
+    const edited = view(context, routine);
+    printResult({ routine: edited }, json, () => printRoutine(edited));
     return 0;
   }
   if (action === "pause" || action === "resume") {
-    const parsed = parseArguments(inputArgs, ["session"]);
-    expectPositionals(parsed.positionals, 0, `daedal routine ${action}`);
-    const { session } = await routinesFor(context, parsed.values);
-    const ability = context.abilities.setPaused(
-      session.id,
-      "routines",
-      action === "pause",
+    const parsed = parseArguments(inputArgs, []);
+    expectPositionals(
+      parsed.positionals,
+      1,
+      `daedal routine ${action} <routine>`,
     );
-    printResult({ ability }, json, () =>
+    const routine = service.update(parsed.positionals[0]!, {
+      enabled: action === "resume",
+    });
+    printResult({ routine }, json, () =>
       console.log(
-        `Routines ${action === "pause" ? "paused" : "resumed"} for ${session.name}`,
+        action === "pause"
+          ? `Paused ${routine.name}`
+          : `Resumed ${routine.name}; next run ${localTime(routine.nextRunAt)}`,
       ),
+    );
+    return 0;
+  }
+  if (action === "run") {
+    const parsed = parseArguments(inputArgs, []);
+    expectPositionals(parsed.positionals, 1, "daedal routine run <routine>");
+    const routine = service.requestRun(parsed.positionals[0]!);
+    printResult({ routine }, json, () =>
+      console.log(
+        `Asked the app to run ${routine.name}; it starts within a few seconds while the app is open`,
+      ),
+    );
+    return 0;
+  }
+  if (action === "remove" || action === "rm") {
+    const parsed = parseArguments(inputArgs, []);
+    expectPositionals(parsed.positionals, 1, "daedal routine remove <routine>");
+    const routine = service.get(parsed.positionals[0]!);
+    service.remove(routine.id);
+    printResult({ removed: routine.name }, json, () =>
+      console.log(`Removed ${routine.name} and its runs`),
     );
     return 0;
   }
   if (action === "runs") {
-    const parsed = parseArguments(inputArgs, ["session", "routine", "limit"]);
-    expectPositionals(parsed.positionals, 0, "daedal routine runs");
-    const { ability } = await routinesFor(context, parsed.values);
-    const runs = context.routines.runs(ability, {
-      ...(parsed.values.routine ? { routine: parsed.values.routine } : {}),
-      limit: parsed.values.limit ? Number(parsed.values.limit) : 30,
+    const parsed = parseArguments(inputArgs, ["limit"]);
+    const limit = parsed.values.limit ? Number(parsed.values.limit) : 20;
+    if (!Number.isInteger(limit) || limit < 1)
+      throw new DaedalusError("VALIDATION", "--limit takes a positive number");
+    const names = new Map(
+      service.list().map((item) => [item.routine.id, item.routine.name]),
+    );
+    const only = parsed.positionals[0]
+      ? service.get(parsed.positionals[0]).id
+      : undefined;
+    const runs = context.repositories.routines.listRuns({
+      ...(only ? { routineId: only } : {}),
+      limit,
     });
     printResult({ runs }, json, () => {
-      for (const run of runs) console.log(runLine(run));
+      if (!runs.length) console.log("No runs.");
+      for (const run of runs)
+        console.log(runLine(run, names.get(run.routineId) ?? ""));
     });
     return 0;
   }
-  if (action === "start") {
+  if (action === "log") {
     const parsed = parseArguments(inputArgs, []);
-    const usage = "daedal routine start <run-id>";
-    expectPositionals(parsed.positionals, 1, usage);
-    const id = runId(parsed.positionals[0], usage);
-    const ability = abilityForRun(context, context.routines.requireRun(id));
-    const started = context.routines.start(ability, id);
-    const session = context.repositories.findAgent(ability.sessionId);
-    const workspace = session
-      ? context.repositories.findWorkspace(session.workspaceId)
-      : undefined;
-    const tasks = new Map(
-      context.repositories
-        .listTasks(workspace ? { workspaceId: workspace.id } : {})
-        .map((task) => [task.id, task.number]),
-    );
-    printResult(started, json, () => {
-      const { routine } = started;
-      console.log(
-        `Run ${id} · routine ${routine.name} · model ${routine.model ?? "the session's"} · timeout ${formatDuration(routine.timeoutMs)} · output ${routine.output}`,
-      );
-      console.log(
-        started.purpose
-          ? `Purpose: ${started.purpose}`
-          : "No purpose is set; ask the user what these routines are for when they are next here.",
-      );
-      console.log("");
-      console.log("--- prompt ---");
-      console.log(started.prompt);
-      console.log("--- end of prompt ---");
-      console.log("");
-      console.log(
-        started.openReports.length
-          ? "Open reports, every routine:"
-          : "No reports are open.",
-      );
-      for (const report of started.openReports)
+    expectPositionals(parsed.positionals, 1, "daedal routine log <run-id>");
+    const entries = await service.transcript(runId(parsed.positionals[0]));
+    printResult({ entries }, json, () => {
+      if (!entries.length) console.log("Nothing in this run's log yet.");
+      for (const entry of entries)
         console.log(
-          `- ${report.key} [${report.routine}${report.urgent ? ", urgent" : ""}]${report.taskId ? ` ${workspace?.slug ?? ""}#${tasks.get(report.taskId) ?? "?"}` : ""}: ${report.title}`,
+          entry.kind === "text" || entry.kind === "result"
+            ? entry.text
+            : `[${entry.kind}] ${entry.text}`,
         );
     });
     return 0;
   }
-  if (action === "done" || action === "fail") {
-    const parsed = parseArguments(
-      inputArgs,
-      action === "done" ? ["outcome", "summary"] : ["summary"],
-    );
-    const usage =
-      action === "done"
-        ? "daedal routine done <run-id> --outcome quiet|notified|task --summary <text>"
-        : "daedal routine fail <run-id> --summary <text>";
-    expectPositionals(parsed.positionals, 1, usage);
-    const id = runId(parsed.positionals[0], usage);
-    const ability = abilityForRun(context, context.routines.requireRun(id));
-    const summary = required(parsed.values.summary, "--summary");
-    const run =
-      action === "done"
-        ? await context.routines.done(
-            ability,
-            id,
-            required(parsed.values.outcome, "--outcome"),
-            summary,
-          )
-        : await context.routines.fail(ability, id, summary);
-    printResult({ run }, json, () => console.log(runLine(run)));
-    return 0;
-  }
-  if (action === "report") {
-    const parsed = parseArguments(
-      inputArgs,
-      ["run", "key", "same-as", "title", "url", "body", "body-file"],
-      ["urgent"],
-    );
-    expectPositionals(parsed.positionals, 0, "daedal routine report ...");
-    const id = runId(
-      parsed.values.run,
-      "daedal routine report --run <run-id> ...",
-    );
-    const run = context.routines.requireRun(id);
-    const ability = abilityForRun(context, run);
-    const session = await context.agents.get(ability.sessionId);
-    const workspace = await context.workspaces.getActive(session.workspaceId);
-    const routine = context.repositories.routines.find(ability.id, run.routine);
-    const result = await context.routineReports.report({
-      ability,
-      workspace,
-      routine: run.routine,
-      // A one-shot routine is gone by the time its run reports.
-      output: routine?.output ?? "notify",
-      runId: id,
-      key: required(parsed.values.key, "--key"),
-      ...(parsed.values["same-as"] ? { sameAs: parsed.values["same-as"] } : {}),
-      urgent: parsed.flags.has("urgent"),
-      title: required(parsed.values.title, "--title"),
-      ...(parsed.values.url ? { url: parsed.values.url } : {}),
-      body: (await textOption(parsed.values, "body")) ?? "",
-    });
-    printResult(result, json, () => {
-      const where = result.task
-        ? ` ${workspace.slug}#${result.task.number}`
-        : "";
-      console.log(`Report ${result.action}${where}: ${result.report.key}`);
-      if (result.notified) console.log(`  ${result.notified}`);
-    });
-    return 0;
-  }
-  if (action === "reports") {
-    const parsed = parseArguments(inputArgs, ["session", "state", "since"]);
-    expectPositionals(parsed.positionals, 0, "daedal routine reports");
-    const since = parsed.values.since
-      ? new Date(Date.now() - parseDuration(parsed.values.since)).toISOString()
-      : undefined;
-    const { session, ability } = await routinesFor(context, parsed.values);
-    const state = parsed.values.state ?? "open";
-    if (!["open", "resolved", "closed", "all"].includes(state))
+  if (action === "when") {
+    const text = inputArgs.join(" ").trim();
+    if (!text)
       throw new DaedalusError(
         "VALIDATION",
-        "--state is one of open, resolved, closed, all",
+        "Usage: daedal routine when <when>",
       );
-    const reports = context.repositories.routines.listReports(ability.id, {
-      ...(state === "all" ? {} : { states: [state as RoutineReportState] }),
-      ...(since ? { seenSince: since } : {}),
-    });
-    const tasks = new Map(
-      context.repositories
-        .listTasks({ workspaceId: session.workspaceId })
-        .map((task) => [task.id, task.number]),
-    );
-    printResult({ reports }, json, () => {
-      for (const report of reports)
-        console.log(
-          reportLine(
-            report,
-            report.taskId ? tasks.get(report.taskId) : undefined,
-          ),
-        );
-    });
-    return 0;
-  }
-  if (action === "resolve") {
-    const parsed = parseArguments(inputArgs, ["session", "run"]);
-    const usage =
-      "daedal routine resolve <key> [--run <run-id> | --session <s>]";
-    expectPositionals(parsed.positionals, 1, usage);
-    // During a run, the run names the session; nothing in the environment has
-    // to be right for it.
-    const ability = parsed.values.run
-      ? abilityForRun(
-          context,
-          context.routines.requireRun(runId(parsed.values.run, usage)),
-        )
-      : (await routinesFor(context, parsed.values)).ability;
-    const report = context.routineReports.resolve(
-      ability,
-      parsed.positionals[0]!,
-    );
-    printResult({ report }, json, () =>
-      console.log(
-        report ? `Resolved ${report.key}` : "No open report has that key",
-      ),
-    );
-    return 0;
-  }
-  if (action === "feedback") {
-    const parsed = parseArguments(inputArgs, ["note"]);
-    const usage = "daedal routine feedback <task-ref> useful|noise|none";
-    expectPositionals(parsed.positionals, 2, usage);
-    const value = parsed.positionals[1];
-    if (value !== "useful" && value !== "noise" && value !== "none")
-      throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
-    const task = await resolveTask(parsed.positionals[0]!);
-    const reports = context.routineReports.feedbackForTask(
-      task.id,
-      value === "none" ? null : value,
-      parsed.values.note,
-    );
-    printResult({ reports }, json, () =>
-      console.log(
-        value === "none"
-          ? `Removed the feedback on task #${task.number}`
-          : `Marked task #${task.number} ${value} (${reports.map((report) => report.key).join(", ")})`,
-      ),
-    );
-    return 0;
-  }
-  if (["get", "enable", "disable", "run", "remove"].includes(action)) {
-    const parsed = parseArguments(inputArgs, ["session"], ["template", "text"]);
-    const usage = `daedal routine ${action} <name>`;
-    expectPositionals(parsed.positionals, 1, usage);
-    const { session, ability } = await routinesFor(context, parsed.values);
-    const name = parsed.positionals[0]!;
-    const template = parsed.flags.has("template");
-    if (action === "get") {
-      const routine = context.routines.get(ability, name, { template });
-      const text = context.routines.text(routine);
-      printResult({ routine, text }, json, () => {
-        if (parsed.flags.has("text")) {
-          process.stdout.write(text);
-          return;
-        }
-        console.log(routineSummary(routine));
-        console.log(
-          `model ${routine.model ?? "the session's"} · timeout ${formatDuration(routine.timeoutMs)} · output ${routine.output}${routine.until ? ` · until ${localTime(routine.until)}` : ""}`,
-        );
-        if (!routine.isTemplate)
-          console.log(
-            `next ${routine.enabled ? localTime(routine.nextRunAt) : "—"} · last ${localTime(routine.lastRunAt)} · failures in a row ${routine.consecutiveFailures}`,
-          );
-      });
-      return 0;
-    }
-    if (action === "run") {
-      const run = context.routines.runNow(ability, name);
-      printResult({ run }, json, () =>
-        console.log(
-          `${run.alreadyQueued ? `Run ${run.id} is already queued` : `Queued run ${run.id}`}; the app sends it to ${session.name} once it is idle`,
-        ),
-      );
-      return 0;
-    }
-    const routine =
-      action === "remove"
-        ? context.routines.remove(ability, name, { template })
-        : context.routines.setEnabled(ability, name, action === "enable");
-    printResult({ routine }, json, () =>
-      console.log(
-        action === "remove"
-          ? `Removed ${routine.isTemplate ? "template" : "routine"} ${routine.name}`
-          : `Routine ${routine.name} ${action === "enable" ? "enabled" : "disabled"}`,
-      ),
+    const schedule = parseWhen(text);
+    printResult({ schedule, text: describeSchedule(schedule) }, json, () =>
+      console.log(`${describeSchedule(schedule)}\t${schedule}`),
     );
     return 0;
   }

@@ -60,8 +60,6 @@ const base: DesktopSnapshotDto = {
   toasts: [],
   abilities: [],
   teams: [],
-  routines: [],
-  routineReports: [],
   settings: {
     version: "0.3.0",
     channel: "stable",
@@ -1885,7 +1883,7 @@ describe("desktop application shell", () => {
     // to copy; the cards say nothing.
     const bars = [
       ...html.matchAll(
-        /<section aria-label="([^"]+) size" class="routine-bar large-file-bar">.*?<\/section>/g,
+        /<section aria-label="([^"]+) size" class="notice-bar large-file-bar">.*?<\/section>/g,
       ),
     ];
     expect(bars.map((bar) => bar[1])).toEqual(["JOURNAL.md", "TEAM.md"]);

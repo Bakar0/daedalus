@@ -19,13 +19,12 @@ import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
 import { sweepProviderActivity } from "./activity-detect";
 import { AbilityService } from "./abilities";
+import { RoutineService, type RoutineSpawner } from "./routines";
 import { findAccount } from "./account-homes";
 import { AccountService } from "./accounts";
 import { DeliveryGate } from "./delivery";
-import { RoutineDelivery } from "./routine-delivery";
+import { AbilityNoteDelivery } from "./ability-notes";
 import { SessionChannel } from "./session-channel";
-import { RoutineReportService } from "./routine-reports";
-import { RoutineService } from "./routines";
 import { SecretService } from "./secrets";
 import {
   customInstructionsPath,
@@ -102,8 +101,6 @@ export interface ApplicationContext {
   /** Workspace secrets: names in SQLite, values in the login Keychain. */
   secrets: SecretService;
   abilities: AbilityService;
-  routines: RoutineService;
-  routineReports: RoutineReportService;
   /** Teams: a lead, its members, and their chat. */
   teams: TeamService;
   /** Workflow runs: which workflow each piece of work follows, and where. */
@@ -112,8 +109,10 @@ export interface ApplicationContext {
   instructions: InstructionService;
   /** The person's own keys, `keybindings.json` in the home. */
   keybindings: KeybindingService;
-  /** The routine clock; only the desktop host ticks it. */
-  routineDelivery: RoutineDelivery;
+  /** Types grant and revoke notes in; only the desktop host ticks it. */
+  abilityNotes: AbilityNoteDelivery;
+  /** Routines on their own page, each run a headless session; ticked by the desktop host. */
+  routines: RoutineService;
   /** How Daedalus hands a line to a running session it did not get from the user. */
   sessionChannel: SessionChannel;
   /** Keystrokes per session, and the rule for typing into a session. */
@@ -154,6 +153,8 @@ export interface ApplicationContextOptions {
   canDrawToasts?: () => boolean;
   /** Injected so tests never write to a real session's inbox. */
   teamTransport?: TeamTransport;
+  /** Starts routine runs; tests pass a fake provider. */
+  routineSpawner?: RoutineSpawner;
   /** Injected so tests stand in for a Claude session's inbox pipe. */
   sessionInbox?: (session: AgentSession, line: string) => Promise<boolean>;
   /** Injected so staleness decay is testable without waiting ten minutes. */
@@ -364,16 +365,6 @@ export async function createApplicationContext(
     sweep: () =>
       sweepProviderActivity({ config, repositories, activity, tmux }),
   });
-  const routines = new RoutineService(
-    repositories,
-    async (sessionId, reason) => {
-      await activity.raise({ sessionId, reason });
-    },
-    options.now,
-  );
-  abilities.onRevoke("routines", (ability) =>
-    routines.skipUndelivered(ability, "Skipped: the ability was revoked"),
-  );
   teams = new TeamService(
     repositories,
     abilities,
@@ -389,19 +380,10 @@ export async function createApplicationContext(
     options.now,
     activity,
   );
-  const routineReports = new RoutineReportService(
-    repositories,
-    notifications,
-    options.now,
-  );
-  const routineDelivery = new RoutineDelivery(
+  const abilityNotes = new AbilityNoteDelivery(
     repositories,
     abilities,
-    agents,
-    routines,
-    routineReports,
     sessionChannel,
-    options.now,
   );
   if (options.reconcile !== false) {
     // A clone only lives as long as the process running it, so anything still
@@ -479,8 +461,6 @@ export async function createApplicationContext(
     accounts,
     secrets,
     abilities,
-    routines,
-    routineReports,
     teams: teams!,
     instructions: new InstructionService(customInstructionsPath(config.home)),
     keybindings: new KeybindingService(keybindingsPath(config.home)),
@@ -491,7 +471,19 @@ export async function createApplicationContext(
       () => workflowsEnabled(config),
       options.now,
     ),
-    routineDelivery,
+    abilityNotes,
+    routines: new RoutineService(
+      repositories,
+      config,
+      {
+        continueConversation: (input) => agents.continueConversation(input),
+        spawn: (input) => agents.spawn(input),
+        restore: (id) => agents.restore(id),
+      },
+      options.routineSpawner,
+      options.now,
+      (request) => notifications.notify(request),
+    ),
     sessionChannel,
     deliveryGate,
     shutdown: new ShutdownService(repositories, agents, terminals, tmux),

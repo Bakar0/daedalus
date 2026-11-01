@@ -74,9 +74,8 @@ export interface HookIngestInput {
 export async function ingestHook(input: HookIngestInput): Promise<void> {
   let opened: Promise<ApplicationContext> | undefined;
   let failedOpens = 0;
-  // The first failed open is forgotten, so a database that was busy for the
-  // routines check is tried once more for the reading and the flush. A second
-  // failure sticks: each attempt can wait out the busy timeout, and a turn
+  // The first failed open is forgotten, so a database that was busy once is
+  // tried again for the flush. A second failure sticks: each attempt can wait out the busy timeout, and a turn
   // must not wait for three.
   const context = () =>
     (opened ??= Promise.resolve()
@@ -104,24 +103,15 @@ export async function ingestHook(input: HookIngestInput): Promise<void> {
       !(await codexHookIsOwn(payload.cwd, input.sessionDirectory))
     )
       return;
-    // A session with routines sits at its prompt after every run, so its
-    // turns end `idle` rather than `done`. Only `Stop` depends on it, and
-    // only `Stop` pays for the database read.
-    const routines =
-      input.event === "Stop" &&
-      (await context()
-        .then((opened) => Boolean(opened.abilities.held(sessionId, "routines")))
-        .catch(() => false));
     const observed =
       provider === "codex"
-        ? observeCodexHook(input.event, payload, { routines })
+        ? observeCodexHook(input.event, payload)
         : (observeClaudeHook(input.event, payload, {
             backgroundAgents: await claudeBackgroundAgents(
               input.event,
               payload,
             ),
-            routines,
-          }) ?? observeCodexHook(input.event, payload, { routines }));
+          }) ?? observeCodexHook(input.event, payload));
     if (!observed) return;
     // From a cloud session, what it says is marked as the cloud's.
     const observation = input.cloudMark

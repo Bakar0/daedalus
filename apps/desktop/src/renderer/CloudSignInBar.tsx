@@ -119,17 +119,17 @@ export function CloudPasteCodeBar({
   return (
     <section
       aria-label="Paste the sign-in code"
-      className="routine-bar cloud-sign-in-bar"
+      className="notice-bar cloud-sign-in-bar"
       data-color={color ?? undefined}
       data-testid="cloud-signin-paste"
       style={sessionColorStyle(color)}
     >
-      <div className="routine-bar-row">
-        <span className="routine-bar-text">
+      <div className="notice-bar-row">
+        <span className="notice-bar-text">
           The page on <strong>{host}</strong> shows a code once you sign in.
           Copy it and paste it into this session's terminal.
         </span>
-        <span className="routine-bar-actions">
+        <span className="notice-bar-actions">
           <button className="quiet" onClick={onDone} type="button">
             Done
           </button>

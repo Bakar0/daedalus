@@ -356,4 +356,76 @@ describe("runMigrations", () => {
       ).toEqual({ count: 0 });
     migrated.close();
   });
+
+  test("ability routines move to their session's workspace", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-routines-move-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    const source = join(import.meta.dir, "../../../../migrations");
+    await mkdir(migrations);
+    const earlier = (await readdir(source))
+      .filter((file) => file.endsWith(".sql") && file < "037_")
+      .sort();
+    for (const file of earlier)
+      await Bun.write(join(migrations, file), Bun.file(join(source, file)));
+    const databasePath = join(home, "state.db");
+    await runMigrations(databasePath, migrations);
+
+    const database = new Database(databasePath);
+    database.exec(`
+      INSERT INTO workspaces (id, slug, name, path, created_at, updated_at, task_id_prefix)
+      VALUES ('w1', 'demo', 'Demo', '/tmp/demo', 'now', 'now', 'demo');
+      INSERT INTO tasks (id, workspace_id, title, description, status, priority, created_at, updated_at, number)
+      VALUES ('t1', 'w1', 'Build broke', '', 'todo', 'normal', 'now', 'now', 1);
+      INSERT INTO agent_sessions (id, workspace_id, task_id, name, provider, kind, tmux_session, command, args, working_directory, status, started_at)
+      VALUES ('s1', 'w1', NULL, 'Watcher', 'claude', 'agent', 'tmux-s1', 'claude', '[]', '/tmp/demo', 'running', 'now');
+      INSERT INTO session_abilities (id, session_id, ability, paused, config, granted_at)
+      VALUES ('ab1', 's1', 'routines', 0, '{"purpose":"watch CI"}', 'now');
+      INSERT INTO routines (id, ability_id, name, schedule, model, timeout_ms, output, enabled, body, is_template, next_run_at, created_at, updated_at)
+      VALUES
+        ('r1', 'ab1', 'ci', '{"kind":"every","everyMs":60000,"text":"every 1m"}', 'haiku', 60000, 'task', 1, 'Builds since {{last_run}}.', 0, '2026-11-01T06:00:00.000Z', 'now', 'now'),
+        ('r2', 'ab1', 'draft', '{"kind":"every","everyMs":60000,"text":"every 1m"}', NULL, 60000, 'task', 1, 'template', 1, NULL, 'now', 'now');
+      INSERT INTO routine_reports (id, ability_id, routine, report_key, title, task_id, state, opened_at, last_seen_at)
+      VALUES ('rep1', 'ab1', 'ci', 'build-1', 'Build broke', 't1', 'open', 'now', 'now');
+    `);
+    database.close();
+
+    await Bun.write(
+      join(migrations, "037_routines_move_to_workspaces.sql"),
+      Bun.file(join(source, "037_routines_move_to_workspaces.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+
+    const migrated = new Database(databasePath);
+    expect(
+      migrated
+        .query(
+          "SELECT name, workspace_id, schedule, prompt, model, enabled, next_run_at FROM workspace_routines",
+        )
+        .all(),
+    ).toEqual([
+      {
+        name: "ci",
+        workspace_id: "w1",
+        schedule: "every 1m",
+        prompt:
+          "Purpose: watch CI\n\nBuilds since <when the previous run ended, ISO 8601>.",
+        model: "haiku",
+        enabled: 1,
+        next_run_at: "2026-11-01T06:00:00.000Z",
+      },
+    ]);
+    expect(
+      migrated
+        .query(
+          "SELECT name FROM sqlite_master WHERE name IN ('routines', 'routine_runs', 'routine_reports')",
+        )
+        .all(),
+    ).toEqual([]);
+    expect(migrated.query("SELECT * FROM session_abilities").all()).toEqual([]);
+    expect(migrated.query("SELECT id FROM tasks").all()).toEqual([
+      { id: "t1" },
+    ]);
+    migrated.close();
+  });
 });

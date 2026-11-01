@@ -1,13 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
-  fillPlaceholders,
   nextCronTime,
   nextRunTime,
   parseDuration,
-  parseRoutineFile,
   parseSchedule,
-  renderRoutineFile,
-} from "./routine-files";
+} from "./routine-schedule";
 
 const local = (text: string) => new Date(text);
 
@@ -84,74 +81,5 @@ describe("routine schedules", () => {
     expect(parseDuration("90s")).toBe(90_000);
     expect(parseDuration("2h")).toBe(7_200_000);
     expect(() => parseDuration("soon")).toThrow("is not a duration");
-  });
-});
-
-describe("routine text", () => {
-  const file = `---
-name: ci-health
-schedule: every 30m
-model: sonnet
-timeout: 10m
-output: task
-vars:
-  pr: Bakar0/daedalus#57
----
-Check CI for {{pr}} since {{last_run}}. Keep {{unknown}}.
-`;
-
-  test("parses frontmatter and body", () => {
-    const routine = parseRoutineFile(file);
-    expect(routine).toMatchObject({
-      name: "ci-health",
-      model: "sonnet",
-      timeoutMs: 600_000,
-      output: "task",
-      enabled: true,
-      vars: { pr: "Bakar0/daedalus#57" },
-    });
-    expect(
-      fillPlaceholders(routine.body, { ...routine.vars, last_run: "09:00" }),
-    ).toBe("Check CI for Bakar0/daedalus#57 since 09:00. Keep {{unknown}}.");
-  });
-
-  test("names the field that is wrong", () => {
-    expect(() => parseRoutineFile("no frontmatter")).toThrow(
-      "starts with frontmatter",
-    );
-    expect(() => parseRoutineFile("---\nname: x\n---\nbody")).toThrow(
-      "'schedule' field is required",
-    );
-    expect(() =>
-      parseRoutineFile("---\nschedule: every 5m\n---\nbody"),
-    ).toThrow("'name' field is required");
-    expect(
-      parseRoutineFile("---\nschedule: every 5m\n---\nbody", "from-file").name,
-    ).toBe("from-file");
-    expect(() =>
-      parseRoutineFile(
-        "---\nname: x\nschedule: every 5m\noutput: maybe\n---\nbody",
-      ),
-    ).toThrow("'output' must be one of");
-    expect(() =>
-      parseRoutineFile("---\nname: x\nschedule: every 5m\n---\n"),
-    ).toThrow("no prompt");
-  });
-
-  test("renders a file that parses back to the same routine", () => {
-    const routine = parseRoutineFile(file);
-    const again = parseRoutineFile(renderRoutineFile(routine));
-    expect(again).toEqual(routine);
-    const disabled = parseRoutineFile(
-      renderRoutineFile({ ...routine, enabled: false }),
-    );
-    expect(disabled.enabled).toBe(false);
-    expect(disabled.body).toBe(routine.body);
-    for (const timeoutMs of [90 * 60_000, 3 * 86_400_000, 45_000]) {
-      const timed = parseRoutineFile(
-        renderRoutineFile({ ...routine, timeoutMs }),
-      );
-      expect(timed.timeoutMs).toBe(timeoutMs);
-    }
   });
 });

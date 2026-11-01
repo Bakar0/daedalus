@@ -214,7 +214,7 @@ describe("cloud sessions", () => {
   test("a cloud session holds no abilities, at spawn or later", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const { context, workspace, host } = await setUp(home);
-      for (const ability of ["orchestration", "routines"])
+      for (const ability of ["orchestration"])
         await expect(
           context.agents.spawn({
             workspace: workspace.id,
@@ -228,7 +228,7 @@ describe("cloud sessions", () => {
       const session = await context.agents.spawn({
         workspace: workspace.id,
       });
-      for (const ability of ["orchestration", "routines"])
+      for (const ability of ["orchestration"])
         expect(() =>
           context.abilities.grant(session.id, ability, { live: true }),
         ).toThrow("A cloud session cannot hold");

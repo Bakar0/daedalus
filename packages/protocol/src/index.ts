@@ -161,12 +161,6 @@ export type AutoRebirthDto = number | "off" | null;
 export const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
 
 /**
- * Where a session holding routines is reborn when its threshold comes to off,
- * so its routines keep running. The core's copy is in `routine-delivery.ts`.
- */
-export const ROUTINES_REBIRTH_PERCENT = 60;
-
-/**
  * Past these sizes a session's header suggests compacting the file: every
  * session that reads the file pays for all of it, on every model call after.
  * The core's copies are in `context-files.ts`.
@@ -198,7 +192,7 @@ export function customSessionColor(
   return color?.startsWith("#") ? color : undefined;
 }
 
-export type AbilityIdDto = "routines" | "orchestration";
+export type AbilityIdDto = "orchestration";
 
 export interface IntegratedTerminalDto {
   id: string;
@@ -750,96 +744,9 @@ export interface SessionAbilityDto {
   ability: AbilityIdDto;
   enabled: boolean;
   paused: boolean;
-  /** For routines: what the session's routines are for. */
-  purpose: string | null;
   /** A grant or revoke note is still waiting to be typed in. */
   noteWaiting: boolean;
   grantedAt: string;
-}
-
-export type DeliveryHoldReasonDto =
-  | "paused"
-  | "stopped"
-  | "rebirth"
-  | "typing"
-  | "busy"
-  | "waiting-on-user"
-  | "input-text"
-  | "in-flight-limit"
-  | "skill-missing";
-
-/** What the routine bar above a session's terminal shows. */
-export interface RoutinesStatusDto {
-  abilityId: string;
-  sessionId: string;
-  paused: boolean;
-  /** Runs waiting to be typed in, oldest first. */
-  waiting: Array<{ runId: number; routine: string; queuedAt: string }>;
-  /** Runs typed in and not finished. */
-  running: number;
-  /** Why the waiting runs are not going in, when they are not. */
-  hold: {
-    reason: DeliveryHoldReasonDto;
-    text: string;
-    /** For `typing`: when the quiet time after a keystroke ends. */
-    until?: string;
-  } | null;
-  nextRun: { routine: string; at: string } | null;
-  lastKeystrokeAt: string | null;
-  routines: number;
-  openReports: number;
-  openUrgentReports: number;
-  openReportTasks: number;
-}
-
-export interface RoutineReportDto {
-  id: string;
-  abilityId: string;
-  routine: string;
-  key: string;
-  sameAs: string | null;
-  urgent: boolean;
-  title: string;
-  url: string | null;
-  taskId: string | null;
-  state: "open" | "resolved" | "closed";
-  verdict: "useful" | "noise" | null;
-  openedAt: string;
-  lastSeenAt: string;
-  resolvedAt: string | null;
-  closedAt: string | null;
-  reopenCount: number;
-}
-
-export interface RoutineDto {
-  name: string;
-  /** What the routine asks the session to do, before placeholders are filled. */
-  prompt: string;
-  schedule: string;
-  until: string | null;
-  model: string | null;
-  timeoutMs: number;
-  output: "task" | "notify" | "none";
-  enabled: boolean;
-  nextRunAt: string | null;
-  lastRunAt: string | null;
-  consecutiveFailures: number;
-  lastRun: RoutineRunDto | null;
-}
-
-export interface RoutineRunDto {
-  id: number;
-  routine: string;
-  status: "queued" | "running" | "done" | "failed" | "skipped";
-  queuedAt: string;
-  deliveredAt: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  outcome: "quiet" | "notified" | "task" | null;
-  summary: string | null;
-  missedMs: number;
-  /** Set by Run now when the routine already had a run waiting. */
-  alreadyQueued?: boolean;
 }
 
 /** A team, named after its lead's session. */
@@ -888,11 +795,55 @@ export interface TeamSayResultDto {
   warnings: string[];
 }
 
-export interface RoutinesDetailDto {
-  purpose: string | null;
+/** One run of a routine on the Routines page: a headless session. */
+export interface RoutineRunDto {
+  id: number;
+  routineId: string;
+  routineName: string;
+  trigger: "schedule" | "manual";
+  status: "running" | "done" | "failed" | "skipped";
+  startedAt: string;
+  finishedAt: string | null;
+  /** The last thing the agent said, or why the run failed or was skipped. */
+  summary: string | null;
+  workingDirectory: string;
+  /** The session a continue made from this run. */
+  continuedSessionId: string | null;
+  /** Finished and not opened yet. */
+  unseen: boolean;
+}
+
+export interface RoutineDto {
+  id: string;
+  name: string;
+  /** Null runs across every workspace. */
+  workspaceId: string | null;
+  workspaceName: string | null;
+  /** As stored: `cron "0 9 * * 1-5"`, `every 30m` or `at …`. */
+  schedule: string;
+  /** The schedule in words, such as "Weekdays at 09:00". */
+  scheduleText: string;
+  prompt: string;
+  model: string | null;
+  enabled: boolean;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  /** Oldest first, at most seven. */
+  recentRuns: RoutineRunDto[];
+}
+
+/** What the Routines page reads. */
+export interface RoutinesPageDto {
   routines: RoutineDto[];
-  templates: RoutineDto[];
+  /** The newest runs across every routine, newest first. */
   runs: RoutineRunDto[];
+  /** Older runs exist; `routineRuns` pages back through them. */
+  moreRuns: boolean;
+}
+
+export interface RoutineTranscriptDto {
+  run: RoutineRunDto;
+  entries: Array<{ kind: "text" | "tool" | "result" | "error"; text: string }>;
 }
 
 /**
@@ -1316,16 +1267,14 @@ export interface DesktopSnapshotDto {
   toasts: ToastDto[];
   /** Every ability row, granted or revoked, for the session cards. */
   abilities: SessionAbilityDto[];
-  /** One entry per session holding routines, for its bar and card badge. */
-  routines: RoutinesStatusDto[];
   /** Every team: a lead holding orchestration, and what it is called. */
   teams: TeamDto[];
-  /** Every routine report that has a task, for the task's card and drawer. */
-  routineReports: RoutineReportDto[];
   /** Workspace journals and team files grown past their compact size. */
   largeFiles?: LargeFileDto[];
   /** The newest workflow run of each session. */
   workflowRuns?: WorkflowRunDto[];
+  /** Finished routine runs the user has not opened, for the sidebar. */
+  unseenRoutineRuns?: number;
   /** Sign-in pages cloud sessions asked to open; absent outside the app. */
   cloudSignIns?: CloudSignInDto[];
   /** Workspaces whose cloud copy a new session waits for. */
@@ -1516,40 +1465,53 @@ export interface DesktopRpcSchema {
         { sessionId: string; ability: AbilityIdDto; granted: boolean },
         SessionAbilityDto
       >;
-      routinesDetail: Request<{ sessionId: string }, RoutinesDetailDto>;
+      routinesPage: Request<Record<string, never>, RoutinesPageDto>;
+      /** Runs older than `beforeId`, newest first. */
+      routineRuns: Request<
+        { beforeId: number; limit: number },
+        { runs: RoutineRunDto[]; moreRuns: boolean }
+      >;
+      /** Reads "weekdays 9:00" into a stored schedule and its words, for the form. */
+      routineParseWhen: Request<
+        { when: string },
+        { schedule: string; text: string }
+      >;
+      routineCreate: Request<
+        {
+          workspace: string | null;
+          when: string;
+          prompt: string;
+          name?: string;
+        },
+        RoutineDto
+      >;
+      routineUpdate: Request<
+        {
+          id: string;
+          name?: string;
+          workspace?: string | null;
+          when?: string;
+          prompt?: string;
+          enabled?: boolean;
+        },
+        RoutineDto
+      >;
+      routineDelete: Request<{ id: string }, { id: string }>;
+      routineStart: Request<{ id: string }, RoutineRunDto>;
+      routineTranscript: Request<{ runId: number }, RoutineTranscriptDto>;
+      /** Opens the run's conversation as a live session of its workspace. */
+      /** `workspaceId` is where a run on all workspaces continues. */
+      routineContinue: Request<
+        { runId: number; workspaceId?: string },
+        AgentSessionDto
+      >;
+      /** The Routines agent's session, started in the workspace on first use. */
+      routinesAgent: Request<{ workspaceId: string }, AgentSessionDto>;
       /** Sends what is waiting, then reads the team as the user. */
       teamDetail: Request<{ teamId: string }, TeamDetailDto>;
       /** Posts to the team chat as the user. */
       teamSay: Request<{ teamId: string; body: string }, TeamSayResultDto>;
       teamGoal: Request<{ teamId: string; goal: string }, TeamDto>;
-      routinesControl: Request<
-        {
-          sessionId: string;
-          action: "pause" | "resume";
-        },
-        SessionAbilityDto
-      >;
-      routinesPurpose: Request<
-        { sessionId: string; purpose: string },
-        SessionAbilityDto
-      >;
-      routineSetEnabled: Request<
-        { sessionId: string; name: string; enabled: boolean },
-        { name: string; enabled: boolean }
-      >;
-      /**
-       * Run now. With a name, queues that routine; without one, the oldest
-       * waiting run. Either way the next line skips the quiet time after
-       * typing, and every other rule still holds.
-       */
-      routineRunNow: Request<
-        { sessionId: string; name?: string },
-        RoutineRunDto
-      >;
-      routineReportVerdict: Request<
-        { id: string; verdict: "useful" | "noise" | null },
-        RoutineReportDto
-      >;
       /**
        * The loopback WebSocket the renderer attaches terminals to. It carries
        * a per-launch token, and the `views://` handler resolves a URL as a
@@ -2380,7 +2342,7 @@ export interface DesktopRpcSchema {
        * Without the deep link people learn to ignore notifications.
        */
       focusSession: { sessionId: string };
-      /** The same, for a clicked routine notification: opens its task. */
+      /** The same, for a clicked notification about a task: opens it. */
       focusTask: { taskId: string };
       /**
        * Quit was requested while something was still live. The renderer draws

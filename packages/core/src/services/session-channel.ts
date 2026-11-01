@@ -51,7 +51,7 @@ export interface DeliveryOptions {
 
 /**
  * - `delivered`: the line went in.
- * - `held`: it did not, and why, for the routines bar.
+ * - `held`: it did not, and why.
  * - `settling`: the last line has not landed yet; nothing new to say.
  */
 export type DeliveryResult =
@@ -77,7 +77,7 @@ const held = (hold: DeliveryHold) => ({ kind: "held", held: hold }) as const;
 
 /**
  * Every line Daedalus hands to a running session without the user sending
- * it: routine runs, grant and revoke notes, rebirth requests. It owns the
+ * it: grant and revoke notes, team messages, rebirth requests. It owns the
  * choice between a Claude session's inbox and typing into the pane, the
  * pause between two lines, the screen read and the delivery gate. Callers
  * say what to send and when, and get back whether it went in.

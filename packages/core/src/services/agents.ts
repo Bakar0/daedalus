@@ -30,6 +30,7 @@ import {
   resolveAutoRebirth,
   SESSION_COLORS,
   type AgentActivityState,
+  type AgentProviderName,
   type AgentSession,
   type AutoRebirth,
   type SessionColor,
@@ -1304,7 +1305,7 @@ export class AgentService {
      */
     continueFrom?: AgentSession;
     note?: boolean;
-    /** Abilities the session holds from the start, such as `routines`. */
+    /** Abilities the session holds from the start, such as `orchestration`. */
     abilities?: string[];
     color?: SessionColor;
     pinned?: boolean;
@@ -1606,34 +1607,6 @@ export class AgentService {
     return this.markRebirthRequested(agent);
   }
 
-  /**
-   * A rebirth request under the delivery rule, for the routines clock: it
-   * goes in only while the session waits at its prompt, and an inbox keeps
-   * it in the mailbox so it is never lost.
-   */
-  async requestRebirthAtPrompt(
-    session: AgentSession,
-    activity: AgentActivityState | undefined,
-  ): Promise<DeliveryResult> {
-    // The row as it stands once the gate passes, not the tick's snapshot.
-    let current = session;
-    const outcome = await this.channel.deliver(
-      session,
-      async () => {
-        current = await this.requireContinuable(session.id);
-        return this.rebirthLine(current);
-      },
-      {
-        when: "at-prompt",
-        activity,
-        skill: { id: REBIRTH_SKILL },
-        mustArrive: true,
-      },
-    );
-    if (outcome.kind === "delivered") this.markRebirthRequested(current);
-    return outcome;
-  }
-
   /** The rebirth request an inbox takes; it needs the skill installed. */
   private async rebirthLine(agent: AgentSession): Promise<string> {
     const skill = await requireSkill(this.config, agent, REBIRTH_SKILL);
@@ -1733,10 +1706,7 @@ export class AgentService {
         agent.kind !== "agent" ||
         agent.status !== "running" ||
         agent.archivedAt ||
-        (agent.provider !== "claude" && agent.provider !== "codex") ||
-        // A session running routines drains its runs first, and is reborn
-        // under the delivery rule; the routine clock decides.
-        this.abilities.held(agent.id, "routines")?.paused === false
+        (agent.provider !== "claude" && agent.provider !== "codex")
       )
         continue;
       if (!agent.rebirthRequestedAt) this.rebirthRetries.delete(agent.id);
@@ -1854,18 +1824,11 @@ export class AgentService {
           `${note}\n`,
           "utf8",
         );
-      // A session holding routines keeps its name: it is one agent over time,
-      // and the name is how its routines' tasks and notifications are signed.
       // A team's lead is numbered like any session; its team keeps one name.
-      const holdsRoutines = Boolean(
-        this.abilities.held(predecessor.id, "routines"),
-      );
       session = await this.spawn({
         workspace: predecessor.workspaceId,
         taskId: predecessor.taskId ?? undefined,
-        name: holdsRoutines
-          ? predecessor.name
-          : rebirthSessionName(predecessor.name),
+        name: rebirthSessionName(predecessor.name),
         provider,
         // A different provider would not understand the old one's model name.
         model:
@@ -1892,14 +1855,15 @@ export class AgentService {
     // Until it is archived the predecessor sits at its prompt with the mark
     // set, which is what the sweep's retry looks for.
     this.continued.add(predecessor.id);
-    // Abilities move with the work, so the routine clock follows the
-    // successor, and archiving the predecessor below does not pause them. A
+    // Abilities move with the work, so archiving the predecessor below does
+    // not pause them. A
     // lead's team is its orchestration ability, so it moves too. A member's
     // handle now names the successor alone.
     this.repositories.transaction(() => {
       this.repositories.abilities.moveToSession(predecessor.id, session.id);
       // So is the workflow run: the successor carries on at the same step.
       this.repositories.workflows.moveToSession(predecessor.id, session.id);
+      this.repositories.routines.moveAgent(predecessor.id, session.id);
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });
@@ -2388,9 +2352,8 @@ export class AgentService {
     const archived = { ...agent, archivedAt: new Date().toISOString() };
     this.repositories.transaction(() => {
       this.repositories.updateAgent(archived);
-      // Archiving pauses what the session holds; its routines and their
-      // tasks stay, and restoring the session resumes them.
-      // A lead's team pauses with it: members keep their place, messages to
+      // Archiving pauses what the session holds, and restoring the session
+      // resumes it. A lead's team pauses with it: members keep their place, messages to
       // the lead wait, and restoring the lead brings the team back. Only
       // revoking orchestration ends a team.
       this.repositories.abilities.setPausedForSession(id, true);
@@ -2411,6 +2374,55 @@ export class AgentService {
       (configured ? resolveAgentExecutable("codex", configured) : undefined) ??
       resolveAgentExecutable("codex", agent.command)
     );
+  }
+
+  /**
+   * Turns a conversation a headless routine run had into a session of the
+   * workspace, archived, and restores it: the user carries on where the run
+   * stopped, in the folder it ran in.
+   */
+  async continueConversation(input: {
+    workspaceId: string;
+    provider: AgentProviderName;
+    providerSessionId: string;
+    workingDirectory: string;
+    name: string;
+    startedAt: string;
+  }): Promise<AgentSession> {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    this.repositories.createAgent({
+      id,
+      workspaceId: input.workspaceId,
+      taskId: null,
+      name: input.name,
+      provider: input.provider,
+      kind: "agent",
+      tmuxSession: `daedalus_${id.replaceAll("-", "")}`,
+      command: input.provider,
+      args: [],
+      workingDirectory: input.workingDirectory,
+      status: "exited",
+      exitCode: 0,
+      startedAt: input.startedAt,
+      endedAt: now,
+      providerSessionId: input.providerSessionId,
+      archivedAt: now,
+      resumeCount: 0,
+      lostReason: null,
+      rebirthRequestedAt: null,
+      resumeOnStart: false,
+      position: this.repositories.nextAgentPosition(input.workspaceId),
+      pinnedAt: null,
+      color: null,
+      autoRebirthPercent: null,
+      account: null,
+      teamId: null,
+      teamHandle: null,
+      spawnedBy: null,
+      hostId: null,
+    });
+    return this.restore(id);
   }
 
   async restore(id: string): Promise<AgentSession> {

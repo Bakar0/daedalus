@@ -1,17 +1,14 @@
 /**
  * A page for checking the session abilities UI in a browser: the card menu,
- * the New session fields, the routine bar, and the Routines and Team tabs. The stub
- * client keeps state, so a rename, a pin, a color, a grant, Pause and Run now
- * all come back through the snapshot the way the real adapter does it.
- * `window.routinesTest` moves the routine status on from a script.
+ * the New session fields and the Team tab. The stub client keeps state, so a
+ * rename, a pin, a color and a grant all come back through the snapshot the
+ * way the real adapter does it.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type {
   AgentSessionDto,
   DesktopSnapshotDto,
-  RoutineDto,
-  RoutinesStatusDto,
   SessionAbilityDto,
   SessionColorDto,
   TeamDetailDto,
@@ -33,7 +30,7 @@ const agent = (
   extra: Partial<AgentSessionDto> = {},
 ): AgentSessionDto => ({
   id,
-  workspaceId: "routines-test-workspace",
+  workspaceId: "abilities-test-workspace",
   taskId: null,
   name,
   provider,
@@ -41,7 +38,7 @@ const agent = (
   tmuxSession: id,
   command: provider,
   args: [],
-  workingDirectory: "/tmp/routines-test",
+  workingDirectory: "/tmp/abilities-test",
   status: "running",
   exitCode: null,
   startedAt,
@@ -62,101 +59,25 @@ const agent = (
   ...extra,
 });
 
-const routine = (
-  name: string,
-  schedule: string,
-  extra: Partial<RoutineDto> = {},
-): RoutineDto => ({
-  name,
-  prompt: `Check ${name} since {{last_run}}.\nReport anything broken; key: ${name}:<id>.`,
-  schedule,
-  until: null,
-  model: null,
-  timeoutMs: 600_000,
-  output: "task",
-  enabled: true,
-  nextRunAt: iso(240),
-  lastRunAt: iso(-900),
-  consecutiveFailures: 0,
-  lastRun: {
-    id: 1,
-    routine: name,
-    status: "done",
-    queuedAt: iso(-960),
-    deliveredAt: iso(-950),
-    startedAt: iso(-940),
-    finishedAt: iso(-900),
-    outcome: "quiet",
-    summary: null,
-    missedMs: 0,
-  },
-  ...extra,
-});
-
-let routines: RoutineDto[] = [
-  routine("ci-health", "every 15m", { model: "haiku" }),
-  routine("alerts-triage", "every 30m", {
-    consecutiveFailures: 3,
-    lastRun: {
-      id: 2,
-      routine: "alerts-triage",
-      status: "failed",
-      queuedAt: iso(-1900),
-      deliveredAt: iso(-1890),
-      startedAt: iso(-1880),
-      finishedAt: iso(-1800),
-      outcome: null,
-      summary: "cx CLI asked for sign-in",
-      missedMs: 0,
-    },
-  }),
-  routine("weekly-digest", "0 9 * * 1", {
-    enabled: false,
-    nextRunAt: null,
-    output: "notify",
-  }),
-];
-let purpose: string | null =
-  "Keep main green and catch production errors before customers do.";
-
 let abilities: SessionAbilityDto[] = [
   {
-    id: "ability-argus",
-    sessionId: "argus",
-    ability: "routines",
+    id: "team-1",
+    sessionId: "reviewer",
+    ability: "orchestration",
     enabled: true,
     paused: false,
-    purpose,
     noteWaiting: false,
     grantedAt: startedAt,
   },
 ];
 
-let status: RoutinesStatusDto = {
-  abilityId: "ability-argus",
-  sessionId: "argus",
-  paused: false,
-  waiting: [
-    { runId: 11, routine: "ci-health", queuedAt: iso(-100) },
-    { runId: 12, routine: "alerts-triage", queuedAt: iso(-45) },
-  ],
-  running: 0,
-  hold: { reason: "typing", text: "you typed in this session", until: iso(80) },
-  nextRun: { routine: "ci-health", at: iso(240) },
-  lastKeystrokeAt: iso(-40),
-  routines: 3,
-  openReports: 1,
-  openUrgentReports: 0,
-  openReportTasks: 1,
-};
-
 let current: DesktopSnapshotDto = {
   workspaces: [
     {
-      id: "routines-test-workspace",
-      slug: "routines-test",
-      name: "Routines test",
-      path: "/tmp/routines-test",
+      id: "abilities-test-workspace",
+      slug: "abilities-test",
+      name: "Abilities test",
+      path: "/tmp/abilities-test",
       createdAt: startedAt,
       updatedAt: startedAt,
       archivedAt: null,
@@ -204,14 +125,12 @@ let current: DesktopSnapshotDto = {
       goal: "Ship v2 checkout",
     },
   ],
-  routines: [status],
-  routineReports: [],
   // Argus is in a run: build done, deploy waiting on its result, and a
   // release step that waits for the go-ahead.
   workflowRuns: [
     {
       id: "run-1",
-      workspaceId: "routines-test-workspace",
+      workspaceId: "abilities-test-workspace",
       sessionId: "argus",
       workflow: "feature",
       steps: [
@@ -267,10 +186,10 @@ let current: DesktopSnapshotDto = {
   settings: {
     version: "0.3.0",
     channel: "stable",
-    home: "/tmp/daedalus-routines-test",
-    workspaceRoot: "/tmp/daedalus-routines-test/workspaces",
-    databasePath: "/tmp/daedalus-routines-test/state.db",
-    repositoryRoot: "/tmp/daedalus-routines-test/repos",
+    home: "/tmp/daedalus-abilities-test",
+    workspaceRoot: "/tmp/daedalus-abilities-test/workspaces",
+    databasePath: "/tmp/daedalus-abilities-test/state.db",
+    repositoryRoot: "/tmp/daedalus-abilities-test/repos",
     tmuxAvailable: true,
     workspaceInstructionFilesEnabled: true,
     autoRestoreSessionsEnabled: true,
@@ -338,25 +257,13 @@ const publish = (changes: Partial<DesktopSnapshotDto> = {}) => {
   current = {
     ...current,
     abilities,
-    routines: abilities.some((item) => item.enabled)
-      ? current.routines.length
-        ? [status]
-        : []
-      : [],
     ...changes,
   };
   for (const listener of [...listeners]) listener();
 };
-const setStatus = (next: Partial<RoutinesStatusDto>) => {
-  status = { ...status, ...next };
-  publish({ routines: [status] });
-};
-
 declare global {
   interface Window {
-    routinesTest: {
-      setStatus: (next: Partial<RoutinesStatusDto>) => void;
-      hold: (reason: NonNullable<RoutinesStatusDto["hold"]>["reason"]) => void;
+    abilitiesTest: {
       spawns: unknown[];
       snapshot: () => DesktopSnapshotDto;
       /** Archives a session, such as a team's lead. */
@@ -365,8 +272,7 @@ declare global {
   }
 }
 
-window.routinesTest = {
-  setStatus,
+window.abilitiesTest = {
   archive: (sessionId) => {
     updateAgent(sessionId, {
       archivedAt: new Date().toISOString(),
@@ -374,14 +280,6 @@ window.routinesTest = {
     });
     publish();
   },
-  hold: (reason) =>
-    setStatus({
-      hold:
-        reason === "typing"
-          ? { reason, text: "you typed", until: iso(80) }
-          : { reason, text: reason },
-      lastKeystrokeAt: reason === "typing" ? iso(-40) : null,
-    }),
   spawns,
   snapshot: () => current,
 };
@@ -435,10 +333,9 @@ const client = {
           : {
               id: `ability-${sessionId}`,
               sessionId,
-              ability: "routines",
+              ability: "orchestration",
               enabled: granted,
               paused: false,
-              purpose: null,
               noteWaiting: true,
               grantedAt: new Date().toISOString(),
             };
@@ -446,116 +343,8 @@ const client = {
           ...abilities.filter((item) => item.sessionId !== sessionId),
           row,
         ];
-        const others = current.routines.filter(
-          (item) => item.sessionId !== sessionId,
-        );
-        publish({
-          routines: granted
-            ? [
-                ...others,
-                {
-                  ...status,
-                  abilityId: row.id,
-                  sessionId,
-                  waiting: [],
-                  hold: null,
-                  nextRun: null,
-                  routines: 0,
-                },
-              ]
-            : others,
-        });
+        publish();
         return ok(row);
-      },
-      routinesDetail: async () =>
-        ok({
-          purpose,
-          routines,
-          templates: [],
-          runs: [
-            {
-              id: 3,
-              routine: "ci-health",
-              status: "done" as const,
-              queuedAt: iso(-1900),
-              deliveredAt: iso(-1890),
-              startedAt: iso(-1880),
-              finishedAt: iso(-1800),
-              outcome: "task" as const,
-              summary: "main is red: lint fails in apps/cli",
-              missedMs: 0,
-            },
-            {
-              id: 2,
-              routine: "ci-health",
-              status: "done" as const,
-              queuedAt: iso(-2900),
-              deliveredAt: iso(-2890),
-              startedAt: iso(-2880),
-              finishedAt: iso(-2800),
-              outcome: "quiet" as const,
-              summary: "all green",
-              missedMs: 0,
-            },
-          ],
-        }),
-      routinesControl: async ({ action }: { action: "pause" | "resume" }) => {
-        const paused = action === "pause";
-        abilities = abilities.map((item) => ({ ...item, paused }));
-        setStatus({
-          paused,
-          hold: paused
-            ? { reason: "paused", text: "routines are paused" }
-            : null,
-        });
-        return ok(abilities[0]);
-      },
-      routinesPurpose: async ({ purpose: next }: { purpose: string }) => {
-        purpose = next;
-        return ok({ ...abilities[0], purpose });
-      },
-      routineSetEnabled: async ({
-        name,
-        enabled,
-      }: {
-        name: string;
-        enabled: boolean;
-      }) => {
-        routines = routines.map((item) =>
-          item.name === name
-            ? { ...item, enabled, nextRunAt: enabled ? iso(600) : null }
-            : item,
-        );
-        setStatus({ routines: routines.length });
-        return ok({ name, enabled });
-      },
-      routineRunNow: async ({ name }: { name?: string }) => {
-        const [first, ...rest] = status.waiting;
-        if (!name && first && status.hold?.reason === "typing")
-          setStatus({
-            waiting: rest,
-            running: status.running + 1,
-            hold: null,
-          });
-        else if (name)
-          setStatus({
-            waiting: [
-              ...status.waiting,
-              { runId: 99, routine: name, queuedAt: new Date().toISOString() },
-            ],
-          });
-        return ok({
-          id: first?.runId ?? 99,
-          routine: name ?? first?.routine ?? "ci-health",
-          status: "queued",
-          queuedAt: new Date().toISOString(),
-          deliveredAt: null,
-          startedAt: null,
-          finishedAt: null,
-          outcome: null,
-          summary: null,
-          missedMs: 0,
-        });
       },
       // Workflows on, so the Workflow pane shows the run.
       skillList: async () =>
@@ -565,7 +354,7 @@ const client = {
         }),
       workflowFiles: async () =>
         ok({
-          root: "/tmp/daedalus-routines-test/workflows",
+          root: "/tmp/daedalus-abilities-test/workflows",
           flows: [
             {
               name: "feature",
@@ -600,7 +389,7 @@ const client = {
         }),
       instructionFiles: async () =>
         ok({
-          root: "/tmp/daedalus-routines-test/instructions",
+          root: "/tmp/daedalus-abilities-test/instructions",
           index: { path: "INDEX.md", text: "# Custom instructions\n" },
           topics: [],
         }),
@@ -645,7 +434,7 @@ const client = {
       workspaceReorder: async () => ok(current.workspaces),
       workspaceContentGet: async () =>
         ok({
-          workspaceId: "routines-test-workspace",
+          workspaceId: "abilities-test-workspace",
           brief: "# Brief",
           journal: "# Journal",
           files: [],

@@ -107,7 +107,7 @@ describe("session inbox", () => {
     });
   });
 
-  test("a note reaches a waiting session now, along with a routine line", async () => {
+  test("a note reaches a waiting session now, along with a pipe line", async () => {
     await withHome(async (config) => {
       const path = await ensureInbox(config, "s1");
       const waiter = startWaiter(path);
@@ -115,7 +115,7 @@ describe("session inbox", () => {
       await Bun.sleep(50);
       expect(await leaveInInbox(config, "s1", "hand off now")).toBe(true);
       expect(await waiter.ended).toEqual(["hand off now\n", 2]);
-      // A note waiting when a routine line arrives goes with it.
+      // A note waiting when a pipe line arrives goes with it.
       const next = startWaiter(path);
       await waitUntil(async () => Bun.file(`${path}.pid`).exists());
       const mail = Bun.file(`${path}.mail`);

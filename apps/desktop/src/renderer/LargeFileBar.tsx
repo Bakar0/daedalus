@@ -36,20 +36,20 @@ export function LargeFileBar({
   return (
     <section
       aria-label={`${FILE_NAME[file.kind]} size`}
-      className="routine-bar large-file-bar"
+      className="notice-bar large-file-bar"
       data-color={color ?? undefined}
       style={sessionColorStyle(color)}
     >
-      <div className="routine-bar-row">
+      <div className="notice-bar-row">
         <span
-          className="routine-bar-text"
+          className="notice-bar-text"
           title="Every session that reads it pays for all of it, on every model call after. The command moves what is no longer current to an archive file."
         >
           {FILE_NAME[file.kind]} is {Math.round(file.bytes / 1000)} KB. To
           shrink it, run:
         </span>
         <code className="large-file-command">{command}</code>
-        <span className="routine-bar-actions">
+        <span className="notice-bar-actions">
           <button
             className="quiet"
             onClick={() =>

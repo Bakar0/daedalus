@@ -296,14 +296,6 @@ describe("Claude hook payloads", () => {
     });
   });
 
-  test("a session holding routines ends its turns idle", () => {
-    const stop = (last_assistant_message: string) =>
-      observeClaudeHook("Stop", claude("Stop", { last_assistant_message }), {
-        routines: true,
-      });
-    expect(stop("Nothing new today.")).toMatchObject({ activity: "idle" });
-  });
-
   test("StopFailure carries the error and SessionEnd clears", () => {
     expect(
       observeClaudeHook(
@@ -638,20 +630,13 @@ describe("Codex hook payloads", () => {
     }
   });
 
-  test("Stop is done, or idle in a session holding routines", () => {
+  test("Stop is done", () => {
     expect(
       observeCodexHook(
         "Stop",
         codex("Stop", { last_assistant_message: "Tests pass." }),
       ),
     ).toMatchObject({ activity: "done", detail: "Tests pass." });
-    expect(
-      observeCodexHook(
-        "Stop",
-        codex("Stop", { last_assistant_message: "Which branch?" }),
-        { routines: true },
-      ),
-    ).toMatchObject({ activity: "idle" });
   });
 
   test("Interrupt has no Claude equivalent and lands on idle", () => {

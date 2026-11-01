@@ -17,7 +17,7 @@ import type { AgentSession } from "../domain";
  * hands each line to one reader, so a line cannot be delivered twice.
  *
  * A line on the pipe only reaches a session whose waiter is reading, which
- * suits routine runs: they go in only when the session is at its prompt.
+ * suits lines that go in only when the session is at its prompt.
  * Notes that must arrive whatever the session is doing, such as a rebirth
  * request, go to the mailbox file beside the pipe instead. A waiter reads
  * the mailbox when it starts, so a note left during a turn arrives when the

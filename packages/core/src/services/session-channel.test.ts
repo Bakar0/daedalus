@@ -6,7 +6,7 @@ import {
   createApplicationContext,
   inboxPath,
   QUIET_AFTER_TYPING_MS,
-  ROUTINE_RUN_SKILL,
+  REBIRTH_SKILL,
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
@@ -159,7 +159,7 @@ async function withChannel(run: (harness: Harness) => Promise<void>) {
   });
 }
 
-const RUN = { id: ROUTINE_RUN_SKILL, args: "7" };
+const RUN = { id: REBIRTH_SKILL, args: "7" };
 
 describe("session channel", () => {
   test("an inbox takes a line at the prompt, and typing does not hold it", async () => {
@@ -229,7 +229,7 @@ describe("session channel", () => {
         tmux.screen = IDLE_SCREEN;
         expect(await deliver()).toEqual({ kind: "delivered" });
         expect(tmux.sent.map((item) => item.text)).toEqual([
-          expect.stringMatching(/^\/daedalus-routine(-\w+)? 7$/),
+          expect.stringMatching(/^\/daedalus-rebirth(-\w+)? 7$/),
         ]);
       },
     );
@@ -263,7 +263,7 @@ describe("session channel", () => {
   test("a skill that is not installed holds as skill-missing", async () => {
     await withChannel(async ({ context, tmux, reading, typedClaude }) => {
       const session = await typedClaude();
-      await context.skills.setEnabled(ROUTINE_RUN_SKILL, false);
+      await context.skills.setEnabled(REBIRTH_SKILL, false);
       expect(
         await context.sessionChannel.deliver(session, "run 7 is due", {
           when: "at-prompt",

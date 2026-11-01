@@ -9,10 +9,6 @@ import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import { channelArtifactName } from "./skills";
 
-/** The managed skill a session follows to create and change its routines. */
-export const ROUTINES_SKILL = "daedalus-routines";
-/** The managed skill a session follows to carry out one delivered run. */
-export const ROUTINE_RUN_SKILL = "daedalus-routine";
 /** The lead's playbook. */
 export const ORCHESTRATION_SKILL = "daedalus-orchestration";
 /** How every member of a team, and its lead, talks in the team chat. */
@@ -40,16 +36,6 @@ export interface AbilityDefinition {
 }
 
 export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
-  routines: {
-    id: "routines",
-    label: "Routines",
-    providers: ["claude", "codex"],
-    // Routines say nothing to the session. A line in the first prompt made
-    // the agent act on it before the user asked for anything. The session
-    // finds the routines skill when the user asks for a routine, a run
-    // arrives as the run skill's own command, and the routine commands
-    // refuse a session without the ability. The app tells the user instead.
-  },
   orchestration: {
     id: "orchestration",
     label: "Orchestration",
@@ -78,7 +64,7 @@ export function abilityDefinition(id: string): AbilityDefinition {
 /**
  * Grants, revokes and pauses abilities on sessions. A grant at creation adds
  * the ability's launch line; a grant to a running session leaves a note that
- * the delivery tick types in under the same rule as a routine run.
+ * the delivery tick types in under the delivery rule.
  */
 export class AbilityService {
   private readonly revokeHooks = new Map<
@@ -97,7 +83,7 @@ export class AbilityService {
     return channelArtifactName(this.config, id);
   }
 
-  /** Lets an ability clean up after a revoke, such as dropping queued runs. */
+  /** Lets an ability clean up after a revoke. */
   onRevoke(ability: AbilityId, hook: (ability: SessionAbility) => void): void {
     this.revokeHooks.set(ability, hook);
   }
@@ -277,7 +263,7 @@ export class AbilityService {
     return updated;
   }
 
-  /** Sets one config value, such as the routines ability's purpose. */
+  /** Sets one config value, such as the orchestration ability's goal. */
   configure(
     sessionId: string,
     abilityId: string,

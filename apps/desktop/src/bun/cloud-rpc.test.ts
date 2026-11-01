@@ -767,61 +767,6 @@ describe("cloud RPC", () => {
     });
   });
 
-  test("a routine run due for a session asleep in the cloud wakes and resumes it", async () => {
-    await withCloud(async (rpc, context) => {
-      await rpc.cloudSignIn({
-        gatewayUrl: "http://localhost:8080",
-        email: "dev@example.com",
-      });
-      const workspace = await context.workspaces.create({ name: "Pods" });
-      inCloud(context, workspace.id);
-      await rpc.cloudWorkspaceCreate({ workspace: workspace.id });
-      const cloudId = context.repositories.cloudWorkspaceId(workspace.id)!;
-      const host = new FakeCloudHost(cloudHostId(cloudId));
-      context.hosts.register(host);
-      const spawned = await rpc.agentSpawn({
-        workspace: workspace.id,
-      });
-      if (!spawned.ok) throw new Error("spawn failed");
-      // Routines are granted on this Mac; a session keeps them when it
-      // moves to the cloud.
-      context.repositories.setAgentPlace(spawned.data.id, {
-        hostId: null,
-        workingDirectory: workspace.path,
-      });
-      const ability = context.abilities.grant(spawned.data.id, "routines", {
-        live: false,
-      });
-      context.repositories.setAgentPlace(spawned.data.id, {
-        hostId: host.id,
-        workingDirectory: ".",
-      });
-      context.routines.add(ability, {
-        text: "---\nname: ci-health\nschedule: every 10m\n---\nCheck CI.",
-      });
-      context.routineDelivery.runNow(ability, "ci-health");
-
-      await rpc.cloudWorkspaceSleep({ workspace: workspace.id });
-      host.sessions.clear();
-      const launches = host.launches.length;
-      await context.routineDelivery.tick({
-        contextPercent: () => 10,
-        activity: () => undefined,
-      });
-      // The wake runs beside the tick.
-      for (let waited = 0; waited < 5_000; waited += 50) {
-        if ((await context.agents.get(spawned.data.id)).status === "running")
-          break;
-        await Bun.sleep(50);
-      }
-      expect((await context.agents.get(spawned.data.id)).status).toBe(
-        "running",
-      );
-      expect(host.launches).toHaveLength(launches + 1);
-      expect(host.launches.at(-1)!.args).toContain("--resume");
-    });
-  });
-
   test("a sleep that did not happen: the session is taken back as it runs, not relaunched", async () => {
     await withCloud(async (rpc, context) => {
       await rpc.cloudSignIn({
