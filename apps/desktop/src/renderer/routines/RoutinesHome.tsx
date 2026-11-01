@@ -9,6 +9,9 @@ import type {
 import type { DesktopClient } from "../client-types";
 import { relativeTime } from "./time";
 
+/** Runs each "Show older" adds to Latest runs. */
+const OLDER_RUNS = 20;
+
 /** The value the form's workspace menu uses for "All workspaces". */
 const ALL = "";
 
@@ -69,6 +72,11 @@ export function RoutinesHome({
   const [open, setOpen] = useState<string>();
   const [adding, setAdding] = useState(false);
   const [viewing, setViewing] = useState<number>();
+  // Pages loaded with "Show older", under the newest runs the poll refreshes.
+  const [older, setOlder] = useState<{
+    runs: RoutineRunDto[];
+    more: boolean;
+  }>();
 
   const load = useCallback(async () => {
     try {
@@ -131,6 +139,26 @@ export function RoutinesHome({
       </div>
     );
 
+  // The poll's newest page moves on as runs start; older pages keep only
+  // what sits below it, so a run never shows twice.
+  const oldestLatest = page.runs.at(-1)?.id ?? Number.POSITIVE_INFINITY;
+  const runs = [
+    ...page.runs,
+    ...(older?.runs.filter((item) => item.id < oldestLatest) ?? []),
+  ];
+  const moreRuns = older ? older.more : page.moreRuns;
+  const showOlder = async () => {
+    const last = runs.at(-1);
+    if (!last) return;
+    const next = await run(
+      client.request.routineRuns({ beforeId: last.id, limit: OLDER_RUNS }),
+    );
+    if (next)
+      setOlder({
+        runs: [...(older?.runs ?? []), ...next.runs],
+        more: next.moreRuns,
+      });
+  };
   const workspaceOf = new Map(
     page.routines.map((item) => [item.id, item.workspaceName]),
   );
@@ -234,11 +262,11 @@ export function RoutinesHome({
               </table>
             )
           )}
-          {page.runs.length > 0 && (
+          {runs.length > 0 && (
             <section className="ability-page-section">
               <h3>Latest runs</h3>
               <ul className="routine-runs routines-home-runs">
-                {page.runs.map((item) => (
+                {runs.map((item) => (
                   <li key={item.id}>
                     <button
                       data-unseen={item.unseen}
@@ -262,6 +290,15 @@ export function RoutinesHome({
                   </li>
                 ))}
               </ul>
+              {moreRuns && (
+                <button
+                  className="quiet routine-runs-older"
+                  onClick={() => void showOlder()}
+                  type="button"
+                >
+                  Show older
+                </button>
+              )}
             </section>
           )}
         </div>

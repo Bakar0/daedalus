@@ -213,8 +213,20 @@ export class RoutineRepository {
     return row ? runFromRow(row) : undefined;
   }
 
-  /** Newest first, across every routine or for one. */
-  listRuns(filter: { routineId?: string; limit: number }): RoutineRun[] {
+  /** Newest first, across every routine or for one; `beforeId` pages back. */
+  listRuns(filter: {
+    routineId?: string;
+    limit: number;
+    beforeId?: number;
+  }): RoutineRun[] {
+    if (filter.beforeId !== undefined)
+      return this.database
+        .query<RoutineRunRow, [number, number]>(
+          `SELECT * FROM workspace_routine_runs WHERE id < ?
+           ORDER BY id DESC LIMIT ?`,
+        )
+        .all(filter.beforeId, filter.limit)
+        .map(runFromRow);
     const rows = filter.routineId
       ? this.database
           .query<RoutineRunRow, [string, number]>(
@@ -228,6 +240,32 @@ export class RoutineRepository {
           )
           .all(filter.limit);
     return rows.map(runFromRow);
+  }
+
+  /**
+   * Runs past the newest `keep` of their routine that are finished and read.
+   * A running or unread run is never one of them.
+   */
+  runsPastKeep(keep: number): number[] {
+    return this.database
+      .query<{ id: number }, [number]>(
+        `SELECT id FROM (
+           SELECT id, status, seen_at, ROW_NUMBER() OVER (
+             PARTITION BY routine_id ORDER BY id DESC) AS place
+           FROM workspace_routine_runs)
+         WHERE place > ? AND status != 'running' AND seen_at IS NOT NULL`,
+      )
+      .all(keep)
+      .map((row) => row.id);
+  }
+
+  deleteRuns(ids: number[]): void {
+    const remove = this.database.query(
+      "DELETE FROM workspace_routine_runs WHERE id = ?",
+    );
+    this.database.transaction(() => {
+      for (const id of ids) remove.run(id);
+    })();
   }
 
   /** Finished runs the user has not opened yet, newest first. */

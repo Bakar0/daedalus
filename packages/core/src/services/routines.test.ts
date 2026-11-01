@@ -411,6 +411,53 @@ describe("RoutineService", () => {
     });
   });
 
+  test("keeps the newest 100 runs of a routine, and every unread one", async () => {
+    const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
+    await withRoutines(fakeClaude("unused"), clock, async (context, home) => {
+      await context.workspaces.create({ name: "Ops", slug: "ops" });
+      const routine = context.routines.add({
+        workspace: "ops",
+        when: "every 30m",
+        prompt: "Check.",
+        name: "check",
+      });
+      const ids: number[] = [];
+      for (let index = 0; index < 105; index++) {
+        const run = context.repositories.routines.createRun({
+          routineId: routine.id,
+          trigger: "schedule",
+          status: "done",
+          providerSessionId: null,
+          workingDirectory: home,
+          startedAt: clock.now.toISOString(),
+          finishedAt: clock.now.toISOString(),
+          summary: `Run ${index}.`,
+          continuedSessionId: null,
+          // The second run is never opened.
+          seenAt: index === 1 ? null : clock.now.toISOString(),
+          pid: null,
+        });
+        ids.push(run.id);
+        await Bun.write(join(home, "routine-runs", `${run.id}.jsonl`), "{}");
+      }
+      expect(await context.routines.prune()).toBe(4);
+      const kept = context.repositories.routines
+        .listRuns({ limit: 200 })
+        .map((run) => run.id);
+      expect(kept).toHaveLength(101);
+      expect(kept).toContain(ids[1]);
+      expect(kept).not.toContain(ids[0]);
+      expect(
+        await Bun.file(join(home, "routine-runs", `${ids[0]}.jsonl`)).exists(),
+      ).toBe(false);
+      // Paging back from the newest ten.
+      const first = context.routines.runs(10);
+      expect(context.routines.runs(10, first.at(-1)!.id)[0]?.id).toBe(
+        first.at(-1)!.id - 1,
+      );
+    });
+  });
+
   test("a run asked for from another process starts on the next tick", async () => {
     const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
     await withRoutines(fakeClaude("Done."), clock, async (context) => {

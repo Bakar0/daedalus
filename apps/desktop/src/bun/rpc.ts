@@ -438,6 +438,22 @@ function routineDto(
   };
 }
 
+/** Runs the Routines page shows before "Show older". */
+const LATEST_RUNS = 10;
+
+/** One page of runs, asking for one more to know whether older ones exist. */
+function runsPage(
+  context: ApplicationContext,
+  limit: number,
+  beforeId?: number,
+): { runs: RoutineRunDto[]; moreRuns: boolean } {
+  const runs = context.routines.runs(limit + 1, beforeId);
+  return {
+    runs: runs.slice(0, limit).map((run) => routineRunDto(context, run)),
+    moreRuns: runs.length > limit,
+  };
+}
+
 function routineViewDto(context: ApplicationContext, id: string): RoutineDto {
   return routineDto(context, context.routines.view(id));
 }
@@ -634,8 +650,10 @@ export function createDesktopRequestHandlers(
         routines: context.routines
           .list()
           .map((view) => routineDto(context, view)),
-        runs: context.routines.runs().map((run) => routineRunDto(context, run)),
+        ...runsPage(context, LATEST_RUNS),
       })),
+    routineRuns: ({ beforeId, limit }) =>
+      result(() => runsPage(context, limit, beforeId)),
     routineParseWhen: ({ when }) =>
       result(() => {
         const schedule = parseWhen(when);

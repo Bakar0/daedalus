@@ -6669,6 +6669,10 @@ dd {
   background: var(--raised-hover) !important;
   color: var(--text) !important;
 }
+.routine-runs-older {
+  align-self: flex-start;
+  padding: 2px 6px;
+}
 .sidebar-routines-count {
   background: var(--accent);
   border-radius: 999px;

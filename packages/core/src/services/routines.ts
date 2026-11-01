@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { loginShellPath } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
@@ -28,6 +28,10 @@ export const MAX_ROUTINE_RUNS = 2;
 export const ROUTINE_RUN_TIMEOUT_MS = 30 * 60_000;
 /** Runs shown per routine in the table. */
 const RECENT_RUNS = 7;
+/** Runs kept per routine; older ones, read and finished, are deleted. */
+export const ROUTINE_RUNS_KEPT = 100;
+/** How often the tick looks for runs past that. */
+const PRUNE_EVERY_MS = 10 * 60_000;
 
 export interface RoutineProcess {
   /** Resolves with the exit code once the process ends. */
@@ -121,6 +125,7 @@ export interface RoutineAddInput {
  */
 export class RoutineService {
   private readonly live = new Map<number, RoutineProcess>();
+  private prunedAt = 0;
 
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -182,8 +187,27 @@ export class RoutineService {
     return found;
   }
 
-  runs(limit = 30): RoutineRun[] {
-    return this.repositories.routines.listRuns({ limit });
+  /** Newest first; `beforeId` gives the page older than that run. */
+  runs(limit: number, beforeId?: number): RoutineRun[] {
+    return this.repositories.routines.listRuns({
+      limit,
+      ...(beforeId !== undefined ? { beforeId } : {}),
+    });
+  }
+
+  /** Deletes runs past the newest `ROUTINE_RUNS_KEPT` of each routine. */
+  async prune(): Promise<number> {
+    const ids = this.repositories.routines.runsPastKeep(ROUTINE_RUNS_KEPT);
+    if (!ids.length) return 0;
+    this.repositories.routines.deleteRuns(ids);
+    await this.removeLogs(ids);
+    return ids.length;
+  }
+
+  private async removeLogs(ids: number[]): Promise<void> {
+    await Promise.all(
+      ids.map((id) => rm(this.logPath(id), { force: true }).catch(() => {})),
+    );
   }
 
   get(idOrName: string): Routine {
@@ -261,7 +285,11 @@ export class RoutineService {
     const routine = this.get(idOrName);
     for (const run of this.repositories.routines.runningRuns())
       if (run.routineId === routine.id) this.live.get(run.id)?.kill();
+    const runs = this.repositories.routines
+      .listRuns({ routineId: routine.id, limit: Number.MAX_SAFE_INTEGER })
+      .map((run) => run.id);
     this.repositories.routines.delete(routine.id);
+    void this.removeLogs(runs);
   }
 
   /** Starts a run now, whatever the schedule says. */
@@ -317,6 +345,10 @@ export class RoutineService {
         continue;
       }
       await this.settle(run.id, null);
+    }
+    if (now.getTime() - this.prunedAt >= PRUNE_EVERY_MS) {
+      this.prunedAt = now.getTime();
+      await this.prune();
     }
     const started: RoutineRun[] = [];
     for (const routine of this.repositories.routines.list()) {

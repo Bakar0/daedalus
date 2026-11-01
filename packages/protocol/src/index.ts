@@ -835,8 +835,10 @@ export interface RoutineDto {
 /** What the Routines page reads. */
 export interface RoutinesPageDto {
   routines: RoutineDto[];
-  /** Newest first, across every routine. */
+  /** The newest runs across every routine, newest first. */
   runs: RoutineRunDto[];
+  /** Older runs exist; `routineRuns` pages back through them. */
+  moreRuns: boolean;
 }
 
 export interface RoutineTranscriptDto {
@@ -1464,6 +1466,11 @@ export interface DesktopRpcSchema {
         SessionAbilityDto
       >;
       routinesPage: Request<Record<string, never>, RoutinesPageDto>;
+      /** Runs older than `beforeId`, newest first. */
+      routineRuns: Request<
+        { beforeId: number; limit: number },
+        { runs: RoutineRunDto[]; moreRuns: boolean }
+      >;
       /** Reads "weekdays 9:00" into a stored schedule and its words, for the form. */
       routineParseWhen: Request<
         { when: string },
