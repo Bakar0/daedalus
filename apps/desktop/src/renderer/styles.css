@@ -6743,7 +6743,8 @@ dd {
   .routines-home-table .routine-row-workspace-inline {
     display: block;
   }
-  .routines-home-runs li > button {
+  /* More specific than the row's own grid, which comes later. */
+  .routines-home .routines-home-runs li > button {
     grid-template-columns: 10px 72px minmax(80px, 160px) 1fr;
   }
   .routines-home-runs .routine-run-workspace {
