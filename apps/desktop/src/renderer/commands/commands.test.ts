@@ -468,11 +468,23 @@ describe("the command table", () => {
     ).toBeUndefined();
   });
 
+  test("⌘=, ⌘- and ⌘0 size the terminals' text from anywhere", () => {
+    // The View menu owns them, so they reach the app from a terminal too.
+    for (const area of [sidebarButton, xtermInput, monacoInput]) {
+      expect(menuOwner(cmd("=", "Equal"), area)).toBe("terminal.fontBigger");
+      expect(menuOwner(cmd("-", "Minus"), area)).toBe("terminal.fontSmaller");
+      expect(menuOwner(cmd("0", "Digit0"), area)).toBe("terminal.fontReset");
+    }
+    // ⌘⇧= is what most people press for ⌘+; the dispatcher takes it.
+    expect(
+      run(press("+", "Equal", { metaKey: true, shiftKey: true }), xtermInput),
+    ).toBe("terminal.fontBigger");
+  });
+
   test("the removed focus and history keys are free", () => {
     for (const event of [
       press("F6", "F6"),
       press("F6", "F6", { shiftKey: true }),
-      cmd("0", "Digit0"),
       cmd("[", "BracketLeft"),
       cmd("]", "BracketRight"),
       cmd("/", "Slash"),

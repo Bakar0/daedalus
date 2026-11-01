@@ -140,6 +140,13 @@ import {
   terminalThemeFor,
 } from "./theme";
 import {
+  TERMINAL_FONT_SIZE,
+  TERMINAL_FONT_SIZE_STORAGE_KEY,
+  TerminalFontSizeContext,
+  clampTerminalFontSize,
+  parseTerminalFontSize,
+} from "./terminal-font";
+import {
   ChangedFileList,
   useWorktreeChanges,
   WorktreeCommits,
@@ -244,7 +251,7 @@ export {
 
 export const PANEL_RAIL_WIDTH = 68;
 export const TERMINAL_PANEL_MIN_HEIGHT = 120;
-export const TERMINAL_FONT_SIZE = 13;
+export { TERMINAL_FONT_SIZE } from "./terminal-font";
 const PANEL_COMPACT_THRESHOLD = 132;
 const PANEL_STEP = 24;
 
@@ -1303,17 +1310,21 @@ const DialogErrorContext = createContext<
 function AppContexts({
   children,
   dialogError,
+  terminalFontSize,
   theme,
 }: {
   children: React.ReactNode;
   dialogError: { message: string; dismiss: () => void } | undefined;
+  terminalFontSize: number;
   theme: AppTheme;
 }) {
   return (
     <AppThemeContext.Provider value={theme}>
-      <DialogErrorContext.Provider value={dialogError}>
-        {children}
-      </DialogErrorContext.Provider>
+      <TerminalFontSizeContext.Provider value={terminalFontSize}>
+        <DialogErrorContext.Provider value={dialogError}>
+          {children}
+        </DialogErrorContext.Provider>
+      </TerminalFontSizeContext.Provider>
     </AppThemeContext.Provider>
   );
 }
@@ -1473,6 +1484,12 @@ function TerminalSurface({
   appThemeRef.current = appTheme;
   const retheme = useRef<(theme: AppTheme) => void>(() => undefined);
   useEffect(() => retheme.current(appTheme), [appTheme]);
+  // ...and the text size, refitting so the program gets the new grid.
+  const fontSize = useContext(TerminalFontSizeContext);
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
+  const refont = useRef<(size: number) => void>(() => undefined);
+  useEffect(() => refont.current(fontSize), [fontSize]);
   const [connection, setConnection] = useState("connecting");
   // A cloud session's output is untrusted; see `TerminalClipboardGate`.
   const cloudRef = useRef(false);
@@ -1680,7 +1697,7 @@ function TerminalSurface({
         // Shell prompts commonly use Nerd Font private-use glyphs. Prefer the
         // user's installed Nerd Font while retaining native monospace fallbacks.
         fontFamily: '"MesloLGS NF", "SF Mono", Menlo, monospace',
-        fontSize: TERMINAL_FONT_SIZE,
+        fontSize: fontSizeRef.current,
         fastScrollSensitivity: 5,
         scrollback: 10_000,
         scrollSensitivity: 2.5,
@@ -1876,6 +1893,11 @@ function TerminalSurface({
         layoutTimer = setTimeout(scheduleFit, 180);
       };
       fitRef.current = scheduleSettledFit;
+      refont.current = (size) => {
+        if (!terminal || terminal.options.fontSize === size) return;
+        terminal.options.fontSize = size;
+        scheduleSettledFit();
+      };
       windowResizeListener = scheduleSettledFit;
       resizeObserver = new ResizeObserver(scheduleSettledFit);
       resizeObserver.observe(container);
@@ -1962,6 +1984,7 @@ function TerminalSurface({
       fitRef.current = () => undefined;
       focusRef.current = () => undefined;
       retheme.current = () => undefined;
+      refont.current = () => undefined;
       inputRef.current = () => undefined;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (frame !== undefined) cancelAnimationFrame(frame);
@@ -2454,6 +2477,16 @@ export function WorkspaceApp({
   const noteMoveError = (workspaceId: string, message: string) =>
     setMoveErrors((current) => ({ ...current, [workspaceId]: message }));
   const [theme, setTheme] = useState<AppTheme>("dark");
+  // Read as the state is made, so the terminals are built at the stored size
+  // rather than refitting to it; a shell rendered outside a window has no
+  // storage and gets the default.
+  const [terminalFontSize, setTerminalFontSize] = useState(() =>
+    typeof window === "undefined"
+      ? TERMINAL_FONT_SIZE
+      : parseTerminalFontSize(
+          window.localStorage.getItem(TERMINAL_FONT_SIZE_STORAGE_KEY),
+        ),
+  );
   const [workspaceForm, setWorkspaceForm] = useState({
     name: "",
     // "default" is the provider's own account.
@@ -2876,6 +2909,20 @@ export function WorkspaceApp({
       return PANEL_RAIL_WIDTH;
     });
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      TERMINAL_FONT_SIZE_STORAGE_KEY,
+      String(terminalFontSize),
+    );
+  }, [terminalFontSize]);
+  const stepTerminalFontSize = (step: number) =>
+    setTerminalFontSize((size) => clampTerminalFontSize(size + step));
+  useCommand("terminal.fontBigger", { run: () => stepTerminalFontSize(1) });
+  useCommand("terminal.fontSmaller", { run: () => stepTerminalFontSize(-1) });
+  useCommand("terminal.fontReset", {
+    run: () => setTerminalFontSize(TERMINAL_FONT_SIZE),
+  });
 
   useCommand("panel.toggleWorkspacePanel", {
     enabled: () => workspacePanelVisible,
@@ -7710,7 +7757,11 @@ export function WorkspaceApp({
   );
 
   return (
-    <AppContexts dialogError={dialogError} theme={theme}>
+    <AppContexts
+      dialogError={dialogError}
+      terminalFontSize={terminalFontSize}
+      theme={theme}
+    >
       <main
         className={`app ${terminalPanelOpen ? "terminal-panel-open" : ""}`}
         data-palette={theme === "midnight" ? "midnight" : undefined}
