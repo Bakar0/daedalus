@@ -182,6 +182,33 @@ export const COMMAND_SPECS = [
     keys: ["ctrl+`"],
     menu: { bar: "View", section: 1 },
   },
+  // The terminals' text size, for reading it from further away: ⌘= and ⌘-
+  // as Terminal.app and iTerm2 have them, ⌘⇧= being what most people press
+  // for ⌘+. A terminal leaves ⌘ keys to the app, and Monaco binds none of
+  // these on a Mac.
+  {
+    id: "terminal.fontBigger",
+    title: "Bigger Terminal Text",
+    group: "Terminal",
+    keys: ["mod+=", "shift+mod+="],
+    allowRepeat: true,
+    menu: { bar: "View", section: 2 },
+  },
+  {
+    id: "terminal.fontSmaller",
+    title: "Smaller Terminal Text",
+    group: "Terminal",
+    keys: ["mod+-"],
+    allowRepeat: true,
+    menu: { bar: "View", section: 2 },
+  },
+  {
+    id: "terminal.fontReset",
+    title: "Reset Terminal Text Size",
+    group: "Terminal",
+    keys: ["mod+0"],
+    menu: { bar: "View", section: 2 },
+  },
   // ⌘B opens and closes the right side panel, as it does VS Code's side bar.
   // Monaco binds nothing to ⌘B, and a terminal leaves ⌘ keys to the app.
   {

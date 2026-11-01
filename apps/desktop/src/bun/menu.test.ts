@@ -97,6 +97,9 @@ describe("desktop application menu", () => {
       "view.worldWindow": "Command+Option+4",
       "terminal.toggle": "Control+`",
       "panel.toggleWorkspacePanel": "Command+B",
+      "terminal.fontBigger": "Command+=",
+      "terminal.fontSmaller": "Command+-",
+      "terminal.fontReset": "Command+0",
     });
   });
 
@@ -123,6 +126,10 @@ describe("desktop application menu", () => {
       "divider",
       "terminal.toggle",
       "panel.toggleWorkspacePanel",
+      "divider",
+      "terminal.fontBigger",
+      "terminal.fontSmaller",
+      "terminal.fontReset",
     ]);
   });
 
