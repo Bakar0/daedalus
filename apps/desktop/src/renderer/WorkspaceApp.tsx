@@ -282,6 +282,8 @@ export {
 } from "./files/explorer-state";
 import { sessionColorStyle } from "./session-color-style";
 import { TerminalClipboardGate } from "./terminal-clipboard";
+import { copiedSelection, leftButtonReport } from "./terminal-selection";
+import type { Cell } from "./terminal-selection";
 import {
   fileBase64,
   pastedImagePaths,
@@ -1581,6 +1583,30 @@ function TerminalSurface({
     // The mouse gestures in this terminal that may copy; tmux copies a
     // drag as the button comes up.
     const clipboardGate = new TerminalClipboardGate();
+    // The left button's last press and release as the program got them, for
+    // `keepCopied`.
+    let pressedAt: Cell | undefined;
+    let releasedAt: Cell | undefined;
+    // tmux leaves copy mode once it has copied, taking its highlight; the
+    // terminal selects the same text so it stays. See terminal-selection.ts.
+    const keepCopied = (copied: string) => {
+      if (!terminal || !pressedAt || !releasedAt) return;
+      const buffer = terminal.buffer.active;
+      const found = copiedSelection({
+        copied,
+        press: pressedAt,
+        release: releasedAt,
+        cols: terminal.cols,
+        lineAt: (row) =>
+          buffer.getLine(buffer.viewportY + row - 1)?.translateToString(),
+      });
+      if (found)
+        terminal.select(
+          found.column,
+          buffer.viewportY + found.row,
+          found.length,
+        );
+    };
     const notePress = (event: MouseEvent) =>
       clipboardGate.press(event.clientX, event.clientY);
     const noteMove = (event: MouseEvent) =>
@@ -1839,7 +1865,9 @@ function TerminalSurface({
           const bytes = Uint8Array.from(atob(encoded), (char) =>
             char.charCodeAt(0),
           );
-          onCopy(new TextDecoder().decode(bytes));
+          const copied = new TextDecoder().decode(bytes);
+          onCopy(copied);
+          keepCopied(copied);
         } catch {
           // Not base64: nothing a program meant to copy.
         }
@@ -2023,6 +2051,11 @@ function TerminalSurface({
         // hidden behind another tab, says `NaN` where the cell goes. The
         // program cannot parse it and takes it for typed text.
         if (/^\u001b\[<\d+;NaN;|^\u001b\[<\d+;\d+;NaN/.test(data)) return;
+        const report = leftButtonReport(data);
+        if (report?.kind === "press") {
+          pressedAt = report.cell;
+          releasedAt = undefined;
+        } else if (report) releasedAt = report.cell;
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "input", data }));
       });

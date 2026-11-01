@@ -130,6 +130,29 @@ const HYPERLINKS_FEATURE_INDEX = 99;
 /** Next to the hyperlinks slot, for the same reason. */
 const SYNC_FEATURE_INDEX = 98;
 
+/** Daedalus's slot in a hook or override array, for the same reason. */
+const HOOK_INDEX = 99;
+
+/** The desktop terminal's selection colour, for tmux's copy mode. */
+const COPY_MODE_BACKGROUND = "#38546b";
+
+/** The desktop terminal's background (`background` in its theme). */
+const TERMINAL_BACKGROUND = "#111112";
+
+/**
+ * Hides the cursor while a pane is in copy mode. tmux shows copy mode's own
+ * cursor there, a block that moves with every line the wheel scrolls back,
+ * and Codex looked as if its prompt had jumped. tmux has no option to hide
+ * it, so it becomes a bar in the background colour: a block that colour
+ * would hide the character under it. Leaving copy mode puts back whatever
+ * the program asked for.
+ */
+const HIDE_COPY_MODE_CURSOR = [
+  "if-shell -F '#{pane_in_mode}'",
+  `'set-option -p cursor-colour "${TERMINAL_BACKGROUND}" ; set-option -p cursor-style bar'`,
+  "'set-option -p -u cursor-colour ; set-option -p -u cursor-style'",
+].join(" ");
+
 /**
  * tmux's own copy-mode wheel bindings, which scroll five lines a report. The
  * Daedalus terminal sends one report per line the trackpad moved, so these
@@ -162,6 +185,52 @@ export const isDefaultCopyModeWheelBinding = (
         line.split(/\s+/)[3] === key &&
         line.trim().endsWith(`select-pane \\; send-keys -X -N 5 ${command}`),
     );
+
+/**
+ * What a key does in copy mode once typing leaves it: tmux leaves copy mode
+ * and sends the key on to the program, as `send-keys` with no key sends the
+ * one it is bound to.
+ */
+const LEAVE_COPY_MODE = ["send-keys", "-X", "cancel", "\\;", "send-keys"];
+
+/** Copy-mode keys that still move around in it rather than leave it. */
+const COPY_MODE_MOVES = new Set([
+  "Escape",
+  "Home",
+  "End",
+  "NPage",
+  "PPage",
+  "Up",
+  "Down",
+  "Left",
+  "Right",
+  "M-Up",
+  "M-Down",
+  "C-Up",
+  "C-Down",
+]);
+
+/**
+ * The keys in `list-keys -T copy-mode` output that typing should take out of
+ * copy mode: everything but moving around, the mouse, and keys already
+ * leaving. The names come back as a command line takes them, so `M-{` loses
+ * its quotes and `\;` keeps its backslash.
+ */
+export const copyModeTypingKeys = (listed: string): string[] =>
+  listed.split("\n").flatMap((line) => {
+    const words = line.trim().split(/\s+/);
+    if (words[0] !== "bind-key" || words[2] !== "copy-mode") return [];
+    const key = (words[3] ?? "").replace(/^"(.*)"$/, "$1");
+    const command = words.slice(4).join(" ");
+    if (
+      !key ||
+      COPY_MODE_MOVES.has(key) ||
+      /Mouse|Wheel|Click/.test(key) ||
+      command === LEAVE_COPY_MODE.join(" ")
+    )
+      return [];
+    return [key];
+  });
 
 export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
   terminalArgs(
@@ -204,6 +273,29 @@ export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
     target.session,
     "mouse",
     "on",
+    ";",
+    // A drag over a program that reads no mouse, Codex or a shell, is tmux's
+    // copy mode, which highlights it black on yellow. The terminal's own
+    // selection colour (`selectionBackground` in the desktop theme) makes
+    // the drag look like the selection it leaves behind.
+    "set-option",
+    "-w",
+    "-t",
+    target.session,
+    "mode-style",
+    `bg=${COPY_MODE_BACKGROUND}`,
+    ";",
+    "set-hook",
+    "-g",
+    `pane-mode-changed[${HOOK_INDEX}]`,
+    HIDE_COPY_MODE_CURSOR,
+    ";",
+    // tmux puts a cursor back with `ESC [ 2 q`, a steady block, where the
+    // terminal's own is a blinking one; `ESC [ 0 q` asks for that.
+    "set-option",
+    "-s",
+    `terminal-overrides[${HOOK_INDEX}]`,
+    "xterm*:Se=\\E[0 q",
     ";",
     "attach-session",
     "-t",
@@ -311,8 +403,8 @@ export class CommandTmuxClient implements TmuxClient {
    */
   private readonly environment: Record<string, string>;
 
-  /** Set once the copy-mode wheel bindings have been looked at. */
-  private copyModeByLine: Promise<void> | undefined;
+  /** Set once the copy-mode bindings have been looked at. */
+  private copyModeKeys: Promise<void> | undefined;
 
   /**
    * Makes copy mode scroll one line per wheel report, where tmux's default
@@ -338,6 +430,21 @@ export class CommandTmuxClient implements TmuxClient {
           command,
         ]);
     }
+  }
+
+  /**
+   * Makes a key typed in copy mode leave it and reach the program. A program
+   * that reads no mouse, Codex or a shell, puts its pane in copy mode when
+   * the wheel scrolls it back, and tmux's emacs keys then took what the user
+   * typed: `f` opened a "(jump forward)" prompt and the program got nothing.
+   * Moving keys and the mouse still work in copy mode. Only the emacs table
+   * changes: someone who chose vi keys chose to type into copy mode.
+   */
+  async typingLeavesCopyMode(): Promise<void> {
+    const listed = await this.run(["list-keys", "-T", "copy-mode"]);
+    if (listed.exitCode !== 0) return;
+    for (const key of ["Any", ...copyModeTypingKeys(listed.stdout)])
+      await this.run(["bind-key", "-T", "copy-mode", key, ...LEAVE_COPY_MODE]);
   }
 
   private args(...args: string[]): string[] {
@@ -567,7 +674,9 @@ export class CommandTmuxClient implements TmuxClient {
     size: TerminalSize | undefined,
     onOutput: (output: Uint8Array) => void,
   ): TmuxPty {
-    this.copyModeByLine ??= this.scrollCopyModeByLine().catch(() => {});
+    this.copyModeKeys ??= this.scrollCopyModeByLine()
+      .then(() => this.typingLeavesCopyMode())
+      .catch(() => {});
     return new TmuxPtyBridge(
       onOutput,
       { socketName: this.socketName, session },
