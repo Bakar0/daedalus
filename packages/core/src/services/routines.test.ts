@@ -121,7 +121,7 @@ class NoTmux {
 
 async function withRoutines(
   spawner: RoutineSpawner,
-  clock: { now: Date },
+  clock: { now: Date; notes?: Array<{ title: string; body: string }> },
   body: (context: ApplicationContext, home: string) => Promise<void>,
 ): Promise<void> {
   await withTemporaryDaedalusHome(async (home) => {
@@ -144,6 +144,11 @@ async function withRoutines(
       routineSpawner: spawner,
       // The Routines agent's first message reaches it through its inbox.
       sessionInbox: async () => true,
+      // Never the real Notification Center.
+      sendNativeNotification: async (note) => {
+        clock.notes?.push({ title: note.title, body: note.body });
+        return { delivered: true, backend: "app" as const, degraded: false };
+      },
       now: () => clock.now,
     });
     try {
@@ -176,7 +181,7 @@ function fakeClaude(answer: string, calls: string[][] = []): RoutineSpawner {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
-describe("WorkspaceRoutineService", () => {
+describe("RoutineService", () => {
   test("runs a due routine headless in its workspace and keeps its answer", async () => {
     const clock = { now: new Date(2026, 9, 28, 12, 59, 0) };
     const calls: string[][] = [];
@@ -188,7 +193,7 @@ describe("WorkspaceRoutineService", () => {
           name: "On call",
           slug: "on-call",
         });
-        const routine = context.workspaceRoutines.add({
+        const routine = context.routines.add({
           workspace: "on-call",
           when: "sun to thu at 8, 10, 13, 16",
           prompt: "Check env health.",
@@ -198,9 +203,9 @@ describe("WorkspaceRoutineService", () => {
           new Date(2026, 9, 28, 13, 0, 0).toISOString(),
         );
 
-        expect(await context.workspaceRoutines.tick()).toEqual([]);
+        expect(await context.routines.tick()).toEqual([]);
         clock.now = new Date(2026, 9, 28, 13, 0, 5);
-        const [started] = await context.workspaceRoutines.tick();
+        const [started] = await context.routines.tick();
         expect(started?.status).toBe("running");
         expect(started?.workingDirectory).toBe(workspace.path);
         expect(calls[0]).toContain("--permission-prompts");
@@ -208,23 +213,23 @@ describe("WorkspaceRoutineService", () => {
         expect(calls[0]![1]).toContain("Check env health.");
 
         await settle();
-        const [view] = context.workspaceRoutines.list();
+        const [view] = context.routines.list();
         expect(
           view!.recentRuns.map((run) => [run.status, run.summary]),
         ).toEqual([["done", "Ingest lag in prod-eu."]]);
         expect(view!.routine.nextRunAt).toBe(
           new Date(2026, 9, 28, 16, 0, 0).toISOString(),
         );
-        expect(
-          (await context.workspaceRoutines.transcript(started!.id)).at(-1),
-        ).toEqual({
-          kind: "result",
-          text: "Ingest lag in prod-eu.\nMore below.",
-        });
+        expect((await context.routines.transcript(started!.id)).at(-1)).toEqual(
+          {
+            kind: "result",
+            text: "Ingest lag in prod-eu.\nMore below.",
+          },
+        );
 
         // The next run is told what this one said.
         clock.now = new Date(2026, 9, 28, 16, 0, 1);
-        await context.workspaceRoutines.tick();
+        await context.routines.tick();
         expect(calls[1]![1]).toContain("said: Ingest lag in prod-eu.");
         await settle();
       },
@@ -236,13 +241,13 @@ describe("WorkspaceRoutineService", () => {
     await withRoutines(fakeClaude("Done."), clock, async (context) => {
       await context.workspaces.create({ name: "Ops", slug: "ops" });
       await context.workspaces.create({ name: "Web", slug: "web" });
-      const first = await context.workspaceRoutines.agent("ops");
+      const first = await context.routines.agent("ops");
       expect(first).toMatchObject({ name: "Routines", provider: "claude" });
       // Asked from another workspace, it is still the same session.
-      expect((await context.workspaceRoutines.agent("web")).id).toBe(first.id);
+      expect((await context.routines.agent("web")).id).toBe(first.id);
 
       await context.agents.archive(first.id);
-      const restored = await context.workspaceRoutines.agent("web");
+      const restored = await context.routines.agent("web");
       expect(restored.id).toBe(first.id);
       expect(restored.archivedAt).toBeNull();
 
@@ -252,10 +257,60 @@ describe("WorkspaceRoutineService", () => {
         provider: "claude",
         name: "Routines · 2",
       });
-      context.repositories.workspaceRoutines.moveAgent(first.id, successor.id);
-      expect((await context.workspaceRoutines.agent("ops")).id).toBe(
-        successor.id,
+      context.repositories.routines.moveAgent(first.id, successor.id);
+      expect((await context.routines.agent("ops")).id).toBe(successor.id);
+    });
+  });
+
+  test("a finished run is unread and notifies until it is opened", async () => {
+    const clock = {
+      now: new Date(2026, 9, 28, 12, 0, 0),
+      notes: [] as Array<{ title: string; body: string }>,
+    };
+    await withRoutines(
+      fakeClaude("Ingest lag in prod-eu."),
+      clock,
+      async (context) => {
+        await context.workspaces.create({ name: "Ops", slug: "ops" });
+        context.routines.add({
+          workspace: "ops",
+          when: "every day at 19:00",
+          prompt: "Check env health.",
+          name: "health",
+        });
+        const run = await context.routines.runNow("health");
+        expect(context.repositories.routines.unseenRunIds()).toEqual([]);
+        await settle();
+        expect(clock.notes).toEqual([
+          { title: "health ran", body: "Ingest lag in prod-eu." },
+        ]);
+        expect(context.repositories.routines.unseenRunIds()).toEqual([run.id]);
+        context.routines.markSeen(run.id);
+        expect(context.repositories.routines.unseenRunIds()).toEqual([]);
+      },
+    );
+  });
+
+  test("a run on all workspaces continues in the workspace that is open", async () => {
+    const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
+    await withRoutines(fakeClaude("Freed 4 GB."), clock, async (context) => {
+      const ops = await context.workspaces.create({ name: "Ops", slug: "ops" });
+      context.routines.add({
+        workspace: null,
+        when: "every day at 19:00",
+        prompt: "Remove merged worktrees everywhere.",
+        name: "cleanup",
+      });
+      const run = await context.routines.runNow("cleanup");
+      await settle();
+      await expect(context.routines.continueRun(run.id)).rejects.toThrow(
+        "Open a workspace",
       );
+      const session = await context.routines.continueRun(run.id, "ops");
+      expect(session).toMatchObject({
+        workspaceId: ops.id,
+        name: "cleanup run",
+      });
     });
   });
 
@@ -263,25 +318,25 @@ describe("WorkspaceRoutineService", () => {
     const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
     await withRoutines(fakeClaude("Done."), clock, async (context) => {
       await context.workspaces.create({ name: "Ops", slug: "ops" });
-      const routine = context.workspaceRoutines.add({
+      const routine = context.routines.add({
         workspace: "ops",
         when: "every day at 19:00",
         prompt: "Clean up merged worktrees.",
         name: "cleanup",
       });
-      context.workspaceRoutines.update("cleanup", { enabled: false });
-      context.workspaceRoutines.requestRun("cleanup");
+      context.routines.update("cleanup", { enabled: false });
+      context.routines.requestRun("cleanup");
 
-      const [started] = await context.workspaceRoutines.tick();
+      const [started] = await context.routines.tick();
       expect(started?.trigger).toBe("manual");
-      const after = context.workspaceRoutines.get("cleanup");
+      const after = context.routines.get("cleanup");
       expect(after.runRequestedAt).toBeNull();
       expect(after.nextRunAt).toBe(routine.nextRunAt);
-      expect(() => context.workspaceRoutines.requestRun("cleanup")).toThrow(
+      expect(() => context.routines.requestRun("cleanup")).toThrow(
         "already running",
       );
       await settle();
-      expect(await context.workspaceRoutines.tick()).toEqual([]);
+      expect(await context.routines.tick()).toEqual([]);
     });
   });
 
@@ -289,22 +344,20 @@ describe("WorkspaceRoutineService", () => {
     const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
     await withRoutines(fakeClaude("Nothing new."), clock, async (context) => {
       await context.workspaces.create({ name: "Ops", slug: "ops" });
-      const routine = context.workspaceRoutines.add({
+      const routine = context.routines.add({
         workspace: "ops",
         when: "every day at 19:00",
         prompt: "Clean up merged worktrees.",
         name: "cleanup",
       });
-      const run = await context.workspaceRoutines.runNow("cleanup");
+      const run = await context.routines.runNow("cleanup");
       expect(run.trigger).toBe("manual");
       await settle();
-      expect(context.workspaceRoutines.get("cleanup").nextRunAt).toBe(
-        routine.nextRunAt,
-      );
+      expect(context.routines.get("cleanup").nextRunAt).toBe(routine.nextRunAt);
 
-      context.workspaceRoutines.update("cleanup", { enabled: false });
+      context.routines.update("cleanup", { enabled: false });
       clock.now = new Date(2026, 9, 28, 19, 0, 5);
-      expect(await context.workspaceRoutines.tick()).toEqual([]);
+      expect(await context.routines.tick()).toEqual([]);
     });
   });
 
@@ -316,20 +369,20 @@ describe("WorkspaceRoutineService", () => {
     });
     await withRoutines(never, clock, async (context) => {
       await context.workspaces.create({ name: "Ops", slug: "ops" });
-      context.workspaceRoutines.add({
+      context.routines.add({
         workspace: "ops",
         when: "hourly",
         prompt: "Look.",
         name: "look",
       });
-      const run = await context.workspaceRoutines.runNow("look");
+      const run = await context.routines.runNow("look");
       // A second service over the same database has no live process for it.
       const repositories = context.repositories;
-      repositories.workspaceRoutines.updateRun({ ...run });
+      repositories.routines.updateRun({ ...run });
       const other = new (
-        context.workspaceRoutines.constructor as new (
+        context.routines.constructor as new (
           ...args: unknown[]
-        ) => typeof context.workspaceRoutines
+        ) => typeof context.routines
       )(
         repositories,
         { home: "", workspaceRoot: "", agents: {} },
@@ -340,9 +393,7 @@ describe("WorkspaceRoutineService", () => {
         () => clock.now,
       );
       await other.tick();
-      expect(repositories.workspaceRoutines.findRun(run.id)?.status).toBe(
-        "failed",
-      );
+      expect(repositories.routines.findRun(run.id)?.status).toBe("failed");
     });
   });
 });

@@ -7799,6 +7799,14 @@ export function WorkspaceApp({
                 <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM8 4.5V8l2.5 1.5" />
               </svg>
               <span>Routines</span>
+              {Boolean(snapshot?.unseenRoutineRuns) && (
+                <span
+                  aria-label={`${snapshot?.unseenRoutineRuns} unread runs`}
+                  className="sidebar-routines-count"
+                >
+                  {snapshot?.unseenRoutineRuns}
+                </span>
+              )}
             </button>
             <div className="section-heading workspace-column-heading">
               <div className="workspace-column-title">
@@ -8379,6 +8387,7 @@ export function WorkspaceApp({
                         handle.showSessionBesideRoutines(),
                       );
                     }}
+                    {...(workspace ? { currentWorkspaceId: workspace.id } : {})}
                     run={perform}
                     workspaces={activeWorkspaces.map((item) => ({
                       id: item.id,

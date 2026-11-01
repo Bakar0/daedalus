@@ -1,12 +1,12 @@
 import type { Database } from "bun:sqlite";
 import type {
-  WorkspaceRoutine,
-  WorkspaceRoutineRun,
-  WorkspaceRoutineRunStatus,
-  WorkspaceRoutineTrigger,
+  Routine,
+  RoutineRun,
+  RoutineRunStatus,
+  RoutineTrigger,
 } from "../domain";
 
-interface WorkspaceRoutineRow {
+interface RoutineRow {
   id: string;
   name: string;
   workspace_id: string | null;
@@ -21,20 +21,21 @@ interface WorkspaceRoutineRow {
   updated_at: string;
 }
 
-interface WorkspaceRoutineRunRow {
+interface RoutineRunRow {
   id: number;
   routine_id: string;
-  trigger: WorkspaceRoutineTrigger;
-  status: WorkspaceRoutineRunStatus;
+  trigger: RoutineTrigger;
+  status: RoutineRunStatus;
   provider_session_id: string | null;
   working_directory: string;
   started_at: string;
   finished_at: string | null;
   summary: string | null;
   continued_session_id: string | null;
+  seen_at: string | null;
 }
 
-const routineFromRow = (row: WorkspaceRoutineRow): WorkspaceRoutine => ({
+const routineFromRow = (row: RoutineRow): Routine => ({
   id: row.id,
   name: row.name,
   workspaceId: row.workspace_id,
@@ -49,7 +50,7 @@ const routineFromRow = (row: WorkspaceRoutineRow): WorkspaceRoutine => ({
   updatedAt: row.updated_at,
 });
 
-const runFromRow = (row: WorkspaceRoutineRunRow): WorkspaceRoutineRun => ({
+const runFromRow = (row: RoutineRunRow): RoutineRun => ({
   id: row.id,
   routineId: row.routine_id,
   trigger: row.trigger,
@@ -60,30 +61,29 @@ const runFromRow = (row: WorkspaceRoutineRunRow): WorkspaceRoutineRun => ({
   finishedAt: row.finished_at,
   summary: row.summary,
   continuedSessionId: row.continued_session_id,
+  seenAt: row.seen_at,
 });
 
-export class WorkspaceRoutineRepository {
+export class RoutineRepository {
   constructor(private readonly database: Database) {}
 
-  list(): WorkspaceRoutine[] {
+  list(): Routine[] {
     return this.database
-      .query<WorkspaceRoutineRow, []>(
-        "SELECT * FROM workspace_routines ORDER BY name",
-      )
+      .query<RoutineRow, []>("SELECT * FROM workspace_routines ORDER BY name")
       .all()
       .map(routineFromRow);
   }
 
-  find(idOrName: string): WorkspaceRoutine | undefined {
+  find(idOrName: string): Routine | undefined {
     const row = this.database
-      .query<WorkspaceRoutineRow, [string, string]>(
+      .query<RoutineRow, [string, string]>(
         "SELECT * FROM workspace_routines WHERE id = ? OR name = ?",
       )
       .get(idOrName, idOrName);
     return row ? routineFromRow(row) : undefined;
   }
 
-  create(routine: WorkspaceRoutine): void {
+  create(routine: Routine): void {
     this.database
       .query(
         `INSERT INTO workspace_routines
@@ -107,7 +107,7 @@ export class WorkspaceRoutineRepository {
       );
   }
 
-  update(routine: WorkspaceRoutine): void {
+  update(routine: Routine): void {
     this.database
       .query(
         `UPDATE workspace_routines SET name = ?, workspace_id = ?, schedule = ?,
@@ -160,13 +160,13 @@ export class WorkspaceRoutineRepository {
     this.database.query("DELETE FROM workspace_routines WHERE id = ?").run(id);
   }
 
-  createRun(run: Omit<WorkspaceRoutineRun, "id">): WorkspaceRoutineRun {
+  createRun(run: Omit<RoutineRun, "id">): RoutineRun {
     const row = this.database
-      .query<WorkspaceRoutineRunRow, (string | null)[]>(
+      .query<RoutineRunRow, (string | null)[]>(
         `INSERT INTO workspace_routine_runs
          (routine_id, trigger, status, provider_session_id, working_directory,
-          started_at, finished_at, summary, continued_session_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          started_at, finished_at, summary, continued_session_id, seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
       )
       .get(
         run.routineId,
@@ -178,28 +178,30 @@ export class WorkspaceRoutineRepository {
         run.finishedAt,
         run.summary,
         run.continuedSessionId,
+        run.seenAt,
       );
     return runFromRow(row!);
   }
 
-  updateRun(run: WorkspaceRoutineRun): void {
+  updateRun(run: RoutineRun): void {
     this.database
       .query(
         `UPDATE workspace_routine_runs SET status = ?, finished_at = ?,
-         summary = ?, continued_session_id = ? WHERE id = ?`,
+         summary = ?, continued_session_id = ?, seen_at = ? WHERE id = ?`,
       )
       .run(
         run.status,
         run.finishedAt,
         run.summary,
         run.continuedSessionId,
+        run.seenAt,
         run.id,
       );
   }
 
-  findRun(id: number): WorkspaceRoutineRun | undefined {
+  findRun(id: number): RoutineRun | undefined {
     const row = this.database
-      .query<WorkspaceRoutineRunRow, [number]>(
+      .query<RoutineRunRow, [number]>(
         "SELECT * FROM workspace_routine_runs WHERE id = ?",
       )
       .get(id);
@@ -207,28 +209,37 @@ export class WorkspaceRoutineRepository {
   }
 
   /** Newest first, across every routine or for one. */
-  listRuns(filter: {
-    routineId?: string;
-    limit: number;
-  }): WorkspaceRoutineRun[] {
+  listRuns(filter: { routineId?: string; limit: number }): RoutineRun[] {
     const rows = filter.routineId
       ? this.database
-          .query<WorkspaceRoutineRunRow, [string, number]>(
+          .query<RoutineRunRow, [string, number]>(
             `SELECT * FROM workspace_routine_runs WHERE routine_id = ?
              ORDER BY id DESC LIMIT ?`,
           )
           .all(filter.routineId, filter.limit)
       : this.database
-          .query<WorkspaceRoutineRunRow, [number]>(
+          .query<RoutineRunRow, [number]>(
             "SELECT * FROM workspace_routine_runs ORDER BY id DESC LIMIT ?",
           )
           .all(filter.limit);
     return rows.map(runFromRow);
   }
 
-  runningRuns(): WorkspaceRoutineRun[] {
+  /** Finished runs the user has not opened yet, newest first. */
+  unseenRunIds(): number[] {
     return this.database
-      .query<WorkspaceRoutineRunRow, []>(
+      .query<{ id: number }, []>(
+        `SELECT id FROM workspace_routine_runs
+         WHERE seen_at IS NULL AND status IN ('done', 'failed')
+         ORDER BY id DESC`,
+      )
+      .all()
+      .map((row) => row.id);
+  }
+
+  runningRuns(): RoutineRun[] {
+    return this.database
+      .query<RoutineRunRow, []>(
         "SELECT * FROM workspace_routine_runs WHERE status = 'running'",
       )
       .all()

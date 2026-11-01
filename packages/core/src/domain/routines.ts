@@ -10,7 +10,7 @@ export type RoutineSchedule =
  * A prompt that runs on a schedule in a workspace folder, as a headless
  * provider session that no live session holds.
  */
-export interface WorkspaceRoutine {
+export interface Routine {
   id: UUID;
   name: string;
   /** Null runs in the workspaces root, for chores across every workspace. */
@@ -28,15 +28,14 @@ export interface WorkspaceRoutine {
   updatedAt: string;
 }
 
-export type WorkspaceRoutineRunStatus =
-  "running" | "done" | "failed" | "skipped";
-export type WorkspaceRoutineTrigger = "schedule" | "manual";
+export type RoutineRunStatus = "running" | "done" | "failed" | "skipped";
+export type RoutineTrigger = "schedule" | "manual";
 
-export interface WorkspaceRoutineRun {
+export interface RoutineRun {
   id: number;
   routineId: UUID;
-  trigger: WorkspaceRoutineTrigger;
-  status: WorkspaceRoutineRunStatus;
+  trigger: RoutineTrigger;
+  status: RoutineRunStatus;
   /** The provider's conversation id, which a continue resumes. */
   providerSessionId: string | null;
   workingDirectory: string;
@@ -46,4 +45,6 @@ export interface WorkspaceRoutineRun {
   summary: string | null;
   /** The session a continue made from this run. */
   continuedSessionId: UUID | null;
+  /** When the user opened the finished run; null is unread. */
+  seenAt: string | null;
 }

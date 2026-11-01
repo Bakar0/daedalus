@@ -3,8 +3,8 @@ import type {
   RoutinesPageDto,
   RoutineTranscriptDto,
   RpcResult,
-  WorkspaceRoutineDto,
-  WorkspaceRoutineRunDto,
+  RoutineDto,
+  RoutineRunDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "../client-types";
 import { relativeTime } from "./time";
@@ -40,7 +40,7 @@ function clockTime(iso: string, now: number): string {
     : `${at.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
 }
 
-function tickTone(run: WorkspaceRoutineRunDto): string {
+function tickTone(run: RoutineRunDto): string {
   return run.status;
 }
 
@@ -55,6 +55,7 @@ export function RoutinesHome({
   run,
   onOpenSession,
   onOpenAgent,
+  currentWorkspaceId,
 }: {
   client: DesktopClient;
   workspaces: Array<{ id: string; name: string }>;
@@ -63,6 +64,8 @@ export function RoutinesHome({
   onOpenSession(sessionId: string): void;
   /** Opens the Routines agent's session beside this page. */
   onOpenAgent(): void;
+  /** Where a run on all workspaces continues. */
+  currentWorkspaceId?: string;
 }) {
   const [page, setPage] = useState<RoutinesPageDto>();
   const [error, setError] = useState<string>();
@@ -110,7 +113,12 @@ export function RoutinesHome({
         }}
         onContinue={async () => {
           const session = await act(
-            client.request.routineContinue({ runId: viewing }),
+            client.request.routineContinue({
+              runId: viewing,
+              ...(currentWorkspaceId
+                ? { workspaceId: currentWorkspaceId }
+                : {}),
+            }),
           );
           if (session) onOpenSession(session.id);
         }}
@@ -236,7 +244,11 @@ export function RoutinesHome({
               <ul className="routine-runs routines-home-runs">
                 {page.runs.map((item) => (
                   <li key={item.id}>
-                    <button onClick={() => setViewing(item.id)} type="button">
+                    <button
+                      data-unseen={item.unseen}
+                      onClick={() => setViewing(item.id)}
+                      type="button"
+                    >
                       <span
                         className="routine-tick"
                         data-tone={tickTone(item)}
@@ -276,7 +288,7 @@ function RoutineRows({
   onSavePrompt,
   onDelete,
 }: {
-  routine: WorkspaceRoutineDto;
+  routine: RoutineDto;
   now: number;
   open: boolean;
   onToggle(): void;

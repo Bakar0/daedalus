@@ -796,7 +796,7 @@ export interface TeamSayResultDto {
 }
 
 /** One run of a routine on the Routines page: a headless session. */
-export interface WorkspaceRoutineRunDto {
+export interface RoutineRunDto {
   id: number;
   routineId: string;
   routineName: string;
@@ -809,9 +809,11 @@ export interface WorkspaceRoutineRunDto {
   workingDirectory: string;
   /** The session a continue made from this run. */
   continuedSessionId: string | null;
+  /** Finished and not opened yet. */
+  unseen: boolean;
 }
 
-export interface WorkspaceRoutineDto {
+export interface RoutineDto {
   id: string;
   name: string;
   /** Null runs across every workspace. */
@@ -827,18 +829,18 @@ export interface WorkspaceRoutineDto {
   nextRunAt: string | null;
   lastRunAt: string | null;
   /** Oldest first, at most seven. */
-  recentRuns: WorkspaceRoutineRunDto[];
+  recentRuns: RoutineRunDto[];
 }
 
 /** What the Routines page reads. */
 export interface RoutinesPageDto {
-  routines: WorkspaceRoutineDto[];
+  routines: RoutineDto[];
   /** Newest first, across every routine. */
-  runs: WorkspaceRoutineRunDto[];
+  runs: RoutineRunDto[];
 }
 
 export interface RoutineTranscriptDto {
-  run: WorkspaceRoutineRunDto;
+  run: RoutineRunDto;
   entries: Array<{ kind: "text" | "tool" | "result" | "error"; text: string }>;
 }
 
@@ -1269,6 +1271,8 @@ export interface DesktopSnapshotDto {
   largeFiles?: LargeFileDto[];
   /** The newest workflow run of each session. */
   workflowRuns?: WorkflowRunDto[];
+  /** Finished routine runs the user has not opened, for the sidebar. */
+  unseenRoutineRuns?: number;
   /** Sign-in pages cloud sessions asked to open; absent outside the app. */
   cloudSignIns?: CloudSignInDto[];
   /** Workspaces whose cloud copy a new session waits for. */
@@ -1472,7 +1476,7 @@ export interface DesktopRpcSchema {
           prompt: string;
           name?: string;
         },
-        WorkspaceRoutineDto
+        RoutineDto
       >;
       routineUpdate: Request<
         {
@@ -1483,13 +1487,17 @@ export interface DesktopRpcSchema {
           prompt?: string;
           enabled?: boolean;
         },
-        WorkspaceRoutineDto
+        RoutineDto
       >;
       routineDelete: Request<{ id: string }, { id: string }>;
-      routineStart: Request<{ id: string }, WorkspaceRoutineRunDto>;
+      routineStart: Request<{ id: string }, RoutineRunDto>;
       routineTranscript: Request<{ runId: number }, RoutineTranscriptDto>;
       /** Opens the run's conversation as a live session of its workspace. */
-      routineContinue: Request<{ runId: number }, AgentSessionDto>;
+      /** `workspaceId` is where a run on all workspaces continues. */
+      routineContinue: Request<
+        { runId: number; workspaceId?: string },
+        AgentSessionDto
+      >;
       /** The Routines agent's session, started in the workspace on first use. */
       routinesAgent: Request<{ workspaceId: string }, AgentSessionDto>;
       /** Sends what is waiting, then reads the team as the user. */

@@ -35,8 +35,8 @@ import {
   type WorkspaceRepository,
   isPartialReload,
   type WorkflowRun,
-  type WorkspaceRoutineRun,
-  type WorkspaceRoutineView,
+  type RoutineRun,
+  type RoutineView,
   describeSchedule,
   parseWhen,
 } from "@daedalus/core";
@@ -71,8 +71,8 @@ import type {
   WorkspaceRepositoryDto,
   SecretDto,
   WorkflowRunDto,
-  WorkspaceRoutineDto,
-  WorkspaceRoutineRunDto,
+  RoutineDto,
+  RoutineRunDto,
 } from "@daedalus/protocol";
 import { isHostCommandId } from "@daedalus/protocol";
 
@@ -316,6 +316,7 @@ export async function desktopSnapshot(
     teams: view.teams.map(teamDto),
     largeFiles: view.largeFiles.map((file) => ({ ...file })),
     workflowRuns: view.workflowRuns.map(workflowRunDto),
+    unseenRoutineRuns: view.unseenRoutineRuns.length,
     settings: {
       version: packageJson.version,
       channel: buildChannel(config.home),
@@ -396,15 +397,14 @@ async function teamDetail(
   };
 }
 
-function workspaceRoutineRunDto(
+function routineRunDto(
   context: ApplicationContext,
-  run: WorkspaceRoutineRun,
-): WorkspaceRoutineRunDto {
+  run: RoutineRun,
+): RoutineRunDto {
   return {
     id: run.id,
     routineId: run.routineId,
-    routineName:
-      context.repositories.workspaceRoutines.find(run.routineId)?.name ?? "",
+    routineName: context.repositories.routines.find(run.routineId)?.name ?? "",
     trigger: run.trigger,
     status: run.status,
     startedAt: run.startedAt,
@@ -412,13 +412,14 @@ function workspaceRoutineRunDto(
     summary: run.summary,
     workingDirectory: run.workingDirectory,
     continuedSessionId: run.continuedSessionId,
+    unseen: !run.seenAt && (run.status === "done" || run.status === "failed"),
   };
 }
 
-function workspaceRoutineDto(
+function routineDto(
   context: ApplicationContext,
-  view: WorkspaceRoutineView,
-): WorkspaceRoutineDto {
+  view: RoutineView,
+): RoutineDto {
   const { routine } = view;
   return {
     id: routine.id,
@@ -432,21 +433,14 @@ function workspaceRoutineDto(
     enabled: routine.enabled,
     nextRunAt: routine.nextRunAt,
     lastRunAt: routine.lastRunAt,
-    recentRuns: view.recentRuns.map((run) =>
-      workspaceRoutineRunDto(context, run),
-    ),
+    recentRuns: view.recentRuns.map((run) => routineRunDto(context, run)),
   };
 }
 
-function routineViewDto(
-  context: ApplicationContext,
-  id: string,
-): WorkspaceRoutineDto {
-  const view = context.workspaceRoutines
-    .list()
-    .find((item) => item.routine.id === id);
+function routineViewDto(context: ApplicationContext, id: string): RoutineDto {
+  const view = context.routines.list().find((item) => item.routine.id === id);
   if (!view) throw new DaedalusError("NOT_FOUND", "No such routine");
-  return workspaceRoutineDto(context, view);
+  return routineDto(context, view);
 }
 
 /**
@@ -638,12 +632,10 @@ export function createDesktopRequestHandlers(
       ),
     routinesPage: () =>
       result(() => ({
-        routines: context.workspaceRoutines
+        routines: context.routines
           .list()
-          .map((view) => workspaceRoutineDto(context, view)),
-        runs: context.workspaceRoutines
-          .runs()
-          .map((run) => workspaceRoutineRunDto(context, run)),
+          .map((view) => routineDto(context, view)),
+        runs: context.routines.runs().map((run) => routineRunDto(context, run)),
       })),
     routineParseWhen: ({ when }) =>
       result(() => {
@@ -654,7 +646,7 @@ export function createDesktopRequestHandlers(
       mutate(() =>
         routineViewDto(
           context,
-          context.workspaceRoutines.add({
+          context.routines.add({
             workspace,
             when,
             prompt,
@@ -664,40 +656,34 @@ export function createDesktopRequestHandlers(
       ),
     routineUpdate: ({ id, ...change }) =>
       mutate(() =>
-        routineViewDto(
-          context,
-          context.workspaceRoutines.update(id, change).id,
-        ),
+        routineViewDto(context, context.routines.update(id, change).id),
       ),
     routineDelete: ({ id }) =>
       mutate(() => {
-        context.workspaceRoutines.remove(id);
+        context.routines.remove(id);
         return { id };
       }),
     routineStart: ({ id }) =>
       mutate(async () =>
-        workspaceRoutineRunDto(
-          context,
-          await context.workspaceRoutines.runNow(id),
-        ),
+        routineRunDto(context, await context.routines.runNow(id)),
       ),
     routineTranscript: ({ runId }) =>
       result(async () => {
-        const run = context.repositories.workspaceRoutines.findRun(runId);
+        const run = context.repositories.routines.findRun(runId);
         if (!run) throw new DaedalusError("NOT_FOUND", "No such run");
+        // Reading a finished run is what makes it read.
+        context.routines.markSeen(runId);
         return {
-          run: workspaceRoutineRunDto(context, run),
-          entries: await context.workspaceRoutines.transcript(runId),
+          run: routineRunDto(context, run),
+          entries: await context.routines.transcript(runId),
         };
       }),
-    routineContinue: ({ runId }) =>
+    routineContinue: ({ runId, workspaceId }) =>
       mutate(async () =>
-        agentDto(await context.workspaceRoutines.continueRun(runId)),
+        agentDto(await context.routines.continueRun(runId, workspaceId)),
       ),
     routinesAgent: ({ workspaceId }) =>
-      mutate(async () =>
-        agentDto(await context.workspaceRoutines.agent(workspaceId)),
-      ),
+      mutate(async () => agentDto(await context.routines.agent(workspaceId))),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
     teamSay: ({ teamId, body }) =>
       mutate(async () => {

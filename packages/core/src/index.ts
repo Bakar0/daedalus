@@ -54,7 +54,7 @@ export * from "./services/abilities";
 export * from "./services/ability-notes";
 export * from "./services/delivery";
 export * from "./services/routine-schedule";
-export * from "./services/workspace-routines";
+export * from "./services/routines";
 export * from "./services/team-transport";
 export * from "./services/teams";
 export * from "./services/workflow-files";

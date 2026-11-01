@@ -5,14 +5,15 @@ import type { DaedalusConfig } from "../config";
 import type {
   AgentProviderName,
   AgentSession,
-  WorkspaceRoutine,
-  WorkspaceRoutineRun,
-  WorkspaceRoutineTrigger,
+  Routine,
+  RoutineRun,
+  RoutineTrigger,
 } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import { accountEnvironment } from "./account-homes";
 import { installedSkill } from "./installed-skills";
+import type { NotificationRequest } from "./notifications";
 import { buildSkillInvocation, resolveAgentExecutable } from "./providers";
 import {
   describeSchedule,
@@ -80,11 +81,11 @@ export const ROUTINES_SKILL = "daedalus-routines";
 const ROUTINES_AGENT_PROMPT =
   "You are the Routines agent. You write and keep the user's Daedalus routines in every workspace, and read their runs. Run `daedal routine list`. If a routine's recent runs failed or gave a weak result, read its runs and suggest one concrete change to its prompt or schedule. Then say in one line what you can do and wait for the user.";
 
-export interface WorkspaceRoutineView {
-  routine: WorkspaceRoutine;
+export interface RoutineView {
+  routine: Routine;
   workspaceName: string | null;
   scheduleText: string;
-  recentRuns: WorkspaceRoutineRun[];
+  recentRuns: RoutineRun[];
 }
 
 export interface RoutineTranscriptEntry {
@@ -92,7 +93,7 @@ export interface RoutineTranscriptEntry {
   text: string;
 }
 
-export interface WorkspaceRoutineAddInput {
+export interface RoutineAddInput {
   name?: string;
   /** Workspace id or slug; null runs across every workspace. */
   workspace: string | null;
@@ -107,7 +108,7 @@ export interface WorkspaceRoutineAddInput {
  * clock, so nothing runs while it is closed; a slot missed meanwhile runs
  * once when it opens.
  */
-export class WorkspaceRoutineService {
+export class RoutineService {
   private readonly live = new Map<number, RoutineProcess>();
 
   constructor(
@@ -116,6 +117,10 @@ export class WorkspaceRoutineService {
     private readonly sessions: RoutineSessions,
     private readonly spawn: RoutineSpawner = spawnRoutineProcess,
     private readonly now: () => Date = () => new Date(),
+    /** Tells the user a run ended; the notification service routes it. */
+    private readonly notify: (
+      request: NotificationRequest,
+    ) => Promise<unknown> = async () => undefined,
   ) {}
 
   /**
@@ -124,7 +129,7 @@ export class WorkspaceRoutineService {
    * return it, restoring it when it was archived.
    */
   async agent(workspace: string): Promise<AgentSession> {
-    const id = this.repositories.workspaceRoutines.agentSessionId();
+    const id = this.repositories.routines.agentSessionId();
     const existing = id ? this.repositories.findAgent(id) : undefined;
     if (existing)
       return existing.archivedAt
@@ -140,35 +145,35 @@ export class WorkspaceRoutineService {
         ROUTINES_AGENT_PROMPT,
       ].join("\n\n"),
     });
-    this.repositories.workspaceRoutines.setAgentSession(session.id);
+    this.repositories.routines.setAgentSession(session.id);
     return session;
   }
 
-  list(): WorkspaceRoutineView[] {
-    return this.repositories.workspaceRoutines.list().map((routine) => ({
+  list(): RoutineView[] {
+    return this.repositories.routines.list().map((routine) => ({
       routine,
       workspaceName: routine.workspaceId
         ? (this.repositories.findWorkspace(routine.workspaceId)?.name ?? null)
         : null,
       scheduleText: describeSchedule(routine.schedule),
-      recentRuns: this.repositories.workspaceRoutines
+      recentRuns: this.repositories.routines
         .listRuns({ routineId: routine.id, limit: RECENT_RUNS })
         .reverse(),
     }));
   }
 
-  runs(limit = 30): WorkspaceRoutineRun[] {
-    return this.repositories.workspaceRoutines.listRuns({ limit });
+  runs(limit = 30): RoutineRun[] {
+    return this.repositories.routines.listRuns({ limit });
   }
 
-  get(idOrName: string): WorkspaceRoutine {
-    const routine = this.repositories.workspaceRoutines.find(idOrName);
+  get(idOrName: string): Routine {
+    const routine = this.repositories.routines.find(idOrName);
     if (!routine)
       throw new DaedalusError("NOT_FOUND", `No routine '${idOrName}'`);
     return routine;
   }
 
-  add(input: WorkspaceRoutineAddInput): WorkspaceRoutine {
+  add(input: RoutineAddInput): Routine {
     const prompt = input.prompt.trim();
     if (!prompt)
       throw new DaedalusError("VALIDATION", "A routine needs a prompt");
@@ -177,7 +182,7 @@ export class WorkspaceRoutineService {
       input.name?.trim() ? routineName(input.name) : nameFromPrompt(prompt),
     );
     const now = this.now();
-    const routine: WorkspaceRoutine = {
+    const routine: Routine = {
       id: crypto.randomUUID(),
       name,
       workspaceId: this.workspaceId(input.workspace),
@@ -192,7 +197,7 @@ export class WorkspaceRoutineService {
       updatedAt: now.toISOString(),
     };
     routine.nextRunAt = this.nextAt(routine);
-    this.repositories.workspaceRoutines.create(routine);
+    this.repositories.routines.create(routine);
     return routine;
   }
 
@@ -206,9 +211,9 @@ export class WorkspaceRoutineService {
       model?: string | null;
       enabled?: boolean;
     },
-  ): WorkspaceRoutine {
+  ): Routine {
     const current = this.get(idOrName);
-    const next: WorkspaceRoutine = {
+    const next: Routine = {
       ...current,
       updatedAt: this.now().toISOString(),
     };
@@ -228,19 +233,19 @@ export class WorkspaceRoutineService {
     // a paused week is not a missed slot to catch up on.
     if (change.when !== undefined || (change.enabled && !current.enabled))
       next.nextRunAt = this.nextAt({ ...next, lastRunAt: null });
-    this.repositories.workspaceRoutines.update(next);
+    this.repositories.routines.update(next);
     return next;
   }
 
   remove(idOrName: string): void {
     const routine = this.get(idOrName);
-    for (const run of this.repositories.workspaceRoutines.runningRuns())
+    for (const run of this.repositories.routines.runningRuns())
       if (run.routineId === routine.id) this.live.get(run.id)?.kill();
-    this.repositories.workspaceRoutines.delete(routine.id);
+    this.repositories.routines.delete(routine.id);
   }
 
   /** Starts a run now, whatever the schedule says. */
-  async runNow(idOrName: string): Promise<WorkspaceRoutineRun> {
+  async runNow(idOrName: string): Promise<RoutineRun> {
     const routine = this.get(idOrName);
     if (this.isRunning(routine.id))
       throw new DaedalusError("CONFLICT", `${routine.name} is already running`);
@@ -251,12 +256,12 @@ export class WorkspaceRoutineService {
    * Asks the app for a run now. For a process other than the app, such as
    * the CLI, which cannot watch the run to its end; the next tick starts it.
    */
-  requestRun(idOrName: string): WorkspaceRoutine {
+  requestRun(idOrName: string): Routine {
     const routine = this.get(idOrName);
     if (this.isRunning(routine.id))
       throw new DaedalusError("CONFLICT", `${routine.name} is already running`);
     const next = { ...routine, runRequestedAt: this.now().toISOString() };
-    this.repositories.workspaceRoutines.update(next);
+    this.repositories.routines.update(next);
     return next;
   }
 
@@ -264,9 +269,9 @@ export class WorkspaceRoutineService {
    * Called on the app's tick. Starts every routine that is due, up to the
    * limit of runs at once, and ends runs past their time limit.
    */
-  async tick(): Promise<WorkspaceRoutineRun[]> {
+  async tick(): Promise<RoutineRun[]> {
     const now = this.now();
-    for (const run of this.repositories.workspaceRoutines.runningRuns()) {
+    for (const run of this.repositories.routines.runningRuns()) {
       if (!this.live.has(run.id)) {
         // Its process belonged to an app that has since quit.
         this.finish(run, "failed", "Daedalus closed while this run was going");
@@ -277,8 +282,8 @@ export class WorkspaceRoutineService {
         this.finish(run, "failed", "Stopped after 30 minutes");
       }
     }
-    const started: WorkspaceRoutineRun[] = [];
-    for (const routine of this.repositories.workspaceRoutines.list()) {
+    const started: RoutineRun[] = [];
+    for (const routine of this.repositories.routines.list()) {
       if (routine.runRequestedAt && !this.isRunning(routine.id)) {
         if (this.live.size >= MAX_ROUTINE_RUNS) break;
         started.push(await this.start(routine, "manual"));
@@ -302,8 +307,14 @@ export class WorkspaceRoutineService {
     return parseTranscript(text);
   }
 
-  /** Opens the run's conversation as a session of its workspace. */
-  async continueRun(runId: number): Promise<AgentSession> {
+  /**
+   * Opens the run's conversation as a session of its workspace. A run on all
+   * workspaces has none, so it joins `fallbackWorkspace`, the one open.
+   */
+  async continueRun(
+    runId: number,
+    fallbackWorkspace?: string,
+  ): Promise<AgentSession> {
     const run = this.requireRun(runId);
     if (run.continuedSessionId) {
       const existing = this.repositories.findAgent(run.continuedSessionId);
@@ -316,22 +327,24 @@ export class WorkspaceRoutineService {
         "CONFLICT",
         "This run has no conversation to continue",
       );
-    const routine = this.repositories.workspaceRoutines.find(run.routineId);
-    const workspaceId = routine?.workspaceId;
+    const routine = this.repositories.routines.find(run.routineId);
+    const workspaceId =
+      routine?.workspaceId ??
+      (fallbackWorkspace ? this.workspaceId(fallbackWorkspace) : null);
     if (!workspaceId)
       throw new DaedalusError(
-        "CONFLICT",
-        "A run across all workspaces cannot be continued in one yet",
+        "VALIDATION",
+        "Open a workspace to continue a run across all workspaces in",
       );
     const session = await this.sessions.continueConversation({
       workspaceId,
       provider: "claude",
       providerSessionId: run.providerSessionId,
       workingDirectory: run.workingDirectory,
-      name: `${routine.name} run`,
+      name: `${routine?.name ?? "Routine"} run`,
       startedAt: run.startedAt,
     });
-    this.repositories.workspaceRoutines.updateRun({
+    this.repositories.routines.updateRun({
       ...run,
       continuedSessionId: session.id,
     });
@@ -339,34 +352,34 @@ export class WorkspaceRoutineService {
   }
 
   private async start(
-    routine: WorkspaceRoutine,
-    trigger: WorkspaceRoutineTrigger,
-  ): Promise<WorkspaceRoutineRun> {
+    routine: Routine,
+    trigger: RoutineTrigger,
+  ): Promise<RoutineRun> {
     const now = this.now();
     const workingDirectory = routine.workspaceId
       ? (this.repositories.findWorkspace(routine.workspaceId)?.path ??
         this.config.workspaceRoot)
       : this.config.workspaceRoot;
-    const previous = this.repositories.workspaceRoutines.listRuns({
+    const previous = this.repositories.routines.listRuns({
       routineId: routine.id,
       limit: 1,
     })[0];
     // A scheduled run moves the clock on; Run now leaves the next slot as it
     // is. Either one answers a request for a run.
     if (trigger === "schedule")
-      this.repositories.workspaceRoutines.update({
+      this.repositories.routines.update({
         ...routine,
         lastRunAt: now.toISOString(),
         nextRunAt: this.nextAt({ ...routine, lastRunAt: now.toISOString() }),
         runRequestedAt: null,
       });
     else if (routine.runRequestedAt)
-      this.repositories.workspaceRoutines.update({
+      this.repositories.routines.update({
         ...routine,
         runRequestedAt: null,
       });
     const providerSessionId = crypto.randomUUID();
-    const run = this.repositories.workspaceRoutines.createRun({
+    const run = this.repositories.routines.createRun({
       routineId: routine.id,
       trigger,
       status: "running",
@@ -376,6 +389,7 @@ export class WorkspaceRoutineService {
       finishedAt: null,
       summary: null,
       continuedSessionId: null,
+      seenAt: null,
     });
     try {
       const configured = this.config.agents.claude?.executable ?? "claude";
@@ -412,7 +426,7 @@ export class WorkspaceRoutineService {
       void process.exited
         .then(async (code) => {
           this.live.delete(run.id);
-          const current = this.repositories.workspaceRoutines.findRun(run.id);
+          const current = this.repositories.routines.findRun(run.id);
           if (!current || current.status !== "running") return;
           const entries = await this.transcript(run.id).catch(() => []);
           const result = [...entries]
@@ -436,17 +450,17 @@ export class WorkspaceRoutineService {
     } catch (error) {
       this.finish(run, "failed", (error as Error).message);
     }
-    return this.repositories.workspaceRoutines.findRun(run.id)!;
+    return this.repositories.routines.findRun(run.id)!;
   }
 
-  private skip(routine: WorkspaceRoutine, reason: string): void {
+  private skip(routine: Routine, reason: string): void {
     const now = this.now().toISOString();
-    this.repositories.workspaceRoutines.update({
+    this.repositories.routines.update({
       ...routine,
       lastRunAt: now,
       nextRunAt: this.nextAt({ ...routine, lastRunAt: now }),
     });
-    this.repositories.workspaceRoutines.createRun({
+    this.repositories.routines.createRun({
       routineId: routine.id,
       trigger: "schedule",
       status: "skipped",
@@ -456,35 +470,60 @@ export class WorkspaceRoutineService {
       finishedAt: now,
       summary: reason,
       continuedSessionId: null,
+      // Nothing ran, so there is nothing to read.
+      seenAt: now,
     });
   }
 
   private finish(
-    run: WorkspaceRoutineRun,
+    run: RoutineRun,
     status: "done" | "failed",
     summary: string,
   ): void {
-    this.repositories.workspaceRoutines.updateRun({
+    this.repositories.routines.updateRun({
       ...run,
       status,
       summary,
       finishedAt: this.now().toISOString(),
     });
+    const routine = this.repositories.routines.find(run.routineId);
+    if (!routine) return;
+    void this.notify({
+      workspaceId: routine.workspaceId,
+      level: status === "failed" ? "error" : "success",
+      title:
+        status === "failed" ? `${routine.name} failed` : `${routine.name} ran`,
+      subtitle: routine.workspaceId
+        ? (this.repositories.findWorkspace(routine.workspaceId)?.name ??
+          "Routines")
+        : "All workspaces",
+      body: summary || "No reply.",
+    }).catch(() => undefined);
+  }
+
+  /** The user opened a finished run, so it no longer counts as unread. */
+  markSeen(runId: number): void {
+    const run = this.requireRun(runId);
+    if (run.status === "running" || run.seenAt) return;
+    this.repositories.routines.updateRun({
+      ...run,
+      seenAt: this.now().toISOString(),
+    });
   }
 
   private isRunning(routineId: string): boolean {
-    return this.repositories.workspaceRoutines
+    return this.repositories.routines
       .runningRuns()
       .some((run) => run.routineId === routineId);
   }
 
-  private requireRun(id: number): WorkspaceRoutineRun {
-    const run = this.repositories.workspaceRoutines.findRun(id);
+  private requireRun(id: number): RoutineRun {
+    const run = this.repositories.routines.findRun(id);
     if (!run) throw new DaedalusError("NOT_FOUND", `No routine run ${id}`);
     return run;
   }
 
-  private nextAt(routine: WorkspaceRoutine): string | null {
+  private nextAt(routine: Routine): string | null {
     return (
       nextRunTime(parseSchedule(routine.schedule), {
         now: this.now(),
@@ -507,11 +546,7 @@ export class WorkspaceRoutineService {
 
   private uniqueName(base: string): string {
     let name = base;
-    for (
-      let suffix = 2;
-      this.repositories.workspaceRoutines.find(name);
-      suffix++
-    )
+    for (let suffix = 2; this.repositories.routines.find(name); suffix++)
       name = `${base}-${suffix}`;
     return name;
   }
@@ -545,8 +580,8 @@ export const ROUTINE_RUN_SYSTEM_PROMPT =
   "This is a headless Daedalus routine run with no Daedalus session: DAEDALUS_SESSION_ID is unset. Skip every instruction that needs a session, such as starting or continuing a workflow, `daedal attention`, team messages and journal entries. Do not mention skipping them. Do only the routine's task.";
 
 function runPrompt(
-  routine: WorkspaceRoutine,
-  previous: WorkspaceRoutineRun | undefined,
+  routine: Routine,
+  previous: RoutineRun | undefined,
   now: Date,
 ): string {
   const lines = [

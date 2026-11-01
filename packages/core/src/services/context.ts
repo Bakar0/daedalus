@@ -19,10 +19,7 @@ import { SqliteRepositories } from "../repositories/sqlite";
 import { ActivityService } from "./activity";
 import { sweepProviderActivity } from "./activity-detect";
 import { AbilityService } from "./abilities";
-import {
-  WorkspaceRoutineService,
-  type RoutineSpawner,
-} from "./workspace-routines";
+import { RoutineService, type RoutineSpawner } from "./routines";
 import { findAccount } from "./account-homes";
 import { AccountService } from "./accounts";
 import { DeliveryGate } from "./delivery";
@@ -115,7 +112,7 @@ export interface ApplicationContext {
   /** Types grant and revoke notes in; only the desktop host ticks it. */
   abilityNotes: AbilityNoteDelivery;
   /** Routines on their own page, each run a headless session; ticked by the desktop host. */
-  workspaceRoutines: WorkspaceRoutineService;
+  routines: RoutineService;
   /** How Daedalus hands a line to a running session it did not get from the user. */
   sessionChannel: SessionChannel;
   /** Keystrokes per session, and the rule for typing into a session. */
@@ -475,7 +472,7 @@ export async function createApplicationContext(
       options.now,
     ),
     abilityNotes,
-    workspaceRoutines: new WorkspaceRoutineService(
+    routines: new RoutineService(
       repositories,
       config,
       {
@@ -485,6 +482,7 @@ export async function createApplicationContext(
       },
       options.routineSpawner,
       options.now,
+      (request) => notifications.notify(request),
     ),
     sessionChannel,
     deliveryGate,

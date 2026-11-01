@@ -984,14 +984,12 @@ setInterval(async () => {
     }
     // Routines on the Routines page start headless runs; the clock is this
     // tick, like the rest.
-    for (const run of await context.workspaceRoutines
-      .tick()
-      .catch(async (error) => {
-        await context.logger.write("error", "routines", {
-          error: String(error),
-        });
-        return [];
-      }))
+    for (const run of await context.routines.tick().catch(async (error) => {
+      await context.logger.write("error", "routines", {
+        error: String(error),
+      });
+      return [];
+    }))
       await context.logger.write("info", "routines", {
         started: run.id,
         routine: run.routineId,

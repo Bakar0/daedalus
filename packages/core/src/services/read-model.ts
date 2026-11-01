@@ -121,6 +121,11 @@ function sources(context: ApplicationContext) {
     ),
     // An agent reports a step a few times an hour at most, so a change
     // reloads the whole window rather than earning a partial part.
+    // A run ends in this process's tick; opening one marks it read.
+    unseenRoutineRuns: rows(
+      () => repositories.routines.unseenRunIds(),
+      () => repositories.routines.unseenRunIds(),
+    ),
     workflowRuns: rows(
       () => context.workflows.list(),
       () => repositories.workflows.versions(),

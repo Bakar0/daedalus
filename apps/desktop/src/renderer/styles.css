@@ -6669,6 +6669,23 @@ dd {
   background: var(--raised-hover) !important;
   color: var(--text) !important;
 }
+.sidebar-routines-count {
+  background: var(--accent);
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  margin-left: auto;
+  padding: 0 6px;
+}
+/* A run nobody opened yet reads brighter than the rest. */
+.routines-home-runs button[data-unseen="true"] strong,
+.routines-home-runs button[data-unseen="true"] .routine-run-summary {
+  color: var(--text);
+}
+.routines-home-runs button[data-unseen="true"] .routine-run-summary {
+  font-weight: 600;
+}
 .sidebar-routines-link svg {
   fill: none;
   height: 14px;

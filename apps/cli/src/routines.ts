@@ -5,9 +5,9 @@ import {
   localTime,
   parseWhen,
   type ApplicationContext,
-  type WorkspaceRoutine,
-  type WorkspaceRoutineRun,
-  type WorkspaceRoutineView,
+  type Routine,
+  type RoutineRun,
+  type RoutineView,
 } from "@daedalus/core";
 import { callerSession } from "./caller";
 import {
@@ -102,11 +102,8 @@ function runId(value: string | undefined): number {
   return id;
 }
 
-function view(
-  context: ApplicationContext,
-  routine: WorkspaceRoutine,
-): WorkspaceRoutineView {
-  const found = context.workspaceRoutines
+function view(context: ApplicationContext, routine: Routine): RoutineView {
+  const found = context.routines
     .list()
     .find((item) => item.routine.id === routine.id);
   if (!found)
@@ -114,7 +111,7 @@ function view(
   return found;
 }
 
-const runLine = (run: WorkspaceRoutineRun, routineName: string) =>
+const runLine = (run: RoutineRun, routineName: string) =>
   [
     run.id,
     routineName,
@@ -124,7 +121,7 @@ const runLine = (run: WorkspaceRoutineRun, routineName: string) =>
     run.summary ?? "",
   ].join("\t");
 
-function routineLine(item: WorkspaceRoutineView): string {
+function routineLine(item: RoutineView): string {
   const { routine } = item;
   const last = item.recentRuns.at(-1);
   return [
@@ -137,7 +134,7 @@ function routineLine(item: WorkspaceRoutineView): string {
   ].join("\t");
 }
 
-function printRoutine(item: WorkspaceRoutineView): void {
+function printRoutine(item: RoutineView): void {
   const { routine } = item;
   console.log(`${routine.name}\t${routine.id}`);
   console.log(`Workspace: ${item.workspaceName ?? "All workspaces"}`);
@@ -161,7 +158,7 @@ export async function routineCommand(
     console.log(routineHelp);
     return 0;
   }
-  const service = context.workspaceRoutines;
+  const service = context.routines;
   if (action === "add") {
     const parsed = parseArguments(
       inputArgs,
@@ -292,7 +289,7 @@ export async function routineCommand(
     const only = parsed.positionals[0]
       ? service.get(parsed.positionals[0]).id
       : undefined;
-    const runs = context.repositories.workspaceRoutines.listRuns({
+    const runs = context.repositories.routines.listRuns({
       ...(only ? { routineId: only } : {}),
       limit,
     });
