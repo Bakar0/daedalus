@@ -40,10 +40,6 @@ function clockTime(iso: string, now: number): string {
     : `${at.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
 }
 
-function tickTone(run: RoutineRunDto): string {
-  return run.status;
-}
-
 /**
  * The Routines page: every routine across the workspaces, each a schedule and
  * a prompt, and the runs they made. A run is a headless session; opening one
@@ -249,10 +245,7 @@ export function RoutinesHome({
                       onClick={() => setViewing(item.id)}
                       type="button"
                     >
-                      <span
-                        className="routine-tick"
-                        data-tone={tickTone(item)}
-                      />
+                      <span className="routine-tick" data-tone={item.status} />
                       <time dateTime={item.startedAt}>
                         {relativeTime(item.startedAt, now)}
                       </time>
@@ -349,7 +342,7 @@ function RoutineRows({
               <button
                 aria-label={`${item.status} ${clockTime(item.startedAt, now)}`}
                 className="routine-tick"
-                data-tone={tickTone(item)}
+                data-tone={item.status}
                 key={item.id}
                 onClick={() => onOpenRun(item.id)}
                 title={`${clockTime(item.startedAt, now)} · ${item.summary ?? item.status}`}

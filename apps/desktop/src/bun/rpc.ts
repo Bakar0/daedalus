@@ -10,6 +10,7 @@ import {
   cloudMcpChoices,
   setCloudMcpServer,
   DaedalusError,
+  isUnseenRun,
   INSTALL_COMMANDS,
   normalizeError,
   ReadModel,
@@ -412,7 +413,7 @@ function routineRunDto(
     summary: run.summary,
     workingDirectory: run.workingDirectory,
     continuedSessionId: run.continuedSessionId,
-    unseen: !run.seenAt && (run.status === "done" || run.status === "failed"),
+    unseen: isUnseenRun(run),
   };
 }
 
@@ -438,9 +439,7 @@ function routineDto(
 }
 
 function routineViewDto(context: ApplicationContext, id: string): RoutineDto {
-  const view = context.routines.list().find((item) => item.routine.id === id);
-  if (!view) throw new DaedalusError("NOT_FOUND", "No such routine");
-  return routineDto(context, view);
+  return routineDto(context, context.routines.view(id));
 }
 
 /**
@@ -669,10 +668,10 @@ export function createDesktopRequestHandlers(
       ),
     routineTranscript: ({ runId }) =>
       result(async () => {
-        const run = context.repositories.routines.findRun(runId);
-        if (!run) throw new DaedalusError("NOT_FOUND", "No such run");
         // Reading a finished run is what makes it read.
         context.routines.markSeen(runId);
+        const run = context.repositories.routines.findRun(runId);
+        if (!run) throw new DaedalusError("NOT_FOUND", "No such run");
         return {
           run: routineRunDto(context, run),
           entries: await context.routines.transcript(runId),

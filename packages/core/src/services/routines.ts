@@ -33,6 +33,17 @@ export interface RoutineProcess {
   /** Resolves with the exit code once the process ends. */
   exited: Promise<number>;
   kill(): void;
+  pid?: number;
+}
+
+/** True while a process with this pid exists; signal 0 only checks. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Starts the provider for one run, its output written to `logPath`. */
@@ -52,7 +63,7 @@ export const spawnRoutineProcess: RoutineSpawner = (input) => {
     stdout: Bun.file(input.logPath),
     stderr: "ignore",
   });
-  return { exited: child.exited, kill: () => child.kill() };
+  return { exited: child.exited, kill: () => child.kill(), pid: child.pid };
 };
 
 /** The session actions routines need, from the agent service. */
@@ -162,6 +173,15 @@ export class RoutineService {
     }));
   }
 
+  /** One routine as the table shows it. */
+  view(idOrName: string): RoutineView {
+    const id = this.get(idOrName).id;
+    const found = this.list().find((item) => item.routine.id === id);
+    if (!found)
+      throw new DaedalusError("NOT_FOUND", `No routine '${idOrName}'`);
+    return found;
+  }
+
   runs(limit = 30): RoutineRun[] {
     return this.repositories.routines.listRuns({ limit });
   }
@@ -249,6 +269,11 @@ export class RoutineService {
     const routine = this.get(idOrName);
     if (this.isRunning(routine.id))
       throw new DaedalusError("CONFLICT", `${routine.name} is already running`);
+    if (this.runningCount() >= MAX_ROUTINE_RUNS)
+      throw new DaedalusError(
+        "CONFLICT",
+        `${MAX_ROUTINE_RUNS} routines are running; try again when one ends`,
+      );
     return this.start(routine, "manual");
   }
 
@@ -272,30 +297,45 @@ export class RoutineService {
   async tick(): Promise<RoutineRun[]> {
     const now = this.now();
     for (const run of this.repositories.routines.runningRuns()) {
-      if (!this.live.has(run.id)) {
-        // Its process belonged to an app that has since quit.
-        this.finish(run, "failed", "Daedalus closed while this run was going");
+      const over =
+        now.getTime() - Date.parse(run.startedAt) > ROUTINE_RUN_TIMEOUT_MS;
+      const live = this.live.get(run.id);
+      if (live) {
+        if (over) {
+          live.kill();
+          this.finish(run, "failed", "Stopped after 30 minutes");
+        }
         continue;
       }
-      if (now.getTime() - Date.parse(run.startedAt) > ROUTINE_RUN_TIMEOUT_MS) {
-        this.live.get(run.id)?.kill();
-        this.finish(run, "failed", "Stopped after 30 minutes");
+      // Started by an app that has since quit. Its process may still be
+      // going, as sessions do; watch it until it ends.
+      if (run.pid && isAlive(run.pid)) {
+        if (over) {
+          process.kill(run.pid);
+          this.finish(run, "failed", "Stopped after 30 minutes");
+        }
+        continue;
       }
+      await this.settle(run.id, null);
     }
     const started: RoutineRun[] = [];
     for (const routine of this.repositories.routines.list()) {
+      const due =
+        routine.enabled &&
+        routine.nextRunAt !== null &&
+        Date.parse(routine.nextRunAt) <= now.getTime();
       if (routine.runRequestedAt && !this.isRunning(routine.id)) {
-        if (this.live.size >= MAX_ROUTINE_RUNS) break;
-        started.push(await this.start(routine, "manual"));
+        if (this.runningCount() >= MAX_ROUTINE_RUNS) continue;
+        // A request that lands on a due slot is that slot's run.
+        started.push(await this.start(routine, due ? "schedule" : "manual"));
         continue;
       }
-      if (!routine.enabled || !routine.nextRunAt) continue;
-      if (Date.parse(routine.nextRunAt) > now.getTime()) continue;
+      if (!due) continue;
       if (this.isRunning(routine.id)) {
         this.skip(routine, "The previous run was still going");
         continue;
       }
-      if (this.live.size >= MAX_ROUTINE_RUNS) break;
+      if (this.runningCount() >= MAX_ROUTINE_RUNS) continue;
       started.push(await this.start(routine, "schedule"));
     }
     return started;
@@ -356,9 +396,10 @@ export class RoutineService {
     trigger: RoutineTrigger,
   ): Promise<RoutineRun> {
     const now = this.now();
+    // A workspace that is gone fails the run rather than running it in the
+    // root, where it would reach every workspace.
     const workingDirectory = routine.workspaceId
-      ? (this.repositories.findWorkspace(routine.workspaceId)?.path ??
-        this.config.workspaceRoot)
+      ? (this.repositories.findWorkspace(routine.workspaceId)?.path ?? "")
       : this.config.workspaceRoot;
     const previous = this.repositories.routines.listRuns({
       routineId: routine.id,
@@ -390,14 +431,16 @@ export class RoutineService {
       summary: null,
       continuedSessionId: null,
       seenAt: null,
+      pid: null,
     });
     try {
+      if (!workingDirectory) throw new Error("Its workspace no longer exists");
       const configured = this.config.agents.claude?.executable ?? "claude";
       if (!resolveAgentExecutable("claude", configured)) await loginShellPath();
       const executable = resolveAgentExecutable("claude", configured);
       if (!executable) throw new Error("Claude Code is not installed");
       await mkdir(this.logDirectory(), { recursive: true });
-      const process = this.spawn({
+      const child = this.spawn({
         executable,
         args: [
           "-p",
@@ -422,35 +465,48 @@ export class RoutineService {
         },
         logPath: this.logPath(run.id),
       });
-      this.live.set(run.id, process);
-      void process.exited
-        .then(async (code) => {
+      this.live.set(run.id, child);
+      this.repositories.routines.updateRun({ ...run, pid: child.pid ?? null });
+      void child.exited
+        .then((code) => {
           this.live.delete(run.id);
-          const current = this.repositories.routines.findRun(run.id);
-          if (!current || current.status !== "running") return;
-          const entries = await this.transcript(run.id).catch(() => []);
-          const result = [...entries]
-            .reverse()
-            .find((entry) => entry.kind === "result");
-          const error = [...entries]
-            .reverse()
-            .find((entry) => entry.kind === "error");
-          if (code === 0 && result)
-            this.finish(current, "done", lastLine(result.text));
-          else
-            this.finish(
-              current,
-              "failed",
-              error ? lastLine(error.text) : `Claude exited with code ${code}`,
-            );
+          return this.settle(run.id, code);
         })
         // The app may have closed the database while the run was going; the
-        // next start fails the run instead.
+        // next app's tick settles the run from its log instead.
         .catch(() => undefined);
     } catch (error) {
-      this.finish(run, "failed", (error as Error).message);
+      this.finish(
+        run,
+        "failed",
+        error instanceof Error ? error.message : String(error),
+      );
     }
-    return this.repositories.routines.findRun(run.id)!;
+    return this.repositories.routines.findRun(run.id) ?? run;
+  }
+
+  /**
+   * Ends a run whose process is gone, from what its log says. `code` is null
+   * when another app started it, so the exit code is not known.
+   */
+  private async settle(runId: number, code: number | null): Promise<void> {
+    const current = this.repositories.routines.findRun(runId);
+    if (!current || current.status !== "running") return;
+    const entries = await this.transcript(runId).catch(() => []);
+    const result = entries.findLast((entry) => entry.kind === "result");
+    const error = entries.findLast((entry) => entry.kind === "error");
+    if (result && (code === 0 || code === null))
+      this.finish(current, "done", lastLine(result.text));
+    else
+      this.finish(
+        current,
+        "failed",
+        error
+          ? lastLine(error.text)
+          : code === null
+            ? "Ended without a result while Daedalus was closed"
+            : `Claude exited with code ${code}`,
+      );
   }
 
   private skip(routine: Routine, reason: string): void {
@@ -472,6 +528,7 @@ export class RoutineService {
       continuedSessionId: null,
       // Nothing ran, so there is nothing to read.
       seenAt: now,
+      pid: null,
     });
   }
 
@@ -509,6 +566,10 @@ export class RoutineService {
       ...run,
       seenAt: this.now().toISOString(),
     });
+  }
+
+  private runningCount(): number {
+    return this.repositories.routines.runningRuns().length;
   }
 
   private isRunning(routineId: string): boolean {

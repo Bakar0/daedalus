@@ -26,7 +26,7 @@ export const routineHelp = `Routine commands:
       [--name <name>] [--workspace <workspace> | --all] [--model <model>|default]
   daedal routine pause|resume <routine>
   daedal routine run <routine>
-  daedal routine remove <routine>
+  daedal routine remove|rm <routine>
   daedal routine runs [<routine>] [--limit <n>]
   daedal routine log <run-id>
   daedal routine when <when>
@@ -50,26 +50,32 @@ on from it in a session.
 The desktop app keeps the clock: routines run only while it is open, at
 most 2 at once, each stopped after 30 minutes. 'run' asks the app for a run
 now, which starts within a few seconds and leaves the schedule alone, even
-for a paused routine. A due run while the previous one is still going is
+for a paused routine. A run keeps going when the app quits, and the app
+picks it up again when it opens. A due run while the previous one is still going is
 skipped.`;
 
-/** The routine's workspace from the flags, else the caller's. */
-async function workspaceOption(
+/** The workspace the flags name: an id or slug, null for --all, or none. */
+function workspaceFlag(
+  values: Record<string, string>,
+  flags: Set<string>,
+): string | null | undefined {
+  if (!flags.has("all")) return values.workspace;
+  if (values.workspace)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Use either --workspace or --all, not both",
+    );
+  return null;
+}
+
+/** A new routine's workspace: the flags, else the calling session's. */
+async function newRoutineWorkspace(
   context: ApplicationContext,
   values: Record<string, string>,
   flags: Set<string>,
-  required: boolean,
-): Promise<string | null | undefined> {
-  if (flags.has("all")) {
-    if (values.workspace)
-      throw new DaedalusError(
-        "VALIDATION",
-        "Use either --workspace or --all, not both",
-      );
-    return null;
-  }
-  if (values.workspace) return values.workspace;
-  if (!required) return undefined;
+): Promise<string | null> {
+  const named = workspaceFlag(values, flags);
+  if (named !== undefined) return named;
   const session = await callerSession(context).catch(() => undefined);
   if (session) return session.workspaceId;
   throw new DaedalusError(
@@ -102,14 +108,8 @@ function runId(value: string | undefined): number {
   return id;
 }
 
-function view(context: ApplicationContext, routine: Routine): RoutineView {
-  const found = context.routines
-    .list()
-    .find((item) => item.routine.id === routine.id);
-  if (!found)
-    throw new DaedalusError("NOT_FOUND", `No routine '${routine.name}'`);
-  return found;
-}
+const view = (context: ApplicationContext, routine: Routine): RoutineView =>
+  context.routines.view(routine.id);
 
 const runLine = (run: RoutineRun, routineName: string) =>
   [
@@ -172,12 +172,11 @@ export async function routineCommand(
         await promptOption(parsed.values),
         "--prompt or --prompt-file",
       ),
-      workspace: (await workspaceOption(
+      workspace: await newRoutineWorkspace(
         context,
         parsed.values,
         parsed.flags,
-        true,
-      )) as string | null,
+      ),
       ...(parsed.values.name ? { name: parsed.values.name } : {}),
       ...(parsed.values.model ? { model: parsed.values.model } : {}),
     });
@@ -217,12 +216,7 @@ export async function routineCommand(
       1,
       "daedal routine edit <routine> ...",
     );
-    const workspace = await workspaceOption(
-      context,
-      parsed.values,
-      parsed.flags,
-      false,
-    );
+    const workspace = workspaceFlag(parsed.values, parsed.flags);
     const prompt = await promptOption(parsed.values);
     const model = parsed.values.model;
     const routine = service.update(parsed.positionals[0]!, {
@@ -268,7 +262,7 @@ export async function routineCommand(
     );
     return 0;
   }
-  if (action === "remove") {
+  if (action === "remove" || action === "rm") {
     const parsed = parseArguments(inputArgs, []);
     expectPositionals(parsed.positionals, 1, "daedal routine remove <routine>");
     const routine = service.get(parsed.positionals[0]!);

@@ -33,6 +33,7 @@ interface RoutineRunRow {
   summary: string | null;
   continued_session_id: string | null;
   seen_at: string | null;
+  pid: number | null;
 }
 
 const routineFromRow = (row: RoutineRow): Routine => ({
@@ -62,6 +63,7 @@ const runFromRow = (row: RoutineRunRow): RoutineRun => ({
   summary: row.summary,
   continuedSessionId: row.continued_session_id,
   seenAt: row.seen_at,
+  pid: row.pid,
 });
 
 export class RoutineRepository {
@@ -162,11 +164,11 @@ export class RoutineRepository {
 
   createRun(run: Omit<RoutineRun, "id">): RoutineRun {
     const row = this.database
-      .query<RoutineRunRow, (string | null)[]>(
+      .query<RoutineRunRow, (string | number | null)[]>(
         `INSERT INTO workspace_routine_runs
          (routine_id, trigger, status, provider_session_id, working_directory,
-          started_at, finished_at, summary, continued_session_id, seen_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          started_at, finished_at, summary, continued_session_id, seen_at, pid)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
       )
       .get(
         run.routineId,
@@ -179,6 +181,7 @@ export class RoutineRepository {
         run.summary,
         run.continuedSessionId,
         run.seenAt,
+        run.pid,
       );
     return runFromRow(row!);
   }
@@ -187,7 +190,8 @@ export class RoutineRepository {
     this.database
       .query(
         `UPDATE workspace_routine_runs SET status = ?, finished_at = ?,
-         summary = ?, continued_session_id = ?, seen_at = ? WHERE id = ?`,
+         summary = ?, continued_session_id = ?, seen_at = ?, pid = ?
+         WHERE id = ?`,
       )
       .run(
         run.status,
@@ -195,6 +199,7 @@ export class RoutineRepository {
         run.summary,
         run.continuedSessionId,
         run.seenAt,
+        run.pid,
         run.id,
       );
   }

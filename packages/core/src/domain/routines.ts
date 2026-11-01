@@ -47,4 +47,10 @@ export interface RoutineRun {
   continuedSessionId: UUID | null;
   /** When the user opened the finished run; null is unread. */
   seenAt: string | null;
+  /** The provider process, while it may still be going. */
+  pid: number | null;
 }
+
+/** Finished, and not opened by the user yet. */
+export const isUnseenRun = (run: RoutineRun): boolean =>
+  !run.seenAt && (run.status === "done" || run.status === "failed");

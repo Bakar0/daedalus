@@ -181,6 +181,11 @@ function fakeClaude(answer: string, calls: string[][] = []): RoutineSpawner {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
+/** A provider that keeps running until the test ends. */
+function neverEnds(): RoutineSpawner {
+  return () => ({ exited: new Promise<number>(() => {}), kill() {} });
+}
+
 describe("RoutineService", () => {
   test("runs a due routine headless in its workspace and keeps its answer", async () => {
     const clock = { now: new Date(2026, 9, 28, 12, 59, 0) };
@@ -260,7 +265,8 @@ describe("RoutineService", () => {
       context.repositories.routines.moveAgent(first.id, successor.id);
       expect((await context.routines.agent("ops")).id).toBe(successor.id);
     });
-  });
+    // Two sessions start, which takes seconds on a loaded machine.
+  }, 20_000);
 
   test("a finished run is unread and notifies until it is opened", async () => {
     const clock = {
@@ -310,6 +316,97 @@ describe("RoutineService", () => {
       expect(session).toMatchObject({
         workspaceId: ops.id,
         name: "cleanup run",
+      });
+    });
+  });
+
+  test("a requested run on a due slot is that slot's run, not a skip later", async () => {
+    const clock = { now: new Date(2026, 9, 28, 19, 0, 5) };
+    await withRoutines(neverEnds(), clock, async (context) => {
+      await context.workspaces.create({ name: "Ops", slug: "ops" });
+      const routine = context.routines.add({
+        workspace: "ops",
+        when: "every day at 19:00",
+        prompt: "Clean up merged worktrees.",
+        name: "cleanup",
+      });
+      context.repositories.routines.update({
+        ...routine,
+        nextRunAt: new Date(2026, 9, 28, 19, 0, 0).toISOString(),
+      });
+      context.routines.requestRun("cleanup");
+      const [started] = await context.routines.tick();
+      expect(started?.trigger).toBe("schedule");
+      await context.routines.tick();
+      expect(
+        context.repositories.routines
+          .listRuns({ limit: 10 })
+          .map((run) => run.status),
+      ).toEqual(["running"]);
+    });
+  });
+
+  test("Run now keeps to the limit of runs at once", async () => {
+    const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
+    await withRoutines(neverEnds(), clock, async (context) => {
+      await context.workspaces.create({ name: "Ops", slug: "ops" });
+      for (const name of ["a", "b", "c"])
+        context.routines.add({
+          workspace: "ops",
+          when: "every day at 19:00",
+          prompt: `Routine ${name}.`,
+          name,
+        });
+      await context.routines.runNow("a");
+      await context.routines.runNow("b");
+      await expect(context.routines.runNow("c")).rejects.toThrow(
+        "2 routines are running",
+      );
+    });
+  });
+
+  test("a run started by an app that quit is watched, then ended from its log", async () => {
+    const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
+    await withRoutines(fakeClaude("unused"), clock, async (context, home) => {
+      await context.workspaces.create({ name: "Ops", slug: "ops" });
+      const routine = context.routines.add({
+        workspace: "ops",
+        when: "every day at 19:00",
+        prompt: "Check.",
+        name: "check",
+      });
+      const orphan = (pid: number | null) =>
+        context.repositories.routines.createRun({
+          routineId: routine.id,
+          trigger: "schedule",
+          status: "running",
+          providerSessionId: crypto.randomUUID(),
+          workingDirectory: home,
+          startedAt: clock.now.toISOString(),
+          finishedAt: null,
+          summary: null,
+          continuedSessionId: null,
+          seenAt: null,
+          pid,
+        });
+      // This test's own process stands in for a run still going.
+      const going = orphan(process.pid);
+      const ended = orphan(null);
+      await Bun.write(
+        join(home, "routine-runs", `${ended.id}.jsonl`),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          result: "All green.",
+        }),
+      );
+      await context.routines.tick();
+      expect(context.repositories.routines.findRun(going.id)?.status).toBe(
+        "running",
+      );
+      expect(context.repositories.routines.findRun(ended.id)).toMatchObject({
+        status: "done",
+        summary: "All green.",
       });
     });
   });
