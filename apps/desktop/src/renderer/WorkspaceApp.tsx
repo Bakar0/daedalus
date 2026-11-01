@@ -282,6 +282,11 @@ export {
 } from "./files/explorer-state";
 import { sessionColorStyle } from "./session-color-style";
 import { TerminalClipboardGate } from "./terminal-clipboard";
+import {
+  fileBase64,
+  pastedImagePaths,
+  transferImages,
+} from "./terminal-images";
 import { isTopmostScope, useFocusScope } from "./use-focus-scope";
 import { onTabListKeyDown, rovingTabIndex } from "./tab-roving";
 import { areaDefault, focusWhenReady, isShown } from "./navigation/area-focus";
@@ -1307,14 +1312,24 @@ const DialogErrorContext = createContext<
   { message: string; dismiss: () => void } | undefined
 >(undefined);
 
+/**
+ * Saves an image pasted or dropped on a terminal and resolves its path, or
+ * undefined when it could not be saved. See `terminal-images.ts`.
+ */
+const SaveTerminalImageContext = createContext<
+  ((file: File) => Promise<string | undefined>) | undefined
+>(undefined);
+
 function AppContexts({
   children,
   dialogError,
+  saveTerminalImage,
   terminalFontSize,
   theme,
 }: {
   children: React.ReactNode;
   dialogError: { message: string; dismiss: () => void } | undefined;
+  saveTerminalImage: (file: File) => Promise<string | undefined>;
   terminalFontSize: number;
   theme: AppTheme;
 }) {
@@ -1322,7 +1337,9 @@ function AppContexts({
     <AppThemeContext.Provider value={theme}>
       <TerminalFontSizeContext.Provider value={terminalFontSize}>
         <DialogErrorContext.Provider value={dialogError}>
-          {children}
+          <SaveTerminalImageContext.Provider value={saveTerminalImage}>
+            {children}
+          </SaveTerminalImageContext.Provider>
         </DialogErrorContext.Provider>
       </TerminalFontSizeContext.Provider>
     </AppThemeContext.Provider>
@@ -1490,6 +1507,9 @@ function TerminalSurface({
   fontSizeRef.current = fontSize;
   const refont = useRef<(size: number) => void>(() => undefined);
   useEffect(() => refont.current(fontSize), [fontSize]);
+  const saveImage = useContext(SaveTerminalImageContext);
+  const saveImageRef = useRef(saveImage);
+  saveImageRef.current = saveImage;
   const [connection, setConnection] = useState("connecting");
   // A cloud session's output is untrusted; see `TerminalClipboardGate`.
   const cloudRef = useRef(false);
@@ -1566,6 +1586,42 @@ function TerminalSurface({
     const noteMove = (event: MouseEvent) =>
       clipboardGate.move(event.clientX, event.clientY);
     const noteRelease = () => clipboardGate.release(Date.now());
+    // An image pasted or dropped here is saved and its path pasted: a
+    // terminal sends only text. A cloud session's program runs on a pod that
+    // cannot read this Mac's files, so it keeps the plain paste.
+    const pasteImages = (
+      event: ClipboardEvent | DragEvent,
+      transfer: DataTransfer | null,
+      kind: "paste" | "drop",
+    ) => {
+      const save = saveImageRef.current;
+      if (!transfer || !save || cloudRef.current) return;
+      const images = transferImages(transfer, kind);
+      if (images.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void Promise.all(images.map(save)).then((paths) => {
+        const saved = paths.filter((path) => path !== undefined);
+        if (saved.length === 0 || disposed) return;
+        terminal?.paste(pastedImagePaths(saved));
+        terminal?.focus();
+      });
+    };
+    const onPaste = (event: ClipboardEvent) =>
+      pasteImages(event, event.clipboardData, "paste");
+    // A file dropped and not taken would otherwise open in place of the app.
+    const onDrop = (event: DragEvent) => {
+      if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+      pasteImages(event, event.dataTransfer, "drop");
+    };
+    const onDragOver = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = cloudRef.current ? "none" : "copy";
+    };
+    container.addEventListener("paste", onPaste, true);
+    container.addEventListener("dragover", onDragOver);
+    container.addEventListener("drop", onDrop);
     container.addEventListener("mousedown", notePress, true);
     // A drag can end outside the terminal.
     window.addEventListener("mousemove", noteMove, true);
@@ -1978,6 +2034,9 @@ function TerminalSurface({
       // and the browser hands focus back to the body.
       heldCaretRef.current = holdsCaret(containerRef.current);
       disposed = true;
+      container.removeEventListener("paste", onPaste, true);
+      container.removeEventListener("dragover", onDragOver);
+      container.removeEventListener("drop", onDrop);
       container.removeEventListener("mousedown", notePress, true);
       window.removeEventListener("mousemove", noteMove, true);
       window.removeEventListener("mouseup", noteRelease, true);
@@ -2791,6 +2850,24 @@ export function WorkspaceApp({
       void client.request.clipboardWrite({ text }).then((response) => {
         if (!response.ok) setError(response.error.message);
       });
+    },
+    [client],
+  );
+
+  const saveTerminalImage = useCallback(
+    async (file: File) => {
+      try {
+        const response = await client.request.terminalImageSave({
+          name: file.name,
+          type: file.type,
+          data: await fileBase64(file),
+        });
+        if (!response.ok) setError(response.error.message);
+        return response.ok ? response.data.path : undefined;
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error));
+        return undefined;
+      }
     },
     [client],
   );
@@ -7759,6 +7836,7 @@ export function WorkspaceApp({
   return (
     <AppContexts
       dialogError={dialogError}
+      saveTerminalImage={saveTerminalImage}
       terminalFontSize={terminalFontSize}
       theme={theme}
     >

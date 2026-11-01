@@ -1,5 +1,7 @@
-import { stat } from "node:fs/promises";
-import { extname, isAbsolute } from "node:path";
+import { randomUUID } from "node:crypto";
+import { mkdir, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { extname, isAbsolute, join } from "node:path";
 import packageJson from "../../../../package.json";
 import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
@@ -75,7 +77,11 @@ import type {
   RoutineDto,
   RoutineRunDto,
 } from "@daedalus/protocol";
-import { isHostCommandId } from "@daedalus/protocol";
+import {
+  isHostCommandId,
+  MAX_TERMINAL_IMAGE_BYTES,
+  TERMINAL_IMAGE_TYPES,
+} from "@daedalus/protocol";
 
 import type { DesktopRemoteHost } from "./remote";
 
@@ -570,6 +576,8 @@ export interface DesktopHost {
   remote: DesktopRemoteHost;
   /** The AWS setup guide in the app bundle, for Settings > Cloud. */
   awsGuidePath?: string;
+  /** Where an image pasted or dropped on a terminal is saved. */
+  terminalImageDirectory?: string;
 }
 
 /** Files macOS runs, rather than shows, when they are opened. */
@@ -605,6 +613,7 @@ export function createDesktopRequestHandlers(
     windows = MAIN_WINDOW_ONLY,
     clipboardWrite = () => false,
     remote = NO_REMOTE,
+    terminalImageDirectory = join(tmpdir(), "daedalus-terminal-images"),
   } = host;
   const readModel = new ReadModel(context);
   const mutate = async <T>(operation: () => T | Promise<T>) => {
@@ -768,6 +777,31 @@ export function createDesktopRequestHandlers(
           );
         await writePasteboardFiles(paths);
         return { written: paths.length };
+      }),
+    // Codex and Claude Code attach an image when its path is pasted, and a
+    // terminal can only send text, so the image goes to a file first.
+    terminalImageSave: ({ name, type, data }) =>
+      result(async () => {
+        const extension = TERMINAL_IMAGE_TYPES[type];
+        if (!extension)
+          throw new DaedalusError("VALIDATION", `Not an image: ${type}`);
+        // Base64 is four characters for every three bytes.
+        if ((data.length / 4) * 3 > MAX_TERMINAL_IMAGE_BYTES)
+          throw new DaedalusError(
+            "VALIDATION",
+            `The image is over ${MAX_TERMINAL_IMAGE_BYTES / 1024 / 1024} MB`,
+          );
+        const bytes = Buffer.from(data, "base64");
+        const stem =
+          name
+            .replace(/\.[^.]*$/, "")
+            .replace(/[^A-Za-z0-9._-]+/g, "-")
+            .slice(0, 60) || "image";
+        const directory = join(terminalImageDirectory, randomUUID());
+        await mkdir(directory, { recursive: true });
+        const path = join(directory, `${stem}${extension}`);
+        await writeFile(path, bytes);
+        return { path };
       }),
     clipboardWrite: ({ text }) =>
       result(() => {

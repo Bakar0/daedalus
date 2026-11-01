@@ -158,6 +158,20 @@ export type AutoRebirthDto = number | "off" | null;
  * fills.
  */
 
+/**
+ * The images a terminal takes when pasted or dropped, by type, and the
+ * extension each is saved with. Codex and Claude Code read all four.
+ */
+export const TERMINAL_IMAGE_TYPES: Readonly<Record<string, string>> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+};
+
+/** Larger than any screenshot. */
+export const MAX_TERMINAL_IMAGE_BYTES = 20 * 1024 * 1024;
+
 export const DEFAULT_AUTO_REBIRTH_PERCENT = 85;
 
 /**
@@ -2289,6 +2303,14 @@ export interface DesktopRpcSchema {
       clipboardFilesRead: Request<Record<string, never>, { paths: string[] }>;
       /** Puts files on the macOS pasteboard, so Finder can paste them. */
       clipboardFilesWrite: Request<{ paths: string[] }, { written: number }>;
+      /**
+       * Saves an image pasted or dropped on a terminal to a file, so its path
+       * can be pasted instead. `data` is the image's bytes in base64.
+       */
+      terminalImageSave: Request<
+        { name: string; type: string; data: string },
+        { path: string }
+      >;
       /**
        * Which window is asking: the main app, or the World on its own. Both
        * load the same page, and a `views://` URL carries no parameters, so a
