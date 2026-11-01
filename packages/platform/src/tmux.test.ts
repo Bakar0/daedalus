@@ -6,6 +6,7 @@ import {
   BUNDLED_TMUX_VARIABLE,
   clampTerminalSize,
   CommandTmuxClient,
+  copyModeTypingKeys,
   findTmuxExecutable,
   isInheritedSessionVariable,
   tmuxPtyArguments,
@@ -138,10 +139,44 @@ test("tmux PTYs use native mouse scrolling, sync repaints, pass OSC 8 links and 
     "mouse",
     "on",
     ";",
+    "set-option",
+    "-w",
+    "-t",
+    "daedalus_123",
+    "mode-style",
+    "bg=#38546b",
+    ";",
+    "set-hook",
+    "-g",
+    "pane-mode-changed[99]",
+    "if-shell -F '#{pane_in_mode}' 'set-option -p cursor-colour \"#111112\" ; set-option -p cursor-style bar' 'set-option -p -u cursor-colour ; set-option -p -u cursor-style'",
+    ";",
+    "set-option",
+    "-s",
+    "terminal-overrides[99]",
+    "xterm*:Se=\\E[0 q",
+    ";",
     "attach-session",
     "-t",
     "daedalus_123",
   ]);
+});
+
+test("typing in copy mode leaves it, but moving and the mouse stay", () => {
+  const listed = [
+    "bind-key  -T copy-mode Escape            send-keys -X cancel",
+    "bind-key  -T copy-mode f                 send-keys -X jump-forward",
+    "bind-key  -T copy-mode \\;                send-keys -X jump-again",
+    'bind-key  -T copy-mode "M-{"             send-keys -X previous-paragraph',
+    "bind-key  -T copy-mode C-c               send-keys -X cancel",
+    "bind-key  -T copy-mode PPage             send-keys -X page-up",
+    "bind-key  -T copy-mode Up                send-keys -X cursor-up",
+    "bind-key  -T copy-mode WheelUpPane       select-pane \\; send-keys -X -N 5 scroll-up",
+    "bind-key  -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel",
+    "bind-key  -T copy-mode q                 send-keys -X cancel \\; send-keys",
+    "bind-key  -T copy-mode-vi v              send-keys -X begin-selection",
+  ].join("\n");
+  expect(copyModeTypingKeys(listed)).toEqual(["f", "\\;", "M-{", "C-c"]);
 });
 
 describe("CommandTmuxClient", () => {

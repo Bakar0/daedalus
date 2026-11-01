@@ -365,6 +365,43 @@ describe("desktop RPC handlers", () => {
     });
   });
 
+  test("an image pasted on a terminal is saved where its path can be pasted", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const context = await createApplicationContext({
+        env: { ...process.env, DAEDALUS_HOME: home },
+        tmux: new FakeTmux(),
+      });
+      const directory = join(home, "images");
+      const rpc = createDesktopRequestHandlers(context, {
+        terminalImageDirectory: directory,
+      });
+      try {
+        const saved = await rpc.terminalImageSave({
+          name: "Screen Shot 1.png",
+          type: "image/png",
+          data: btoa("\x89PNG"),
+        });
+        if (!saved.ok) throw new Error(saved.error.message);
+        expect(saved.data.path.startsWith(`${directory}/`)).toBe(true);
+        expect(saved.data.path.endsWith("/Screen-Shot-1.png")).toBe(true);
+        expect([...(await Bun.file(saved.data.path).bytes())]).toEqual([
+          0x89, 0x50, 0x4e, 0x47,
+        ]);
+        const refused = await rpc.terminalImageSave({
+          name: "run.sh",
+          type: "text/x-shellscript",
+          data: btoa("echo"),
+        });
+        expect(refused).toMatchObject({
+          ok: false,
+          error: { code: "VALIDATION" },
+        });
+      } finally {
+        context.close();
+      }
+    });
+  });
+
   test("snapshot reports configuration and dependency availability", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       await withoutProviderClis(home);

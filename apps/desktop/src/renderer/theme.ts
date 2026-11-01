@@ -19,7 +19,12 @@ export const isAppTheme = (value: unknown): value is AppTheme =>
 export const appearanceOf = (theme: AppTheme): "dark" | "light" =>
   theme === "light" ? "light" : "dark";
 
-/** xterm's colours, matched to the center so the terminal has no frame. */
+/**
+ * xterm's colours, matched to the center so the terminal has no frame. tmux's
+ * copy mode uses the same selection background and hides its cursor in the
+ * dark background: `COPY_MODE_BACKGROUND` and `TERMINAL_BACKGROUND` in
+ * packages/platform/src/tmux.ts.
+ */
 export const terminalThemeFor = (theme: AppTheme) =>
   theme === "midnight"
     ? {
