@@ -18,7 +18,7 @@ import {
   EXPLORER_MAX_WIDTH,
   EXPLORER_MIN_WIDTH,
   lifecycleTone,
-  lineJumpSequence,
+  lineEditSequence,
   parseCollapsedWorkspaces,
   parseRememberedDirectories,
   planExplorerRefresh,
@@ -187,7 +187,7 @@ describe("desktop application shell", () => {
     ).toBeUndefined();
   });
 
-  test("maps Cmd+Left and Cmd+Right to the start and end of the line", () => {
+  test("maps Cmd+Left, Cmd+Right and Cmd+Backspace to line start, end and kill", () => {
     const cmdLeft = {
       altKey: false,
       ctrlKey: false,
@@ -196,12 +196,13 @@ describe("desktop application shell", () => {
       shiftKey: false,
       type: "keydown",
     };
-    expect(lineJumpSequence(cmdLeft)).toBe("\x01");
-    expect(lineJumpSequence({ ...cmdLeft, key: "ArrowRight" })).toBe("\x05");
-    expect(lineJumpSequence({ ...cmdLeft, metaKey: false })).toBeUndefined();
-    expect(lineJumpSequence({ ...cmdLeft, shiftKey: true })).toBeUndefined();
-    expect(lineJumpSequence({ ...cmdLeft, type: "keyup" })).toBeUndefined();
-    expect(lineJumpSequence({ ...cmdLeft, key: "ArrowUp" })).toBeUndefined();
+    expect(lineEditSequence(cmdLeft)).toBe("\x01");
+    expect(lineEditSequence({ ...cmdLeft, key: "ArrowRight" })).toBe("\x05");
+    expect(lineEditSequence({ ...cmdLeft, key: "Backspace" })).toBe("\x15");
+    expect(lineEditSequence({ ...cmdLeft, metaKey: false })).toBeUndefined();
+    expect(lineEditSequence({ ...cmdLeft, shiftKey: true })).toBeUndefined();
+    expect(lineEditSequence({ ...cmdLeft, type: "keyup" })).toBeUndefined();
+    expect(lineEditSequence({ ...cmdLeft, key: "ArrowUp" })).toBeUndefined();
   });
 
   test("keeps resized panels as narrow visible rails", () => {

@@ -464,11 +464,13 @@ export function agentMultilineSequence(
 }
 
 /**
- * Cmd+Left and Cmd+Right move the caret to the start and end of the line, the
- * way Terminal.app and iTerm2 send them: Ctrl+A and Ctrl+E, which readline
- * shells, Claude Code and Codex all read as Home and End.
+ * Cmd+Left and Cmd+Right move the caret to the start and end of the line, and
+ * Cmd+Backspace deletes back to the start of it, the way iTerm2 sends them:
+ * Ctrl+A, Ctrl+E and Ctrl+U, which readline shells, Claude Code and Codex all
+ * read as Home, End and kill-line. xterm.js translates the Option variants
+ * itself but leaves Cmd to the app, so these need doing here.
  */
-export function lineJumpSequence(
+export function lineEditSequence(
   event: Pick<
     KeyboardEvent,
     "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey" | "type"
@@ -484,6 +486,7 @@ export function lineJumpSequence(
     return undefined;
   if (event.key === "ArrowLeft") return "\x01";
   if (event.key === "ArrowRight") return "\x05";
+  if (event.key === "Backspace") return "\x15";
   return undefined;
 }
 
@@ -1533,7 +1536,7 @@ function TerminalSurface({
   ) => {
     const sequence =
       agentMultilineSequence(event.nativeEvent, target) ??
-      lineJumpSequence(event.nativeEvent);
+      lineEditSequence(event.nativeEvent);
     if (!sequence) return;
     event.preventDefault();
     event.stopPropagation();
@@ -2588,6 +2591,10 @@ export function WorkspaceApp({
   // What the core said when it refused the name, until the name changes.
   // Anything the form can tell for itself it shows as the user types.
   const [workspaceRefusal, setWorkspaceRefusal] = useState<string>();
+  // From submit until the modal closes. The refresh that follows a create
+  // brings the new workspace in while the modal is still up, and its name
+  // would otherwise flash as already taken.
+  const [workspaceCreating, setWorkspaceCreating] = useState(false);
   const [taskForm, setTaskForm] = useState({ title: "", description: "" });
   const [sessionType, setSessionType] = useState("claude");
   const [sessionModel, setSessionModel] = useState("");
@@ -4552,6 +4559,7 @@ export function WorkspaceApp({
     event.preventDefault();
     if (workspaceNameProblem(workspaceForm.name, snapshot?.workspaces ?? []))
       return;
+    setWorkspaceCreating(true);
     const created = await workspaceActions.run(
       client.request.workspaceCreate({
         name: workspaceForm.name,
@@ -4563,6 +4571,7 @@ export function WorkspaceApp({
           : {}),
       }),
     );
+    setWorkspaceCreating(false);
     if (created) {
       setWorkspaceId(created.id);
       setWorkspaceForm({
@@ -7850,7 +7859,7 @@ export function WorkspaceApp({
 
   // Blank says nothing: the field starts that way, and `required` covers it.
   const workspaceNameError =
-    (workspaceForm.name
+    (workspaceForm.name && !workspaceCreating
       ? workspaceNameProblem(workspaceForm.name, snapshot?.workspaces ?? [])
       : undefined) ?? workspaceRefusal;
   // Every <Modal> below is open exactly when one of these is set.
