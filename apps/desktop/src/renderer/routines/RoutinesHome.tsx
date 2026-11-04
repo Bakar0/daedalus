@@ -9,7 +9,8 @@ import type {
 import type { DesktopClient } from "../client-types";
 import { relativeTime } from "./time";
 
-/** Runs each "Show older" adds to Latest runs. */
+/** Runs a routine's History shows first, and each "Show older" adds. */
+const HISTORY_RUNS = 10;
 const OLDER_RUNS = 20;
 
 /** The value the form's workspace menu uses for "All workspaces". */
@@ -78,11 +79,6 @@ export function RoutinesHome({
   const [open, setOpen] = useState<string>();
   const [adding, setAdding] = useState(false);
   const [viewing, setViewing] = useState<number>();
-  // Pages loaded with "Show older", under the newest runs the poll refreshes.
-  const [older, setOlder] = useState<{
-    runs: RoutineRunDto[];
-    more: boolean;
-  }>();
 
   const load = useCallback(async () => {
     try {
@@ -145,26 +141,6 @@ export function RoutinesHome({
       </div>
     );
 
-  // The poll's newest page moves on as runs start; older pages keep only
-  // what sits below it, so a run never shows twice.
-  const oldestLatest = page.runs.at(-1)?.id ?? Number.POSITIVE_INFINITY;
-  const runs = [
-    ...page.runs,
-    ...(older?.runs.filter((item) => item.id < oldestLatest) ?? []),
-  ];
-  const moreRuns = older ? older.more : page.moreRuns;
-  const showOlder = async () => {
-    const last = runs.at(-1);
-    if (!last) return;
-    const next = await run(
-      client.request.routineRuns({ beforeId: last.id, limit: OLDER_RUNS }),
-    );
-    if (next)
-      setOlder({
-        runs: [...(older?.runs ?? []), ...next.runs],
-        more: next.moreRuns,
-      });
-  };
   const workspaceOf = new Map(
     page.routines.map((item) => [item.id, item.workspaceName]),
   );
@@ -236,7 +212,26 @@ export function RoutinesHome({
                           client.request.routineDelete({ id: routine.id }),
                         )
                       }
+                      onMarkRead={() =>
+                        void act(
+                          client.request.routineMarkAllSeen({
+                            routineId: routine.id,
+                          }),
+                        )
+                      }
                       onOpenRun={setViewing}
+                      loadRuns={(beforeId) =>
+                        run(
+                          client.request.routineRuns({
+                            routineId: routine.id,
+                            limit:
+                              beforeId === undefined
+                                ? HISTORY_RUNS
+                                : OLDER_RUNS,
+                            ...(beforeId !== undefined ? { beforeId } : {}),
+                          }),
+                        )
+                      }
                       onRunNow={() =>
                         void act(
                           client.request.routineStart({ id: routine.id }),
@@ -269,74 +264,177 @@ export function RoutinesHome({
               </table>
             )
           )}
-          {runs.length > 0 && (
+          {page.unread.length > 0 && (
             <section className="ability-page-section">
               <header className="routines-section-head">
-                <h3>Latest runs</h3>
-                {unseen > 0 && (
-                  <div>
-                    <button
-                      className="quiet"
-                      onClick={() =>
-                        void act(client.request.routineMarkAllSeen({}))
-                      }
-                      type="button"
-                    >
-                      Mark all read ({unseen})
-                    </button>
-                  </div>
-                )}
+                <h3>Unread ({unseen})</h3>
+                <div>
+                  <button
+                    className="quiet"
+                    onClick={() =>
+                      void act(client.request.routineMarkAllSeen({}))
+                    }
+                    type="button"
+                  >
+                    Mark all read
+                  </button>
+                </div>
               </header>
               <ul className="routine-runs routines-home-runs">
-                {runs.map((item) => (
-                  <li key={item.id}>
-                    <button
-                      data-unseen={item.unseen}
-                      onClick={() => setViewing(item.id)}
-                      type="button"
-                    >
-                      <span
-                        className="routine-tick"
-                        data-tone={runTone(item)}
-                      />
-                      <time dateTime={item.startedAt}>
-                        {relativeTime(item.startedAt, now)}
-                      </time>
-                      <strong>
-                        {item.routineName}
-                        {item.unseen && (
-                          <span
-                            aria-label="unread"
-                            className="routine-unread-dot"
-                            role="img"
-                          />
-                        )}
-                      </strong>
-                      <span className="routine-row-muted routine-run-workspace">
-                        {workspaceOf.get(item.routineId) ?? "All workspaces"}
-                      </span>
-                      <span className="routine-run-summary">
-                        {item.status === "running"
-                          ? "running…"
-                          : (item.summary ?? "")}
-                      </span>
-                    </button>
-                  </li>
+                {page.unread.map((item) => (
+                  <RunRow
+                    item={item}
+                    key={item.id}
+                    now={now}
+                    onOpen={() => setViewing(item.id)}
+                    workspace={
+                      workspaceOf.get(item.routineId) ?? "All workspaces"
+                    }
+                  />
                 ))}
               </ul>
-              {moreRuns && (
-                <button
-                  className="quiet routine-runs-older"
-                  onClick={() => void showOlder()}
-                  type="button"
-                >
-                  Show older
-                </button>
+              {unseen > page.unread.length && (
+                <p className="routine-row-muted">
+                  {unseen - page.unread.length} more; open a routine to see its
+                  runs.
+                </p>
               )}
             </section>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * One run in a list. `workspace` is set where runs of several routines mix,
+ * and adds the routine's name and workspace; a routine's own History leaves
+ * them out.
+ */
+function RunRow({
+  item,
+  now,
+  onOpen,
+  workspace,
+}: {
+  item: RoutineRunDto;
+  now: number;
+  onOpen(): void;
+  workspace?: string;
+}) {
+  const dot = item.unseen && (
+    <span aria-label="unread" className="routine-unread-dot" role="img" />
+  );
+  return (
+    <li>
+      <button
+        data-history={workspace === undefined}
+        data-unseen={item.unseen}
+        onClick={onOpen}
+        type="button"
+      >
+        <span className="routine-tick" data-tone={runTone(item)} />
+        <time dateTime={item.startedAt}>
+          {relativeTime(item.startedAt, now)}
+          {workspace === undefined && dot}
+        </time>
+        {workspace !== undefined && (
+          <>
+            <strong>
+              {item.routineName}
+              {dot}
+            </strong>
+            <span className="routine-row-muted routine-run-workspace">
+              {workspace}
+            </span>
+          </>
+        )}
+        <span className="routine-run-summary">
+          {item.status === "running" ? "running…" : (item.summary ?? "")}
+        </span>
+      </button>
+    </li>
+  );
+}
+
+/**
+ * A routine's own runs, newest first, so a routine that runs every minute
+ * never pushes another one's out of sight. It reloads its first page when
+ * the routine's latest run or unread count changes on the page's poll.
+ */
+function RoutineHistory({
+  routine,
+  now,
+  loadRuns,
+  onOpenRun,
+  onMarkRead,
+}: {
+  routine: RoutineDto;
+  now: number;
+  loadRuns(
+    beforeId?: number,
+  ): Promise<{ runs: RoutineRunDto[]; moreRuns: boolean } | undefined>;
+  onOpenRun(runId: number): void;
+  onMarkRead(): void;
+}) {
+  const [runs, setRuns] = useState<RoutineRunDto[]>();
+  const [more, setMore] = useState(false);
+  const latest = routine.recentRuns.at(-1);
+  const version = `${latest?.id}:${latest?.status}:${routine.unseenRuns}`;
+  useEffect(() => {
+    let current = true;
+    void loadRuns().then((page) => {
+      if (!current || !page) return;
+      setRuns(page.runs);
+      setMore(page.moreRuns);
+    });
+    return () => {
+      current = false;
+    };
+    // `loadRuns` is a new function on every render; the version is what
+    // says the runs changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
+  const showOlder = async () => {
+    const last = runs?.at(-1);
+    if (!last) return;
+    const page = await loadRuns(last.id);
+    if (!page) return;
+    setRuns([...(runs ?? []), ...page.runs]);
+    setMore(page.moreRuns);
+  };
+  if (!runs) return <p className="ability-page-empty">Loading runs…</p>;
+  if (runs.length === 0)
+    return <p className="ability-page-empty">No runs yet. Try ▶ Run now.</p>;
+  return (
+    <div className="routine-history">
+      {routine.unseenRuns > 0 && (
+        <div className="routine-prompt-actions">
+          <button className="quiet" onClick={onMarkRead} type="button">
+            Mark {routine.unseenRuns} read
+          </button>
+        </div>
+      )}
+      <ul className="routine-runs routines-home-runs">
+        {runs.map((item) => (
+          <RunRow
+            item={item}
+            key={item.id}
+            now={now}
+            onOpen={() => onOpenRun(item.id)}
+          />
+        ))}
+      </ul>
+      {more && (
+        <button
+          className="quiet routine-runs-older"
+          onClick={() => void showOlder()}
+          type="button"
+        >
+          Show older
+        </button>
+      )}
     </div>
   );
 }
@@ -349,6 +447,8 @@ function RoutineRows({
   onSetEnabled,
   onRunNow,
   onOpenRun,
+  loadRuns,
+  onMarkRead,
   onSavePrompt,
   onDelete,
 }: {
@@ -359,9 +459,14 @@ function RoutineRows({
   onSetEnabled(enabled: boolean): void;
   onRunNow(): void;
   onOpenRun(runId: number): void;
+  loadRuns(
+    beforeId?: number,
+  ): Promise<{ runs: RoutineRunDto[]; moreRuns: boolean } | undefined>;
+  onMarkRead(): void;
   onSavePrompt(prompt: string): Promise<unknown>;
   onDelete(): void;
 }) {
+  const [tab, setTab] = useState<"history" | "prompt">("history");
   const [editing, setEditing] = useState<string>();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const running = routine.recentRuns.some((item) => item.status === "running");
@@ -470,7 +575,29 @@ function RoutineRows({
         <tr className="routine-row-detail">
           <td />
           <td colSpan={7}>
-            {editing === undefined ? (
+            <div className="routine-tabs" role="tablist">
+              {(["history", "prompt"] as const).map((name) => (
+                <button
+                  aria-selected={tab === name}
+                  className="quiet"
+                  key={name}
+                  onClick={() => setTab(name)}
+                  role="tab"
+                  type="button"
+                >
+                  {name === "history" ? "History" : "Prompt"}
+                </button>
+              ))}
+            </div>
+            {tab === "history" ? (
+              <RoutineHistory
+                loadRuns={loadRuns}
+                now={now}
+                onMarkRead={onMarkRead}
+                onOpenRun={onOpenRun}
+                routine={routine}
+              />
+            ) : editing === undefined ? (
               <div className="routine-prompt">
                 <pre>{routine.prompt}</pre>
                 <div className="routine-prompt-actions">

@@ -6957,6 +6957,27 @@ button.routine-tick:hover {
 .routines-home-runs .routine-tick {
   height: 10px;
 }
+/* A routine's History has no routine or workspace column. */
+.routines-home-runs li > button[data-history="true"] {
+  grid-template-columns: 10px 80px 1fr;
+}
+.routine-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.routine-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.routine-tabs button {
+  padding: 2px 8px;
+}
+.routine-tabs button[aria-selected="true"] {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
 .routine-transcript {
   display: flex;
   flex-direction: column;

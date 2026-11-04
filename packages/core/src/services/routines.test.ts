@@ -363,7 +363,27 @@ describe("RoutineService", () => {
       await context.routines.runNow("certs");
       await settle();
       expect(context.repositories.routines.unseenRunIds()).toHaveLength(2);
-      expect(context.routines.markAllSeen()).toBe(2);
+      expect(context.routines.unseen(50).map((run) => run.summary)).toEqual([
+        "Disk at 91%.",
+        "Disk at 91%.",
+      ]);
+      // One routine's history and mark-read leave the other's runs alone.
+      const certs = context.routines.get("certs");
+      const history = context.routines.runs({
+        routineId: certs.id,
+        limit: 10,
+      });
+      expect(history.map((run) => run.routineId)).toEqual([certs.id]);
+      expect(
+        context.routines.runs({
+          routineId: certs.id,
+          limit: 10,
+          beforeId: history[0]!.id,
+        }),
+      ).toEqual([]);
+      expect(context.routines.markAllSeen("certs")).toBe(1);
+      expect(context.routines.view("disk").unseenRuns).toBe(1);
+      expect(context.routines.markAllSeen()).toBe(1);
       expect(context.repositories.routines.unseenRunIds()).toEqual([]);
       expect(context.routines.markAllSeen()).toBe(0);
     });
@@ -527,10 +547,10 @@ describe("RoutineService", () => {
         await Bun.file(join(home, "routine-runs", `${ids[0]}.jsonl`)).exists(),
       ).toBe(false);
       // Paging back from the newest ten.
-      const first = context.routines.runs(10);
-      expect(context.routines.runs(10, first.at(-1)!.id)[0]?.id).toBe(
-        first.at(-1)!.id - 1,
-      );
+      const first = context.routines.runs({ limit: 10 });
+      expect(
+        context.routines.runs({ limit: 10, beforeId: first.at(-1)!.id })[0]?.id,
+      ).toBe(first.at(-1)!.id - 1);
     });
   });
 

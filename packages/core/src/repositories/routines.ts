@@ -228,27 +228,24 @@ export class RoutineRepository {
     limit: number;
     beforeId?: number;
   }): RoutineRun[] {
-    if (filter.beforeId !== undefined)
-      return this.database
-        .query<RoutineRunRow, [number, number]>(
-          `SELECT * FROM workspace_routine_runs WHERE id < ?
-           ORDER BY id DESC LIMIT ?`,
-        )
-        .all(filter.beforeId, filter.limit)
-        .map(runFromRow);
-    const rows = filter.routineId
-      ? this.database
-          .query<RoutineRunRow, [string, number]>(
-            `SELECT * FROM workspace_routine_runs WHERE routine_id = ?
-             ORDER BY id DESC LIMIT ?`,
-          )
-          .all(filter.routineId, filter.limit)
-      : this.database
-          .query<RoutineRunRow, [number]>(
-            "SELECT * FROM workspace_routine_runs ORDER BY id DESC LIMIT ?",
-          )
-          .all(filter.limit);
-    return rows.map(runFromRow);
+    const where: string[] = [];
+    const values: Array<string | number> = [];
+    if (filter.routineId !== undefined) {
+      where.push("routine_id = ?");
+      values.push(filter.routineId);
+    }
+    if (filter.beforeId !== undefined) {
+      where.push("id < ?");
+      values.push(filter.beforeId);
+    }
+    return this.database
+      .query<RoutineRunRow, Array<string | number>>(
+        `SELECT * FROM workspace_routine_runs
+         ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+         ORDER BY id DESC LIMIT ?`,
+      )
+      .all(...values, filter.limit)
+      .map(runFromRow);
   }
 
   /**
@@ -278,6 +275,16 @@ export class RoutineRepository {
   }
 
   /** Finished runs the user has not opened yet, newest first. */
+  unseenRuns(limit: number): RoutineRun[] {
+    return this.database
+      .query<RoutineRunRow, [number]>(
+        `SELECT * FROM workspace_routine_runs WHERE ${UNSEEN}
+         ORDER BY id DESC LIMIT ?`,
+      )
+      .all(limit)
+      .map(runFromRow);
+  }
+
   unseenRunIds(): number[] {
     return this.database
       .query<{ id: number }, []>(
@@ -303,14 +310,21 @@ export class RoutineRepository {
     );
   }
 
-  /** Marks every finished, unread run read at `at`; returns how many. */
-  markAllSeen(at: string): number {
+  /**
+   * Marks every finished, unread run read at `at`, of one routine or of
+   * all; returns how many.
+   */
+  markAllSeen(at: string, routineId?: string): number {
+    if (routineId === undefined)
+      return this.database
+        .query(`UPDATE workspace_routine_runs SET seen_at = ? WHERE ${UNSEEN}`)
+        .run(at).changes;
     return this.database
       .query(
         `UPDATE workspace_routine_runs SET seen_at = ?
-         WHERE ${UNSEEN}`,
+         WHERE routine_id = ? AND ${UNSEEN}`,
       )
-      .run(at).changes;
+      .run(at, routineId).changes;
   }
 
   runningRuns(): RoutineRun[] {

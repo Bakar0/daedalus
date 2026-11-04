@@ -192,12 +192,21 @@ export class RoutineService {
     return found;
   }
 
-  /** Newest first; `beforeId` gives the page older than that run. */
-  runs(limit: number, beforeId?: number): RoutineRun[] {
-    return this.repositories.routines.listRuns({
-      limit,
-      ...(beforeId !== undefined ? { beforeId } : {}),
-    });
+  /**
+   * Newest first, of one routine or of all; `beforeId` gives the page older
+   * than that run.
+   */
+  runs(filter: {
+    limit: number;
+    beforeId?: number;
+    routineId?: string;
+  }): RoutineRun[] {
+    return this.repositories.routines.listRuns(filter);
+  }
+
+  /** Finished runs not opened yet, newest first, across every routine. */
+  unseen(limit: number): RoutineRun[] {
+    return this.repositories.routines.unseenRuns(limit);
   }
 
   /** Deletes runs past the newest `ROUTINE_RUNS_KEPT` of each routine. */
@@ -617,9 +626,12 @@ export class RoutineService {
     });
   }
 
-  /** Clears the unread count without opening each run. */
-  markAllSeen(): number {
-    return this.repositories.routines.markAllSeen(this.now().toISOString());
+  /** Clears the unread count, of one routine or of all, without opening each run. */
+  markAllSeen(routineId?: string): number {
+    return this.repositories.routines.markAllSeen(
+      this.now().toISOString(),
+      routineId === undefined ? undefined : this.get(routineId).id,
+    );
   }
 
   private runningCount(): number {
