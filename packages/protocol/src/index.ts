@@ -820,6 +820,8 @@ export interface RoutineRunDto {
   finishedAt: string | null;
   /** The last thing the agent said, or why the run failed or was skipped. */
   summary: string | null;
+  /** What a done run found; null for older runs and ones not done. */
+  outcome: "ok" | "attention" | null;
   workingDirectory: string;
   /** The session a continue made from this run. */
   continuedSessionId: string | null;

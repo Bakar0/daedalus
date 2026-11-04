@@ -6847,6 +6847,11 @@ dd {
 .routine-tick[data-tone="failed"] {
   background: var(--danger) !important;
 }
+/* Ran fine and found something a person must act on: the amber the session
+   dots use for an error that is not a crash. */
+.routine-tick[data-tone="attention"] {
+  background: #ffb454 !important;
+}
 .routine-tick[data-tone="skipped"] {
   background: transparent !important;
   outline: 1px dashed var(--muted);

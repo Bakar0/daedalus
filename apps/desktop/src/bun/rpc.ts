@@ -417,6 +417,7 @@ function routineRunDto(
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     summary: run.summary,
+    outcome: run.outcome,
     workingDirectory: run.workingDirectory,
     continuedSessionId: run.continuedSessionId,
     unseen: isUnseenRun(run),

@@ -29,6 +29,8 @@ export interface Routine {
 }
 
 export type RoutineRunStatus = "running" | "done" | "failed" | "skipped";
+/** What a done run found: nothing for a person, or something to act on. */
+export type RoutineRunOutcome = "ok" | "attention";
 export type RoutineTrigger = "schedule" | "manual";
 
 export interface RoutineRun {
@@ -43,6 +45,8 @@ export interface RoutineRun {
   finishedAt: string | null;
   /** The last thing the agent said, or why the run failed or was skipped. */
   summary: string | null;
+  /** Set when a run ends done, from its reply's OK: or ATTENTION: line. */
+  outcome: RoutineRunOutcome | null;
   /** The session a continue made from this run. */
   continuedSessionId: UUID | null;
   /** When the user opened the finished run; null is unread. */

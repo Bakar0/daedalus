@@ -9,8 +9,12 @@ A routine is a time and a prompt. While the Daedalus app is open, each run
 is a headless `claude -p` in the routine's workspace folder, or in the
 workspaces root for a routine on all workspaces. Nobody watches a run and
 nobody can answer it. Its last reply is its result, and the first line of
-that reply is what the Routines page shows. The user reads runs on the
-Routines page and can carry one on in a session.
+that reply is what the Routines page shows. Daedalus tells every run to
+start that line with `OK:` when nothing needs a person or `ATTENTION:` when
+something does. An ATTENTION run shows amber, counts toward the unread
+badge and sends an alert; an OK run shows green and does neither. A reply
+with neither word counts as ATTENTION. The user reads runs on the Routines
+page and can carry one on in a session.
 
 Use `"{{daedal}}"` for every command below, exactly that path. Below,
 `daedal` means that executable. Run `daedal routine --help` once for the
@@ -39,8 +43,13 @@ time and what the previous run said. Write the prompt for that reader:
 - Say exactly what to check, with the commands, paths and queries to use.
   A run cannot ask which service or which environment.
 - Say what counts as worth reporting and what is known noise to ignore.
-- Say what to put first in the reply. "Start your reply with the one thing
-  a person must act on, or 'All clear' when nothing needs anyone."
+- Say what counts as ATTENTION and what is OK. "ATTENTION when a pod is
+  crash-looping or a token has expired; OK for the known datalake-gateway
+  slow-query warnings." Daedalus already asks for the word; the prompt
+  decides which one fits.
+- Say whether a problem the previous run already reported is still
+  ATTENTION. An unresolved problem usually is; say so, or say to report it
+  OK as "unchanged" when the user only wants to hear what is new.
 - Say what the run must never do, such as restart, deploy, merge or
   delete, when the routine only looks.
 - Keep secrets out of the prompt. Use `daedal exec --secret <NAME> --

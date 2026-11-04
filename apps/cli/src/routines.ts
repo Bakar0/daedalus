@@ -111,11 +111,15 @@ function runId(value: string | undefined): number {
 const view = (context: ApplicationContext, routine: Routine): RoutineView =>
   context.routines.view(routine.id);
 
+/** "done", or "attention" for a done run that found something to act on. */
+const runState = (run: RoutineRun) =>
+  run.outcome === "attention" ? "attention" : run.status;
+
 const runLine = (run: RoutineRun, routineName: string) =>
   [
     run.id,
     routineName,
-    run.status,
+    runState(run),
     run.trigger === "manual" ? "run now" : "scheduled",
     localTime(run.startedAt),
     run.summary ?? "",
@@ -130,7 +134,7 @@ function routineLine(item: RoutineView): string {
     item.workspaceName ?? "All workspaces",
     item.scheduleText,
     `next ${routine.enabled && routine.nextRunAt ? localTime(routine.nextRunAt) : "—"}`,
-    `last ${last ? `${localTime(last.startedAt)} ${last.status}` : "never"}`,
+    `last ${last ? `${localTime(last.startedAt)} ${runState(last)}` : "never"}`,
   ].join("\t");
 }
 

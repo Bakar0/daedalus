@@ -31,6 +31,12 @@ export function countdown(iso: string | null, now: number): string {
   return `in ${minutes}m ${pad(seconds % 60)}s`;
 }
 
+/** A run's tick colour: its status, or "attention" for a done run that
+ * found something a person must act on. */
+function runTone(item: RoutineRunDto): string {
+  return item.outcome === "attention" ? "attention" : item.status;
+}
+
 /** "today 13:00", "Fri 09:00". */
 function clockTime(iso: string, now: number): string {
   const at = new Date(iso);
@@ -289,7 +295,10 @@ export function RoutinesHome({
                       onClick={() => setViewing(item.id)}
                       type="button"
                     >
-                      <span className="routine-tick" data-tone={item.status} />
+                      <span
+                        className="routine-tick"
+                        data-tone={runTone(item)}
+                      />
                       <time dateTime={item.startedAt}>
                         {relativeTime(item.startedAt, now)}
                       </time>
@@ -410,12 +419,12 @@ function RoutineRows({
           <span className="routine-ticks">
             {routine.recentRuns.map((item) => (
               <button
-                aria-label={`${item.status} ${clockTime(item.startedAt, now)}`}
+                aria-label={`${runTone(item)} ${clockTime(item.startedAt, now)}`}
                 className="routine-tick"
-                data-tone={item.status}
+                data-tone={runTone(item)}
                 key={item.id}
                 onClick={() => onOpenRun(item.id)}
-                title={`${clockTime(item.startedAt, now)} · ${item.summary ?? item.status}`}
+                title={`${clockTime(item.startedAt, now)} · ${item.summary || runTone(item)}`}
                 type="button"
               />
             ))}
@@ -424,7 +433,7 @@ function RoutineRows({
         <td className="routine-row-last routine-col-last">
           {last ? (
             <>
-              <span>{last.summary ?? last.status}</span>
+              <span>{last.summary || runTone(last)}</span>
               <small className="routine-row-muted">
                 {relativeTime(last.finishedAt ?? last.startedAt, now)}
               </small>
@@ -663,7 +672,7 @@ function RunView({
               <small>
                 Headless Claude,{" "}
                 {item.trigger === "manual" ? "Run now" : "on schedule"} ·{" "}
-                {item.status}
+                {runTone(item)}
                 {item.workingDirectory ? ` · in ${item.workingDirectory}` : ""}
               </small>
             </div>

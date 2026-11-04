@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type {
   Routine,
   RoutineRun,
+  RoutineRunOutcome,
   RoutineRunStatus,
   RoutineTrigger,
 } from "../domain";
@@ -31,6 +32,7 @@ interface RoutineRunRow {
   started_at: string;
   finished_at: string | null;
   summary: string | null;
+  outcome: RoutineRunOutcome | null;
   continued_session_id: string | null;
   seen_at: string | null;
   pid: number | null;
@@ -64,6 +66,7 @@ const runFromRow = (row: RoutineRunRow): RoutineRun => ({
   startedAt: row.started_at,
   finishedAt: row.finished_at,
   summary: row.summary,
+  outcome: row.outcome,
   continuedSessionId: row.continued_session_id,
   seenAt: row.seen_at,
   pid: row.pid,
@@ -170,8 +173,9 @@ export class RoutineRepository {
       .query<RoutineRunRow, (string | number | null)[]>(
         `INSERT INTO workspace_routine_runs
          (routine_id, trigger, status, provider_session_id, working_directory,
-          started_at, finished_at, summary, continued_session_id, seen_at, pid)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          started_at, finished_at, summary, outcome, continued_session_id,
+          seen_at, pid)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
       )
       .get(
         run.routineId,
@@ -182,6 +186,7 @@ export class RoutineRepository {
         run.startedAt,
         run.finishedAt,
         run.summary,
+        run.outcome,
         run.continuedSessionId,
         run.seenAt,
         run.pid,
@@ -193,13 +198,14 @@ export class RoutineRepository {
     this.database
       .query(
         `UPDATE workspace_routine_runs SET status = ?, finished_at = ?,
-         summary = ?, continued_session_id = ?, seen_at = ?, pid = ?
-         WHERE id = ?`,
+         summary = ?, outcome = ?, continued_session_id = ?, seen_at = ?,
+         pid = ? WHERE id = ?`,
       )
       .run(
         run.status,
         run.finishedAt,
         run.summary,
+        run.outcome,
         run.continuedSessionId,
         run.seenAt,
         run.pid,
