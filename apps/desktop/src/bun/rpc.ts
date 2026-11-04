@@ -441,6 +441,7 @@ function routineDto(
     nextRunAt: routine.nextRunAt,
     lastRunAt: routine.lastRunAt,
     recentRuns: view.recentRuns.map((run) => routineRunDto(context, run)),
+    unseenRuns: view.unseenRuns,
   };
 }
 
@@ -704,6 +705,8 @@ export function createDesktopRequestHandlers(
           entries: await context.routines.transcript(runId),
         };
       }),
+    routineMarkAllSeen: () =>
+      mutate(() => ({ count: context.routines.markAllSeen() })),
     routineContinue: ({ runId, workspaceId }) =>
       mutate(async () =>
         agentDto(await context.routines.continueRun(runId, workspaceId)),

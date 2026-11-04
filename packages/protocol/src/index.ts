@@ -844,6 +844,8 @@ export interface RoutineDto {
   lastRunAt: string | null;
   /** Oldest first, at most seven. */
   recentRuns: RoutineRunDto[];
+  /** Finished runs not opened yet, of any age. */
+  unseenRuns: number;
 }
 
 /** What the Routines page reads. */
@@ -1513,6 +1515,8 @@ export interface DesktopRpcSchema {
       routineDelete: Request<{ id: string }, { id: string }>;
       routineStart: Request<{ id: string }, RoutineRunDto>;
       routineTranscript: Request<{ runId: number }, RoutineTranscriptDto>;
+      /** Marks every finished run read; returns how many were unread. */
+      routineMarkAllSeen: Request<Record<string, never>, { count: number }>;
       /** Opens the run's conversation as a live session of its workspace. */
       /** `workspaceId` is where a run on all workspaces continues. */
       routineContinue: Request<

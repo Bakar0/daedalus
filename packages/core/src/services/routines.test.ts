@@ -297,6 +297,27 @@ describe("RoutineService", () => {
     );
   });
 
+  test("mark all read clears every finished run but not a running one", async () => {
+    const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
+    await withRoutines(fakeClaude("Disk at 91%."), clock, async (context) => {
+      await context.workspaces.create({ name: "Ops", slug: "ops" });
+      for (const name of ["disk", "certs"])
+        context.routines.add({
+          workspace: "ops",
+          when: "every day at 19:00",
+          prompt: `Check ${name}.`,
+          name,
+        });
+      await context.routines.runNow("disk");
+      await context.routines.runNow("certs");
+      await settle();
+      expect(context.repositories.routines.unseenRunIds()).toHaveLength(2);
+      expect(context.routines.markAllSeen()).toBe(2);
+      expect(context.repositories.routines.unseenRunIds()).toEqual([]);
+      expect(context.routines.markAllSeen()).toBe(0);
+    });
+  });
+
   test("a run on all workspaces continues in the workspace that is open", async () => {
     const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
     await withRoutines(fakeClaude("Freed 4 GB."), clock, async (context) => {

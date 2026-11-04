@@ -162,6 +162,7 @@ export function RoutinesHome({
   const workspaceOf = new Map(
     page.routines.map((item) => [item.id, item.workspaceName]),
   );
+  const unseen = page.routines.reduce((sum, item) => sum + item.unseenRuns, 0);
   return (
     <div className="workflows-tab">
       <p className="workflows-intro">
@@ -264,7 +265,22 @@ export function RoutinesHome({
           )}
           {runs.length > 0 && (
             <section className="ability-page-section">
-              <h3>Latest runs</h3>
+              <header className="routines-section-head">
+                <h3>Latest runs</h3>
+                {unseen > 0 && (
+                  <div>
+                    <button
+                      className="quiet"
+                      onClick={() =>
+                        void act(client.request.routineMarkAllSeen({}))
+                      }
+                      type="button"
+                    >
+                      Mark all read ({unseen})
+                    </button>
+                  </div>
+                )}
+              </header>
               <ul className="routine-runs routines-home-runs">
                 {runs.map((item) => (
                   <li key={item.id}>
@@ -277,7 +293,16 @@ export function RoutinesHome({
                       <time dateTime={item.startedAt}>
                         {relativeTime(item.startedAt, now)}
                       </time>
-                      <strong>{item.routineName}</strong>
+                      <strong>
+                        {item.routineName}
+                        {item.unseen && (
+                          <span
+                            aria-label="unread"
+                            className="routine-unread-dot"
+                            role="img"
+                          />
+                        )}
+                      </strong>
                       <span className="routine-row-muted routine-run-workspace">
                         {workspaceOf.get(item.routineId) ?? "All workspaces"}
                       </span>
@@ -362,6 +387,14 @@ function RoutineRows({
                 {routine.workspaceName ?? "All workspaces"}
               </small>
             </span>
+            {routine.unseenRuns > 0 && (
+              <span
+                className="routine-unread-count"
+                title={`${routine.unseenRuns} finished ${routine.unseenRuns === 1 ? "run" : "runs"} not opened yet`}
+              >
+                {routine.unseenRuns} new
+              </span>
+            )}
           </button>
         </td>
         <td className="routine-row-workspace routine-col-workspace">

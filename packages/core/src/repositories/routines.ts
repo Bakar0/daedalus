@@ -36,6 +36,9 @@ interface RoutineRunRow {
   pid: number | null;
 }
 
+/** A finished run the user has not opened; `isUnseenRun` in SQL. */
+const UNSEEN = "seen_at IS NULL AND status IN ('done', 'failed')";
+
 const routineFromRow = (row: RoutineRow): Routine => ({
   id: row.id,
   name: row.name,
@@ -273,11 +276,35 @@ export class RoutineRepository {
     return this.database
       .query<{ id: number }, []>(
         `SELECT id FROM workspace_routine_runs
-         WHERE seen_at IS NULL AND status IN ('done', 'failed')
+         WHERE ${UNSEEN}
          ORDER BY id DESC`,
       )
       .all()
       .map((row) => row.id);
+  }
+
+  /** How many finished runs each routine has that the user has not opened. */
+  unseenCounts(): Map<string, number> {
+    return new Map(
+      this.database
+        .query<{ routine_id: string; count: number }, []>(
+          `SELECT routine_id, COUNT(*) AS count FROM workspace_routine_runs
+           WHERE ${UNSEEN}
+           GROUP BY routine_id`,
+        )
+        .all()
+        .map((row) => [row.routine_id, row.count]),
+    );
+  }
+
+  /** Marks every finished, unread run read at `at`; returns how many. */
+  markAllSeen(at: string): number {
+    return this.database
+      .query(
+        `UPDATE workspace_routine_runs SET seen_at = ?
+         WHERE ${UNSEEN}`,
+      )
+      .run(at).changes;
   }
 
   runningRuns(): RoutineRun[] {

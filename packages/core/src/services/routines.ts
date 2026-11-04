@@ -101,6 +101,8 @@ export interface RoutineView {
   workspaceName: string | null;
   scheduleText: string;
   recentRuns: RoutineRun[];
+  /** Finished runs the user has not opened, of any age. */
+  unseenRuns: number;
 }
 
 export interface RoutineTranscriptEntry {
@@ -166,6 +168,7 @@ export class RoutineService {
   }
 
   list(): RoutineView[] {
+    const unseen = this.repositories.routines.unseenCounts();
     return this.repositories.routines.list().map((routine) => ({
       routine,
       workspaceName: routine.workspaceId
@@ -175,6 +178,7 @@ export class RoutineService {
       recentRuns: this.repositories.routines
         .listRuns({ routineId: routine.id, limit: RECENT_RUNS })
         .reverse(),
+      unseenRuns: unseen.get(routine.id) ?? 0,
     }));
   }
 
@@ -598,6 +602,11 @@ export class RoutineService {
       ...run,
       seenAt: this.now().toISOString(),
     });
+  }
+
+  /** Clears the unread count without opening each run. */
+  markAllSeen(): number {
+    return this.repositories.routines.markAllSeen(this.now().toISOString());
   }
 
   private runningCount(): number {
