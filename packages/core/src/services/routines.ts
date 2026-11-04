@@ -7,6 +7,7 @@ import type {
   AgentSession,
   Routine,
   RoutineRun,
+  RoutineRunOutcome,
   RoutineTrigger,
 } from "../domain";
 import { DaedalusError } from "../errors";
@@ -101,6 +102,8 @@ export interface RoutineView {
   workspaceName: string | null;
   scheduleText: string;
   recentRuns: RoutineRun[];
+  /** Finished runs the user has not opened, of any age. */
+  unseenRuns: number;
 }
 
 export interface RoutineTranscriptEntry {
@@ -166,6 +169,7 @@ export class RoutineService {
   }
 
   list(): RoutineView[] {
+    const unseen = this.repositories.routines.unseenCounts();
     return this.repositories.routines.list().map((routine) => ({
       routine,
       workspaceName: routine.workspaceId
@@ -175,6 +179,7 @@ export class RoutineService {
       recentRuns: this.repositories.routines
         .listRuns({ routineId: routine.id, limit: RECENT_RUNS })
         .reverse(),
+      unseenRuns: unseen.get(routine.id) ?? 0,
     }));
   }
 
@@ -187,12 +192,21 @@ export class RoutineService {
     return found;
   }
 
-  /** Newest first; `beforeId` gives the page older than that run. */
-  runs(limit: number, beforeId?: number): RoutineRun[] {
-    return this.repositories.routines.listRuns({
-      limit,
-      ...(beforeId !== undefined ? { beforeId } : {}),
-    });
+  /**
+   * Newest first, of one routine or of all; `beforeId` gives the page older
+   * than that run.
+   */
+  runs(filter: {
+    limit: number;
+    beforeId?: number;
+    routineId?: string;
+  }): RoutineRun[] {
+    return this.repositories.routines.listRuns(filter);
+  }
+
+  /** Finished runs not opened yet, newest first, across every routine. */
+  unseen(limit: number): RoutineRun[] {
+    return this.repositories.routines.unseenRuns(limit);
   }
 
   /** Deletes runs past the newest `ROUTINE_RUNS_KEPT` of each routine. */
@@ -461,6 +475,7 @@ export class RoutineService {
       startedAt: now.toISOString(),
       finishedAt: null,
       summary: null,
+      outcome: null,
       continuedSessionId: null,
       seenAt: null,
       pid: null,
@@ -527,9 +542,10 @@ export class RoutineService {
     const entries = await this.transcript(runId).catch(() => []);
     const result = entries.findLast((entry) => entry.kind === "result");
     const error = entries.findLast((entry) => entry.kind === "error");
-    if (result && (code === 0 || code === null))
-      this.finish(current, "done", lastLine(result.text));
-    else
+    if (result && (code === 0 || code === null)) {
+      const { outcome, summary } = readOutcome(lastLine(result.text));
+      this.finish(current, "done", summary, outcome);
+    } else
       this.finish(
         current,
         "failed",
@@ -557,6 +573,7 @@ export class RoutineService {
       startedAt: now,
       finishedAt: now,
       summary: reason,
+      outcome: null,
       continuedSessionId: null,
       // Nothing ran, so there is nothing to read.
       seenAt: now,
@@ -568,20 +585,29 @@ export class RoutineService {
     run: RoutineRun,
     status: "done" | "failed",
     summary: string,
+    outcome: RoutineRunOutcome | null = null,
   ): void {
+    const now = this.now().toISOString();
+    // A run that found nothing for a person is read already: it neither
+    // counts toward the sidebar badge nor sends an alert.
+    const quiet = outcome === "ok";
     this.repositories.routines.updateRun({
       ...run,
       status,
       summary,
-      finishedAt: this.now().toISOString(),
+      outcome,
+      finishedAt: now,
+      seenAt: quiet ? now : run.seenAt,
     });
     const routine = this.repositories.routines.find(run.routineId);
-    if (!routine) return;
+    if (!routine || quiet) return;
     void this.notify({
       workspaceId: routine.workspaceId,
-      level: status === "failed" ? "error" : "success",
+      level: status === "failed" ? "error" : "info",
       title:
-        status === "failed" ? `${routine.name} failed` : `${routine.name} ran`,
+        status === "failed"
+          ? `${routine.name} failed`
+          : `${routine.name} needs attention`,
       subtitle: routine.workspaceId
         ? (this.repositories.findWorkspace(routine.workspaceId)?.name ??
           "Routines")
@@ -598,6 +624,14 @@ export class RoutineService {
       ...run,
       seenAt: this.now().toISOString(),
     });
+  }
+
+  /** Clears the unread count, of one routine or of all, without opening each run. */
+  markAllSeen(routineId?: string): number {
+    return this.repositories.routines.markAllSeen(
+      this.now().toISOString(),
+      routineId === undefined ? undefined : this.get(routineId).id,
+    );
   }
 
   private runningCount(): number {
@@ -679,13 +713,33 @@ function runPrompt(
 ): string {
   const lines = [
     `This is a scheduled run of the routine "${routine.name}" (${describeSchedule(routine.schedule)}), started by Daedalus at ${now.toLocaleString("en-GB")}.`,
-    "Nobody is watching live and nobody can answer a question or a permission prompt. Do the work, then end with a short reply whose first line is the most important thing you found or did.",
+    "Nobody is watching live and nobody can answer a question or a permission prompt. Do the work, then end with a short reply whose first line starts with `OK:` when nothing needs a person, or `ATTENTION:` when something does, followed by the most important thing you found or did. Daedalus reads that word: an ATTENTION run is flagged to the user, an OK run is not, and a reply with neither counts as ATTENTION.",
   ];
   if (previous?.finishedAt && previous.summary)
     lines.push(
-      `The previous run ended ${new Date(previous.finishedAt).toLocaleString("en-GB")} and said: ${previous.summary}`,
+      `The previous run ended ${new Date(previous.finishedAt).toLocaleString("en-GB")} and said: ${previous.outcome ? `${previous.outcome.toUpperCase()}: ` : ""}${previous.summary}`,
     );
   return `${lines.join("\n")}\n\n${routine.prompt}`;
+}
+
+/**
+ * Splits a done run's first line into its outcome and the summary after it.
+ * The word may sit inside markdown, as in `**ATTENTION:** …`. A line with
+ * neither word counts as attention, so a reply that forgot it is never
+ * shown as all clear.
+ */
+export function readOutcome(line: string): {
+  outcome: RoutineRunOutcome;
+  summary: string;
+} {
+  const match = /^[\s*_`#>]*(OK|ATTENTION)\b[*_`]*\s*[:\-–—][*_`\s]*/i.exec(
+    line,
+  );
+  if (!match) return { outcome: "attention", summary: line };
+  return {
+    outcome: match[1]!.toUpperCase() === "OK" ? "ok" : "attention",
+    summary: line.slice(match[0].length).trim(),
+  };
 }
 
 function lastLine(text: string): string {

@@ -6682,13 +6682,34 @@ dd {
   margin-left: auto;
   padding: 0 6px;
 }
-/* A run nobody opened yet reads brighter than the rest. */
+/* A run nobody opened yet has an accent bar and a dot, and reads brighter.
+   Weight alone was not enough: summaries often carry their own bold. */
+.routines-home-runs li > button[data-unseen="true"] {
+  box-shadow: inset 2px 0 var(--accent) !important;
+}
 .routines-home-runs button[data-unseen="true"] strong,
 .routines-home-runs button[data-unseen="true"] .routine-run-summary {
   color: var(--text);
 }
-.routines-home-runs button[data-unseen="true"] .routine-run-summary {
+.routine-unread-dot {
+  background: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  height: 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+  width: 6px;
+}
+/* The routine's own unread runs, beside its name in the table. */
+.routine-unread-count {
+  background: var(--accent-wash);
+  border-radius: 999px;
+  color: var(--accent);
+  flex: none;
+  font-size: 10px;
   font-weight: 600;
+  line-height: 16px;
+  padding: 0 6px;
 }
 .sidebar-routines-link svg {
   fill: none;
@@ -6826,6 +6847,11 @@ dd {
 .routine-tick[data-tone="failed"] {
   background: var(--danger) !important;
 }
+/* Ran fine and found something a person must act on: the amber the session
+   dots use for an error that is not a crash. */
+.routine-tick[data-tone="attention"] {
+  background: #ffb454 !important;
+}
 .routine-tick[data-tone="skipped"] {
   background: transparent !important;
   outline: 1px dashed var(--muted);
@@ -6930,6 +6956,27 @@ button.routine-tick:hover {
 }
 .routines-home-runs .routine-tick {
   height: 10px;
+}
+/* A routine's History has no routine or workspace column. */
+.routines-home-runs li > button[data-history="true"] {
+  grid-template-columns: 10px 80px 1fr;
+}
+.routine-history {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.routine-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.routine-tabs button {
+  padding: 2px 8px;
+}
+.routine-tabs button[aria-selected="true"] {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
 }
 .routine-transcript {
   display: flex;

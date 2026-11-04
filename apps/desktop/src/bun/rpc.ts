@@ -417,6 +417,7 @@ function routineRunDto(
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
     summary: run.summary,
+    outcome: run.outcome,
     workingDirectory: run.workingDirectory,
     continuedSessionId: run.continuedSessionId,
     unseen: isUnseenRun(run),
@@ -441,19 +442,20 @@ function routineDto(
     nextRunAt: routine.nextRunAt,
     lastRunAt: routine.lastRunAt,
     recentRuns: view.recentRuns.map((run) => routineRunDto(context, run)),
+    unseenRuns: view.unseenRuns,
   };
 }
 
-/** Runs the Routines page shows before "Show older". */
-const LATEST_RUNS = 10;
+/** Unread runs the Routines page lists; the badges count the rest. */
+const UNREAD_RUNS = 50;
 
 /** One page of runs, asking for one more to know whether older ones exist. */
 function runsPage(
   context: ApplicationContext,
-  limit: number,
-  beforeId?: number,
+  filter: { routineId: string; limit: number; beforeId?: number },
 ): { runs: RoutineRunDto[]; moreRuns: boolean } {
-  const runs = context.routines.runs(limit + 1, beforeId);
+  const { limit } = filter;
+  const runs = context.routines.runs({ ...filter, limit: limit + 1 });
   return {
     runs: runs.slice(0, limit).map((run) => routineRunDto(context, run)),
     moreRuns: runs.length > limit,
@@ -659,10 +661,18 @@ export function createDesktopRequestHandlers(
         routines: context.routines
           .list()
           .map((view) => routineDto(context, view)),
-        ...runsPage(context, LATEST_RUNS),
+        unread: context.routines
+          .unseen(UNREAD_RUNS)
+          .map((run) => routineRunDto(context, run)),
       })),
-    routineRuns: ({ beforeId, limit }) =>
-      result(() => runsPage(context, limit, beforeId)),
+    routineRuns: ({ routineId, beforeId, limit }) =>
+      result(() =>
+        runsPage(context, {
+          routineId,
+          limit,
+          ...(beforeId !== undefined ? { beforeId } : {}),
+        }),
+      ),
     routineParseWhen: ({ when }) =>
       result(() => {
         const schedule = parseWhen(when);
@@ -704,6 +714,8 @@ export function createDesktopRequestHandlers(
           entries: await context.routines.transcript(runId),
         };
       }),
+    routineMarkAllSeen: ({ routineId }) =>
+      mutate(() => ({ count: context.routines.markAllSeen(routineId) })),
     routineContinue: ({ runId, workspaceId }) =>
       mutate(async () =>
         agentDto(await context.routines.continueRun(runId, workspaceId)),

@@ -7,6 +7,7 @@ import {
   describeSchedule,
   parseTranscript,
   parseWhen,
+  readOutcome,
   ROUTINE_RUN_SYSTEM_PROMPT,
   type ApplicationContext,
   type RoutineSpawner,
@@ -72,6 +73,26 @@ test("parseTranscript keeps text, tools and the result once", () => {
     { kind: "tool", text: "Bash ls -la" },
     { kind: "result", text: "All green.\nDetails." },
   ]);
+});
+
+describe("readOutcome", () => {
+  test.each([
+    ["OK: Quiet run.", "ok", "Quiet run."],
+    ["ok - nothing new", "ok", "nothing new"],
+    ["ATTENTION: SSO token expired.", "attention", "SSO token expired."],
+    [
+      "**ATTENTION:** kubectl can't reach stg",
+      "attention",
+      "kubectl can't reach stg",
+    ],
+    ["**OK**: All clear", "ok", "All clear"],
+    // No word: never shown as all clear.
+    ["Ingest lag in prod-eu.", "attention", "Ingest lag in prod-eu."],
+    ["Okay, nothing found.", "attention", "Okay, nothing found."],
+    ["OK.", "attention", "OK."],
+  ])("%s", (line, outcome, summary) => {
+    expect(readOutcome(line)).toEqual({ outcome, summary });
+  });
 });
 
 class NoTmux {
@@ -216,12 +237,13 @@ describe("RoutineService", () => {
         expect(calls[0]).toContain("--permission-prompts");
         expect(calls[0]).toContain(ROUTINE_RUN_SYSTEM_PROMPT);
         expect(calls[0]![1]).toContain("Check env health.");
+        expect(calls[0]![1]).toContain("`OK:`");
 
         await settle();
         const [view] = context.routines.list();
         expect(
-          view!.recentRuns.map((run) => [run.status, run.summary]),
-        ).toEqual([["done", "Ingest lag in prod-eu."]]);
+          view!.recentRuns.map((run) => [run.status, run.outcome, run.summary]),
+        ).toEqual([["done", "attention", "Ingest lag in prod-eu."]]);
         expect(view!.routine.nextRunAt).toBe(
           new Date(2026, 9, 28, 16, 0, 0).toISOString(),
         );
@@ -235,7 +257,9 @@ describe("RoutineService", () => {
         // The next run is told what this one said.
         clock.now = new Date(2026, 9, 28, 16, 0, 1);
         await context.routines.tick();
-        expect(calls[1]![1]).toContain("said: Ingest lag in prod-eu.");
+        expect(calls[1]![1]).toContain(
+          "said: ATTENTION: Ingest lag in prod-eu.",
+        );
         await settle();
       },
     );
@@ -268,6 +292,33 @@ describe("RoutineService", () => {
     // Two sessions start, which takes seconds on a loaded machine.
   }, 20_000);
 
+  test("an OK run is read already and sends no alert", async () => {
+    const clock = {
+      now: new Date(2026, 9, 28, 12, 0, 0),
+      notes: [] as Array<{ title: string; body: string }>,
+    };
+    await withRoutines(
+      fakeClaude("OK: Quiet run, nothing needs a person."),
+      clock,
+      async (context) => {
+        await context.workspaces.create({ name: "Ops", slug: "ops" });
+        context.routines.add({
+          workspace: "ops",
+          when: "every day at 19:00",
+          prompt: "Check env health.",
+          name: "health",
+        });
+        const run = await context.routines.runNow("health");
+        await settle();
+        const done = context.repositories.routines.findRun(run.id);
+        expect(done?.outcome).toBe("ok");
+        expect(done?.summary).toBe("Quiet run, nothing needs a person.");
+        expect(context.repositories.routines.unseenRunIds()).toEqual([]);
+        expect(clock.notes).toEqual([]);
+      },
+    );
+  });
+
   test("a finished run is unread and notifies until it is opened", async () => {
     const clock = {
       now: new Date(2026, 9, 28, 12, 0, 0),
@@ -288,13 +339,54 @@ describe("RoutineService", () => {
         expect(context.repositories.routines.unseenRunIds()).toEqual([]);
         await settle();
         expect(clock.notes).toEqual([
-          { title: "health ran", body: "Ingest lag in prod-eu." },
+          { title: "health needs attention", body: "Ingest lag in prod-eu." },
         ]);
         expect(context.repositories.routines.unseenRunIds()).toEqual([run.id]);
         context.routines.markSeen(run.id);
         expect(context.repositories.routines.unseenRunIds()).toEqual([]);
       },
     );
+  });
+
+  test("mark all read clears every finished run but not a running one", async () => {
+    const clock = { now: new Date(2026, 9, 28, 12, 0, 0) };
+    await withRoutines(fakeClaude("Disk at 91%."), clock, async (context) => {
+      await context.workspaces.create({ name: "Ops", slug: "ops" });
+      for (const name of ["disk", "certs"])
+        context.routines.add({
+          workspace: "ops",
+          when: "every day at 19:00",
+          prompt: `Check ${name}.`,
+          name,
+        });
+      await context.routines.runNow("disk");
+      await context.routines.runNow("certs");
+      await settle();
+      expect(context.repositories.routines.unseenRunIds()).toHaveLength(2);
+      expect(context.routines.unseen(50).map((run) => run.summary)).toEqual([
+        "Disk at 91%.",
+        "Disk at 91%.",
+      ]);
+      // One routine's history and mark-read leave the other's runs alone.
+      const certs = context.routines.get("certs");
+      const history = context.routines.runs({
+        routineId: certs.id,
+        limit: 10,
+      });
+      expect(history.map((run) => run.routineId)).toEqual([certs.id]);
+      expect(
+        context.routines.runs({
+          routineId: certs.id,
+          limit: 10,
+          beforeId: history[0]!.id,
+        }),
+      ).toEqual([]);
+      expect(context.routines.markAllSeen("certs")).toBe(1);
+      expect(context.routines.view("disk").unseenRuns).toBe(1);
+      expect(context.routines.markAllSeen()).toBe(1);
+      expect(context.repositories.routines.unseenRunIds()).toEqual([]);
+      expect(context.routines.markAllSeen()).toBe(0);
+    });
   });
 
   test("a run on all workspaces continues in the workspace that is open", async () => {
@@ -385,6 +477,7 @@ describe("RoutineService", () => {
           startedAt: clock.now.toISOString(),
           finishedAt: null,
           summary: null,
+          outcome: null,
           continuedSessionId: null,
           seenAt: null,
           pid,
@@ -407,6 +500,8 @@ describe("RoutineService", () => {
       expect(context.repositories.routines.findRun(ended.id)).toMatchObject({
         status: "done",
         summary: "All green.",
+        // No OK: word, so it is not taken as all clear.
+        outcome: "attention",
       });
     });
   });
@@ -432,6 +527,7 @@ describe("RoutineService", () => {
           startedAt: clock.now.toISOString(),
           finishedAt: clock.now.toISOString(),
           summary: `Run ${index}.`,
+          outcome: "ok",
           continuedSessionId: null,
           // The second run is never opened.
           seenAt: index === 1 ? null : clock.now.toISOString(),
@@ -451,10 +547,10 @@ describe("RoutineService", () => {
         await Bun.file(join(home, "routine-runs", `${ids[0]}.jsonl`)).exists(),
       ).toBe(false);
       // Paging back from the newest ten.
-      const first = context.routines.runs(10);
-      expect(context.routines.runs(10, first.at(-1)!.id)[0]?.id).toBe(
-        first.at(-1)!.id - 1,
-      );
+      const first = context.routines.runs({ limit: 10 });
+      expect(
+        context.routines.runs({ limit: 10, beforeId: first.at(-1)!.id })[0]?.id,
+      ).toBe(first.at(-1)!.id - 1);
     });
   });
 

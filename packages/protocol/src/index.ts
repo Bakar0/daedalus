@@ -820,6 +820,8 @@ export interface RoutineRunDto {
   finishedAt: string | null;
   /** The last thing the agent said, or why the run failed or was skipped. */
   summary: string | null;
+  /** What a done run found; null for older runs and ones not done. */
+  outcome: "ok" | "attention" | null;
   workingDirectory: string;
   /** The session a continue made from this run. */
   continuedSessionId: string | null;
@@ -844,15 +846,18 @@ export interface RoutineDto {
   lastRunAt: string | null;
   /** Oldest first, at most seven. */
   recentRuns: RoutineRunDto[];
+  /** Finished runs not opened yet, of any age. */
+  unseenRuns: number;
 }
 
 /** What the Routines page reads. */
 export interface RoutinesPageDto {
   routines: RoutineDto[];
-  /** The newest runs across every routine, newest first. */
-  runs: RoutineRunDto[];
-  /** Older runs exist; `routineRuns` pages back through them. */
-  moreRuns: boolean;
+  /**
+   * Finished runs not opened yet, across every routine, newest first. Each
+   * routine's full history is `routineRuns` with its id.
+   */
+  unread: RoutineRunDto[];
 }
 
 export interface RoutineTranscriptDto {
@@ -1480,9 +1485,9 @@ export interface DesktopRpcSchema {
         SessionAbilityDto
       >;
       routinesPage: Request<Record<string, never>, RoutinesPageDto>;
-      /** Runs older than `beforeId`, newest first. */
+      /** One routine's runs, newest first; `beforeId` pages back. */
       routineRuns: Request<
-        { beforeId: number; limit: number },
+        { routineId: string; beforeId?: number; limit: number },
         { runs: RoutineRunDto[]; moreRuns: boolean }
       >;
       /** Reads "weekdays 9:00" into a stored schedule and its words, for the form. */
@@ -1513,6 +1518,8 @@ export interface DesktopRpcSchema {
       routineDelete: Request<{ id: string }, { id: string }>;
       routineStart: Request<{ id: string }, RoutineRunDto>;
       routineTranscript: Request<{ runId: number }, RoutineTranscriptDto>;
+      /** Marks finished runs read, of one routine or of all; returns how many. */
+      routineMarkAllSeen: Request<{ routineId?: string }, { count: number }>;
       /** Opens the run's conversation as a live session of its workspace. */
       /** `workspaceId` is where a run on all workspaces continues. */
       routineContinue: Request<

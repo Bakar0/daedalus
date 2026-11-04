@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type {
   Routine,
   RoutineRun,
+  RoutineRunOutcome,
   RoutineRunStatus,
   RoutineTrigger,
 } from "../domain";
@@ -31,10 +32,14 @@ interface RoutineRunRow {
   started_at: string;
   finished_at: string | null;
   summary: string | null;
+  outcome: RoutineRunOutcome | null;
   continued_session_id: string | null;
   seen_at: string | null;
   pid: number | null;
 }
+
+/** A finished run the user has not opened; `isUnseenRun` in SQL. */
+const UNSEEN = "seen_at IS NULL AND status IN ('done', 'failed')";
 
 const routineFromRow = (row: RoutineRow): Routine => ({
   id: row.id,
@@ -61,6 +66,7 @@ const runFromRow = (row: RoutineRunRow): RoutineRun => ({
   startedAt: row.started_at,
   finishedAt: row.finished_at,
   summary: row.summary,
+  outcome: row.outcome,
   continuedSessionId: row.continued_session_id,
   seenAt: row.seen_at,
   pid: row.pid,
@@ -167,8 +173,9 @@ export class RoutineRepository {
       .query<RoutineRunRow, (string | number | null)[]>(
         `INSERT INTO workspace_routine_runs
          (routine_id, trigger, status, provider_session_id, working_directory,
-          started_at, finished_at, summary, continued_session_id, seen_at, pid)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          started_at, finished_at, summary, outcome, continued_session_id,
+          seen_at, pid)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
       )
       .get(
         run.routineId,
@@ -179,6 +186,7 @@ export class RoutineRepository {
         run.startedAt,
         run.finishedAt,
         run.summary,
+        run.outcome,
         run.continuedSessionId,
         run.seenAt,
         run.pid,
@@ -190,13 +198,14 @@ export class RoutineRepository {
     this.database
       .query(
         `UPDATE workspace_routine_runs SET status = ?, finished_at = ?,
-         summary = ?, continued_session_id = ?, seen_at = ?, pid = ?
-         WHERE id = ?`,
+         summary = ?, outcome = ?, continued_session_id = ?, seen_at = ?,
+         pid = ? WHERE id = ?`,
       )
       .run(
         run.status,
         run.finishedAt,
         run.summary,
+        run.outcome,
         run.continuedSessionId,
         run.seenAt,
         run.pid,
@@ -219,27 +228,24 @@ export class RoutineRepository {
     limit: number;
     beforeId?: number;
   }): RoutineRun[] {
-    if (filter.beforeId !== undefined)
-      return this.database
-        .query<RoutineRunRow, [number, number]>(
-          `SELECT * FROM workspace_routine_runs WHERE id < ?
-           ORDER BY id DESC LIMIT ?`,
-        )
-        .all(filter.beforeId, filter.limit)
-        .map(runFromRow);
-    const rows = filter.routineId
-      ? this.database
-          .query<RoutineRunRow, [string, number]>(
-            `SELECT * FROM workspace_routine_runs WHERE routine_id = ?
-             ORDER BY id DESC LIMIT ?`,
-          )
-          .all(filter.routineId, filter.limit)
-      : this.database
-          .query<RoutineRunRow, [number]>(
-            "SELECT * FROM workspace_routine_runs ORDER BY id DESC LIMIT ?",
-          )
-          .all(filter.limit);
-    return rows.map(runFromRow);
+    const where: string[] = [];
+    const values: Array<string | number> = [];
+    if (filter.routineId !== undefined) {
+      where.push("routine_id = ?");
+      values.push(filter.routineId);
+    }
+    if (filter.beforeId !== undefined) {
+      where.push("id < ?");
+      values.push(filter.beforeId);
+    }
+    return this.database
+      .query<RoutineRunRow, Array<string | number>>(
+        `SELECT * FROM workspace_routine_runs
+         ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+         ORDER BY id DESC LIMIT ?`,
+      )
+      .all(...values, filter.limit)
+      .map(runFromRow);
   }
 
   /**
@@ -269,15 +275,56 @@ export class RoutineRepository {
   }
 
   /** Finished runs the user has not opened yet, newest first. */
+  unseenRuns(limit: number): RoutineRun[] {
+    return this.database
+      .query<RoutineRunRow, [number]>(
+        `SELECT * FROM workspace_routine_runs WHERE ${UNSEEN}
+         ORDER BY id DESC LIMIT ?`,
+      )
+      .all(limit)
+      .map(runFromRow);
+  }
+
   unseenRunIds(): number[] {
     return this.database
       .query<{ id: number }, []>(
         `SELECT id FROM workspace_routine_runs
-         WHERE seen_at IS NULL AND status IN ('done', 'failed')
+         WHERE ${UNSEEN}
          ORDER BY id DESC`,
       )
       .all()
       .map((row) => row.id);
+  }
+
+  /** How many finished runs each routine has that the user has not opened. */
+  unseenCounts(): Map<string, number> {
+    return new Map(
+      this.database
+        .query<{ routine_id: string; count: number }, []>(
+          `SELECT routine_id, COUNT(*) AS count FROM workspace_routine_runs
+           WHERE ${UNSEEN}
+           GROUP BY routine_id`,
+        )
+        .all()
+        .map((row) => [row.routine_id, row.count]),
+    );
+  }
+
+  /**
+   * Marks every finished, unread run read at `at`, of one routine or of
+   * all; returns how many.
+   */
+  markAllSeen(at: string, routineId?: string): number {
+    if (routineId === undefined)
+      return this.database
+        .query(`UPDATE workspace_routine_runs SET seen_at = ? WHERE ${UNSEEN}`)
+        .run(at).changes;
+    return this.database
+      .query(
+        `UPDATE workspace_routine_runs SET seen_at = ?
+         WHERE routine_id = ? AND ${UNSEEN}`,
+      )
+      .run(at, routineId).changes;
   }
 
   runningRuns(): RoutineRun[] {
