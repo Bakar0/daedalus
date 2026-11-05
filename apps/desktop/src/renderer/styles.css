@@ -6682,11 +6682,8 @@ dd {
   margin-left: auto;
   padding: 0 6px;
 }
-/* A run nobody opened yet has an accent bar and a dot, and reads brighter.
-   Weight alone was not enough: summaries often carry their own bold. */
-.routines-home-runs li > button[data-unseen="true"] {
-  box-shadow: inset 2px 0 var(--accent) !important;
-}
+/* A run nobody opened yet has a dot and reads brighter. Weight alone was
+   not enough: summaries often carry their own bold. */
 .routines-home-runs button[data-unseen="true"] strong,
 .routines-home-runs button[data-unseen="true"] .routine-run-summary {
   color: var(--text);
@@ -6959,7 +6956,11 @@ button.routine-tick:hover {
 }
 /* A routine's History has no routine or workspace column. */
 .routines-home-runs li > button[data-history="true"] {
-  grid-template-columns: 10px 80px 1fr;
+  grid-template-columns: 10px 96px 1fr;
+}
+/* The unread dot sits after the time; it never wraps under it. */
+.routines-home-runs time {
+  white-space: nowrap;
 }
 .routine-history {
   display: flex;
