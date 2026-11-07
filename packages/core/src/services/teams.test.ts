@@ -916,7 +916,7 @@ describe("teams", () => {
     });
   });
 
-  test("the lead hears when a member needs the user or stops", async () => {
+  test("the lead reads when a member needs the user, and hears when it stops", async () => {
     await withTeams(async ({ context, transport }) => {
       const { session: leader, team } = await lead(context);
       const server = await context.teams.spawnMember({
@@ -925,16 +925,16 @@ describe("teams", () => {
         name: "server",
         instructions: "Server.",
       });
+      // The member's card already tells the user; the note waits in the
+      // chat and wakes nobody, so the lead does not repeat it to the user.
       await context.activity.raise({
         sessionId: server.session.id,
         reason: "Which database should I use?",
       });
-      const [asked] = transport.to(leader);
-      expect(asked!.text).toBe(
-        '[team "Checkout API"] 1 new message for you from daedalus. Read it with: daedal team chat --tagged',
-      );
+      expect(transport.to(leader)).toHaveLength(0);
+      expect(transport.to(server.session)).toHaveLength(0);
       expect(readChat(context, team.id, "lead")).toBe(
-        "daedalus: @lead @server needs the user: Which database should I use?",
+        "daedalus: @server needs the user: Which database should I use?",
       );
       // A permission prompt goes to the user only; the lead is not woken.
       await context.activity.record({
@@ -943,10 +943,13 @@ describe("teams", () => {
         detail: "Bash(git push)",
         source: "hook",
       });
-      expect(transport.to(leader)).toHaveLength(1);
+      expect(transport.to(leader)).toHaveLength(0);
       // Archiving a running member stops it first; the lead hears once.
       await context.agents.archive(server.session.id, true);
-      expect(transport.to(leader)).toHaveLength(2);
+      const [stopped] = transport.to(leader);
+      expect(stopped!.text).toBe(
+        '[team "Checkout API"] 1 new message for you from daedalus. Read it with: daedal team chat --tagged',
+      );
       expect(readChat(context, team.id, "lead")).toBe(
         "daedalus: @lead @server stopped running.",
       );
@@ -955,7 +958,7 @@ describe("teams", () => {
         sessionId: leader.id,
         reason: "Approve the plan?",
       });
-      expect(transport.to(leader)).toHaveLength(2);
+      expect(transport.to(leader)).toHaveLength(1);
       expect(context.repositories.teams.messages(team.id)).toHaveLength(2);
     });
   });
@@ -1005,8 +1008,43 @@ describe("team transport", () => {
       providerSessionId: null,
       account: null,
       workingDirectory: "/tmp",
+      args: [],
       ...overrides,
     }) as AgentSession;
+
+  test("leaves notices in a Claude session's inbox mailbox, not its socket", async () => {
+    const home = await mkdtemp(join(tmpdir(), "dt-"));
+    try {
+      await mkdir(join(home, "inbox"), { recursive: true });
+      const transport = new ProviderTeamTransport(
+        { home } as never,
+        () => undefined,
+      );
+      const inboxed = session({
+        args: ["--settings", "x-daedalus-inbox.json"],
+      });
+      const mail = join(home, "inbox", "daedalus-id.fifo.mail");
+      await Bun.write(mail, "rebirth note\n");
+      for (const count of [1, 2])
+        await transport.deliver({
+          session: inboxed,
+          text: `[team "API"] ${count} new for you`,
+          from: '[team "API"] lead',
+        });
+      await transport.deliver({
+        session: inboxed,
+        text: '[team "Web"] 1 new for you',
+        from: '[team "Web"] lead',
+      });
+      // No waiter is reading, so every note waits for the turn to end and
+      // arrives in one wake; the note already there stays.
+      expect(await Bun.file(mail).text()).toBe(
+        'rebirth note\n[team "API"] 1 new for you\n[team "API"] 2 new for you\n[team "Web"] 1 new for you\n',
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
 
   test("writes a user line to the live Claude session's inbox socket", async () => {
     const root = await mkdtemp(join(tmpdir(), "dt-"));

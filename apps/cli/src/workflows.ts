@@ -254,12 +254,16 @@ export async function workflowCommand(
     });
     // A waiting gate fails the command, so whatever was chained after it
     // with && does not run.
+    const isMember =
+      context.teams.membership(sessionId)?.reader.role === "member";
     if (outcome.waiting)
       throw new DaedalusError(
         "CONFLICT",
-        stepAction === "done"
-          ? `Step '${parsed.positionals[0]}' waits for the user to approve what came out. Attention is raised; ask them in the conversation and stop.`
-          : `Step '${parsed.positionals[0]}' waits for the user to agree before it starts. Attention is raised; ask them in the conversation and stop.`,
+        gateWaitingText(
+          parsed.positionals[0]!,
+          stepAction === "done" ? "result" : "start",
+          isMember ? sessionId : undefined,
+        ),
         { runId: outcome.run.id },
       );
     printResult(outcome, json, () => {
@@ -350,4 +354,25 @@ export async function workflowCommand(
     "VALIDATION",
     `Unknown workflow command '${action}'. Run 'daedal workflow help'.`,
   );
+}
+
+/**
+ * What an agent is told when its step waits at a gate. The user answers in
+ * words; Daedalus has no approve button, so the text never points at one. A
+ * team member's user talks to the lead, so the lead may approve for it, and
+ * the member learns that from its run, not from a relayed message.
+ */
+export function gateWaitingText(
+  step: string,
+  gate: "start" | "result",
+  memberSessionId?: string,
+): string {
+  const waits =
+    gate === "result"
+      ? `Step '${step}' waits for the user to approve what came out.`
+      : `Step '${step}' waits for the user to agree before it starts.`;
+  const answer = memberSessionId
+    ? ` Tag @lead with what to approve and stop. The user answers in this session, or tells your lead, who runs 'daedal workflow approve --session ${memberSessionId}'; 'daedal workflow status' then shows the step approved. Daedalus has no approve button, so never ask the user to approve it there.`
+    : " Ask them in the conversation and stop. Daedalus has no approve button, so never ask the user to approve it there.";
+  return `${waits} Attention is raised.${answer}`;
 }

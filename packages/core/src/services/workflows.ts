@@ -482,7 +482,7 @@ export class WorkflowService {
         if (awaitsResult(step))
           throw new DaedalusError(
             "CONFLICT",
-            `Step '${step.name}' waits for the user to approve what came out. Ask them; to change it first, start '${step.name}' again.`,
+            `Step '${step.name}' waits for the user to approve what came out. Wait for their answer, which comes in words (in a team, through your lead); to change it first, start '${step.name}' again.`,
           );
         if (
           step.state === "active" &&

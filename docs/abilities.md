@@ -158,8 +158,10 @@ rebirth successor takes both, and the predecessor leaves the team.
   instructions. The lead manages that member like its own.
 - **Status notes.** When a member needs the user, at most as often as the
   user is notified about it, and when it stops or is archived, Daedalus
-  posts a note in the chat as `daedalus`, tagging only the lead: "@lead
-  @server needs the user: …" or "@lead @server stopped running.". A lead
+  posts a note in the chat as `daedalus`. "@server needs the user: …" tags
+  nobody: the member's card already tells the user, and a woken lead only
+  told them again, burying its own questions. The lead reads it in the chat
+  on its next read. "@lead @server stopped running." tags only the lead. A lead
   needing the user posts nothing, and neither does a rebirth or a member's
   permission prompt: only the user can answer one, on the member's card, and
   the note would wake the lead at its full context for nothing. A member the
@@ -205,7 +207,15 @@ idle, so its hooks alone would not deliver. An archived member can be
 tagged; the message waits until it is restored. `@all` reaches live sessions
 only.
 
-- **Claude** sessions get the message on their inbox socket. Daedalus finds
+- **Claude** sessions launched with the inbox hook get the notice in their
+  Daedalus inbox mailbox (`session-inbox.ts`). The hook wakes an idle
+  session at once, as "Stop hook feedback", and a busy one when its turn
+  ends, with every notice that came in meanwhile, so a busy lead wakes once.
+  The mailbox is append-only, so a team notice never disturbs a rebirth or
+  other note waiting beside it. Claude's own socket, below, queued the line as a prompt, and a
+  prompt arriving while the user typed was sent with their draft.
+- **Claude** sessions started before the inbox hook get the message on their
+  inbox socket. Daedalus finds
   the live `<claudeHome>/sessions/<pid>.json` whose `sessionId` is the
   session's, and writes one line to its `messagingSocketPath`:
   `{"type":"user","message":{"role":"user","content":...},"from":...,"session_id":...}`.
@@ -226,8 +236,7 @@ Claude adds its own paragraph under every message from another session,
 saying that it is not from the user. No setting or line field turns it off,
 which is one more reason the delivered line is short.
 
-Neither path types into the session's pane, so it never touches what the user
-is typing. Messages the user posts reach Claude members as peer messages too;
+None of these paths types into the session's pane. Messages the user posts reach Claude members as peer messages too;
 an instruction that needs the user's own authority is typed in the member's
 session directly.
 

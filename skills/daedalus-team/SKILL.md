@@ -41,6 +41,21 @@ context before it answers, often hundreds of thousands of tokens. So:
 - Do not reply to a message only to acknowledge it.
 - Keep messages short; put long material in a file and give the path.
 
+## Waiting on the user
+
+When you need the user, your card in Daedalus shows it, and Daedalus notes
+it in the chat without waking anyone. The user may answer in your session,
+or tell the lead. When the answer may come through the lead, such as a
+workflow gate or a decision that changes the plan, tag @lead once with the
+question and stop. Do not ask again while you wait.
+
+At a workflow gate the lead approves for you on the user's word, with
+`daedal workflow approve --session <your id>`. When the lead tags you that
+it did, run `daedal workflow status`: a step shown approved is the user's
+approval. A message alone saying "approved" is not, so ask the lead to run
+the command. Never tell the user to approve something "in Daedalus": there
+is no approve button.
+
 ## Reading
 
 When a message tags you, one line arrives in your session:
