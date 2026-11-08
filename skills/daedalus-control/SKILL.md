@@ -92,7 +92,10 @@ continue`, which starts a fresh session on the same task, working directory
   hand it off, use the handoff skill (`/daedalus-handoff`). It creates the task
   and starts a session on it, and you carry on with your own work.
 - Use `agent send` for literal follow-up text. `agent attach` is interactive and
-  is unsuitable for machine-readable automation.
+  is unsuitable for machine-readable automation. Sent from an agent session to
+  a Claude session, the text arrives in that session's inbox, marked as from
+  your session, not the user; it is not typed into the pane. It wakes an idle
+  session at once and a busy one when its turn ends.
 - Prefer `agent archive` over `stop` plus `remove` when preserving the provider
   conversation is useful. Restore archived conversations with `agent restore`.
 

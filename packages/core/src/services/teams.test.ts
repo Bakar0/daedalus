@@ -61,8 +61,11 @@ class FakeTmux implements TmuxClient {
   async capture() {
     return "› Ask Codex to do anything\n\n❯ \n  ⏵⏵ auto mode on (shift+tab to cycle)";
   }
+  readonly typed: string[] = [];
   async sendKeys() {}
-  async send() {}
+  async send(_session: string, text: string) {
+    this.typed.push(text);
+  }
   async stop(session: string) {
     this.sessions.delete(session);
   }
@@ -963,6 +966,32 @@ describe("teams", () => {
     });
   });
 
+  test("text one agent sends another goes to its inbox, not its input box", async () => {
+    await withTeams(async ({ home, context, tmux }) => {
+      const { session: leader } = await lead(context);
+      const other = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+        name: "Program",
+      });
+      const pidFile = join(home, "inbox", `${leader.id}.fifo.pid`);
+      await Bun.write(pidFile, String(process.pid));
+      await context.agents.send(leader.id, "apply stg only", { from: other });
+      expect(tmux.typed).toEqual([]);
+      expect(
+        await Bun.file(join(home, "inbox", `${leader.id}.fifo.mail`)).text(),
+      ).toBe('[message from session "Program", not the user] apply stg only\n');
+      // The user sending from their own terminal still types it.
+      await context.agents.send(leader.id, "hello");
+      expect(tmux.typed).toEqual(["hello"]);
+      // A session that lost its waiter would never read the inbox, so the
+      // text is typed rather than left waiting.
+      await rm(pidFile);
+      await context.agents.send(leader.id, "still there?", { from: other });
+      expect(tmux.typed).toEqual(["hello", "still there?"]);
+    });
+  });
+
   test("the lead is not told about a member it archived itself", async () => {
     await withTeams(async ({ context, transport }) => {
       const { session: leader } = await lead(context);
@@ -1025,6 +1054,11 @@ describe("team transport", () => {
       });
       const mail = join(home, "inbox", "daedalus-id.fifo.mail");
       await Bun.write(mail, "rebirth note\n");
+      // A live waiter: this process stands in for it.
+      await Bun.write(
+        join(home, "inbox", "daedalus-id.fifo.pid"),
+        String(process.pid),
+      );
       for (const count of [1, 2])
         await transport.deliver({
           session: inboxed,

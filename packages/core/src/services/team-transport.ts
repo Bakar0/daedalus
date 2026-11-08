@@ -6,7 +6,7 @@ import type { DaedalusConfig } from "../config";
 import type { AgentActivityState, AgentSession } from "../domain";
 import { accountConfig, accountEnvironment } from "./account-homes";
 import type { SessionChannel } from "./session-channel";
-import { leaveInInbox, usesInbox } from "./session-inbox";
+import { inboxWaiterAlive, leaveInInbox, usesInbox } from "./session-inbox";
 
 /** One delivery of team chat messages into a member's or the lead's session. */
 export interface TeamDelivery {
@@ -65,8 +65,9 @@ const DELIVERY_TIMEOUT_MS = 5_000;
  * arrives while the user is typing goes out with their draft. The inbox wakes
  * the session through a hook instead, so nothing reaches the input box. It
  * wakes an idle session at once and a busy one when its turn ends, with every
- * notice that came in meanwhile in one wake. A session started before
- * the inbox hook existed still gets the socket.
+ * notice that came in meanwhile in one wake. A session that has lost its
+ * waiter, or was started before the inbox hook existed, still gets the
+ * socket, so its notices are not left waiting.
  */
 export class ProviderTeamTransport implements TeamTransport {
   constructor(
@@ -89,7 +90,10 @@ export class ProviderTeamTransport implements TeamTransport {
   }
 
   private async deliverToClaude(delivery: TeamDelivery): Promise<void> {
-    if (usesInbox(delivery.session)) {
+    if (
+      usesInbox(delivery.session) &&
+      (await inboxWaiterAlive(this.config, delivery.session.id))
+    ) {
       await leaveInInbox(this.config, delivery.session.id, delivery.text);
       return;
     }

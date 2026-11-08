@@ -214,8 +214,9 @@ only.
   The mailbox is append-only, so a team notice never disturbs a rebirth or
   other note waiting beside it. Claude's own socket, below, queued the line as a prompt, and a
   prompt arriving while the user typed was sent with their draft.
-- **Claude** sessions started before the inbox hook get the message on their
-  inbox socket. Daedalus finds
+- **Claude** sessions started before the inbox hook, or whose inbox waiter is
+  no longer running (a session idle for days can lose it), get the message on
+  their inbox socket, so it is not left waiting. Daedalus finds
   the live `<claudeHome>/sessions/<pid>.json` whose `sessionId` is the
   session's, and writes one line to its `messagingSocketPath`:
   `{"type":"user","message":{"role":"user","content":...},"from":...,"session_id":...}`.

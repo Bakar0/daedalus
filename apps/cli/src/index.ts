@@ -1227,9 +1227,13 @@ async function agentCommand(
         "VALIDATION",
         "Usage: daedal agent send <agent-id> <text>",
       );
+    // Sent by another agent, the text goes to the target's inbox, so it is
+    // never typed into a box the user may be writing in.
+    const from = await callerSession(context);
     const result = await context.agents.send(
       parsed.positionals[0]!,
       parsed.positionals.slice(1).join(" "),
+      from ? { from } : {},
     );
     printResult(result, json, () =>
       console.log(`Sent input to agent ${result.id}`),
