@@ -65,7 +65,13 @@ approve>"`: the step waits, attention is raised, the command exits 4, and no
   and do them. A step with `gate: start` (old name `before`) waits when it starts: say what you
   will do there, ask, and end your turn; after their yes, run
   `daedal workflow approve` and do the step. Never approve on the user's
-  behalf.
+  behalf. The user approves in words: Daedalus shows the gate on your card
+  but has no approve button, so never ask them to approve it there. In a
+  team, a member's user talks to the lead, so a member tags `@lead` with
+  what to approve and stops. The lead runs
+  `daedal workflow approve --session <member id>` on the user's word, and
+  the member's `daedal workflow status` then shows the step approved. Go by
+  that status, not by a message saying it was approved.
 - **Loops.** A circular run goes back to its loop step after the last one.
   Each time round, check `until`; when it holds or the user says stop,
   `daedal workflow end --note "<why>"`.

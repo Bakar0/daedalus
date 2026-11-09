@@ -6,6 +6,7 @@ import type { DaedalusConfig } from "../config";
 import type { AgentActivityState, AgentSession } from "../domain";
 import { accountConfig, accountEnvironment } from "./account-homes";
 import type { SessionChannel } from "./session-channel";
+import { inboxWaiterAlive, leaveInInbox, usesInbox } from "./session-inbox";
 
 /** One delivery of team chat messages into a member's or the lead's session. */
 export interface TeamDelivery {
@@ -58,9 +59,15 @@ export class HostTeamTransport implements TeamTransport {
 const DELIVERY_TIMEOUT_MS = 5_000;
 
 /**
- * Claude through the session's inbox socket, Codex through `codex queue`.
- * Neither touches what the user is typing, and a busy session gets the
- * message in or after its current turn.
+ * Claude through the Daedalus session inbox, Codex through `codex queue`.
+ *
+ * Claude's own messaging socket queues a line as a prompt, and a prompt that
+ * arrives while the user is typing goes out with their draft. The inbox wakes
+ * the session through a hook instead, so nothing reaches the input box. It
+ * wakes an idle session at once and a busy one when its turn ends, with every
+ * notice that came in meanwhile in one wake. A session that has lost its
+ * waiter, or was started before the inbox hook existed, still gets the
+ * socket, so its notices are not left waiting.
  */
 export class ProviderTeamTransport implements TeamTransport {
   constructor(
@@ -83,6 +90,13 @@ export class ProviderTeamTransport implements TeamTransport {
   }
 
   private async deliverToClaude(delivery: TeamDelivery): Promise<void> {
+    if (
+      usesInbox(delivery.session) &&
+      (await inboxWaiterAlive(this.config, delivery.session.id))
+    ) {
+      await leaveInInbox(this.config, delivery.session.id, delivery.text);
+      return;
+    }
     const sessionId = delivery.session.providerSessionId ?? delivery.session.id;
     const { claudeHome } = accountConfig(
       this.config,

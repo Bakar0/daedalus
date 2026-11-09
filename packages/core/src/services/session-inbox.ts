@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { chmod, lstat, mkdir, open, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { runCommand } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
@@ -106,6 +106,31 @@ export async function leaveInInbox(
     await handle.close();
   }
   return postToInbox(config, sessionId, "");
+}
+
+/**
+ * Whether a waiter is reading the session's inbox now or will when its turn
+ * ends. A session left idle for days can lose its waiter; a note left for it
+ * then waits until the user starts its next turn.
+ */
+export async function inboxWaiterAlive(
+  config: DaedalusConfig,
+  sessionId: string,
+): Promise<boolean> {
+  const pid = Number(
+    (
+      await readFile(`${inboxPath(config, sessionId)}.pid`, "utf8").catch(
+        () => "",
+      )
+    ).trim(),
+  );
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

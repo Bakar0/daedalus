@@ -144,11 +144,15 @@ export class TeamService {
     agents.onSessionRunning((session) => this.flushSession(session.id));
     // A permission prompt is for the user, who sees it on the member's card.
     // Posting it would wake the lead, at its full context, for something it
-    // cannot approve.
+    // cannot approve. Any other need is the user's too: the note waits in the
+    // chat for the lead's next read, and wakes nobody, so the lead does not
+    // tell the user again what the member's card already shows.
     activity?.onAttention(async (session, reason, state) =>
       state === "needs_permission"
         ? undefined
-        : this.noteMemberStatus(session.id, `needs the user: ${reason}`),
+        : this.noteMemberStatus(session.id, `needs the user: ${reason}`, {
+            wakeLead: false,
+          }),
     );
     abilities.onRevoke("orchestration", (ability) =>
       this.repositories.clearTeam(ability.id),
@@ -455,13 +459,15 @@ export class TeamService {
 
   /**
    * Tells a member's lead, in the chat, that the member needs the user or
-   * stopped. Only the lead is tagged. Nothing for a lead or a non-member,
-   * nor when the lead's own process made the change.
+   * stopped. Only the lead is tagged, and only with `wakeLead`; otherwise the
+   * note tags nobody and waits for the lead's next read. Nothing for a lead
+   * or a non-member, nor when the lead's own process made the change.
    * Never throws.
    */
   async noteMemberStatus(
     sessionId: string,
     status: string,
+    options: { wakeLead?: boolean } = {},
   ): Promise<TeamSayResult | undefined> {
     try {
       const membership = this.membership(sessionId);
@@ -470,11 +476,12 @@ export class TeamService {
       // only wake it again, at its full context.
       if (process.env.DAEDALUS_SESSION_ID === membership.team.lead.id)
         return undefined;
+      const wake = options.wakeLead ?? true;
       return await this.say({
         team: membership.team.id,
         author: DAEDALUS_HANDLE,
-        tags: [LEAD_HANDLE],
-        body: `@${LEAD_HANDLE} @${membership.reader.handle} ${status}`,
+        tags: wake ? [LEAD_HANDLE] : [],
+        body: `${wake ? `@${LEAD_HANDLE} ` : ""}@${membership.reader.handle} ${status}`,
       });
     } catch {
       return undefined;

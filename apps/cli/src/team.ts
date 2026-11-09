@@ -41,9 +41,10 @@ Everyone in the team, and the user, posts to one chat. Tags decide who is
 told: @<handle> sends that member's session a one-line notice saying who
 wrote and to run 'team chat --tagged', @lead the lead's, @all everyone's.
 A message that tags nobody is stored and only read with 'team chat'. Claude
-sessions get the notice through their inbox socket as a message from
-another session; Codex sessions through 'codex queue'. A busy session gets it in or after its current turn, and
-nothing is typed into its pane. A session that is not running, or a send
+sessions get the notice through their Daedalus inbox, which wakes an idle
+session at once and a busy one when its turn ends, with every notice in one wake;
+Codex sessions through 'codex queue'. Nothing reaches the input box, so the
+user's draft is never sent with it. A session that is not running, or a send
 that fails, is tried again on the next post in the team, on 'team chat' and
 'team list', and when the session starts or ends a turn. 'team list' shows
 the last failure.

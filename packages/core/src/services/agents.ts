@@ -57,6 +57,7 @@ import {
   sessionLaunchModel,
 } from "./providers";
 import type { DeliveryResult, SessionChannel } from "./session-channel";
+import { inboxWaiterAlive, leaveInInbox, usesInbox } from "./session-inbox";
 import { installedSkill, requireSkill } from "./installed-skills";
 import { abilityDefinition, type AbilityService } from "./abilities";
 import {
@@ -2104,7 +2105,17 @@ export class AgentService {
     return this.sessionHost(agent).capture(agent.tmuxSession, options);
   }
 
-  async send(id: string, text: string): Promise<AgentSession> {
+  /**
+   * Types text into a session's pane and submits it, as the user would. Text
+   * one agent sends another goes to the target's inbox instead while a
+   * waiter reads it: typed, it would land in the input box and go out with whatever the
+   * user was writing there.
+   */
+  async send(
+    id: string,
+    text: string,
+    options: { from?: AgentSession } = {},
+  ): Promise<AgentSession> {
     if (!text)
       throw new DaedalusError(
         "VALIDATION",
@@ -2113,6 +2124,21 @@ export class AgentService {
     // A session asleep with its cloud workspace wakes for the message.
     await this.wakeIfAsleep(await this.get(id));
     const agent = await this.requireRunning(id);
+    const { from } = options;
+    if (
+      from &&
+      from.id !== agent.id &&
+      !agent.hostId &&
+      usesInbox(agent) &&
+      (await inboxWaiterAlive(this.config, agent.id))
+    ) {
+      await leaveInInbox(
+        this.config,
+        agent.id,
+        `[message from session "${from.name}", not the user] ${text}`,
+      );
+      return agent;
+    }
     await this.sessionHost(agent).send(agent.tmuxSession, text);
     return agent;
   }
