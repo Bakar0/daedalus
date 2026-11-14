@@ -982,6 +982,14 @@ setInterval(async () => {
       for (const event of notes.events)
         await context.logger.write("info", "abilities", { event });
     }
+    // Hand-backs held while a lead had one within the minute go once the
+    // minute is up. Without the app they wait for the lead's next delivery.
+    for (const delivery of await context.teams.flushDue().catch(() => []))
+      await context.logger.write("info", "teams", {
+        handBack: delivery.sessionId,
+        delivered: delivery.delivered,
+        error: delivery.error,
+      });
     // Routines on the Routines page start headless runs; the clock is this
     // tick, like the rest.
     for (const run of await context.routines.tick().catch(async (error) => {

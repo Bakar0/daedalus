@@ -42,6 +42,11 @@ export interface ActivityObservation {
   /** The provider's id for the tool call this reading is about. */
   toolUseId?: string;
   /**
+   * The turn's last assistant message in full, where `detail` is one short
+   * line: what a member's lead is handed back when the turn ends.
+   */
+  message?: string;
+  /**
    * The tool call named by `toolUseId` has ended. Ending one call says
    * nothing about a wait on another, so this may only end the wait for the
    * same call; see `admitsActivityWrite`.
@@ -334,7 +339,7 @@ function turnEnded(
   return {
     activity: "done",
     source,
-    ...(last ? { detail: shorten(last) } : {}),
+    ...(last ? { detail: shorten(last), message: last } : {}),
     ifActivity: TURN_END,
   };
 }

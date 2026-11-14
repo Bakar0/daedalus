@@ -293,6 +293,8 @@ describe("Claude hook payloads", () => {
     ).toMatchObject({
       activity: "done",
       detail: "Built the parser. Should I build A?",
+      // In full, with its line breaks, for the hand-back to a lead.
+      message: "Built the parser.\n\nShould I build A?",
     });
   });
 

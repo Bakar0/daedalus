@@ -85,7 +85,26 @@ export interface RecordActivityInput {
   toolUseId?: string;
   /** See `ActivityObservation.settles`. */
   settles?: boolean;
+  /** See `ActivityObservation.message`. */
+  message?: string;
 }
+
+/**
+ * How a turn ended, as a member's lead is told it: it finished, failed, was
+ * interrupted, or stopped to wait on the user.
+ */
+export type TurnEnd = "finished" | "failed" | "stopped" | "waiting";
+
+/**
+ * What the turn-end listener did with a turn: `handed-back` when the
+ * session's lead was told, so the user is not also notified that it
+ * finished; `reply` when the session leads a team, whose finished turn is a
+ * reply to the user and is notified in its own words.
+ */
+export type TurnEndHandling = "handed-back" | "reply" | undefined;
+
+/** The longest reply a notification body quotes. */
+const MAX_REPLY_ALERT = 240;
 
 export interface ActivityOutcome {
   state: AgentActivityState;
@@ -100,6 +119,42 @@ export interface ActivityOutcome {
 export interface AttentionOutcome {
   attention?: SessionAttention;
   notification?: NotificationDecision;
+}
+
+/**
+ * Whether this change of activity ends a turn, and how. A pane reading is a
+ * guess, so it ends nothing; an `idle` ends a turn only straight from
+ * `working`, as an interrupt does, and not when a session starts or the
+ * pane saw the prompt before the turn's own `Stop`.
+ */
+function turnEndOf(
+  previous: AgentActivity | undefined,
+  input: RecordActivityInput,
+): TurnEnd | undefined {
+  if (input.source === "pane") return undefined;
+  switch (input.activity) {
+    case "done":
+      return "finished";
+    case "error":
+      return "failed";
+    case "needs_input":
+      return "waiting";
+    case "idle":
+      return previous === "working" ? "stopped" : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** What a turn end says: its last message, its error, or its question. */
+function turnEndText(
+  end: TurnEnd,
+  input: RecordActivityInput,
+  detail: string | null,
+): string | null {
+  if (end === "finished") return input.message?.trim() || detail;
+  if (end === "waiting") return input.reason?.trim() || detail;
+  return detail;
 }
 
 const truncate = (value: string, limit: number) =>
@@ -282,9 +337,31 @@ export class ActivityService {
     activity: AgentActivity,
   ) => Promise<unknown> = async () => undefined;
 
+  private turnEndListener: (
+    session: AgentSession,
+    end: TurnEnd,
+    text: string | null,
+  ) => Promise<TurnEndHandling> = async () => undefined;
+
+  /**
+   * Told when a session's turn ends, from a hook, a transcript or the agent
+   * itself (never from a pane guess): it finished, failed, was interrupted,
+   * or stopped to wait on the user. `text` is its last message, or what it
+   * is waiting for. The team service hands it back to the session's lead.
+   */
+  onTurnEnd(
+    listener: (
+      session: AgentSession,
+      end: TurnEnd,
+      text: string | null,
+    ) => Promise<TurnEndHandling>,
+  ): void {
+    this.turnEndListener = listener;
+  }
+
   /**
    * Told when a session starts needing the user, at most as often as the
-   * user is notified. The team service tells a member's lead.
+   * user is notified.
    */
   onAttention(
     listener: (
@@ -404,10 +481,28 @@ export class ActivityService {
       attention = undefined;
     }
 
+    const end = transitioned ? turnEndOf(previous?.activity, input) : undefined;
+    const handling = end
+      ? await this.turnEndListener(
+          session,
+          end,
+          turnEndText(end, input, detail),
+        ).catch(() => undefined)
+      : undefined;
     const notification = transitioned
       ? // An agent that wrote its own reason gets to say it in its own words;
         // wrapping it in a generated headline only adds noise.
-        await this.alert(session, stored, input.reason ?? detail, input.reason)
+        await this.alert(
+          session,
+          stored,
+          input.reason ?? detail,
+          input.reason,
+          handling === "reply" && input.message
+            ? { reply: input.message }
+            : handling === "handed-back" && input.activity === "done"
+              ? { quiet: true }
+              : {},
+        )
       : undefined;
     this.repositories.saveAgentActivity(stored);
     const state = publicState(stored);
@@ -463,6 +558,7 @@ export class ActivityService {
         : {}),
       ...(observation.toolUseId ? { toolUseId: observation.toolUseId } : {}),
       ...(observation.settles ? { settles: true } : {}),
+      ...(observation.message ? { message: observation.message } : {}),
     });
   }
 
@@ -828,9 +924,15 @@ export class ActivityService {
     stored: StoredAgentActivity,
     detail: string | null,
     reason?: string,
+    options: {
+      /** A lead's finished turn: its reply is the body. */
+      reply?: string;
+      /** A member's finished turn went to its lead; the user is not told. */
+      quiet?: boolean;
+    } = {},
   ): Promise<NotificationDecision | undefined> {
     const headline = ACTIVITY_HEADLINE[stored.activity];
-    if (!headline) return undefined;
+    if (!headline || options.quiet) return undefined;
     const debounced =
       stored.notifiedActivity === stored.activity &&
       stored.notifiedAt !== null &&
@@ -856,7 +958,9 @@ export class ActivityService {
             : "info",
       title: this.alertTitle(session),
       ...(subtitle ? { subtitle } : {}),
-      body: reason ?? this.reasonText(session, stored.activity, detail),
+      body: options.reply
+        ? truncate(options.reply.replace(/\s+/g, " ").trim(), MAX_REPLY_ALERT)
+        : (reason ?? this.reasonText(session, stored.activity, detail)),
       blocking: isAttentionActivity(stored.activity),
     });
   }

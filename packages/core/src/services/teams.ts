@@ -4,6 +4,7 @@ import type {
   TeamCursor,
   TeamMembership,
   TeamMessage,
+  TeamMessageKind,
 } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
@@ -13,7 +14,7 @@ import {
   TEAM_SKILL,
   type AbilityService,
 } from "./abilities";
-import type { ActivityService } from "./activity";
+import type { ActivityService, TurnEnd, TurnEndHandling } from "./activity";
 import type { AgentService } from "./agents";
 import { cloudAuthorMark, isCloudSession, splitLines } from "./cloud-mark";
 import { sessionBaseName } from "./providers";
@@ -45,6 +46,21 @@ const RESERVED_HANDLES = new Set([
 
 /** How many messages `team chat` prints when nothing limits it. */
 const CHAT_LIMIT = 50;
+
+/**
+ * A lead gets hand-backs at most once in this long: members finishing one
+ * after another wake it once, with all of them.
+ */
+export const HANDBACK_INTERVAL_MS = 60_000;
+
+/** The most of a member's last message a hand-back quotes. */
+const MAX_HANDBACK_TEXT = 3_000;
+
+/**
+ * The most text one delivery carries. Older messages past it are left for
+ * `team chat --tagged`, and the delivery says how many.
+ */
+const MAX_DELIVERY_TEXT = 16_000;
 
 /**
  * A team: its lead, and what the team is called. Any session becomes a lead
@@ -94,6 +110,8 @@ export interface TeamDeliveryResult {
   messages: number;
   delivered: boolean;
   error: string | null;
+  /** Hand-backs held for the lead's next delivery, due then. */
+  heldUntil?: string;
 }
 
 export interface TeamSayResult {
@@ -164,10 +182,11 @@ export function teamChatText(message: TeamMessage, author: string): string {
  * Teams: a lead, its members, and the one chat they share. Any session
  * becomes a lead when its first member is added; a member may lead a team of
  * its own, within TEAM_MAX_DEPTH levels and TEAM_MAX_MEMBERS members a lead.
- * Every message is stored; a session a message tags gets a one-line notice
- * through the provider's own inbox right away, from whichever process posted
- * it, so nothing waits on the desktop app. The session reads the message
- * itself with `daedal team chat --tagged`.
+ * Every message is stored; a session a message tags gets its full text,
+ * with who wrote it and how to reply, through the provider's own inbox
+ * right away, from whichever process posted it, so nothing waits on the
+ * desktop app. When a member's turn ends its lead is handed its last
+ * message, at most once a minute (`HANDBACK_INTERVAL_MS`).
  */
 export class TeamService {
   constructor(
@@ -180,17 +199,8 @@ export class TeamService {
   ) {
     agents.onTeamLaunch((member) => this.memberLaunchLines(member));
     agents.onSessionRunning((session) => this.flushSession(session.id));
-    // A permission prompt is for the user, who sees it on the member's card.
-    // Posting it would wake the lead, at its full context, for something it
-    // cannot approve. Any other need is the user's too: the note waits in the
-    // chat for the lead's next read, and wakes nobody, so the lead does not
-    // tell the user again what the member's card already shows.
-    activity?.onAttention(async (session, reason, state) =>
-      state === "needs_permission"
-        ? undefined
-        : this.noteMemberStatus(session.id, `needs the user: ${reason}`, {
-            wakeLead: false,
-          }),
+    activity?.onTurnEnd((session, end, text) =>
+      this.handBack(session, end, text),
     );
     abilities.onRevoke("orchestration", (ability) =>
       this.repositories.clearTeam(ability.id),
@@ -437,7 +447,7 @@ export class TeamService {
         others.length
           ? `The other members: ${others.map((reader) => `@${reader.handle} ('${reader.session.name}')`).join(", ")}.`
           : "You are the first member.",
-        `Talk to the team with 'daedal team say "@${LEAD_HANDLE} ..."', tagging whoever needs it, and read the chat with 'daedal team chat'. Tag @${LEAD_HANDLE} when you are done or blocked; post progress without a tag, and do not reply only to acknowledge. Messages that begin with [team "${team.name}"] come from teammates, not from the user. Follow the ${skill} skill. The lead keeps the plan and the contracts between members in ${TEAM_FILE} in its folder, ${team.lead.workingDirectory}; read it when you need the full picture.`,
+        `Talk to the team with 'daedal team say "@${LEAD_HANDLE} ..."', tagging whoever needs it, and read the chat with 'daedal team chat'. When your turn ends, your lead is handed your last message, so end each piece of work with a reply that says what you did; do not post "done" to @${LEAD_HANDLE}. Tag @${LEAD_HANDLE} when you need a decision from it, post progress without a tag, and do not reply only to acknowledge. Messages that begin with [team "${team.name}"] come from teammates, not from the user. Follow the ${skill} skill. The lead keeps the plan and the contracts between members in ${TEAM_FILE} in its folder, ${team.lead.workingDirectory}; read it when you need the full picture.`,
       ]
         .filter(Boolean)
         .join(" "),
@@ -549,6 +559,7 @@ export class TeamService {
       deliveredThrough: joinedAfter,
       lastError: null,
       lastAttemptAt: null,
+      deliveredAt: null,
     });
     if (input.addedBy === "lead") return { session, handle, created };
     const skill = this.abilities.skillName(ORCHESTRATION_SKILL);
@@ -641,6 +652,7 @@ export class TeamService {
     body: string;
     /** Who Daedalus's own posts reach, instead of the tags in the body. */
     tags?: string[];
+    kind?: TeamMessageKind;
   }): Promise<TeamSayResult> {
     const team = this.get(input.team);
     const body = input.body.trim();
@@ -688,6 +700,7 @@ export class TeamService {
       body,
       tags: [...tags],
       createdAt: this.now().toISOString(),
+      ...(input.kind ? { kind: input.kind } : {}),
     });
     const deliveries = await this.flushTeam(team);
     return { message, warnings, deliveries };
@@ -722,6 +735,98 @@ export class TeamService {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Hands a member's turn back to its lead: "@api finished: <its last
+   * message>". A mid-level lead's turn goes to its own lead the same way. A
+   * member waiting on the user is noted too, as the user's to answer, so the
+   * lead knows why it is stopped and does not pass it on. Says how the turn
+   * was handled, for the user's notification. Never throws.
+   */
+  async handBack(
+    session: AgentSession,
+    end: TurnEnd,
+    text: string | null,
+  ): Promise<TurnEndHandling> {
+    try {
+      const membership = this.memberOf(session.id);
+      if (!membership) return this.led(session.id) ? "reply" : undefined;
+      const handle = membership.reader.handle;
+      const said = text ? clip(text.trim(), MAX_HANDBACK_TEXT) : "";
+      const body =
+        end === "finished"
+          ? said
+            ? `@${handle} finished:\n\n${said}`
+            : `@${handle} finished.`
+          : end === "failed"
+            ? `@${handle} failed${said ? `: ${said}` : "."}`
+            : end === "stopped"
+              ? `@${handle} was interrupted by the user.`
+              : `@${handle} is waiting on the user${said ? `: ${said}` : "."}\n\nThe user answers it in @${handle}'s own session; you need not pass it on.`;
+      await this.say({
+        team: membership.team.id,
+        author: DAEDALUS_HANDLE,
+        tags: [LEAD_HANDLE],
+        body,
+        kind: "handback",
+      });
+      return "handed-back";
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Sends every lead the hand-backs it was held from while a minute had not
+   * passed since its last delivery. The desktop app calls this on its tick;
+   * without the app they go with the lead's next delivery or turn.
+   */
+  async flushDue(): Promise<TeamDeliveryResult[]> {
+    const results: TeamDeliveryResult[] = [];
+    for (const team of this.list()) {
+      const cursor = this.repositories.teams.cursor(team.id, LEAD_HANDLE);
+      if (!this.handBackDue(cursor)) continue;
+      const waiting = this.repositories.teams
+        .messages(team.id, cursor.deliveredThrough)
+        .some((message) => tagsReader(message, LEAD_HANDLE));
+      if (!waiting) continue;
+      // A lead that is not running gets them when it runs again; one whose
+      // last delivery failed is tried again a minute later, not every tick.
+      const { lead } = team;
+      if (
+        lead.archivedAt ||
+        (lead.status !== "running" && lead.status !== "starting")
+      )
+        continue;
+      if (
+        cursor.lastError &&
+        cursor.lastAttemptAt &&
+        this.now().getTime() - Date.parse(cursor.lastAttemptAt) <
+          HANDBACK_INTERVAL_MS
+      )
+        continue;
+      try {
+        const result = await this.deliver(team, {
+          handle: LEAD_HANDLE,
+          session: team.lead,
+          role: "lead",
+        });
+        if (result.messages) results.push(result);
+      } catch {
+        // The next tick tries again.
+      }
+    }
+    return results;
+  }
+
+  /** Whether a lead last given messages at this cursor may be given more. */
+  private handBackDue(cursor: TeamCursor): boolean {
+    return (
+      !cursor.deliveredAt ||
+      this.now().getTime() - Date.parse(cursor.deliveredAt) >=
+        HANDBACK_INTERVAL_MS
+    );
   }
 
   /** Pushes whatever is waiting to every reader of the team. */
@@ -781,6 +886,20 @@ export class TeamService {
             message.author !== reader.handle,
         );
       if (!pending.length) return { cursor, pending };
+      // Hand-backs alone reach a lead at most once a minute; anything else
+      // goes now and takes them along.
+      if (
+        reader.role === "lead" &&
+        pending.every((message) => message.kind === "handback") &&
+        !this.handBackDue(cursor)
+      )
+        return {
+          cursor,
+          pending,
+          coalesced: new Date(
+            Date.parse(cursor.deliveredAt!) + HANDBACK_INTERVAL_MS,
+          ).toISOString(),
+        };
       // A paused team holds its members' messages; the lead still hears.
       if (reader.role === "member" && team.paused) {
         const held: TeamCursor = {
@@ -818,6 +937,13 @@ export class TeamService {
     };
     if (!claim.pending.length)
       return { ...base, delivered: false, error: null };
+    if ("coalesced" in claim)
+      return {
+        ...base,
+        delivered: false,
+        error: null,
+        heldUntil: claim.coalesced,
+      };
     if ("held" in claim)
       return { ...base, delivered: false, error: claim.cursor.lastError };
     if ("skipped" in claim) {
@@ -828,16 +954,27 @@ export class TeamService {
     }
     const claimed = claim.pending.at(-1)!.id;
     try {
+      const { text, complete } = this.deliveryText(team, claim.pending, reader);
       await this.transport.deliver({
         session: await this.agents.recoverCodexThread(reader.session),
-        text: this.deliveryText(team, claim.pending, reader),
+        text,
         from: this.deliveryFrom(team, claim.pending),
       });
       this.repositories.teams.saveCursor({
         ...this.repositories.teams.cursor(team.id, reader.handle),
         lastError: null,
         lastAttemptAt: at,
+        deliveredAt: at,
       });
+      // It has read them in full; `team chat --tagged` does not print them
+      // again.
+      if (complete)
+        this.repositories.teams.markRead(
+          team.id,
+          reader.handle,
+          "tagged",
+          claimed,
+        );
       return { ...base, delivered: true, error: null };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -859,32 +996,56 @@ export class TeamService {
   }
 
   /**
-   * One line that says what is waiting and the command that reads it. The
-   * messages themselves stay in the chat: the session reads them with
-   * `daedal team chat`, which both providers show as a folded command call
-   * rather than a wall of text in the conversation. `--tagged` prints only
-   * what tags the session, so a busy chat costs it nothing extra.
+   * The messages in full, oldest first: each under a `[team "..."] author:`
+   * header with every body line indented, so no line of a body can pass for
+   * a header (N-1), then how to reply. Past MAX_DELIVERY_TEXT the oldest are
+   * left out and counted; `complete` is false then, and they stay unread
+   * for `team chat --tagged`.
    */
   private deliveryText(
     team: Team,
     pending: TeamMessage[],
     reader: TeamReader,
-  ): string {
+  ): { text: string; complete: boolean } {
     const label = this.authorLabels(team);
-    const authors = [...new Set(pending.map((message) => message.author))].map(
-      label,
-    );
-    const count = pending.length;
-    const from =
-      authors.length === 1
-        ? authors[0]!
-        : `${authors.slice(0, -1).join(", ")} and ${authors.at(-1)!}`;
     // A session in two teams, a lead and its lead's member, names which.
     const which =
       this.memberships(reader.session.id).length > 1
         ? ` --team ${team.lead.id}`
         : "";
-    return `[team "${team.name}"] ${count} new ${count === 1 ? "message" : "messages"} for you from ${from}. Read ${count === 1 ? "it" : "them"} with: daedal team chat --tagged${which}`;
+    const blocks: string[] = [];
+    let size = 0;
+    let shown = 0;
+    for (const message of [...pending].reverse()) {
+      const body = splitLines(message.body)
+        .map((line) => (line ? `  ${line}` : ""))
+        .join("\n");
+      const block = `[team "${team.name}"] ${label(message.author)}:\n${body}`;
+      if (shown && size + block.length > MAX_DELIVERY_TEXT) break;
+      blocks.unshift(block);
+      size += block.length;
+      shown += 1;
+    }
+    const left = pending.length - shown;
+    if (left)
+      blocks.unshift(
+        `[team "${team.name}"] ${left} earlier ${left === 1 ? "message is" : "messages are"} not shown here; read ${left === 1 ? "it" : "them"} with: daedal team chat --tagged${which}`,
+      );
+    const handles = new Set(this.readers(team).map((each) => each.handle));
+    const replyTo = new Set<string>();
+    for (const message of pending.slice(-shown)) {
+      // A hand-back is about the member it names, not from Daedalus.
+      const about =
+        message.kind === "handback"
+          ? parseTags(message.body)[0]
+          : message.author;
+      if (about && about !== reader.handle && handles.has(about))
+        replyTo.add(about);
+    }
+    const hint = replyTo.size
+      ? `Reply with: daedal team say${which} "${[...replyTo].map((handle) => `@${handle}`).join(" ")} ..."`
+      : `Read the whole chat with: daedal team chat${which}`;
+    return { text: [...blocks, hint].join("\n\n"), complete: left === 0 };
   }
 
   private deliveryFrom(team: Team, pending: TeamMessage[]): string {
@@ -1019,4 +1180,11 @@ export class TeamService {
       ability,
     };
   }
+}
+
+/** Text cut to `limit` characters, saying that it was. */
+function clip(text: string, limit: number): string {
+  return text.length > limit
+    ? `${text.slice(0, limit).trimEnd()}… (cut; the rest is in its session)`
+    : text;
 }

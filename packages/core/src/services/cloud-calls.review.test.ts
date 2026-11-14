@@ -98,6 +98,7 @@ describe("security review re-check: cloud text marks", () => {
         author: "final",
         body,
         tags: [],
+        kind: "message",
         createdAt: "2026-10-26T12:00:00.000Z",
       },
       "final [cloud final]",

@@ -5,6 +5,7 @@ import { runCommand, type CommandResult } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
 import type { AgentActivityState, AgentSession } from "../domain";
 import { accountConfig, accountEnvironment } from "./account-homes";
+import { splitLines } from "./cloud-mark";
 import type { SessionChannel } from "./session-channel";
 import { inboxWaiterAlive, leaveInInbox, usesInbox } from "./session-inbox";
 
@@ -43,10 +44,14 @@ export class HostTeamTransport implements TeamTransport {
   async deliver(delivery: TeamDelivery): Promise<void> {
     const { session } = delivery;
     if (!session.hostId) return this.local.deliver(delivery);
-    const outcome = await this.channel.deliver(session, delivery.text, {
-      when: "at-prompt",
-      activity: this.activity(session.id),
-    });
+    const outcome = await this.channel.deliver(
+      session,
+      typedLine(delivery.text),
+      {
+        when: "at-prompt",
+        activity: this.activity(session.id),
+      },
+    );
     if (outcome.kind === "held") throw new Error(outcome.held.text);
     if (outcome.kind === "settling")
       throw new Error(
@@ -54,6 +59,16 @@ export class HostTeamTransport implements TeamTransport {
       );
   }
 }
+
+/**
+ * Text typed into a pane, on one line: a line break typed into a prompt can
+ * submit what came before it. Lines are kept apart with ` / `.
+ */
+export const typedLine = (text: string): string =>
+  splitLines(text)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" / ");
 
 /** How long a socket write or `codex queue` may take before it counts as failed. */
 const DELIVERY_TIMEOUT_MS = 5_000;
