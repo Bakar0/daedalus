@@ -167,17 +167,35 @@ rebirth successor takes both, and the predecessor leaves the team.
 - **The user adds a member** with `--team <lead>`. Daedalus then posts in the
   chat, as `daedalus` and tagging only the lead, who was added with which
   instructions. The lead manages that member like its own.
-- **Status notes.** When a member needs the user, at most as often as the
-  user is notified about it, and when it stops or is archived, Daedalus
-  posts a note in the chat as `daedalus`. "@server needs the user: …" tags
-  nobody: the member's card already tells the user, and a woken lead only
-  told them again, burying its own questions. The lead reads it in the chat
-  on its next read. "@lead @server stopped running." tags only the lead. A lead
-  needing the user posts nothing, and neither does a rebirth or a member's
-  permission prompt: only the user can answer one, on the member's card, and
-  the note would wake the lead at its full context for nothing. A member the
-  lead itself stops or archives posts nothing either: the note is skipped
-  when the posting process runs as the lead (`DAEDALUS_SESSION_ID`).
+- **Hand-back.** Members do not post "done". When a member's turn ends,
+  Daedalus posts to its lead, as `daedalus`, tagging only the lead and with
+  `kind = 'handback'` in `team_messages`: "@server finished:" and the turn's
+  last assistant message (Claude's and Codex's `Stop` hook
+  `last_assistant_message`, cut at 3000 characters), "@server failed: <the
+  error>" (`StopFailure`), "@server was interrupted by the user." (an
+  interrupt straight from `working`), or "@server is waiting on the user:
+  <its question>" with a line saying the user answers it in the member's
+  session. `ActivityService.onTurnEnd` calls `TeamService.handBack` on the
+  transition into each of those; a pane reading is a guess and ends no turn.
+  A permission prompt hands nothing back: only the user can answer it, on the
+  member's card. A member that leads hands back to its own lead in the same
+  way, so a piece of a nested tree reports up one level at a time.
+- **Hand-back rate.** A lead gets hand-backs at most once a minute
+  (`HANDBACK_INTERVAL_MS`), measured from `team_cursors.delivered_at`, its
+  last delivery. A delivery holding only hand-backs inside that minute waits;
+  anything else, such as a member's question, goes at once and takes the
+  waiting hand-backs with it. The desktop app sends what waited on its tick
+  (`TeamService.flushDue`); with the app closed it goes with the lead's next
+  delivery or turn.
+- **Notifications.** A member's finished turn does not notify the user,
+  since its lead got it. Its failure and its wait on the user still do, and
+  its card shows them. A lead's finished turn is a reply to the user: when
+  the user is not looking at the lead, the notification's body is the start
+  of its last message. A lead needing the user posts nothing to the team.
+- **Status notes.** When a member stops or is archived, Daedalus posts
+  "@lead @server stopped running." as `daedalus`, tagging only the lead. A
+  member the lead itself stops or archives posts nothing: the note is
+  skipped when the posting process runs as the lead (`DAEDALUS_SESSION_ID`).
 - **Teams inside teams.** A member can lead a team of its own: it runs
   `agent spawn --team` itself, or the user names it with `--team <member>`.
   A session is a member of at most one team and leads at most one. A tree
@@ -218,12 +236,15 @@ chat` printed to it, and `tagged_read_through`, the last message tagging it
 that `team chat --tagged` printed. A tagged read moves only that marker, so
 the rest of the chat stays unread, and a later full read skips what it
 printed. Each read updates only its own column, so it never undoes a
-delivery saved meanwhile. One delivery is a single line naming how many waiting
-messages tag the reader and who wrote them, and the command that reads them:
-`[team "<name>"] 2 new messages for you from lead and user. Read them with:
-daedal team chat --tagged`. The messages stay in the chat. Both providers show a
-command call as one folded row, so the conversation shows a line and a row
-per delivery instead of every message in full. The cursor moves under a write lock
+delivery saved meanwhile. One delivery carries every waiting message that
+tags the reader, in full, oldest first: a `[team "<name>"] <author>:` header,
+the body under it with every line indented two spaces, so no body line can
+pass for a header, and last a reply line, `Reply with: daedal team say
+"@server ..."`, naming the sessions that wrote (for a hand-back, the member
+it is about), with `--team <lead>` for a session in two teams. A delivered
+message is marked read for `team chat --tagged`. Past 16,000 characters the
+oldest are left out, counted in a first line that says to read them with
+`team chat --tagged`, and stay unread. The cursor moves under a write lock
 before the send, so two processes never send the same message, and moves
 back if the send fails. A failure is kept in `last_error`, shown by
 `team list`, and the send is tried again on the next post, on `team chat` and
@@ -233,8 +254,9 @@ idle, so its hooks alone would not deliver. An archived member can be
 tagged; the message waits until it is restored. `@all` reaches live sessions
 only.
 
-- **Claude** sessions launched with the inbox hook get the notice in their
-  Daedalus inbox mailbox (`session-inbox.ts`). The hook wakes an idle
+- **Claude** sessions launched with the inbox hook get the messages in their
+  Daedalus inbox mailbox (`session-inbox.ts`), line breaks and all: the
+  waiter prints the mailbox file whole. Only a line on the pipe is one line. The hook wakes an idle
   session at once, as "Stop hook feedback", and a busy one when its turn
   ends, with every notice that came in meanwhile, so a busy lead wakes once.
   The mailbox is append-only, so a team notice never disturbs a rebirth or
@@ -259,8 +281,11 @@ only.
   mark it as a teammate's.
 
 Claude adds its own paragraph under every message from another session,
-saying that it is not from the user. No setting or line field turns it off,
-which is one more reason the delivered line is short.
+saying that it is not from the user. No setting or line field turns it off.
+
+A member on a cloud host has no inbox on this Mac; its delivery is typed into
+its prompt while it waits there, on one line, with `/` between the lines,
+since a line break typed into a prompt could submit what came before it.
 
 None of these paths types into the session's pane. Messages the user posts reach Claude members as peer messages too;
 an instruction that needs the user's own authority is typed in the member's

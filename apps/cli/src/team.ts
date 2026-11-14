@@ -51,12 +51,14 @@ archived; past either, the spawn is refused and says where to add instead.
 'team tree' prints the whole tree the team is in, or every tree.
 
 Everyone in the team, and the user, posts to one chat. Tags decide who is
-told: @<handle> sends that member's session a one-line notice saying who
-wrote and to run 'team chat --tagged', @lead the lead's, @all everyone's.
-A message that tags nobody is stored and only read with 'team chat'. Claude
-sessions get the notice through their Daedalus inbox, which wakes an idle
-session at once and a busy one when its turn ends, with every notice in one wake;
-Codex sessions through 'codex queue'. Nothing reaches the input box, so the
+told: @<handle> sends that member's session the message in full, with who
+wrote it and how to reply, @lead the lead's, @all everyone's. A message that
+tags nobody is stored and only read with 'team chat'. When a member's turn
+ends, its lead is handed the member's last message ("@server finished: ..."),
+at most once a minute, so members do not post "done". Claude sessions get
+messages through their Daedalus inbox, which wakes an idle session at once
+and a busy one when its turn ends, with every message in one wake; Codex
+sessions through 'codex queue'. Nothing reaches the input box, so the
 user's draft is never sent with it. A session that is not running, or a send
 that fails, is tried again on the next post in the team, on 'team chat' and
 'team list', and when the session starts or ends a turn. 'team list' shows

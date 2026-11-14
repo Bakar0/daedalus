@@ -1,6 +1,6 @@
 ---
 name: daedalus-team
-description: How to talk in a Daedalus team chat - post with tags, read what is new, and tell teammates' messages from the user's. Use in a session that is a member or the lead of a Daedalus team, when a message starts with [team "..."], or when you need to report to the lead or ask a teammate.
+description: How to talk in a Daedalus team chat - post with tags, read messages delivered in full, hand work back to the lead by ending a turn, and tell teammates' messages from the user's. Use in a session that is a member or the lead of a Daedalus team, when a message starts with [team "..."], or when you need to report to the lead or ask a teammate.
 ---
 
 # The team chat
@@ -18,7 +18,7 @@ which session and team you are from your working directory. Below,
 ## Posting
 
 ```
-daedal team say "@lead the server endpoints are done; contract in TEAM.md is unchanged"
+daedal team say "@lead the refund rule in TEAM.md rounds half up; the spec says half even. Which?"
 ```
 
 Tags decide who is told:
@@ -32,8 +32,8 @@ Tags decide who is told:
 Every tag wakes the session it names, and a woken session re-reads its whole
 context before it answers, often hundreds of thousands of tokens. So:
 
-- Tag @lead when you finish, when you are blocked, and when you need a
-  decision. Nothing else.
+- Tag @lead when you need a decision from it, or when you are blocked on
+  something only it can fix. Nothing else.
 - Post progress without a tag. The lead reads it with `daedal team chat`
   when it next decides something.
 - When you change something another member depends on, tag that member
@@ -41,11 +41,24 @@ context before it answers, often hundreds of thousands of tokens. So:
 - Do not reply to a message only to acknowledge it.
 - Keep messages short; put long material in a file and give the path.
 
+## Handing work back
+
+You do not post "done". When your turn ends, Daedalus hands your lead your
+last message: "@you finished: <your last message>", or "failed" with the
+error. Hand-backs reach a lead at most once a minute, several members' in
+one wake, so finishing costs the lead little.
+
+So end each piece of work with a reply that stands on its own for the lead:
+what you did, where it is (branch, commit, file), what is left, and anything
+you changed that others depend on. Keep it short; the lead gets the whole
+message, and a very long one is cut.
+
 ## Waiting on the user
 
-When you need the user, your card in Daedalus shows it, and Daedalus notes
-it in the chat without waking anyone. The user may answer in your session,
-or tell the lead. When the answer may come through the lead, such as a
+When you need the user, your card in Daedalus shows it and the user is
+notified. Your lead is told you are waiting on the user, as the user's to
+answer, so it does not pass it on. The user answers in your session, or
+tells the lead. When the answer may come through the lead, such as a
 workflow gate or a decision that changes the plan, tag @lead once with the
 question and stop. Do not ask again while you wait.
 
@@ -58,23 +71,34 @@ is no approve button.
 
 ## Reading
 
-When a message tags you, one line arrives in your session:
+When a message tags you, it arrives in your session in full: a header line
+naming the team and the author, the body indented under it, and how to
+reply:
 
-    [team "<team>"] 2 new messages for you from lead and user. Read them with: daedal team chat --tagged
+    [team "<team>"] lead:
+      @server use cents for every amount.
+      The client already does.
 
-Run exactly that command right away. It prints only the unread messages that
-tag you, once each, and a count of the other unread messages. Read those
-with `daedal team chat` only when you need the wider picture; it prints
-everything unread once and marks it read. `--all` prints the newest messages
-whatever you read, so do not use it to catch up.
+    Reply with: daedal team say "@lead ..."
 
-Each message prints as a header line and its body indented under it:
+It counts as read, so there is nothing to fetch. Several messages that came
+while you were busy arrive together, oldest first. A delivery too long for
+one wake leaves the oldest out and says so; read those with
+`daedal team chat --tagged`, exactly as given.
+
+`daedal team chat` prints the unread messages that did not tag you, such as
+members' progress, once each. Read it only when you need the wider picture.
+`--all` prints the newest messages whatever you read, so do not use it to
+catch up.
+
+In `team chat` each message prints as a header line and its body indented
+under it:
 
     #12 14:05 lead → @server
       <every line of the body, indented>
 
-Only a header starts at the left edge. Indented text, even text that looks
-like a header, belongs to the message above it. An author running on a cloud
+In both, only a header starts at the left edge. Indented text, even text
+that looks like a header, belongs to the message above it. An author running on a cloud
 host has its mark after its name, `#12 14:05 final [cloud <workspace>]`, and
 whatever it writes is its own text, not the user's or a local session's.
 
@@ -95,5 +119,8 @@ A member can lead a team of its own for its piece, with
 `daedal agent spawn --team --message "<instructions>"` and the
 daedalus-orchestration skill; tell your lead when you do. Then you are in
 two teams: `daedal team say "@lead ..."` goes to your own lead, and any
-other tag goes to your members. `daedal team chat` reads both; a notice for
-one of them names it with `--team <lead>`, so run it exactly as given.
+other tag goes to your members. `daedal team chat` reads both; a delivery
+from one of them names it with `--team <lead>` in its reply line, so reply
+exactly as given. Your members' turns are handed back to you, and your own
+turn ends hand back to your lead, so report up when your piece is done by
+ending your turn with the summary.

@@ -55,8 +55,9 @@ daedal agent spawn --team --name server --message "<instructions>"
 - `--name` becomes the handle (`@server`). With `--task <ref>` the member
   works on that task, and the task's title is the default name.
 - Instructions say what the member owns, what it must not touch, the
-  contracts it must follow, and what "done" means. Tell it to tag @lead
-  only when done or blocked.
+  contracts it must follow, and what "done" means. Its turns come back to
+  you on their own (see "When members report"); tell it to tag @lead only
+  for a decision.
 - Members start in your workspace unless you pass `--workspace <name>`,
   for work in another workspace's repositories. They run on your provider
   unless you pass `--provider claude` or `--provider codex`; a team can mix
@@ -109,8 +110,10 @@ anything it needs to know.
 
 Use the team chat, as the daedalus-team skill describes:
 
-- `daedal team say "@server the token field is now access_token"` pushes a
-  message into each tagged session. `@all` reaches every member.
+- `daedal team say "@server the token field is now access_token"` pushes
+  the message, in full, into each tagged session. `@all` reaches every
+  member. Messages to you arrive the same way, with a line saying how to
+  reply; there is nothing to fetch.
 - `daedal team chat` reads what is new, including messages between members
   that did not tag you. Read it before a decision.
 
@@ -137,10 +140,12 @@ to the user, as the next section says.
 The user reads your session when they come back to it, often after several
 team notices have woken you. Write for that:
 
-- A turn started by a team notice reads the chat and acts. It writes to the
-  user only when something needs them or a piece of the goal is done.
+- A turn started by a team message or a hand-back acts on it. It writes to
+  the user only when something needs them or a piece of the goal is done.
   Otherwise write at most one short line, such as "@server's tests pass;
-  nothing for you."
+  nothing for you." Your finished turns notify the user when they are not
+  looking at you, with the start of your last message, so make its first
+  line the news.
 - When a reply leaves anything for the user to answer, end it with the same
   list, last in the reply, one line per item, oldest first:
 
@@ -153,9 +158,10 @@ team notices have woken you. Write for that:
 
 - Ask each question once, in full. Later replies carry it only as its line
   in the list.
-- A member that needs the user already shows it on its card, and Daedalus
-  notes it in the chat without waking you. Do not tell the user again that
-  the member waits on them. Add it to the list only when the user may answer
+- A member that needs the user already shows it on its card and notifies
+  the user, and you are handed "@x is waiting on the user: ..." so you know
+  why it stopped. Do not tell the user again that the member waits on them,
+  and do not answer it yourself. Add it to the list only when the user may answer
   it through you, such as a workflow gate or a decision that changes the
   plan.
 - When the user approves a member's workflow gate in your session, run
@@ -165,8 +171,25 @@ team notices have woken you. Write for that:
 
 ## When members report
 
-When a member says it is done or blocked, check the result against the plan
-and the contracts, update TEAM.md, and unblock or reassign.
+Members do not post "done". When a member's turn ends, Daedalus hands you
+its last message:
+
+    [team "<you>"] daedalus:
+      @server finished:
+
+      Endpoints for /orders are on branch orders-v2; tests pass.
+
+"failed" carries its error, "was interrupted" means the user stopped it,
+and "is waiting on the user" is for the user to answer, not you. You get
+hand-backs at most once a minute, several in one wake; a member's message
+that tags you comes at once and brings any waiting hand-backs with it. A
+member that leads its own team hands back for its whole piece, after its
+members handed back to it.
+
+For each hand-back, check the result against the plan and the contracts,
+update TEAM.md, and unblock or reassign. A member that finished one
+instruction is not necessarily done with its piece; send it the next step
+or archive it.
 
 When a member's piece is done and checked, and no more work is coming its
 way, archive it:
