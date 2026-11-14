@@ -91,8 +91,8 @@ daedal agent spawn --workspace <workspace> --provider codex [--task <task-ref>] 
 daedal agent spawn --workspace <workspace> --provider claude [--task <task-ref>] [--model <model>] [--account <account>] [--message <text>]
 daedal agent spawn --workspace <workspace> --command <configured-name> [--task <task-ref>] [--message <text>]
 daedal agent spawn --workspace <workspace> --provider <codex|claude> --task <task-ref> --refine
-daedal agent spawn ... [--ability orchestration] [--color <color>] [--pin]
-daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--provider claude|codex] [--model <model>] [--account <account>] [--user]
+daedal agent spawn ... [--color <color>] [--pin]
+daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex] [--model <model>] [--account <account>] [--user]
 daedal agent spawn ... [--workflow <name>]
 daedal agent list [--workspace <workspace>] [--running]
 daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
@@ -198,7 +198,7 @@ daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
 ```
 
-Names, pins, colors and abilities, for any session. `<session>` is an id, or a name that only one live session has. The `orchestration` ability and the `daedal team` commands are in [abilities.md](abilities.md). Routines are not an ability; see `daedal routine --help`.
+Names, pins, colors and abilities, for any session. `<session>` is an id, or a name that only one live session has. Teams and the `daedal team` commands are in [abilities.md](abilities.md#orchestration-and-teams). Routines are not an ability; see `daedal routine --help`.
 
 ## Team
 
@@ -206,11 +206,13 @@ Names, pins, colors and abilities, for any session. `<session>` is an id, or a n
 daedal team say "<text>" [--team <lead>] [--user]
 daedal team chat [--tagged | --all] [--limit <n>] [--team <lead>] [--user]
 daedal team list [--team <lead>]
+daedal team tree [--team <lead>]
 daedal team goal [<text>] [--team <lead>]
-daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--provider claude|codex]
+daedal team pause|resume [--team <lead>]
+daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex]
 ```
 
-A team is a session holding the orchestration ability, its lead, and the members it or the user adds. Inside the lead or a member, `--team` defaults to its own team and a post is signed with its handle; another session's post is refused. Outside a session the author is `user`, and `--team <lead>` is needed when more than one team exists. `--user` posts as the user from inside a session's folder. `agent spawn --team` with no value adds a member to the calling lead's team; with a lead it adds one for the user and tells the lead in the chat. A member runs on the lead's provider unless `--provider` picks the other, so a team can mix Claude and Codex. `team chat` prints the unread messages once and marks them read; `--tagged` prints only those that tag the reader, plus a count of the rest, which stay unread; `--all` prints the newest whatever was read. `team say` prints, per tagged session, whether the message reached it; `team list --json` returns each member's `undelivered` count and `lastError`. Delivery and tags are in [abilities.md](abilities.md#the-chat).
+A team is a lead and the members it or the user adds. Any Claude or Codex session on this Mac becomes a lead when its first member is added, and a member can lead a team of its own: at most 3 levels below the top lead and 5 members a lead, which a refused spawn names. Inside the lead or a member, `--team` defaults to its own team and a post is signed with its handle; another session's post is refused. A session that leads a team and is a member of another posts `@lead` to its own lead and anything else to its team, and `team chat` reads both. Outside a session the author is `user`, and `--team <lead>` is needed when more than one team exists. `--user` posts as the user from inside a session's folder. `agent spawn --team` with no value adds a member to the calling session's team, making it a lead if needed; with a lead it adds one for the user and tells the lead in the chat. A member runs in the lead's workspace unless `--workspace` names another, on the lead's provider unless `--provider` picks the other, so a team can mix Claude and Codex. `team chat` prints the unread messages once and marks them read; `--tagged` prints only those that tag the reader, plus a count of the rest, which stay unread; `--all` prints the newest whatever was read. `team say` prints, per tagged session, whether the message reached it; `team list --json` returns each member's `undelivered` count, `lastError` and the team it `leads`. `team tree` prints the whole tree from its top lead. `team pause` holds the members' messages and refuses new members down the tree until `team resume`; `agent stop` and `agent archive` on a lead do the same to every member below it. Delivery and tags are in [abilities.md](abilities.md#the-chat).
 
 ## Workflow
 

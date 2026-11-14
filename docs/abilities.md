@@ -39,7 +39,6 @@ row in `session_abilities`. The ability's data, such as a team's goal, hangs
 off that row's id, so a rebirth moves everything with one update.
 
 ```
-daedal agent spawn --workspace <w> --provider claude --name Argus --ability orchestration
 daedal session grant <session> orchestration
 daedal session revoke <session> orchestration
 daedal session abilities <session>
