@@ -1464,13 +1464,17 @@ export class AgentService {
           // Any session may lead a team or join one later.
           acceptPeerMessages: true,
           workingDirectory: prepared.workingDirectory,
-          additionalDirectories: sessionDirectories(
-            workspace.path,
-            prepared.references.map(
-              (repository) =>
-                repository.referencePath ?? repository.canonicalPath,
+          additionalDirectories: [
+            ...sessionDirectories(
+              workspace.path,
+              prepared.references.map(
+                (repository) =>
+                  repository.referencePath ?? repository.canonicalPath,
+              ),
             ),
-          ),
+            // The main agent at Home reads across every workspace.
+            ...(workspace.kind === "home" ? [this.config.workspaceRoot] : []),
+          ],
         });
     const session: AgentSession = {
       id,
@@ -1865,6 +1869,7 @@ export class AgentService {
       // So is the workflow run: the successor carries on at the same step.
       this.repositories.workflows.moveToSession(predecessor.id, session.id);
       this.repositories.routines.moveAgent(predecessor.id, session.id);
+      this.repositories.threads.moveToSession(predecessor.id, session.id);
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });

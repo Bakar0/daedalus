@@ -66,6 +66,11 @@ export interface WorkspaceDto {
    * days asleep, or what came home when it was archived.
    */
   cloudNotice?: string;
+  /**
+   * `home` for the hidden row Home's main agent runs in. Every list of
+   * workspaces leaves it out.
+   */
+  kind?: "home";
 }
 
 export interface TaskDto {
@@ -143,6 +148,19 @@ export interface AgentSessionDto {
   spawnedBy: string | null;
   /** The cloud host it runs on (`ws:<cloud workspace id>`); null or absent for this Mac. */
   hostId?: string | null;
+  /** When the user or its lead marked this thread done; it shows as Resolved. */
+  resolvedAt?: string | null;
+}
+
+/** Work a lead suggested as a thread, waiting for the user to start it. */
+export interface ThreadSuggestionDto {
+  id: number;
+  leadSessionId: string;
+  title: string;
+  /** Where it would run; null for the lead's own workspace. */
+  workspaceId: string | null;
+  message: string | null;
+  createdAt: string;
 }
 
 /**
@@ -1584,6 +1602,24 @@ export interface DesktopRpcSchema {
       >;
       /** The Routines agent's session, started in the workspace on first use. */
       routinesAgent: Request<{ workspaceId: string }, AgentSessionDto>;
+      /**
+       * Home's main agent, made on first use: the hidden Home workspace and
+       * its session.
+       */
+      homeAgent: Request<
+        Record<string, never>,
+        { workspace: WorkspaceDto; session: AgentSessionDto }
+      >;
+      /** The threads a lead suggested that wait on the user. */
+      threadSuggestions: Request<{ leadId: string }, ThreadSuggestionDto[]>;
+      /** Starts a suggested thread as a new member of its lead's team. */
+      threadSuggestionStart: Request<{ id: number }, AgentSessionDto>;
+      threadSuggestionDismiss: Request<{ id: number }, { id: number }>;
+      /** Marks a thread done, or open again. */
+      threadResolve: Request<
+        { sessionId: string; resolved: boolean },
+        AgentSessionDto
+      >;
       /** Sends what is waiting, then reads the team as the user. */
       teamDetail: Request<{ teamId: string }, TeamDetailDto>;
       /** Posts to the team chat as the user. */
@@ -2025,6 +2061,8 @@ export interface DesktopRpcSchema {
           appForeground: boolean;
           workspaceId: string | null;
           sessionId: string | null;
+          /** A thread open in the Threads pane beside `sessionId`. */
+          paneSessionId?: string | null;
         },
         PresenceStateDto
       >;

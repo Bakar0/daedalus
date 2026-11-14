@@ -518,8 +518,9 @@ export class TeamService {
         `'${leadName}' is ${above.length} levels below its top lead '${sessionBaseName(above.at(-1)!.name)}', and teams nest at most ${TEAM_MAX_DEPTH} levels, so it cannot add members; add this one to '${sessionBaseName(above[0]!.name)}' instead ('daedal agent spawn --team ${above[0]!.id}')`,
       );
     if (existing) {
+      // A resolved thread is done with; it does not hold a place.
       const active = this.members(existing.id).filter(
-        (member) => !member.archivedAt,
+        (member) => !member.archivedAt && !member.resolvedAt,
       );
       if (active.length >= TEAM_MAX_MEMBERS)
         throw new DaedalusError(
@@ -751,7 +752,12 @@ export class TeamService {
   ): Promise<TurnEndHandling> {
     try {
       const membership = this.memberOf(session.id);
-      if (!membership) return this.led(session.id) ? "reply" : undefined;
+      // The main agent at Home answers the user even before its first thread.
+      if (!membership)
+        return this.led(session.id) ||
+          this.repositories.findHomeWorkspace()?.id === session.workspaceId
+          ? "reply"
+          : undefined;
       const handle = membership.reader.handle;
       const said = text ? clip(text.trim(), MAX_HANDBACK_TEXT) : "";
       const body =

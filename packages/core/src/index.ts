@@ -61,6 +61,8 @@ export * from "./services/workflow-files";
 export * from "./services/workflows";
 export * from "./domain/plans";
 export * from "./services/plans";
+export * from "./services/home";
+export * from "./services/threads";
 export { InstructionService } from "./services/instruction-files";
 export {
   KEYBINDINGS_FILE,

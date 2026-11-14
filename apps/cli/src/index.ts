@@ -30,6 +30,7 @@ import { routineCommand, routineHelp } from "./routines";
 import { sessionCommand, sessionHelp } from "./sessions";
 import { workflowCommand, workflowHelp } from "./workflows";
 import { planCommand, planHelp } from "./plans";
+import { threadCommand, threadHelp } from "./threads";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
 import { workspaceArchivedOrExplain } from "./archive";
@@ -103,6 +104,7 @@ Usage:
   daedal team <say|chat|list|goal> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
+  daedal thread <suggest|suggestions|start|dismiss|done|reopen> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
   daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
@@ -121,6 +123,7 @@ const commandHelp: Record<string, string> = {
   team: teamHelp,
   workflow: workflowHelp,
   plan: planHelp,
+  thread: threadHelp,
   account: accountHelp,
   secret: secretHelp,
   keys: keysHelp,
@@ -2566,6 +2569,7 @@ export async function runCli(
       "cloud",
       "workflow",
       "plan",
+      "thread",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2612,6 +2616,10 @@ export async function runCli(
       return await routineCommand(context, args.slice(1), json);
     if (args[0] === "plan")
       return await planCommand(context, args.slice(1), json, () =>
+        callerSession(context).catch(() => undefined),
+      );
+    if (args[0] === "thread")
+      return await threadCommand(context, args.slice(1), json, () =>
         callerSession(context).catch(() => undefined),
       );
     return await agentCommand(context, args.slice(1), json, options);

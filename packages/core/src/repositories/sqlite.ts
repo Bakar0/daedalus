@@ -28,6 +28,7 @@ import { accountModelKey, derivedDefaultModel } from "../domain";
 import { DaedalusError } from "../errors";
 import { AbilityRepository } from "./abilities";
 import { RoutineRepository } from "./routines";
+import { ThreadRepository } from "./threads";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
 import { WorkflowRepository } from "./workflows";
@@ -64,6 +65,8 @@ interface WorkspaceRow {
   account_models: string;
   default_claude_account: string | null;
   default_codex_account: string | null;
+  /** `workspace`, or `home` for the main agent's hidden row (043). */
+  kind?: string;
   /** From `workspace_places`, joined. */
   place: string | null;
   place_notice: string | null;
@@ -123,6 +126,7 @@ interface AgentRow {
   team_handle: string | null;
   spawned_by: string | null;
   host_id: string | null;
+  resolved_at?: string | null;
 }
 
 interface IntegratedTerminalRow {
@@ -219,6 +223,7 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => {
     defaultModel: derivedDefaultModel(workspace),
     ...(row.place === "cloud" ? { place: "cloud" as const } : {}),
     ...(row.place_notice ? { cloudNotice: row.place_notice } : {}),
+    ...(row.kind === "home" ? { kind: "home" as const } : {}),
   };
 };
 
@@ -266,6 +271,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   teamHandle: row.team_handle,
   spawnedBy: row.spawned_by,
   hostId: row.host_id,
+  resolvedAt: row.resolved_at ?? null,
 });
 
 const integratedTerminalFromRow = (
@@ -427,6 +433,7 @@ export class SqliteRepositories {
   readonly secrets: SecretRepository;
   readonly workflows: WorkflowRepository;
   readonly routines: RoutineRepository;
+  readonly threads: ThreadRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -438,6 +445,7 @@ export class SqliteRepositories {
     this.secrets = new SecretRepository(this.database);
     this.workflows = new WorkflowRepository(this.database);
     this.routines = new RoutineRepository(this.database);
+    this.threads = new ThreadRepository(this.database);
   }
 
   /**
@@ -474,8 +482,8 @@ export class SqliteRepositories {
          (id, slug, name, path, created_at, updated_at, archived_at,
           task_id_prefix, position, start_sets_in_progress, default_provider,
           default_model, auto_handoff_percent, default_claude_account,
-          default_codex_account, account_models, auto_rebirth_percent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          default_codex_account, account_models, auto_rebirth_percent, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -495,6 +503,7 @@ export class SqliteRepositories {
         workspace.defaultCodexAccount,
         JSON.stringify(workspace.accountModels),
         autoRebirthColumn(workspace.autoRebirthPercent),
+        workspace.kind ?? "workspace",
       );
   }
 
@@ -978,6 +987,23 @@ export class SqliteRepositories {
    * Team membership is its own write for the same reason as the labels:
    * `updateAgent` leaves it alone.
    */
+  /** Marks a thread done, or (null) open again. */
+  setAgentResolved(id: string, resolvedAt: string | null): void {
+    this.database
+      .query("UPDATE agent_sessions SET resolved_at = ? WHERE id = ?")
+      .run(resolvedAt, id);
+  }
+
+  /** The hidden row the main agent at Home runs in, if it was made. */
+  findHomeWorkspace(): Workspace | undefined {
+    const row = this.database
+      .query<WorkspaceRow, []>(
+        `${WORKSPACES} WHERE workspaces.kind = 'home' LIMIT 1`,
+      )
+      .get();
+    return row ? workspaceFromRow(row) : undefined;
+  }
+
   setAgentTeam(id: string, teamId: string | null, handle: string | null): void {
     this.database
       .query(

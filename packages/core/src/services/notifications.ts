@@ -71,7 +71,8 @@ export function routeNotification(
     present &&
     presence.appForeground &&
     Boolean(request.sessionId) &&
-    presence.sessionId === request.sessionId;
+    (presence.sessionId === request.sessionId ||
+      presence.paneSessionId === request.sessionId);
   // Already on screen: the indicator has said it. A second alert for what the
   // user is looking at is what teaches people to dismiss alerts unread.
   if (watching && !request.desktop)

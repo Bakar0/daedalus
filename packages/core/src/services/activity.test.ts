@@ -158,6 +158,16 @@ describe("notification routing", () => {
     ).toEqual({ channel: null, suppressed: "on_screen" });
   });
 
+  test("says nothing about a thread open in the Threads pane beside its lead", () => {
+    expect(
+      routeNotification(
+        presence({ sessionId: "lead", paneSessionId: "session" }),
+        { sessionId: "session" } as never,
+        false,
+      ),
+    ).toEqual({ channel: null, suppressed: "on_screen" });
+  });
+
   test("uses a toast when the app is open on something else", () => {
     expect(
       routeNotification(

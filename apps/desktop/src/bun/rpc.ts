@@ -723,6 +723,31 @@ export function createDesktopRequestHandlers(
       ),
     routinesAgent: ({ workspaceId }) =>
       mutate(async () => agentDto(await context.routines.agent(workspaceId))),
+    homeAgent: () =>
+      mutate(async () => {
+        const home = await context.home.agent();
+        return {
+          workspace: workspaceDto(home.workspace),
+          session: agentDto(home.session),
+        };
+      }),
+    threadSuggestions: ({ leadId }) =>
+      result(() =>
+        context.threads.suggestions(leadId).map((suggestion) => ({
+          id: suggestion.id,
+          leadSessionId: suggestion.leadSessionId,
+          title: suggestion.title,
+          workspaceId: suggestion.workspaceId,
+          message: suggestion.message,
+          createdAt: suggestion.createdAt,
+        })),
+      ),
+    threadSuggestionStart: ({ id }) =>
+      mutate(async () => agentDto(await context.threads.start(id))),
+    threadSuggestionDismiss: ({ id }) =>
+      mutate(() => ({ id: context.threads.dismiss(id).id })),
+    threadResolve: ({ sessionId, resolved }) =>
+      mutate(() => agentDto(context.threads.resolve(sessionId, resolved))),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
     teamSay: ({ teamId, body }) =>
       mutate(async () => {

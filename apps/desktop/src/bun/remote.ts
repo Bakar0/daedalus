@@ -140,21 +140,35 @@ function modelArguments(args: readonly string[]): string[] {
 export function phoneSnapshot(
   snapshot: DesktopSnapshotDto,
 ): DesktopSnapshotDto {
+  // Home's main agent is a desktop surface; on the phone its hidden row
+  // would read as a workspace.
+  const home = new Set(
+    snapshot.workspaces
+      .filter((workspace) => workspace.kind === "home")
+      .map((workspace) => workspace.id),
+  );
   return {
     ...snapshot,
-    agents: snapshot.agents.map((session) => ({
-      ...session,
-      args: modelArguments(session.args),
-    })),
-    tasks: snapshot.tasks.map((task) =>
-      task.description.length > PHONE_BRIEF_CHARACTERS
-        ? {
-            ...task,
-            description: task.description.slice(0, PHONE_BRIEF_CHARACTERS),
-            descriptionShortened: true,
-          }
-        : task,
+    workspaces: snapshot.workspaces.filter(
+      (workspace) => !home.has(workspace.id),
     ),
+    agents: snapshot.agents
+      .filter((session) => !home.has(session.workspaceId))
+      .map((session) => ({
+        ...session,
+        args: modelArguments(session.args),
+      })),
+    tasks: snapshot.tasks
+      .filter((task) => !home.has(task.workspaceId))
+      .map((task) =>
+        task.description.length > PHONE_BRIEF_CHARACTERS
+          ? {
+              ...task,
+              description: task.description.slice(0, PHONE_BRIEF_CHARACTERS),
+              descriptionShortened: true,
+            }
+          : task,
+      ),
   };
 }
 

@@ -35,6 +35,13 @@ import {
 const MARKER_DIRECTORY = ".daedalus";
 const MARKER_FILE = "workspace.json";
 
+/**
+ * The id, slug and folder name of the hidden Home row the main agent runs
+ * in. A slug the user can type is letters, digits and hyphens, so a dot
+ * keeps it apart from any workspace they make.
+ */
+export const HOME_WORKSPACE_ID = ".home";
+
 export function workspaceSlug(value: string): string {
   const slug = normalizeWorkspaceSlug(value);
   if (!slug || slug.length > WORKSPACE_SLUG_MAX) {
@@ -205,10 +212,70 @@ export class WorkspaceService {
     }
   }
 
+  /** The workspaces the user made, without the hidden Home row. */
   async list(): Promise<Workspace[]> {
     return (await this.listWithHealth())
-      .filter((item) => item.available && !item.workspace.archivedAt)
+      .filter(
+        (item) =>
+          item.available &&
+          !item.workspace.archivedAt &&
+          item.workspace.kind !== "home",
+      )
       .map((item) => item.workspace);
+  }
+
+  /**
+   * The hidden row the main agent at Home runs in, made on first use. Its
+   * folder is `.home` under the workspaces root rather than the root itself:
+   * a CLAUDE.md or AGENTS.md written at the root would be read by every
+   * session in every workspace below it.
+   */
+  async ensureHome(): Promise<Workspace> {
+    const existing = this.repositories.findHomeWorkspace();
+    const path = existing?.path ?? join(this.workspaceRoot, HOME_WORKSPACE_ID);
+    await ensureDirectory(join(path, MARKER_DIRECTORY));
+    const marker = join(path, MARKER_DIRECTORY, MARKER_FILE);
+    if (!(await pathExists(marker)))
+      await writeTextFile(
+        marker,
+        `${JSON.stringify({ id: existing?.id ?? HOME_WORKSPACE_ID }, null, 2)}\n`,
+      );
+    await ensureWorkspaceContentFiles(
+      path,
+      this.daedalusHome,
+      this.instructionFiles(),
+    );
+    if (existing) {
+      if (!existing.archivedAt) return existing;
+      const restored = {
+        ...existing,
+        archivedAt: null,
+        updatedAt: new Date().toISOString(),
+      };
+      this.repositories.updateWorkspace(restored);
+      return restored;
+    }
+    const now = new Date().toISOString();
+    const home: Workspace = {
+      id: HOME_WORKSPACE_ID,
+      slug: HOME_WORKSPACE_ID,
+      name: "Home",
+      path,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      position: 0,
+      startSetsInProgress: false,
+      autoRebirthPercent: null,
+      defaultProvider: "claude",
+      defaultModel: null,
+      accountModels: {},
+      defaultClaudeAccount: null,
+      defaultCodexAccount: null,
+      kind: "home",
+    };
+    this.repositories.createWorkspace(home);
+    return home;
   }
 
   /**

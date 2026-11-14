@@ -53,6 +53,11 @@ export interface Workspace {
   defaultClaudeAccount: string | null;
   defaultCodexAccount: string | null;
   /**
+   * `home` for the one hidden row the main agent at Home runs in. Absent for
+   * every workspace the user made; lists that show workspaces leave Home out.
+   */
+  kind?: "home";
+  /**
    * Where it lives: `cloud` while its cloud copy holds it and every session
    * runs there; absent on this Mac. Changed only by a workspace move, by
    * archive, and by the fallback to this Mac's backup.
@@ -188,6 +193,25 @@ export interface AgentSession {
    * workspace root there.
    */
   hostId: string | null;
+  /**
+   * When the user or its lead marked this thread done. A resolved member
+   * shows under Resolved and no longer counts against its lead's cap.
+   */
+  resolvedAt?: string | null;
+}
+
+/** Work a lead suggested as a thread, for the user to start or dismiss. */
+export interface ThreadSuggestion {
+  id: number;
+  leadSessionId: UUID;
+  title: string;
+  /** Where it would run; null for the lead's own workspace. */
+  workspaceId: string | null;
+  /** The new thread's instructions; null starts it with the title alone. */
+  message: string | null;
+  createdAt: string;
+  startedSessionId: UUID | null;
+  closedAt: string | null;
 }
 
 export interface IntegratedTerminal {
@@ -576,6 +600,8 @@ export interface PresenceState {
   appForeground: boolean;
   workspaceId: string | null;
   sessionId: string | null;
+  /** A thread open in the Threads pane beside `sessionId`; on screen too. */
+  paneSessionId?: string | null;
   userIdleSeconds: number;
   observedAt: string;
 }

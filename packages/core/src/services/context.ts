@@ -64,6 +64,8 @@ import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkflowService } from "./workflows";
 import { PlanService } from "./plans";
+import { HomeService } from "./home";
+import { ThreadService } from "./threads";
 import {
   instructionFileOptions,
   WorkspaceContentService,
@@ -108,6 +110,10 @@ export interface ApplicationContext {
   workflows: WorkflowService;
   /** Plans: `plans/*.plan.md` in a workspace or at Home, and their owners. */
   plans: PlanService;
+  /** Home's main agent, in the hidden Home workspace. */
+  home: HomeService;
+  /** A lead's threads: suggested ones, and marking one resolved. */
+  threads: ThreadService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
   instructions: InstructionService;
   /** The person's own keys, `keybindings.json` in the home. */
@@ -485,6 +491,11 @@ export async function createApplicationContext(
       send: (sessionId, text, from) =>
         agents.send(sessionId, text, from ? { from } : {}),
     }),
+    home: new HomeService(repositories, config, workspaces, {
+      spawn: (input) => agents.spawn(input),
+      restore: (id) => agents.restore(id),
+    }),
+    threads: new ThreadService(repositories, workspaces, teams!, options.now),
     abilityNotes,
     routines: new RoutineService(
       repositories,
