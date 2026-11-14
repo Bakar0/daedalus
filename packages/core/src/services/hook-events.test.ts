@@ -113,6 +113,10 @@ describe("Claude hook payloads", () => {
     expect(
       after('~/.daedalus/bin/daedal attention "Merge PR #147"')?.ifNotActivity,
     ).toContain("needs_input");
+    expect(
+      after('daedal plan ask cart ^stale "Full cart or version?"')
+        ?.ifNotActivity,
+    ).toContain("needs_input");
     expect(after("daedal attention --clear")?.ifNotActivity).toBeUndefined();
     expect(after("daedal agent list")?.ifNotActivity).toBeUndefined();
   });

@@ -306,7 +306,8 @@ function toolCall(payload: Record<string, unknown>): {
 
 /**
  * Whether a shell call is the agent raising its own badge with
- * `daedal attention "<reason>"`. `--clear` takes it down, so that one may
+ * `daedal attention "<reason>"`, or with `daedal plan ask`, which asks the
+ * user a question in a plan. `--clear` takes it down, so that one may
  * retract like any other tool.
  */
 export function raisesAttention(
@@ -317,8 +318,9 @@ export function raisesAttention(
   const command = text((toolInput as { command?: unknown })?.command);
   return (
     !!command &&
-    /\bdaedal\s+attention\b/.test(command) &&
-    !/\battention\b[^\n;&|]*--clear\b/.test(command)
+    (/\bdaedal\s+plan\s+ask\b/.test(command) ||
+      (/\bdaedal\s+attention\b/.test(command) &&
+        !/\battention\b[^\n;&|]*--clear\b/.test(command)))
   );
 }
 
