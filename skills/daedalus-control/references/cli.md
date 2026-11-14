@@ -118,6 +118,31 @@ workspace's `defaultModel` when `--provider` is its `defaultProvider`, and
 lists fails the spawn with exit code 2; fix it with `workspace update
 --default-model`. Display labels are descriptive and are not model IDs.
 
+## Plans
+
+```text
+daedal plan new "<title>" [--workspace <workspace> | --home] [--owner <handle>] [--body-file <path|->]
+daedal plan list [--workspace <workspace> | --home]
+daedal plan show <plan>
+daedal plan start <plan> ^<id> [--owner <handle>]
+daedal plan done|block|drop <plan> ^<id>
+daedal plan ask <plan> ^<id> "<question>"
+```
+
+A plan is `plans/<slug>.plan.md` in a workspace (or at Home with `--home`):
+frontmatter `plan:` and `owner:`, free markdown sections, and a nested
+checklist under `## Tasks`, one task per line as `- [ ] Title @owner ^id`.
+States are `[ ]` todo, `[/]` doing, `[x]` done, `[!]` blocked and `[-]`
+dropped; markdown indented under a task is its details, and a `> ? ...` line
+there is a question for the user. `<plan>` is the slug, a path, or the
+absolute path an agent was given. `start` marks the task `[/]` with you as
+its owner; `ask` adds the question under the task, where the app shows it
+under "Needs you". An `@owner` is a session's team handle or its name as a
+handle (`Cart endpoints` is `@cart-endpoints`). The app opens a plan as an
+interactive document: Start agent on a task, Open its owner, and Ask (⌘L) on
+any selected text, which sends the owner the question, then `path:lines:` and
+the quote. Edit the file directly for anything else.
+
 ## Accounts
 
 ```text
