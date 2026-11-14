@@ -59,6 +59,8 @@ export * from "./services/team-transport";
 export * from "./services/teams";
 export * from "./services/workflow-files";
 export * from "./services/workflows";
+export * from "./domain/plans";
+export * from "./services/plans";
 export { InstructionService } from "./services/instruction-files";
 export {
   KEYBINDINGS_FILE,

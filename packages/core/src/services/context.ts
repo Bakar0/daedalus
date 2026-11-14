@@ -63,6 +63,7 @@ import { TeamService } from "./teams";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkflowService } from "./workflows";
+import { PlanService } from "./plans";
 import {
   instructionFileOptions,
   WorkspaceContentService,
@@ -105,6 +106,8 @@ export interface ApplicationContext {
   teams: TeamService;
   /** Workflow runs: which workflow each piece of work follows, and where. */
   workflows: WorkflowService;
+  /** Plans: `plans/*.plan.md` in a workspace or at Home, and their owners. */
+  plans: PlanService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
   instructions: InstructionService;
   /** The person's own keys, `keybindings.json` in the home. */
@@ -471,6 +474,17 @@ export async function createApplicationContext(
       () => workflowsEnabled(config),
       options.now,
     ),
+    plans: new PlanService({
+      workspaceRoot: config.workspaceRoot,
+      workspace: (reference) => workspaces.getActive(reference),
+      workspaces: () => workspaces.list(),
+      sessions: (workspace) => agents.list({ workspace }),
+      activity: (sessionId) => activity.get(sessionId)?.activity,
+      needsAttention: (sessionId) => Boolean(activity.attentionFor(sessionId)),
+      spawn: (input) => agents.spawn(input),
+      send: (sessionId, text, from) =>
+        agents.send(sessionId, text, from ? { from } : {}),
+    }),
     abilityNotes,
     routines: new RoutineService(
       repositories,
