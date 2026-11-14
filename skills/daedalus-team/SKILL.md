@@ -24,6 +24,9 @@ daedal team say "@lead the refund rule in TEAM.md rounds half up; the spec says 
 Tags decide who is told:
 
 - `@lead` reaches the lead, `@<handle>` that member, `@all` everyone.
+- Put the tags first. A message that starts with tags goes only to them,
+  so naming another member later ("the contract from @api") does not
+  wake it. Without a leading tag, every handle named in the text is told.
 - Only tagged sessions get the message pushed to them. A message that tags
   nobody is stored, and only someone reading the chat sees it.
 - An unknown tag is refused with the list of handles. `daedal team list`
@@ -43,7 +46,9 @@ context before it answers, often hundreds of thousands of tokens. So:
 
 ## Handing work back
 
-You do not post "done". When your turn ends, Daedalus hands your lead your
+You do not post "done", and you do not post a summary with `team say`
+either: the hand-back is your report, and a second copy wakes the lead
+twice. When your turn ends, Daedalus hands your lead your
 last message: "@you finished: <your last message>", or "failed" with the
 error. Hand-backs reach a lead at most once a minute, several members' in
 one wake, so finishing costs the lead little.

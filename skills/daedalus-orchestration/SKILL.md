@@ -159,6 +159,8 @@ Use the team chat, as the daedalus-team skill describes:
   the message, in full, into each tagged session. `@all` reaches every
   member. Messages to you arrive the same way, with a line saying how to
   reply; there is nothing to fetch.
+- Put the tags first. A message that starts with tags goes only to them;
+  "@docs add it. Contract from @api: ..." reaches @docs, not @api.
 - `daedal team chat` reads what is new, including messages between members
   that did not tag you. Read it before a decision.
 

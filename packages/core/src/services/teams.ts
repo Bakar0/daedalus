@@ -142,13 +142,19 @@ export function teamHandleBase(text: string | undefined): string {
 }
 
 /**
- * The handles a message tags. A tag is `@` and a handle, at the start or
- * after a character that cannot be part of an address, so `a@b.com` is not
- * a tag.
+ * The handles a message tags. A message that starts with tags
+ * (`@db @cache ...`) is addressed to those alone, so a handle named later in
+ * the text ("the contract from @api") does not deliver it there. A message
+ * with no leading tag is addressed to every handle it names. A tag is `@` and
+ * a handle, at the start or after a character that cannot be part of an
+ * address, so `a@b.com` is not a tag.
  */
 export function parseTags(body: string): string[] {
+  const leading = /^\s*((?:@[a-z0-9][a-z0-9-]*[\s,:;]*)+)/i.exec(body)?.[1];
   const tags = new Set<string>();
-  for (const match of body.matchAll(/(?:^|[^\w.@-])@([a-z0-9][a-z0-9-]*)/gi))
+  for (const match of (leading ?? body).matchAll(
+    /(?:^|[^\w.@-])@([a-z0-9][a-z0-9-]*)/gi,
+  ))
     tags.add(match[1]!.toLowerCase().replace(/-+$/, ""));
   return [...tags];
 }

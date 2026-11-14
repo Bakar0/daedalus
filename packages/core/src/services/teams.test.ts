@@ -1413,8 +1413,13 @@ describe("teams", () => {
     expect(teamHandleBase("   ")).toBe("member");
     expect(teamHandleBase(undefined)).toBe("member");
     expect(
-      parseTags("@Lead hi @all, ask @client-2. not a@b.com or @-x"),
+      parseTags("Hi @Lead and @all, ask @client-2. not a@b.com or @-x"),
     ).toEqual(["lead", "all", "client-2"]);
+    expect(parseTags("@cartdocs add it. Contract from @discount: ...")).toEqual(
+      ["cartdocs"],
+    );
+    expect(parseTags("  @db, @cache: index? cc @api")).toEqual(["db", "cache"]);
+    expect(parseTags("@db-\nhello @api")).toEqual(["db"]);
   });
 
   test("both skills are managed skills", () => {
