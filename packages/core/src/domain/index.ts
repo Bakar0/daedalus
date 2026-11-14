@@ -200,6 +200,32 @@ export interface AgentSession {
   resolvedAt?: string | null;
 }
 
+/** A session keeping an eye on another, as the main agent does (044). */
+export interface SessionTrack {
+  trackerSessionId: UUID;
+  trackedSessionId: UUID;
+  createdAt: string;
+}
+
+/**
+ * Between a tracker and a session it tracks: a report of the tracked
+ * session's turn end, or a message from the tracker. `peerSessionId` is the
+ * other end.
+ */
+export type TrackNoteKind = "message" | "report" | "waiting";
+
+export interface TrackNote {
+  id: number;
+  recipientSessionId: UUID;
+  peerSessionId: UUID | null;
+  kind: TrackNoteKind;
+  body: string;
+  createdAt: string;
+  deliveredAt: string | null;
+  lastError: string | null;
+  attemptedAt: string | null;
+}
+
 /** Work a lead suggested as a thread, for the user to start or dismiss. */
 export interface ThreadSuggestion {
   id: number;

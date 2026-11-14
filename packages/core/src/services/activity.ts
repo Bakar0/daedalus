@@ -337,17 +337,37 @@ export class ActivityService {
     activity: AgentActivity,
   ) => Promise<unknown> = async () => undefined;
 
-  private turnEndListener: (
+  private readonly turnEndListeners: ((
     session: AgentSession,
     end: TurnEnd,
     text: string | null,
-  ) => Promise<TurnEndHandling> = async () => undefined;
+  ) => Promise<TurnEndHandling>)[] = [];
+
+  /**
+   * Every turn-end listener, in the order they were added. The turn was
+   * handed back if any listener handed it back, else a reply if any says so.
+   */
+  private async turnEnded(
+    session: AgentSession,
+    end: TurnEnd,
+    text: string | null,
+  ): Promise<TurnEndHandling> {
+    const handled: TurnEndHandling[] = [];
+    for (const listener of this.turnEndListeners)
+      handled.push(await listener(session, end, text).catch(() => undefined));
+    return handled.includes("handed-back")
+      ? "handed-back"
+      : handled.includes("reply")
+        ? "reply"
+        : undefined;
+  }
 
   /**
    * Told when a session's turn ends, from a hook, a transcript or the agent
    * itself (never from a pane guess): it finished, failed, was interrupted,
    * or stopped to wait on the user. `text` is its last message, or what it
-   * is waiting for. The team service hands it back to the session's lead.
+   * is waiting for. The team service hands it back to the session's lead,
+   * and the tracking service reports it to the sessions tracking it.
    */
   onTurnEnd(
     listener: (
@@ -356,7 +376,7 @@ export class ActivityService {
       text: string | null,
     ) => Promise<TurnEndHandling>,
   ): void {
-    this.turnEndListener = listener;
+    this.turnEndListeners.push(listener);
   }
 
   /**
@@ -483,11 +503,7 @@ export class ActivityService {
 
     const end = transitioned ? turnEndOf(previous?.activity, input) : undefined;
     const handling = end
-      ? await this.turnEndListener(
-          session,
-          end,
-          turnEndText(end, input, detail),
-        ).catch(() => undefined)
+      ? await this.turnEnded(session, end, turnEndText(end, input, detail))
       : undefined;
     const notification = transitioned
       ? // An agent that wrote its own reason gets to say it in its own words;

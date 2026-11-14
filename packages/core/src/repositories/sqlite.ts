@@ -29,6 +29,7 @@ import { DaedalusError } from "../errors";
 import { AbilityRepository } from "./abilities";
 import { RoutineRepository } from "./routines";
 import { ThreadRepository } from "./threads";
+import { TrackRepository } from "./tracks";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
 import { WorkflowRepository } from "./workflows";
@@ -434,6 +435,7 @@ export class SqliteRepositories {
   readonly workflows: WorkflowRepository;
   readonly routines: RoutineRepository;
   readonly threads: ThreadRepository;
+  readonly tracks: TrackRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -446,6 +448,7 @@ export class SqliteRepositories {
     this.workflows = new WorkflowRepository(this.database);
     this.routines = new RoutineRepository(this.database);
     this.threads = new ThreadRepository(this.database);
+    this.tracks = new TrackRepository(this.database);
   }
 
   /**

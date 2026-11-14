@@ -104,7 +104,7 @@ Usage:
   daedal team <say|chat|list|goal> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
-  daedal thread <suggest|suggestions|start|dismiss|done|reopen> ... [--json]
+  daedal thread <new|track|untrack|list|say|suggest|suggestions|start|dismiss|done|reopen> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
   daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]

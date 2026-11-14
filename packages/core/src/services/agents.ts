@@ -503,17 +503,23 @@ export class AgentService {
     this.teamLaunchLines = lines;
   }
 
-  private sessionRunning: (session: AgentSession) => Promise<unknown> =
-    async () => undefined;
+  private readonly sessionRunningListeners: ((
+    session: AgentSession,
+  ) => Promise<unknown>)[] = [];
+
+  private async sessionRunning(session: AgentSession): Promise<void> {
+    for (const listener of this.sessionRunningListeners)
+      await listener(session).catch(() => undefined);
+  }
 
   /**
    * Called once a spawn, restore or revive has the session running, such as
    * to send it team messages that waited while it was not. A resumed session
-   * sits idle, so its own hooks may not fire again for a long time. Must not
-   * throw.
+   * sits idle, so its own hooks may not fire again for a long time. Every
+   * listener is called, in the order they were added.
    */
   onSessionRunning(run: (session: AgentSession) => Promise<unknown>): void {
-    this.sessionRunning = run;
+    this.sessionRunningListeners.push(run);
   }
 
   private cloudAsleep:
@@ -1870,6 +1876,7 @@ export class AgentService {
       this.repositories.workflows.moveToSession(predecessor.id, session.id);
       this.repositories.routines.moveAgent(predecessor.id, session.id);
       this.repositories.threads.moveToSession(predecessor.id, session.id);
+      this.repositories.tracks.moveToSession(predecessor.id, session.id);
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });

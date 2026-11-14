@@ -15,23 +15,25 @@ export const HOME_MEMORY_FILE = "MEMORY.md";
  */
 export function homeAgentPrompt(memoryPath: string): string {
   return [
-    "You are the main agent at Daedalus Home. You coordinate the user's work across all of their workspaces; every piece of work runs in a thread, a Daedalus session that is a member of your team.",
+    "You are the main agent at Daedalus Home. You coordinate the user's work across all of their workspaces. Work runs in threads: ordinary Daedalus sessions in the user's workspaces that you track. They are in no team and have no handle; tracking only means their turns are reported to you.",
     `- Read ${memoryPath} now. It holds what the user asked you to remember. When the user states a preference ("keep it to 3 running", "always use codex for docs"), save it there in one line, say "Saved to memory: ...", and follow it from then on.`,
     "- Answer quick questions yourself, here. Do not start a thread for a question you can answer from the CLI or a file.",
-    '- Start one thread per piece of work: `daedal agent spawn --team --workspace <workspace> --name <short-handle> --message "<instructions>"`. Pick the workspace the work belongs to (`daedal workspace list`); never leave --workspace out. Then say which thread got what, one line each.',
-    '- Route a follow-up about running work to the thread that has it (`daedal team say "@handle ..."`) instead of starting a new one, and say where it went. Put the tags first: a message that starts with tags goes only to them, so naming another thread later in the text does not wake it.',
+    '- Start one thread per piece of work: `daedal thread new --workspace <workspace> --name "<short name>" --message "<instructions>"`. It starts an ordinary session there and tracks it. Pick the workspace the work belongs to (`daedal workspace list`); never leave --workspace out. Then say which thread got what, one line each.',
+    '- When the user points you at a session ("keep an eye on the stale-write session"), track it: `daedal thread track <session>`; find it with `daedal thread list --all`. When they tell you to stop, `daedal thread untrack <session>`; it keeps running.',
+    '- Route a follow-up about running work to the thread that has it, `daedal thread say <session> "<text>"`, instead of starting a new one, and say where it went.',
     '- When you see work worth doing that the user did not ask for, suggest it instead of starting it: `daedal thread suggest "<title>" --workspace <workspace> --message "<instructions>"`. The user starts it from the Threads pane.',
-    "- Threads hand back their last message when their turn ends. Post to the user only when a thread finishes something or gets stuck, with the news in the first line. A thread waiting on the user shows in the Threads pane; do not relay its question.",
+    "- A tracked session's last message comes to you when its turn ends. Post to the user only when a thread finishes something or gets stuck, with the news in the first line. A thread waiting on the user shows in the Threads pane; do not relay its question.",
     '- When you need the user to decide something, run `daedal attention "<the question>"` as well as asking it, and `daedal attention --clear` once answered. A question only in your reply shows as done, not waiting on the user.',
-    "- When a thread's work is done and checked, mark it resolved: `daedal thread done <session>`.",
+    "- When a thread's work is done and checked, mark it resolved: `daedal thread done <session>`. It stops reporting to you.",
+    "- Do not use `daedal agent spawn --team`: you track sessions, you do not lead a team.",
     "Follow the daedalus-orchestration skill. Then greet the user in one line and wait.",
   ].join("\n");
 }
 
 /**
  * Home's main agent: one Claude session in the hidden Home workspace, made on
- * first use. It is the lead of a team whose members, its threads, run in any
- * workspace.
+ * first use. It tracks its threads, ordinary sessions in any workspace; it
+ * leads no team.
  */
 export class HomeService {
   constructor(
@@ -48,6 +50,40 @@ export class HomeService {
       restore(id: string): Promise<AgentSession>;
     },
   ) {}
+
+  /**
+   * Moves the members of any team led from Home to tracked sessions of their
+   * lead, clears their handles, and ends the team. The main agent once led
+   * its threads as a team. Safe to run again: a second run finds nothing.
+   * Returns the sessions it moved.
+   */
+  adoptTeamMembers(): string[] {
+    const home = this.repositories.findHomeWorkspace();
+    if (!home) return [];
+    const at = new Date().toISOString();
+    const moved: string[] = [];
+    this.repositories.transaction(() => {
+      for (const ability of this.repositories.abilities.list("orchestration")) {
+        const lead = this.repositories.findAgent(ability.sessionId);
+        if (lead?.workspaceId !== home.id) continue;
+        for (const member of this.repositories.listTeamMembers(ability.id)) {
+          if (member.id !== lead.id)
+            this.repositories.tracks.add(lead.id, member.id, at);
+          this.repositories.setAgentTeam(member.id, null, null);
+          moved.push(member.id);
+        }
+        if (ability.enabled)
+          this.repositories.abilities.update({
+            ...ability,
+            enabled: false,
+            paused: false,
+            pendingNote: null,
+            revokedAt: at,
+          });
+      }
+    });
+    return moved;
+  }
 
   /** The Home row, if the main agent was ever opened. */
   workspace(): Workspace | undefined {

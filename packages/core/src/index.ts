@@ -63,6 +63,7 @@ export * from "./domain/plans";
 export * from "./services/plans";
 export * from "./services/home";
 export * from "./services/threads";
+export * from "./services/tracking";
 export { InstructionService } from "./services/instruction-files";
 export {
   KEYBINDINGS_FILE,

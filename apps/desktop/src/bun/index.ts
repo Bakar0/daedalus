@@ -990,6 +990,14 @@ setInterval(async () => {
         delivered: delivery.delivered,
         error: delivery.error,
       });
+    // The same for reports to a session tracking others, such as the main
+    // agent.
+    for (const delivery of await context.tracking.flushDue().catch(() => []))
+      await context.logger.write("info", "tracking", {
+        report: delivery.sessionId,
+        delivered: delivery.delivered,
+        error: delivery.error,
+      });
     // Routines on the Routines page start headless runs; the clock is this
     // tick, like the rest.
     for (const run of await context.routines.tick().catch(async (error) => {

@@ -272,6 +272,12 @@ export class TeamService {
         "VALIDATION",
         `'${session.name}' runs in the cloud and cannot lead a team yet; add the members to a session on this Mac`,
       );
+    // The main agent tracks its threads; it leads no team (#71).
+    if (session.workspaceId === this.repositories.findHomeWorkspace()?.id)
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${session.name}' runs at Home and leads no team; start work with 'daedal thread new --workspace <workspace> --message "<instructions>"', which starts a session and tracks it`,
+      );
     // Refuses past the depth cap, naming the lead to add to instead.
     this.abilities.grant(session.id, "orchestration", { live: false });
     return { team: this.get(session.id), created: true };
@@ -758,7 +764,7 @@ export class TeamService {
   ): Promise<TurnEndHandling> {
     try {
       const membership = this.memberOf(session.id);
-      // The main agent at Home answers the user even before its first thread.
+      // The main agent at Home answers the user; it leads no team.
       if (!membership)
         return this.led(session.id) ||
           this.repositories.findHomeWorkspace()?.id === session.workspaceId

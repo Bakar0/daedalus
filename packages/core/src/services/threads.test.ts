@@ -5,7 +5,9 @@ import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   createApplicationContext,
   HOME_WORKSPACE_ID,
+  type AgentSession,
   type ApplicationContext,
+  type TeamDelivery,
   type TeamTransport,
 } from "../index";
 
@@ -47,13 +49,23 @@ class FakeTmux implements TmuxClient {
   }
 }
 
-const silentTransport: TeamTransport = { deliver: async () => {} };
+/** Records every delivery, by the session it went to. */
+class RecordingTransport implements TeamTransport {
+  readonly sent: TeamDelivery[] = [];
+  async deliver(delivery: TeamDelivery) {
+    this.sent.push(delivery);
+  }
+  to(session: Pick<AgentSession, "id">): TeamDelivery[] {
+    return this.sent.filter((each) => each.session.id === session.id);
+  }
+}
 
 async function withHome(
   run: (harness: {
     home: string;
     context: ApplicationContext;
     tmux: FakeTmux;
+    transport: RecordingTransport;
   }) => Promise<void>,
 ) {
   await withTemporaryDaedalusHome(async (home) => {
@@ -64,6 +76,7 @@ async function withHome(
       }),
     );
     const tmux = new FakeTmux();
+    const transport = new RecordingTransport();
     const context = await createApplicationContext({
       env: {
         DAEDALUS_HOME: home,
@@ -73,7 +86,7 @@ async function withHome(
         DAEDALUS_CURSOR_HOME: join(home, "cursor"),
       },
       tmux,
-      teamTransport: silentTransport,
+      teamTransport: transport,
       sendNativeNotification: async () => ({
         delivered: true,
         backend: "app" as const,
@@ -83,7 +96,7 @@ async function withHome(
     try {
       await context.workspaces.create({ name: "Checkout", slug: "checkout" });
       await context.workspaces.create({ name: "Docs", slug: "docs" });
-      await run({ home, context, tmux });
+      await run({ home, context, tmux, transport });
     } finally {
       context.close();
     }
@@ -108,6 +121,9 @@ describe("Home", () => {
       // Its prompt is the coordinator's, with the memory file.
       const prompt = tmux.launches[0]!.args.at(-1)!;
       expect(prompt).toContain("Start one thread per piece of work");
+      expect(prompt).toContain("daedal thread new --workspace");
+      expect(prompt).toContain("daedal thread track <session>");
+      expect(prompt).toContain("daedal attention");
       expect(prompt).toContain(join(first.workspace.path, "MEMORY.md"));
       expect(
         await Bun.file(join(first.workspace.path, "MEMORY.md")).exists(),
@@ -138,26 +154,301 @@ describe("Home", () => {
     });
   });
 
-  test("a thread of the main agent runs in another workspace", async () => {
-    await withHome(async ({ context }) => {
+  test("a thread of the main agent is an ordinary session it tracks, in another workspace", async () => {
+    await withHome(async ({ context, tmux }) => {
       const { session: main } = await context.home.agent();
-      const { session } = await context.teams.spawnMember({
-        team: main.id,
-        addedBy: "lead",
+      const session = await context.tracking.start({
+        tracker: main.id,
         workspace: "checkout",
         name: "endpoints",
-        instructions: "Build the cart endpoints",
+        message: "Build the cart endpoints",
       });
-      expect(session.workspaceId).toBe("checkout");
-      expect(context.teams.led(main.id)?.lead.id).toBe(main.id);
-      // The main agent stays the main agent once it leads threads.
+      expect(session).toMatchObject({
+        workspaceId: "checkout",
+        name: "endpoints",
+        teamId: null,
+        teamHandle: null,
+        spawnedBy: main.id,
+      });
+      expect(context.tracking.tracks(main.id, session.id)).toBe(true);
+      expect(context.teams.led(main.id)).toBeUndefined();
+      expect(context.teams.memberOf(session.id)).toBeUndefined();
+      // It is told where its replies go.
+      const prompt = tmux.launches.at(-1)!.args.at(-1)!;
+      expect(prompt).toContain("Build the cart endpoints");
+      expect(prompt).toContain(
+        "The main agent started this session and tracks it",
+      );
       expect(context.home.current()?.id).toBe(main.id);
+      // The main agent leads no team.
+      await expect(
+        context.teams.spawnMember({
+          team: main.id,
+          addedBy: "lead",
+          workspace: "checkout",
+          name: "other",
+          instructions: "Work",
+        }),
+      ).rejects.toThrow("leads no team; start work with 'daedal thread new");
+      await expect(
+        context.tracking.start({
+          tracker: main.id,
+          workspace: HOME_WORKSPACE_ID,
+          message: "Here",
+        }),
+      ).rejects.toThrow("not at Home");
+    });
+  });
+
+  test("tracking, untracking and the All list", async () => {
+    await withHome(async ({ context }) => {
+      const { session: main } = await context.home.agent();
+      const mine = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "stale",
+      });
+      expect(context.tracking.track(main.id, mine.id).added).toBe(true);
+      expect(context.tracking.track(main.id, mine.id).added).toBe(false);
+      expect(() => context.tracking.track(main.id, main.id)).toThrow(
+        "cannot track itself",
+      );
+      expect(
+        context.tracking.sessions(main.id).map((row) => row.session.name),
+      ).toEqual(["stale"]);
+      const other = await context.agents.spawn({
+        provider: "claude",
+        workspace: "docs",
+        name: "changelog",
+      });
+      // All: every live session in every workspace, never Home's.
+      expect(
+        context.tracking
+          .sessions(main.id, { all: true })
+          .map((row) => [row.session.name, row.tracked])
+          .sort(),
+      ).toEqual([
+        ["changelog", false],
+        ["stale", true],
+      ]);
+      expect(context.tracking.untrack(main.id, mine.id).removed).toBe(true);
+      expect(context.tracking.sessions(main.id)).toEqual([]);
+      expect(context.tracking.isTracked(other.id)).toBe(false);
+      expect(context.repositories.findAgent(mine.id)?.status).toBe("running");
+    });
+  });
+});
+
+/** A turn of a session, as its hooks report it. */
+async function turn(
+  context: ApplicationContext,
+  session: AgentSession,
+  message: string,
+) {
+  await context.activity.record({
+    sessionId: session.id,
+    activity: "working",
+    source: "hook",
+  });
+  return context.activity.record({
+    sessionId: session.id,
+    activity: "done",
+    detail: message.slice(0, 40),
+    message,
+    source: "hook",
+  });
+}
+
+/** Moves a session's last delivery a minute and more into the past. */
+function minuteLater(context: ApplicationContext, sessionId: string) {
+  context.repositories.database
+    .query(
+      "UPDATE track_notes SET delivered_at = ? WHERE recipient_session_id = ? AND delivered_at IS NOT NULL",
+    )
+    .run(new Date(Date.now() - 61_000).toISOString(), sessionId);
+}
+
+describe("reports to the tracker", () => {
+  test("a tracked session's turn end reaches its tracker, at most once a minute", async () => {
+    await withHome(async ({ context, transport }) => {
+      const { session: main } = await context.home.agent();
+      const docs = await context.tracking.start({
+        tracker: main.id,
+        workspace: "docs",
+        name: "cart docs",
+        message: "Document the cart",
+      });
+      const stale = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "stale",
+      });
+      context.tracking.track(main.id, stale.id);
+
+      const finished = await turn(
+        context,
+        docs,
+        "Wrote the discount section.\n\nLinks checked.",
+      );
+      expect(transport.to(main).map((each) => each.text)).toEqual([
+        "[tracked 'cart docs' in Docs] finished:\n\n" +
+          "  Wrote the discount section.\n\n" +
+          "  Links checked.\n\n" +
+          `Reply with: daedal thread say ${docs.id} "..."`,
+      ]);
+      // The main agent tells the user; the tracked turn is not notified.
+      expect(finished.notification).toBeUndefined();
+
+      // A second within the minute waits for the tick.
+      await turn(context, stale, "Picked full cart.");
+      expect(transport.to(main)).toHaveLength(1);
+      expect(await context.tracking.flushDue()).toEqual([]);
+      minuteLater(context, main.id);
+      expect(await context.tracking.flushDue()).toMatchObject([
+        { sessionId: main.id, delivered: true, messages: 1 },
+      ]);
+      expect(transport.to(main).at(-1)!.text).toContain(
+        "[tracked 'stale' in Checkout] finished:\n\n  Picked full cart.",
+      );
+    });
+  });
+
+  test("a tracked session waiting on the user wakes no one alone", async () => {
+    await withHome(async ({ context, transport }) => {
+      const { session: main } = await context.home.agent();
+      const screen = await context.tracking.start({
+        tracker: main.id,
+        workspace: "docs",
+        name: "cart screen",
+        message: "Spec the cart screen",
+      });
+      await context.activity.raise({
+        sessionId: screen.id,
+        reason: "Keep files in the session folder?",
+      });
+      expect(transport.to(main)).toHaveLength(0);
+      minuteLater(context, main.id);
+      await context.tracking.flushDue();
+      expect(transport.to(main)).toHaveLength(0);
+      // The next report takes it along.
+      await turn(context, screen, "Moved them to the root.");
+      const [both] = transport.to(main);
+      expect(both!.text).toContain(
+        "[tracked 'cart screen' in Docs] is waiting on the user: Keep files in the session folder?",
+      );
+      expect(both!.text).toContain("finished:\n\n  Moved them to the root.");
+    });
+  });
+
+  test("say delivers in full at once and takes held reports along", async () => {
+    await withHome(async ({ context, transport }) => {
+      const { session: main } = await context.home.agent();
+      const stale = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "stale",
+      });
+      context.tracking.track(main.id, stale.id);
+      const said = await context.tracking.say({
+        tracker: main.id,
+        session: stale.id,
+        body: "Full cart.\nNot only the version.",
+      });
+      expect(said.delivery.delivered).toBe(true);
+      expect(transport.to(stale).map((each) => each.text)).toEqual([
+        "[from 'Main agent', which tracks you]:\n" +
+          "  Full cart.\n  Not only the version.\n\n" +
+          "When this turn ends, your last message goes back to the main agent, so end with a reply that says what you did.",
+      ]);
+      await expect(
+        context.tracking.say({ tracker: main.id, session: main.id, body: "x" }),
+      ).rejects.toThrow("does not track");
+    });
+  });
+
+  test("a tracked team member reports to both its lead and its tracker", async () => {
+    await withHome(async ({ context, transport }) => {
+      const { session: main } = await context.home.agent();
+      const lead = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "Checkout lead",
+      });
+      const { session: member } = await context.teams.spawnMember({
+        team: lead.id,
+        addedBy: "lead",
+        name: "rate",
+        instructions: "Rate limit",
+      });
+      context.tracking.track(main.id, member.id);
+      await turn(context, member, "Rate limit merged.");
+      expect(transport.to(lead).at(-1)!.text).toContain(
+        "@rate finished:\n\n  Rate limit merged.",
+      );
+      expect(transport.to(main).at(-1)!.text).toContain(
+        "[tracked 'rate' in Checkout] finished:\n\n  Rate limit merged.",
+      );
+      // Still a member of its own lead's team.
+      expect(context.teams.memberOf(member.id)?.team.lead.id).toBe(lead.id);
+    });
+  });
+
+  test("a resolved or untracked session stops reporting", async () => {
+    await withHome(async ({ context, transport }) => {
+      const { session: main } = await context.home.agent();
+      const one = await context.tracking.start({
+        tracker: main.id,
+        workspace: "docs",
+        message: "One",
+      });
+      const two = await context.tracking.start({
+        tracker: main.id,
+        workspace: "docs",
+        message: "Two",
+      });
+      context.threads.resolve(one.id, true);
+      await turn(context, one, "After done.");
+      context.tracking.untrack(main.id, two.id);
+      await turn(context, two, "After untrack.");
+      minuteLater(context, main.id);
+      await context.tracking.flushDue();
+      expect(transport.to(main)).toHaveLength(0);
+    });
+  });
+});
+
+describe("existing main-agent teams", () => {
+  test("members of a team led from Home become tracked sessions, once", async () => {
+    await withHome(async ({ context }) => {
+      const { session: main } = await context.home.agent();
+      // A team made before the main agent tracked instead of leading.
+      const ability = context.abilities.grant(main.id, "orchestration", {
+        live: false,
+      });
+      const changelog = await context.agents.spawn({
+        provider: "claude",
+        workspace: "docs",
+        name: "changelog",
+      });
+      context.repositories.setAgentTeam(changelog.id, ability.id, "changelog");
+      expect(context.teams.led(main.id)).toBeDefined();
+
+      expect(context.home.adoptTeamMembers()).toEqual([changelog.id]);
+      expect(context.repositories.findAgent(changelog.id)).toMatchObject({
+        teamId: null,
+        teamHandle: null,
+      });
+      expect(context.tracking.tracks(main.id, changelog.id)).toBe(true);
+      expect(context.teams.led(main.id)).toBeUndefined();
+      // Running it again changes nothing.
+      expect(context.home.adoptTeamMembers()).toEqual([]);
+      expect(context.tracking.sessions(main.id)).toHaveLength(1);
     });
   });
 });
 
 describe("threads", () => {
-  test("a suggested thread waits for Start, then runs as a member where it was suggested", async () => {
+  test("a suggested thread waits for Start, then runs as a tracked session where it was suggested", async () => {
     await withHome(async ({ context }) => {
       const { session: main } = await context.home.agent();
       const suggestion = await context.threads.suggest({
@@ -177,7 +468,8 @@ describe("threads", () => {
         name: "Load-test GET /cart",
         workspaceId: "checkout",
       });
-      expect(context.teams.memberOf(thread.id)?.team.lead.id).toBe(main.id);
+      expect(thread.teamId).toBeNull();
+      expect(context.tracking.tracks(main.id, thread.id)).toBe(true);
       expect(context.threads.suggestions(main.id)).toEqual([]);
       await expect(context.threads.start(suggestion.id)).rejects.toThrow(
         "already started",
@@ -191,6 +483,7 @@ describe("threads", () => {
       const suggestion = await context.threads.suggest({
         lead: main.id,
         title: "Add cart_events table",
+        workspace: "checkout",
       });
       context.threads.dismiss(suggestion.id);
       expect(context.threads.suggestions(main.id)).toEqual([]);
@@ -204,12 +497,20 @@ describe("threads", () => {
       await expect(
         context.threads.suggest({ lead: main.id, title: "   " }),
       ).rejects.toThrow("needs a title");
+      // The main agent's thread needs a workspace to run in.
+      await expect(
+        context.threads.suggest({ lead: main.id, title: "Somewhere" }),
+      ).rejects.toThrow("pass --workspace");
     });
   });
 
   test("a resolved thread does not count against its lead's five", async () => {
     await withHome(async ({ context }) => {
-      const { session: main } = await context.home.agent();
+      const main = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "Checkout lead",
+      });
       const threads = [];
       for (let index = 0; index < 5; index += 1)
         threads.push(

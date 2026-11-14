@@ -66,6 +66,7 @@ import { WorkflowService } from "./workflows";
 import { PlanService } from "./plans";
 import { HomeService } from "./home";
 import { ThreadService } from "./threads";
+import { TrackingService } from "./tracking";
 import {
   instructionFileOptions,
   WorkspaceContentService,
@@ -114,6 +115,8 @@ export interface ApplicationContext {
   home: HomeService;
   /** A lead's threads: suggested ones, and marking one resolved. */
   threads: ThreadService;
+  /** Sessions the main agent (or any session) tracks, and their reports. */
+  tracking: TrackingService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
   instructions: InstructionService;
   /** The person's own keys, `keybindings.json` in the home. */
@@ -374,21 +377,36 @@ export async function createApplicationContext(
     sweep: () =>
       sweepProviderActivity({ config, repositories, activity, tmux }),
   });
+  const teamTransport = new HostTeamTransport(
+    options.teamTransport ??
+      new ProviderTeamTransport(config, (session) =>
+        agents.codexExecutable(session),
+      ),
+    sessionChannel,
+    (sessionId) => activity.get(sessionId),
+  );
   teams = new TeamService(
     repositories,
     abilities,
     agents,
-    new HostTeamTransport(
-      options.teamTransport ??
-        new ProviderTeamTransport(config, (session) =>
-          agents.codexExecutable(session),
-        ),
-      sessionChannel,
-      (sessionId) => activity.get(sessionId),
-    ),
+    teamTransport,
     options.now,
     activity,
   );
+  const tracking = new TrackingService(
+    repositories,
+    agents,
+    workspaces,
+    teamTransport,
+    options.now,
+    activity,
+  );
+  const home = new HomeService(repositories, config, workspaces, {
+    spawn: (input) => agents.spawn(input),
+    restore: (id) => agents.restore(id),
+  });
+  // The main agent once led its threads as a team; they are tracked now.
+  home.adoptTeamMembers();
   const abilityNotes = new AbilityNoteDelivery(
     repositories,
     abilities,
@@ -491,11 +509,15 @@ export async function createApplicationContext(
       send: (sessionId, text, from) =>
         agents.send(sessionId, text, from ? { from } : {}),
     }),
-    home: new HomeService(repositories, config, workspaces, {
-      spawn: (input) => agents.spawn(input),
-      restore: (id) => agents.restore(id),
-    }),
-    threads: new ThreadService(repositories, workspaces, teams!, options.now),
+    home,
+    threads: new ThreadService(
+      repositories,
+      workspaces,
+      teams!,
+      tracking,
+      options.now,
+    ),
+    tracking,
     abilityNotes,
     routines: new RoutineService(
       repositories,

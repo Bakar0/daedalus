@@ -2,20 +2,23 @@ import type { AgentSession, ThreadSuggestion } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import type { TeamService } from "./teams";
+import type { TrackingService } from "./tracking";
 import type { WorkspaceService } from "./workspaces";
 
 /** The longest title a suggested thread takes; it becomes a session name. */
 export const THREAD_TITLE_MAX = 120;
 
 /**
- * A lead's threads: its team's members as the Threads pane shows them, the
- * threads it suggests for the user to start, and marking one resolved.
+ * Threads: the sessions the main agent tracks, or a lead's team members, as
+ * the Threads pane shows them; the threads either suggests for the user to
+ * start; and marking one resolved.
  */
 export class ThreadService {
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly workspaces: Pick<WorkspaceService, "getActive">,
     private readonly teams: Pick<TeamService, "spawnMember" | "memberOf">,
+    private readonly tracking: Pick<TrackingService, "start" | "isTracked">,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -44,7 +47,11 @@ export class ThreadService {
     const workspace = input.workspace
       ? await this.workspaces.getActive(input.workspace)
       : undefined;
-    if (workspace?.kind === "home")
+    if (
+      workspace?.kind === "home" ||
+      (!workspace &&
+        lead.workspaceId === this.repositories.findHomeWorkspace()?.id)
+    )
       throw new DaedalusError(
         "VALIDATION",
         "A thread runs in one of your workspaces, not at Home; pass --workspace <workspace>",
@@ -64,16 +71,32 @@ export class ThreadService {
     return this.repositories.threads.open(this.lead(lead).id);
   }
 
-  /** Starts a suggestion as a new member of its lead's team. */
+  /**
+   * Starts a suggestion. The main agent's becomes an ordinary session it
+   * tracks; any other lead's becomes a new member of its team.
+   */
   async start(id: number): Promise<AgentSession> {
     const suggestion = this.open(id);
-    const { session } = await this.teams.spawnMember({
-      team: suggestion.leadSessionId,
-      addedBy: "user",
-      name: suggestion.title,
-      instructions: suggestion.message ?? suggestion.title,
-      ...(suggestion.workspaceId ? { workspace: suggestion.workspaceId } : {}),
-    });
+    const lead = this.lead(suggestion.leadSessionId);
+    const session =
+      lead.workspaceId === this.repositories.findHomeWorkspace()?.id
+        ? await this.tracking.start({
+            tracker: lead.id,
+            workspace: suggestion.workspaceId ?? "",
+            name: suggestion.title,
+            message: suggestion.message ?? suggestion.title,
+          })
+        : (
+            await this.teams.spawnMember({
+              team: suggestion.leadSessionId,
+              addedBy: "user",
+              name: suggestion.title,
+              instructions: suggestion.message ?? suggestion.title,
+              ...(suggestion.workspaceId
+                ? { workspace: suggestion.workspaceId }
+                : {}),
+            })
+          ).session;
     this.repositories.threads.close(
       suggestion.id,
       this.now().toISOString(),
@@ -93,17 +116,21 @@ export class ThreadService {
   }
 
   /**
-   * Marks a thread done (or open again). It moves to Resolved and stops
-   * counting against its lead's member cap; it keeps running until stopped.
+   * Marks a thread done (or open again). It moves to Resolved, stops
+   * counting against its lead's member cap and stops reporting to the
+   * session tracking it; it keeps running until stopped.
    */
   resolve(sessionId: string, resolved: boolean): AgentSession {
     const session = this.repositories.findAgent(sessionId);
     if (!session)
       throw new DaedalusError("NOT_FOUND", `Session ${sessionId} not found`);
-    if (!this.teams.memberOf(session.id))
+    if (
+      !this.teams.memberOf(session.id) &&
+      !this.tracking.isTracked(session.id)
+    )
       throw new DaedalusError(
         "VALIDATION",
-        `'${session.name}' is not a thread: it is in no lead's team`,
+        `'${session.name}' is not a thread: nothing tracks it and it is in no lead's team`,
       );
     const resolvedAt = resolved ? this.now().toISOString() : null;
     this.repositories.setAgentResolved(session.id, resolvedAt);
