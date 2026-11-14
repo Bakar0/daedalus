@@ -11571,24 +11571,6 @@ button.routine-tick:hover {
   min-height: 160px;
   padding: 8px;
 }
-.threads-message {
-  border-top: 1px solid var(--line);
-  display: flex;
-  gap: 8px;
-  padding: 8px 10px;
-}
-.threads-message input {
-  background: var(--elevated);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  flex: 1;
-  font-size: 13px;
-  min-width: 0;
-  padding: 6px 9px;
-}
-.threads-pane .threads-message .threads-button {
-  align-self: stretch;
-}
 @media (max-width: 1100px) {
   .terminal-with-threads.has-threads {
     flex-direction: column;

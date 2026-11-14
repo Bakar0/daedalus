@@ -288,22 +288,7 @@ function OpenThread({
   renderTerminal: (session: AgentSessionDto) => ReactNode;
 }) {
   const { session } = row;
-  const [message, setMessage] = useState("");
-  const [sending, setSending] = useState(false);
   const live = session.status === "running" || session.status === "starting";
-  const send = async () => {
-    const text = message.trim();
-    if (!text || sending) return;
-    setSending(true);
-    try {
-      const sent = await run(
-        client.request.agentSend({ id: session.id, text }),
-      );
-      if (sent) setMessage("");
-    } finally {
-      setSending(false);
-    }
-  };
   return (
     <div className="threads-open">
       <div className="threads-open-head">
@@ -363,30 +348,6 @@ function OpenThread({
         </div>
       )}
       <div className="threads-terminal">{renderTerminal(session)}</div>
-      <form
-        className="threads-message"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
-        <input
-          aria-label={`Message ${row.title}`}
-          disabled={!live}
-          onChange={(event) => setMessage(event.target.value)}
-          placeholder={
-            live ? "Message this thread directly" : "This thread is not running"
-          }
-          value={message}
-        />
-        <button
-          className="threads-button"
-          disabled={!live || sending || !message.trim()}
-          type="submit"
-        >
-          Send
-        </button>
-      </form>
     </div>
   );
 }

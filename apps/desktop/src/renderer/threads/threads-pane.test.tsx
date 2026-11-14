@@ -69,12 +69,12 @@ describe("Threads pane", () => {
     expect(html).toContain("2 open");
   });
 
-  test("an open thread shows what it asks, its terminal, a message box and Stop", () => {
+  test("an open thread shows what it asks, its terminal and Stop, and no second message box", () => {
     const html = pane("Cart storage");
     expect(html).toContain("← Threads");
     expect(html).toContain("It waits on you");
     expect(html).toContain("terminal of Cart storage");
-    expect(html).toContain("Message this thread directly");
+    expect(html).not.toContain("Message this thread directly");
     expect(html).toContain(">Stop<");
     expect(html).toContain("Mark done");
   });
