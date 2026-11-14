@@ -1,13 +1,15 @@
 ---
 name: daedalus-orchestration
-description: Lead a Daedalus team of sessions toward one goal - plan the work, add members, send them decisions, and keep TEAM.md. Use only in a session that holds the Daedalus orchestration ability, when the user asks for work that needs several sessions, asks about the team, or when a member reports.
+description: Lead a Daedalus team of sessions toward one goal - plan the work, add members, send them decisions, and keep TEAM.md. Use when the user asks for work that needs several sessions, when this session leads a team or is about to add its first member, when the user asks about the team, or when a member reports.
 ---
 
 # Leading a team
 
-This session holds the Daedalus orchestration ability, so it leads a team.
-The team is named after this session. Members are ordinary sessions: the
-user can open any of them, answer its questions and hand it off. You plan
+Any session can lead a Daedalus team: the first member it adds makes it the
+lead, and the team is named after it. Lead one when the user asks for work
+that needs several sessions, or when the work splits into pieces that can
+run side by side; small work you do yourself. Members are ordinary sessions:
+the user can open any of them, answer its questions and hand it off. You plan
 the work, start members, keep track of who does what, and tell each member
 about decisions that affect it. The user is above you: they may talk to a
 member directly or add one themselves.
@@ -55,12 +57,28 @@ daedal agent spawn --team --name server --message "<instructions>"
 - Instructions say what the member owns, what it must not touch, the
   contracts it must follow, and what "done" means. Tell it to tag @lead
   only when done or blocked.
-- Members start in your workspace, on your provider unless you pass
-  `--provider claude` or `--provider codex`. A team can mix them.
+- Members start in your workspace unless you pass `--workspace <name>`,
+  for work in another workspace's repositories. They run on your provider
+  unless you pass `--provider claude` or `--provider codex`; a team can mix
+  them.
 - Pick the member's model with `--model` (see below). The model must be
   one the member's provider offers.
 
 Record the member in TEAM.md, with its provider, its model and why.
+
+## Teams inside teams
+
+A member can lead a team of its own for a piece too big for one session: it
+runs `daedal agent spawn --team` itself, and its members report to it, not
+to you. You may tell a member to do that. Limits:
+
+- A tree goes at most 3 levels below its top lead, and a lead has at most 5
+  members that are not archived. Daedalus refuses past either and says
+  where to add instead; archive members you no longer need.
+- A session is a member of at most one team and leads at most one.
+- If you are also a member of another team, `daedal team say "@lead ..."`
+  goes to your own lead, and any other tag to your team. `daedal team chat`
+  reads both. `daedal team tree` prints the whole tree.
 
 ## Choosing a member's model
 
@@ -103,8 +121,8 @@ for, use `@all` only for a decision every member must act on, and never
 send a message that only acknowledges. Members post progress without a tag;
 read it with `team chat` when you next decide something.
 
-- `daedal team list` shows each member's status, activity, unread count and
-  any delivery that failed.
+- `daedal team list` shows each member's status, activity, unread count,
+  any delivery that failed, and whether it leads a team of its own.
 
 To change a member's instructions or give it new work, say so in the chat
 and tag it. Say plainly what replaces what. Messages from you arrive as
@@ -165,5 +183,9 @@ merge or another member's work, or while the user is talking to it.
 
 When the whole goal is met, tell the user what each member did and what is left.
 
-Do not run team commands after Daedalus says the ability was removed: the
-team has ended and the members keep running on their own.
+`daedal team pause` holds every message to your members, and to the teams
+below them, and refuses new members until `daedal team resume`. Stopping or
+archiving you does the same to the members below you.
+
+Do not run team commands for the team after Daedalus says it has ended: the
+members keep running on their own.

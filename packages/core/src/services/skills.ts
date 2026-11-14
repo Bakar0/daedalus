@@ -196,7 +196,7 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     id: "daedalus-orchestration",
     title: "Orchestration",
     summary:
-      "Lets a session that holds the orchestration ability lead a team: plan the work, add members, send them decisions and keep TEAM.md. Sessions without the ability cannot use it.",
+      "How a session leads a team: plan the work, add members, send them decisions and keep TEAM.md. Any session becomes a lead when it adds its first member.",
     supportsAlways: false,
     defaultEnabled: true,
     defaultMode: "on-demand",

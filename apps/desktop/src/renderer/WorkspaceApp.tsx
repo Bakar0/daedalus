@@ -2613,7 +2613,6 @@ export function WorkspaceApp({
     /** The workspace whose card's + opened the dialog. */
     workspaceId?: string;
     color?: SessionColorDto;
-    orchestration?: boolean;
     /** The team the new session joins as a member the user added. */
     teamId?: string;
     /** A member's instructions, which it needs. */
@@ -3799,7 +3798,6 @@ export function WorkspaceApp({
       offerAbilities:
         session.kind === "agent" &&
         (session.provider === "claude" || session.provider === "codex"),
-      offerOrchestration: !session.teamId,
       onColor: (color) => void updateSession(session, { color }),
       onOrchestration: (granted) =>
         void setOrchestrationAbility(session, granted),
@@ -4617,10 +4615,8 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
-    const { color, orchestration, teamId, instructions, workflow } =
-      sessionForm;
+    const { color, teamId, instructions, workflow } = sessionForm;
     const cloud = sessionInCloud;
-    const abilities = orchestration ? ["orchestration" as const] : [];
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: sessionWorkspace.id,
@@ -4687,9 +4683,7 @@ export function WorkspaceApp({
               teamId,
               ...(instructions?.trim() ? { message: instructions.trim() } : {}),
             }
-          : abilities.length && !isTerminal
-            ? { abilities }
-            : {}),
+          : {}),
         ...(workflow && !isTerminal && !teamId ? { workflow } : {}),
       });
       if (response.ok) {
@@ -9699,8 +9693,9 @@ export function WorkspaceApp({
                     </select>
                   </label>
                 )}
-              {/* What most sessions leave alone: the account, the colour and
-                  the abilities, folded under one row. */}
+              {/* What most sessions leave alone: the account and the colour,
+                  folded under one row. Any session leads a team once a member
+                  is added, so there is no ability to pick. */}
               {(!memberTeam || sessionAccounts.length > 1) && (
                 <details className="session-more-settings">
                   <summary>More settings</summary>
@@ -9746,43 +9741,6 @@ export function WorkspaceApp({
                         value={sessionForm.color ?? null}
                       />
                     </div>
-                  )}
-                  {sessionType !== "terminal" && !sessionForm.teamId && (
-                    // One row per ability the agent can be given at launch.
-                    <fieldset className="session-tool-picker session-abilities">
-                      <legend>Agent abilities</legend>
-                      {(
-                        [
-                          {
-                            key: "orchestration",
-                            label: "Orchestration",
-                            description:
-                              "Lead a team of sessions toward one goal",
-                          },
-                        ] as const
-                      ).map((ability) => (
-                        <label
-                          className="session-ability-option"
-                          key={ability.key}
-                        >
-                          <span>
-                            <strong>{ability.label}</strong>
-                            <small>{ability.description}</small>
-                          </span>
-                          <input
-                            checked={Boolean(sessionForm[ability.key])}
-                            className="switch"
-                            onChange={(event) =>
-                              setSessionForm({
-                                ...sessionForm,
-                                [ability.key]: event.target.checked,
-                              })
-                            }
-                            type="checkbox"
-                          />
-                        </label>
-                      ))}
-                    </fieldset>
                   )}
                 </details>
               )}

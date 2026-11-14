@@ -2,8 +2,9 @@
 
 Every agent in Daedalus is an ordinary session. A session can be named,
 pinned and colored, and it can hold abilities: things Daedalus adds to it on
-top of being a session. There is one: orchestration, which makes a session
-the lead of a team.
+top of being a session. There is one: orchestration, the record of a team a
+session leads. Nobody grants it by hand any more: any session becomes a lead
+when it adds its first member (see Orchestration and teams).
 
 Routines are not an ability. They live on the Routines page in the app's
 sidebar: a prompt that runs on a schedule in a workspace, each run a headless
@@ -44,8 +45,10 @@ daedal session revoke <session> orchestration
 daedal session abilities <session>
 ```
 
-- **Orchestration** adds one line to the launch prompt saying what the
-  session holds and which skill to follow. Granted to a running session,
+- **Orchestration** adds one line to the launch prompt saying the session
+  leads a team and which skill to follow. Every other Claude or Codex session
+  on this Mac gets one line saying how to lead a team instead. Granted to a
+  running session with `session grant`, which starts a team with no members,
   Daedalus sends one note, as described under Delivery below; until then
   `session abilities` shows the note as waiting.
 - **Revoke** stops what the ability does and sends a note saying so. The row
@@ -97,19 +100,23 @@ finds the session from the working directory.
 
 ## Orchestration and teams
 
-A session holding the orchestration ability leads a team: sessions working
-toward one goal. The lead plans the work, adds members, and sends each one
-the decisions that affect it. Members are ordinary sessions the user can open,
-answer and be reborn. The user is above the lead and can add a member too.
+A team is a lead and its members: sessions working toward one goal. Any
+Claude or Codex session on this Mac can lead one, with no switch or grant: the
+first `agent spawn --team` run inside a session makes it the lead, and the
+user's `agent spawn --team <session>` makes that session one. Every agent
+session is told so in one line of its launch prompt. The lead plans the work,
+adds members, and sends each one the decisions that affect it. Members are
+ordinary sessions the user can open, answer and be reborn. The user is above
+the lead and can add a member too.
 
 In the app:
 
-- **Orchestration** is a switch in Create session and in a session's card
-  menu. A member's menu does not offer it.
+- A lead's card menu has **End team**, which asks to confirm. There is no
+  switch to make a lead: the session becomes one when a member is added.
 - A lead's card has a **+** that adds a member: a name, which becomes its
   `@handle`, Claude or Codex (the lead's provider is chosen at first), a
   model, and optional **Instructions**. The member runs in the lead's
-  workspace and in its color. Without instructions
+  workspace (the CLI's `--workspace` picks another) and in its color. Without instructions
   it starts knowing only its team, its lead and the goal, says it is ready,
   and waits for the user to instruct it in its own session; the lead is
   told so in the chat.
@@ -130,22 +137,26 @@ In the app:
   the user (⌘↵ sends). The open tab reads the team again every 4 seconds.
 
 ```
-daedal agent spawn --workspace <w> --provider claude --name "Checkout API" --ability orchestration
-daedal agent spawn --team --name server --message "<instructions>"   # inside the lead
+daedal agent spawn --team --name server --message "<instructions>"   # inside any session
 daedal agent spawn --team "Checkout API" --message "<instructions>"  # the user
+daedal agent spawn --team --workspace docs --message "<instructions>"  # a member elsewhere
 daedal team say "@server the token field is access_token"
 daedal team chat [--tagged | --all]
 daedal team list
+daedal team tree
 daedal team goal "<text>"
+daedal team pause|resume
 ```
 
-The team is the lead's `session_abilities` row: its id is the team id, and its
+The team is the lead's `orchestration` row in `session_abilities`, made when
+its first member is added: its id is the team id, and its
 `goal` config is the shared goal. A rebirth moves the ability to the successor,
 so the team follows the lead with no other change. A member records its team
 in `agent_sessions.team_id` and its handle in `team_handle`; a member's
 rebirth successor takes both, and the predecessor leaves the team.
 
-- **Members** start in the lead's workspace, on the lead's provider unless
+- **Members** start in the lead's workspace unless `--workspace` names
+  another, on the lead's provider unless
   `--provider` asks for the other. A team can mix Claude and Codex in any
   combination of lead and members, because each session gets team
   messages through its own provider's inbox. A task is optional. The handle comes from
@@ -167,14 +178,29 @@ rebirth successor takes both, and the predecessor leaves the team.
   the note would wake the lead at its full context for nothing. A member the
   lead itself stops or archives posts nothing either: the note is skipped
   when the posting process runs as the lead (`DAEDALUS_SESSION_ID`).
-- **Pausing and ending a team.** Archiving the lead, by hand or by quitting
-  the app with "Quit and stop sessions", pauses the team: members keep their
-  handle and color, messages to the lead wait for it, no member can be added,
-  and the app marks members "lead archived". Restoring the lead resumes the
-  team and sends what waited. Only revoking the ability (Orchestration off,
-  which asks to confirm "End team") ends a team: every member's team is
-  cleared and they keep running as plain sessions. A member cannot be granted
-  orchestration.
+- **Teams inside teams.** A member can lead a team of its own: it runs
+  `agent spawn --team` itself, or the user names it with `--team <member>`.
+  A session is a member of at most one team and leads at most one. A tree
+  goes at most 3 levels below its top lead (`TEAM_MAX_DEPTH`) and a lead
+  has at most 5 members that are not archived (`TEAM_MAX_MEMBERS`); past
+  either, the spawn is refused and the refusal names the lead to add to, or
+  says to archive a member. A session in two teams posts `@lead` to its own
+  lead's team and any other tag to the team it leads; `team chat` reads both,
+  and its notices name the team with `--team <lead>`. `team tree` prints the
+  tree from its top lead, and `team list` marks a member that leads.
+- **Pausing and ending a team.** `team pause` pauses a team and every team
+  below it: messages to members wait, with the reason in `team list`, and no
+  member can be added; the lead still hears from its members. `team resume`
+  sends what waited. Archiving the lead, by hand or by quitting the app with
+  "Quit and stop sessions", pauses its team the same way: members keep their
+  handle and color, messages to the lead wait for it, and the app marks
+  members "lead archived". Restoring the lead resumes the team and sends what
+  waited. Archiving a lead by hand (`agent archive`, the card's Archive)
+  archives every member below it too, and stopping a lead stops them; each
+  member is restored on its own. Quitting the app archives sessions one by one
+  and does not cascade. Only **End team** (`session revoke <lead>
+orchestration`) ends a team: every member's team is cleared and they keep
+  running as plain sessions, and members that lead keep their own teams.
 
 ### The chat
 
@@ -223,11 +249,10 @@ only.
   Claude shows it as a message from another session, with `from` as the
   sender. The line format comes from Claude's debug log, not its public
   docs, so a Claude update can break it; the failure then shows in
-  `team list`. Leads and members launch with `crossSessionInbound: "accept"`
-  in Daedalus's settings, because a session in bypassPermissions mode would
-  otherwise hold each message behind an approval dialog. A session granted
-  orchestration while running has not got that setting until it is
-  relaunched.
+  `team list`. Every agent session launches with `crossSessionInbound:
+"accept"` in Daedalus's settings, because any session may lead or join a
+  team while it runs, and a session in bypassPermissions mode would otherwise
+  hold each message behind an approval dialog.
 - **Codex** sessions get it through `codex queue --thread <thread> --message
 <text>`, run with the session's account. A busy session runs it after its
   current turn, as a user turn; only the `[team ...]` prefix and the skill

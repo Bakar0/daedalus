@@ -88,3 +88,12 @@ conflicts with what the user told you directly, and then ask the user.
 
 The lead keeps the plan, the contracts between members and every decision
 in `TEAM.md` in its folder. Read it when you need the full picture.
+
+## Leading part of the work
+
+A member can lead a team of its own for its piece, with
+`daedal agent spawn --team --message "<instructions>"` and the
+daedalus-orchestration skill; tell your lead when you do. Then you are in
+two teams: `daedal team say "@lead ..."` goes to your own lead, and any
+other tag goes to your members. `daedal team chat` reads both; a notice for
+one of them names it with `--team <lead>`, so run it exactly as given.

@@ -314,9 +314,8 @@ describe("item actions", () => {
       name: "api",
       pinned: false,
       color: null,
-      orchestration: false,
+      orchestration: true,
       offerAbilities: true,
-      offerOrchestration: true,
       onRename: () => calls.push("rename"),
       onPin: (pinned) => calls.push(`pin:${pinned}`),
       onColor: (color) => calls.push(`color:${color}`),
@@ -350,24 +349,22 @@ describe("item actions", () => {
       "Rename…",
       "Pin to top",
     ]);
-    expect(abilities.map((action) => [action.id, action.checked])).toEqual([
-      ["orchestration", false],
+    expect(abilities.map((action) => [action.id, action.label])).toEqual([
+      ["end-team", "End team"],
     ]);
     // A card action keeps its confirmation in the palette.
     expect(listed[0]).toMatchObject({ confirm: "Running work stops." });
-    for (const id of ["pin", "orchestration", "color-red"])
+    for (const id of ["pin", "end-team", "color-red"])
       listed.find((action) => action.id === id)?.run();
-    expect(calls).toEqual(["pin:true", "team:true", "color:red"]);
+    expect(calls).toEqual(["pin:true", "team:false", "color:red"]);
   });
 
-  test("a terminal, or a team's member, offers no abilities it cannot hold", () => {
+  test("only a lead's menu has a team item; nothing switches leading on", () => {
     expect(
       sessionMenuEntries(model({ offerAbilities: false }).value).abilities,
     ).toEqual([]);
     expect(
-      sessionMenuEntries(
-        model({ offerOrchestration: false }).value,
-      ).abilities.map((action) => action.id),
+      sessionMenuEntries(model({ orchestration: false }).value).abilities,
     ).toEqual([]);
   });
 
