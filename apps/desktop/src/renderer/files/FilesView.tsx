@@ -16,6 +16,7 @@ import type {
   EditorAreaHandle,
 } from "./EditorArea";
 import { FileTree, type FileTreeHandle } from "./FileTree";
+import type { PlanLive } from "./PlanView";
 
 // Monaco and dockview are several megabytes the app needs only once someone
 // opens a file, and neither can load outside a browser, which is where the
@@ -209,6 +210,8 @@ export interface FilesEditorProps {
   onNewTerminal?(): void;
   onTerminalTabClosed?(terminalId: string): void;
   onOpenExternal?(url: string): void;
+  /** What a plan's preview needs from the app: live sessions, and Open. */
+  planLive?: PlanLive;
   /** What to show while the editor chunk loads: the tab that will be in front. */
   loadingContent?: React.ReactNode;
   /** Session worktree folders and the commit each branched from. */

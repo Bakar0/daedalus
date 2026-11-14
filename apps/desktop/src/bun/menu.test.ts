@@ -256,6 +256,7 @@ describe("File, Go and Help menus", () => {
       ["session.new", "New Session…", "Command+N"],
       ["task.new", "New Task…", "Command+Shift+N"],
       ["terminal.new", "New Terminal", "Command+T"],
+      ["plan.new", "New Plan…", null],
       "divider",
       // ⌘S and ⌘W act on the tabs only, so the menu must not own them: they
       // show in the title and the dispatcher keeps them.

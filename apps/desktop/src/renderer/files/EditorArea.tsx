@@ -32,6 +32,8 @@ import {
 } from "../use-focus-scope";
 import { deleteKeyCloses, tabCloseRequest } from "./tab-keys";
 import { MarkdownPreview } from "../markdown-preview";
+import { isPlanPath, PlanView, type PlanLive } from "./PlanView";
+import { createPlan } from "./plan-actions";
 import { INSTRUCTIONS_ICON_PATH, WORKFLOW_ICON_PATH } from "../WorkflowPane";
 import {
   closeDocument,
@@ -165,6 +167,8 @@ export interface EditorAreaProps {
   abilityTabName?(kind: "team", id: string): string | undefined;
   /** The + in the tab strip: a new terminal in a tab. */
   onNewTerminal?(): void;
+  /** What a plan's preview needs from the app: live sessions, and Open. */
+  planLive?: PlanLive;
   /** A terminal tab was closed by the user, so its shell should end. */
   onTerminalTabClosed?(terminalId: string): void;
   /** Hands a web tab's address to the default browser. */
@@ -235,6 +239,7 @@ interface EditorContextValue {
   abilityTabName?(kind: "team", id: string): string | undefined;
   onNewTerminal?(): void;
   onOpenExternal?(url: string): void;
+  planLive?: PlanLive;
   load(path: string): Promise<OpenDocument | undefined>;
   save(doc: OpenDocument): Promise<void>;
   close(panel: IDockviewPanel): Promise<void>;
@@ -331,6 +336,7 @@ export default function EditorArea({
   onNewTerminal,
   onTerminalTabClosed,
   onOpenExternal,
+  planLive,
   onError,
   onWorkspaceDocumentSaved,
   handleRef,
@@ -548,7 +554,14 @@ export default function EditorArea({
         isImage(path) ? "image" : "file",
         {
           path,
-          mode: options.mode ?? current?.mode ?? "edit",
+          // A plan opens as its interactive document; a link to a line
+          // opens the text at that line.
+          mode:
+            options.mode ??
+            current?.mode ??
+            (isPlanPath(path) && options.line === undefined
+              ? "preview"
+              : "edit"),
           heading: options.heading ?? current?.heading,
         },
         options.pinned,
@@ -830,6 +843,14 @@ export default function EditorArea({
       : undefined;
     return group?.activePanel ?? api?.activePanel;
   };
+  useCommand("plan.new", {
+    run: () =>
+      void createPlan(client, workspaceId, (message) =>
+        callbacks.current.onError(message),
+      ).then((path) => {
+        if (path) open(path, { pinned: true });
+      }),
+  });
   useCommand("tab.save", {
     enabled: inThisArea,
     run: (context) => {
@@ -1048,6 +1069,7 @@ export default function EditorArea({
     abilityTabName,
     onNewTerminal,
     onOpenExternal,
+    planLive,
     load,
     save,
     close,
@@ -1572,6 +1594,8 @@ function FilePanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   if (!doc) return <div className="editor-loading">Opening…</div>;
   if (params.mode === "preview" && isHtml(params.path))
     return <HtmlPanel doc={doc} />;
+  if (params.mode === "preview" && isPlanPath(params.path))
+    return <PlanPanel doc={doc} />;
   if (params.mode === "preview" && isMarkdown(params.path))
     return (
       <MarkdownPanel
@@ -1823,6 +1847,27 @@ function DiffPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
   if ("message" in loaded)
     return <div className="editor-loading">{loaded.message}</div>;
   return <div className="monaco-panel" ref={container} />;
+}
+
+function PlanPanel({ doc }: { doc: OpenDocument }) {
+  useDocumentsRevision();
+  const context = useEditorContext();
+  return (
+    <div className="markdown-panel plan-panel">
+      <PlanView
+        client={context.client}
+        live={context.planLive}
+        onError={context.onError}
+        onFileChanged={(content) => {
+          if (!isDirty(doc) && content !== doc.model.getValue())
+            reloadDocument(doc, { ...doc.file, content });
+        }}
+        path={doc.path}
+        text={doc.model.getValue()}
+        workspaceId={context.workspaceId}
+      />
+    </div>
+  );
 }
 
 function MarkdownPanel({

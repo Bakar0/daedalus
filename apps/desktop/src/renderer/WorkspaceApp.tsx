@@ -8609,6 +8609,21 @@ export function WorkspaceApp({
                   if (terminal) void closeIntegratedTerminal(terminal);
                 }}
                 onOpenExternal={openExternalLink}
+                planLive={{
+                  // A plan's owner chips follow these: a status, an
+                  // activity or a badge moving is a new key.
+                  liveKey: agents
+                    .map(
+                      (item) =>
+                        `${item.id}:${item.name}:${item.status}:${item.archivedAt ? 1 : 0}:${activityById.get(item.id)?.activity ?? ""}:${attentionById.has(item.id) ? 1 : 0}`,
+                    )
+                    .join("|"),
+                  workspaceName: workspace.name,
+                  openSession: (sessionId) => {
+                    const target = sessionsById.get(sessionId);
+                    if (target) showSession(target.id, target.workspaceId);
+                  },
+                }}
                 loadingContent={
                   view === "session" ? (
                     <div className="app-panel session-panel">{sessionPane}</div>

@@ -380,6 +380,14 @@ export const COMMAND_SPECS = [
     keys: ["mod+t"],
     menu: { bar: "File", section: 0 },
   },
+  // No key: the File menu, the palette and the file tree's menu create one.
+  {
+    id: "plan.new",
+    title: "New Plan…",
+    group: "File",
+    keys: [],
+    menu: { bar: "File", section: 0 },
+  },
   {
     id: "app.settings",
     title: "Settings…",
