@@ -208,7 +208,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent models <codex|claude> [--account <account>]
   daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--workflow <name>]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
-  daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--provider claude|codex] [--user]
+  daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
   daedal agent get <agent-id>
@@ -241,7 +241,6 @@ workspace's --start-sets-in-progress setting is on, which is the default.
 the task and write the brief back with 'task update --description-file -'
 instead of doing the task, and leaves the status alone.
 
-'agent spawn --ability orchestration' starts a session that leads a team.
 --color and --pin mark the session's card. See 'daedal session --help'.
 Routines are not an ability: they live on the Routines page; see
 'daedal routine --help'.
@@ -250,9 +249,13 @@ Routines are not an ability: they live on the Routines page; see
 already open, so the agent spends nothing choosing one.
 
 'agent spawn --team' adds a member to a team: with no value, the team of the
-lead running it; with a lead, that lead's team, and the lead is told in the
-team chat. The member runs on the lead's provider unless --provider picks
-the other; a team can mix Claude and Codex. See 'daedal team --help'.
+session running it, which becomes a lead if it is not one yet; with a lead,
+that lead's team (made now if the session leads none), and the lead is told
+in the team chat. Any session can lead, a member included, within 3 levels
+and 5 members a lead. The member runs in the lead's workspace unless
+--workspace names another, on the lead's provider unless --provider picks
+the other; a team can mix Claude and Codex. 'agent stop' and 'agent archive'
+on a lead do the same to every member below it. See 'daedal team --help'.
 
 'agent spawn' without --model starts with the workspace's default model when
 --provider is the workspace's default provider. Otherwise Claude is asked for
@@ -1249,7 +1252,8 @@ async function agentCommand(
       1,
       "daedal agent stop <agent-id> [--force]",
     );
-    const result = await context.agents.stop(
+    // A lead's members below it stop with it.
+    const result = await context.agents.stopTree(
       parsed.positionals[0]!,
       parsed.flags.has("force"),
     );

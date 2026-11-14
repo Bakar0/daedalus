@@ -57,8 +57,8 @@ library ID.
 
 ```text
 daedal agent models <codex|claude> [--account <account>]
-daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--ability orchestration] [--color <color>] [--pin]
-daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>]
+daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--color <color>] [--pin]
+daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
@@ -76,17 +76,21 @@ daedal session rebirth-at <session> <percent>|off|default
 daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
 daedal team say "<text>" [--team <lead>] [--user]
-daedal team chat [--all] [--team <lead>]
+daedal team chat [--tagged | --all] [--team <lead>]
 daedal team list [--team <lead>]
+daedal team tree [--team <lead>]
 daedal team goal [<text>] [--team <lead>]
+daedal team pause|resume [--team <lead>]
 ```
 
 `<session>` is a session id, or its name when only one live session has it.
-An ability adds something to a session. A session that holds
-`orchestration` leads a team: it adds members with `agent spawn --team` and
-talks to them with `daedal team`; the `daedalus-orchestration` and
-`daedalus-team` skills and `daedal team --help` describe it. A rebirth moves a
-session's abilities, pin and color to the successor, which gets ` · 2`.
+Any session can lead a team: the first `agent spawn --team` run inside it
+adds a member and makes it the lead, and it talks to members with
+`daedal team`. A member can lead a team of its own, up to 3 levels below the
+top lead and 5 members a lead. Stopping or archiving a lead does the same to
+the members below it. The `daedalus-orchestration` and `daedalus-team` skills
+and `daedal team --help` describe it. A rebirth moves a session's team, pin
+and color to the successor, which gets ` · 2`.
 Routines are not an ability: they run on a schedule in a workspace, from the
 Routines page; `daedal routine --help` describes them.
 
