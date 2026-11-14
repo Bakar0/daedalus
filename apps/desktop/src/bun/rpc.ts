@@ -15,6 +15,7 @@ import {
   isUnseenRun,
   INSTALL_COMMANDS,
   normalizeError,
+  parsePlan,
   ReadModel,
   updateSettings,
   type AccountProfile,
@@ -1317,6 +1318,38 @@ export function createDesktopRequestHandlers(
           await context.workspaceContent.detachRepository(id),
         ),
       ),
+    planView: ({ workspace, path, text }) =>
+      result(async () => {
+        const file = await context.plans.find({ workspace }, path);
+        const plan = parsePlan(text);
+        return {
+          title: plan.title,
+          owner: plan.owner,
+          blocks: plan.blocks,
+          hasTasksSection: plan.hasTasksSection,
+          absolutePath: file.absolutePath,
+          owners: await context.plans.owners(file, plan),
+        };
+      }),
+    planCreate: ({ workspace, title }) =>
+      mutate(async () => ({
+        path: (await context.plans.create({ workspace }, { title })).path,
+      })),
+    planTaskStart: ({ workspace, path, task }) =>
+      mutate(async () => {
+        const file = await context.plans.find({ workspace }, path);
+        const { session } = await context.plans.startTask(file, task);
+        return {
+          session: agentDto(session),
+          content: (await context.plans.read(file)).source,
+        };
+      }),
+    planAsk: ({ workspace, path, ...input }) =>
+      mutate(async () => {
+        const file = await context.plans.find({ workspace }, path);
+        const { session, message } = await context.plans.askOwner(file, input);
+        return { sessionId: session.id, sessionName: session.name, message };
+      }),
     workspaceJournalAppend: (params) =>
       mutate(async () => {
         await context.workspaceContent.appendJournal(params);

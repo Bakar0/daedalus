@@ -410,6 +410,62 @@ export interface WorkspaceFileDto {
   format: "markdown" | "text";
 }
 
+/** A plan file (`*.plan.md`) as its interactive view draws it. */
+export type PlanTaskStateDto =
+  "todo" | "doing" | "done" | "blocked" | "dropped";
+
+/** An owner chip: `none` is a handle no session answers to. */
+export type PlanOwnerStateDto =
+  "working" | "waiting" | "idle" | "error" | "stopped" | "none";
+
+/** Lines are 1-based and inclusive, in the whole file. */
+export interface PlanMarkdownPartDto {
+  kind: "markdown";
+  text: string;
+  startLine: number;
+  endLine: number;
+}
+
+export interface PlanQuestionPartDto {
+  kind: "question";
+  text: string;
+  line: number;
+}
+
+export interface PlanTaskPartDto {
+  kind: "task";
+  task: PlanTaskDto;
+}
+
+export interface PlanTaskDto {
+  /** `^id`, or `L<line>` for a task with no id. */
+  key: string;
+  id: string | null;
+  state: PlanTaskStateDto;
+  title: string;
+  owner: string | null;
+  line: number;
+  endLine: number;
+  depth: number;
+  body: (PlanMarkdownPartDto | PlanQuestionPartDto | PlanTaskPartDto)[];
+}
+
+export interface PlanOwnerDto {
+  handle: string;
+  sessionId: string | null;
+  sessionName: string | null;
+  state: PlanOwnerStateDto;
+}
+
+export interface PlanViewDto {
+  title: string | null;
+  owner: string | null;
+  blocks: (PlanMarkdownPartDto | PlanTaskPartDto)[];
+  hasTasksSection: boolean;
+  absolutePath: string;
+  owners: PlanOwnerDto[];
+}
+
 export interface WorkspaceImageDto {
   name: string;
   path: string;
@@ -2070,6 +2126,40 @@ export interface DesktopRpcSchema {
       workspaceRepositoryDetach: Request<
         { id: string },
         WorkspaceRepositoryDto
+      >;
+      /** Parses a plan's text, as the editor holds it, and finds its owners. */
+      planView: Request<
+        { workspace: string; path: string; text: string },
+        PlanViewDto
+      >;
+      /** Writes `plans/<slug>.plan.md`; the path is workspace-relative. */
+      planCreate: Request<
+        { workspace: string; title: string },
+        { path: string }
+      >;
+      /**
+       * Starts an agent on a task, on the workspace's default provider, and
+       * marks the task `[/]` with the new session as its owner.
+       */
+      planTaskStart: Request<
+        { workspace: string; path: string; task: string },
+        { session: AgentSessionDto; content: string }
+      >;
+      /**
+       * Sends the owner of part of a plan the user's question, then
+       * `path:lines:` and the quote. `owner` null means the plan's own.
+       */
+      planAsk: Request<
+        {
+          workspace: string;
+          path: string;
+          owner: string | null;
+          question: string;
+          startLine: number;
+          endLine: number;
+          quote: string;
+        },
+        { sessionId: string; sessionName: string; message: string }
       >;
       workspaceJournalAppend: Request<
         {
