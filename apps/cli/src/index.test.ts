@@ -1011,11 +1011,10 @@ describe("daedal team", () => {
           "codex",
           "--name",
           "Checkout API",
-          "--ability",
-          "orchestration",
         ]);
 
-        // Inside the lead's folder, a bare --team is its own team.
+        // Inside a session's folder, a bare --team makes it the lead of
+        // its own team; no ability is needed.
         const server = await json(
           [
             "agent",
@@ -1112,16 +1111,84 @@ describe("daedal team", () => {
           (await json(["team", "goal", "Ship v2 checkout"])).team.goal,
         ).toBe("Ship v2 checkout");
 
-        // Only the lead or the user adds members.
-        const byMember = await cli(
+        // Only the lead or the user adds members to a team.
+        const intoLeads = await cli(
           home,
-          ["agent", "spawn", "--team", "--message", "x"],
+          ["agent", "spawn", "--team", "Checkout API", "--message", "x"],
           env,
           undefined,
           server.workingDirectory,
         );
-        expect(byMember.exitCode).not.toBe(0);
-        expect(byMember.stderr).toContain("works only inside a lead's session");
+        expect(intoLeads.exitCode).not.toBe(0);
+        expect(intoLeads.stderr).toContain("ask @lead to add a member");
+
+        // A member leads a team of its own with a bare --team.
+        const schema = await json(
+          [
+            "agent",
+            "spawn",
+            "--team",
+            "--name",
+            "Schema",
+            "--message",
+            "Write the schema.",
+          ],
+          server.workingDirectory,
+        );
+        expect(schema.teamHandle).toBe("schema");
+        const tree = await json(["team", "tree", "--team", "Checkout API"]);
+        expect(tree.trees).toHaveLength(1);
+        expect(tree.trees[0]).toMatchObject({ handle: null });
+        expect(
+          tree.trees[0].members.map(
+            (m: { handle: string; members: { handle: string }[] }) => [
+              m.handle,
+              m.members.map((sub) => sub.handle),
+            ],
+          ),
+        ).toEqual([
+          ["server", ["schema"]],
+          ["docs", []],
+        ]);
+        // From the middle, @lead goes up to its own lead's team; any other
+        // tag goes to the team it leads.
+        const up = await json(
+          ["team", "say", "@lead schema is next"],
+          server.workingDirectory,
+        );
+        expect(up.message).toMatchObject({ author: "server", tags: ["lead"] });
+        const down = await json(
+          ["team", "say", "@schema use UUIDs"],
+          server.workingDirectory,
+        );
+        expect(down.message).toMatchObject({
+          author: "lead",
+          tags: ["schema"],
+        });
+        const both = await json(["team", "chat"], server.workingDirectory);
+        expect(both.teams).toHaveLength(2);
+        const listed = await json(["team", "list", "--team", "Checkout API"]);
+        expect(
+          listed.members.find((m: { handle: string }) => m.handle === "server")
+            .leads,
+        ).toBeTruthy();
+
+        // Pausing holds the members' messages and refuses new members, down
+        // the tree; resuming lets them go.
+        const paused = await json(["team", "pause", "--team", "Checkout API"]);
+        expect(paused.teams.map((t: { paused: boolean }) => t.paused)).toEqual([
+          true,
+          true,
+        ]);
+        const refused = await cli(
+          home,
+          ["agent", "spawn", "--team", "Checkout API", "--message", "x"],
+          env,
+        );
+        expect(refused.exitCode).toBe(4);
+        expect(refused.stderr).toContain("daedal team resume");
+        const resumed = await json(["team", "resume", "--team", "Server"]);
+        expect(resumed.teams).toHaveLength(1);
 
         const help = await cli(home, ["team", "--help"], env);
         expect(help.stdout).toContain("daedal team say");

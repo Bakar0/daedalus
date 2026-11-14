@@ -254,8 +254,7 @@ export async function workflowCommand(
     });
     // A waiting gate fails the command, so whatever was chained after it
     // with && does not run.
-    const isMember =
-      context.teams.membership(sessionId)?.reader.role === "member";
+    const isMember = Boolean(context.teams.memberOf(sessionId));
     if (outcome.waiting)
       throw new DaedalusError(
         "CONFLICT",

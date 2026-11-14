@@ -56,6 +56,7 @@ import {
   resolveProvider,
   sessionLaunchModel,
 } from "./providers";
+import { teamDescendants } from "./team-tree";
 import type { DeliveryResult, SessionChannel } from "./session-channel";
 import { inboxWaiterAlive, leaveInInbox, usesInbox } from "./session-inbox";
 import { installedSkill, requireSkill } from "./installed-skills";
@@ -1041,8 +1042,8 @@ export class AgentService {
           sessionName: name,
           model: input.model,
           prompt,
-          acceptPeerMessages:
-            Boolean(team) || abilities.includes("orchestration"),
+          // Any session may lead a team or join one later.
+          acceptPeerMessages: true,
         });
     const session: AgentSession = {
       id,
@@ -1208,9 +1209,7 @@ export class AgentService {
             sessionId: agent.id,
             sessionName: agent.name,
             model: modelArgument(agent.args),
-            acceptPeerMessages:
-              Boolean(agent.teamId) ||
-              Boolean(this.abilities.held(agent.id, "orchestration")),
+            acceptPeerMessages: true,
             resume: {
               ...(agent.providerSessionId
                 ? { nativeId: agent.providerSessionId }
@@ -1440,7 +1439,9 @@ export class AgentService {
           ? await this.refinementInvocation(provider?.name)
           : undefined,
       message: [
-        ...this.abilities.launchLines(abilities),
+        ...this.abilities.launchLines(abilities, {
+          teamHint: provider?.name === "claude" || provider?.name === "codex",
+        }),
         ...(team ? this.teamLaunchLines(team) : []),
         input.message?.trim(),
       ]
@@ -1461,8 +1462,8 @@ export class AgentService {
           sessionName: name,
           prompt: launchPrompt,
           model,
-          acceptPeerMessages:
-            Boolean(team) || abilities.includes("orchestration"),
+          // Any session may lead a team or join one later.
+          acceptPeerMessages: true,
           workingDirectory: prepared.workingDirectory,
           additionalDirectories: sessionDirectories(
             workspace.path,
@@ -2183,6 +2184,33 @@ export class AgentService {
     return { ...agent, color: value };
   }
 
+  /**
+   * Stops a session and, when it leads a team, every member below it that
+   * is running. A member that will not stop is left as it is; the session
+   * itself must stop.
+   */
+  async stopTree(id: string, force = false): Promise<AgentSession> {
+    const stopped = await this.stop(id, force);
+    for (const member of teamDescendants(this.repositories, stopped.id))
+      if (member.status === "running" || member.status === "starting")
+        await this.stop(member.id, force).catch(() => undefined);
+    return stopped;
+  }
+
+  /**
+   * Archives a session and, when it leads a team, every member below it.
+   * Archiving pauses each team it leads; restoring a lead brings its team
+   * back, and its members are restored one by one.
+   */
+  async archiveTree(id: string, force = false): Promise<AgentSession> {
+    const members = teamDescendants(this.repositories, (await this.get(id)).id);
+    const archived = await this.archive(id, force);
+    for (const member of members)
+      if (!this.repositories.findAgent(member.id)?.archivedAt)
+        await this.archive(member.id, force).catch(() => undefined);
+    return archived;
+  }
+
   async stop(id: string, force = false): Promise<AgentSession> {
     const agent = await this.get(id);
     // A session that never finished starting is still a live tmux session, so
@@ -2607,9 +2635,7 @@ export class AgentService {
       }).adapter.buildLaunch({
         sessionId: agent.id,
         model: modelArgument(agent.args),
-        acceptPeerMessages:
-          Boolean(agent.teamId) ||
-          Boolean(this.abilities.held(agent.id, "orchestration")),
+        acceptPeerMessages: true,
         workingDirectory: agent.workingDirectory,
         additionalDirectories: sessionDirectories(
           workspace.path,

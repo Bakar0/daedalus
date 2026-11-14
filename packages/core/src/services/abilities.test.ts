@@ -266,7 +266,7 @@ describe("abilities", () => {
       );
       // Told by its launch prompt, so no note waits to be typed.
       expect(tmux.launches.at(-1)!.args.join(" ")).toContain(
-        "orchestration ability",
+        "You lead a Daedalus team",
       );
       // An ordinary session folder: nothing is written into it.
       expect(session.workingDirectory).not.toContain("agents");
@@ -344,7 +344,7 @@ describe("abilities", () => {
         live: true,
       });
       expect(granted.pendingNote).toContain(
-        "now holds the orchestration ability",
+        "now leads a team",
       );
       // The user is typing: the note waits.
       await tick(harness);
@@ -368,7 +368,7 @@ describe("abilities", () => {
       const revoked = context.abilities.revoke(session.id, "orchestration");
       expect(revoked).toMatchObject({ enabled: false });
       expect(revoked.pendingNote).toContain(
-        "orchestration ability was removed",
+        "your team has ended",
       );
       expect(() =>
         context.abilities.require(session.id, "orchestration"),

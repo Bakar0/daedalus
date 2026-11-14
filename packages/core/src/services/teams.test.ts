@@ -284,16 +284,22 @@ describe("teams", () => {
     await withTeams(async ({ context, tmux }) => {
       const { session, team } = await lead(context);
       expect(team).toMatchObject({ name: "Checkout API", goal: null });
-      expect(prompt(tmux.launches.at(-1)!)).toContain("orchestration ability");
+      expect(prompt(tmux.launches.at(-1)!)).toContain(
+        "You lead a Daedalus team",
+      );
       expect(prompt(tmux.launches.at(-1)!)).toContain("TEAM.md");
       expect(launchSettings(tmux.launches.at(-1)!).crossSessionInbound).toBe(
         "accept",
       );
-      // A session outside any team keeps Claude's own default.
+      // Any session may lead or join a team later, so every one accepts,
+      // and is told at launch how to lead one.
       await context.agents.spawn({ workspace: "shop", provider: "claude" });
-      expect(
-        launchSettings(tmux.launches.at(-1)!).crossSessionInbound,
-      ).toBeUndefined();
+      expect(launchSettings(tmux.launches.at(-1)!).crossSessionInbound).toBe(
+        "accept",
+      );
+      expect(prompt(tmux.launches.at(-1)!)).toContain(
+        "'daedal agent spawn --team --message",
+      );
       expect(context.teams.membership(session.id)?.reader.handle).toBe("lead");
       expect(() => context.teams.get("nobody")).toThrow("No team");
     });
@@ -358,12 +364,8 @@ describe("teams", () => {
           instructions: "  ",
         }),
       ).rejects.toThrow("A member the lead adds needs instructions");
-      // A member cannot lead a team of its own.
-      expect(() =>
-        context.abilities.grant(server.session.id, "orchestration", {
-          live: true,
-        }),
-      ).toThrow("a member cannot lead one");
+      // A member may lead a team of its own.
+      expect(context.teams.lead(server.session.id).created).toBe(true);
       expect(transport.delivered).toEqual([]);
     });
   });
@@ -839,7 +841,9 @@ describe("teams", () => {
       // The lead is numbered like any successor; the team keeps its name.
       expect(nextLead.name).toBe("Checkout API · 2");
       expect(context.teams.get(nextLead.id).name).toBe("Checkout API");
-      expect(prompt(tmux.launches.at(-1)!)).toContain("orchestration ability");
+      expect(prompt(tmux.launches.at(-1)!)).toContain(
+        "You lead a Daedalus team",
+      );
       expect(
         context.teams
           .readers(context.teams.get(team.id))
@@ -1010,6 +1014,220 @@ describe("teams", () => {
         else process.env.DAEDALUS_SESSION_ID = previous;
       }
       expect(transport.to(leader)).toHaveLength(0);
+    });
+  });
+
+  test("any session leads once it adds a member; a team made for a failed start goes", async () => {
+    await withTeams(async ({ context }) => {
+      const plain = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+        name: "Planner",
+      });
+      expect(context.teams.led(plain.id)).toBeUndefined();
+      await expect(
+        context.teams.spawnMember({
+          team: plain.id,
+          addedBy: "lead",
+          provider: "custom",
+          instructions: "x",
+        }),
+      ).rejects.toThrow("not custom");
+      expect(context.teams.led(plain.id)).toBeUndefined();
+      // The user names a plain session: it becomes the lead and is told so.
+      const added = await context.teams.spawnMember({
+        team: plain.id,
+        addedBy: "user",
+        name: "api",
+        instructions: "Build it.",
+      });
+      expect(added.created).toBe(true);
+      expect(added.note?.message.body).toContain("You lead this team now");
+      expect(context.teams.get(plain.id).lead.id).toBe(plain.id);
+      // A second member joins the same team.
+      const again = await context.teams.spawnMember({
+        team: plain.id,
+        addedBy: "lead",
+        name: "web",
+        instructions: "Build the page.",
+      });
+      expect(again.created).toBe(false);
+      expect(again.session.teamId).toBe(added.session.teamId);
+
+      // A start that fails takes back the team it made.
+      const lonely = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+        name: "Lonely",
+      });
+      await expect(
+        context.teams.spawnMember({
+          team: lonely.id,
+          addedBy: "lead",
+          instructions: "x",
+          workspace: "nowhere",
+        }),
+      ).rejects.toThrow();
+      expect(context.teams.led(lonely.id)).toBeUndefined();
+    });
+  });
+
+  test("teams nest three levels deep, five members a lead, across workspaces", async () => {
+    await withTeams(async ({ context }) => {
+      await context.workspaces.create({ name: "Docs", slug: "docs" });
+      const { session: top, team } = await lead(context);
+      const add = (lead: string, name: string, workspace?: string) =>
+        context.teams.spawnMember({
+          team: lead,
+          addedBy: "lead",
+          name,
+          instructions: `Do ${name}.`,
+          ...(workspace ? { workspace } : {}),
+        });
+      const one = await add(top.id, "one");
+      // A member in another workspace.
+      const docs = await add(top.id, "docs", "docs");
+      expect(docs.session.workspaceId).not.toBe(top.workspaceId);
+      expect(context.teams.memberOf(docs.session.id)?.team.id).toBe(team.id);
+      const two = await add(one.session.id, "two");
+      const three = await add(two.session.id, "three");
+      expect(
+        context.teams.ancestors(three.session.id).map((s) => s.id),
+      ).toEqual([two.session.id, one.session.id, top.id]);
+      // Three levels below the top lead is the floor.
+      await expect(add(three.session.id, "four")).rejects.toThrow(
+        `add this one to 'two' instead ('daedal agent spawn --team ${two.session.id}')`,
+      );
+      expect(() =>
+        context.abilities.grant(three.session.id, "orchestration", {
+          live: false,
+        }),
+      ).toThrow("teams nest at most 3 levels");
+      // A session in the middle is in two teams: the one it leads first.
+      expect(
+        context.teams
+          .memberships(one.session.id)
+          .map((place) => place.reader.handle),
+      ).toEqual(["lead", "one"]);
+      expect(context.teams.author(context.teams.get(top.id), one.session)).toBe(
+        "one",
+      );
+      expect(
+        context.teams.author(context.teams.get(one.session.id), one.session),
+      ).toBe("lead");
+      // The tree from anywhere in it starts at the top.
+      const [tree] = context.teams.tree(three.session.id);
+      expect(tree?.session.id).toBe(top.id);
+      expect(
+        tree?.members.map((node) => [
+          node.handle,
+          node.members.map((sub) => sub.handle),
+        ]),
+      ).toEqual([
+        ["one", ["two"]],
+        ["docs", []],
+      ]);
+      expect(context.teams.tree().map((node) => node.session.id)).toEqual([
+        top.id,
+      ]);
+
+      // Five members that are not archived, at most.
+      for (const name of ["c", "d", "e"]) await add(top.id, name);
+      await expect(add(top.id, "f")).rejects.toThrow(
+        "already has 5 members, the most one lead can have",
+      );
+      await context.agents.archive(docs.session.id, true);
+      await add(top.id, "f");
+    });
+  });
+
+  test("a paused team holds its members' messages and takes no one new, down the tree", async () => {
+    await withTeams(async ({ context, transport }) => {
+      const { session: top, team } = await lead(context);
+      const mid = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "mid",
+        instructions: "Mid.",
+      });
+      const low = await context.teams.spawnMember({
+        team: mid.session.id,
+        addedBy: "lead",
+        name: "low",
+        instructions: "Low.",
+      });
+      const paused = await context.teams.setPaused(team.id, true);
+      expect(paused.map((each) => [each.name, each.paused])).toEqual([
+        ["Checkout API", true],
+        ["mid", true],
+      ]);
+      const held = await context.teams.say({
+        team: team.id,
+        author: "lead",
+        body: "@mid hold on",
+      });
+      expect(held.deliveries[0]).toMatchObject({
+        handle: "mid",
+        delivered: false,
+        error:
+          "the team is paused; it gets the messages when 'Checkout API' resumes",
+      });
+      // The lead still hears from its members.
+      const up = await context.teams.say({
+        team: team.id,
+        author: "mid",
+        body: "@lead understood",
+      });
+      expect(up.deliveries[0]).toMatchObject({
+        handle: "lead",
+        delivered: true,
+      });
+      await expect(
+        context.teams.spawnMember({
+          team: mid.session.id,
+          addedBy: "lead",
+          instructions: "x",
+        }),
+      ).rejects.toThrow(`daedal team resume --team ${mid.session.id}`);
+      expect(transport.to(mid.session)).toEqual([]);
+      await context.teams.setPaused(team.id, false);
+      expect(transport.to(mid.session)).toHaveLength(1);
+      expect(transport.to(low.session)).toEqual([]);
+      expect(top.id).toBe(team.lead.id);
+    });
+  });
+
+  test("stopping or archiving a lead does the same to the members below it", async () => {
+    await withTeams(async ({ context }) => {
+      const { session: top, team } = await lead(context);
+      const mid = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "mid",
+        instructions: "Mid.",
+      });
+      const low = await context.teams.spawnMember({
+        team: mid.session.id,
+        addedBy: "lead",
+        name: "low",
+        instructions: "Low.",
+      });
+      const plain = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+      });
+      await context.agents.stopTree(top.id, true);
+      for (const id of [top.id, mid.session.id, low.session.id])
+        expect((await context.agents.get(id)).status).toBe("exited");
+      expect((await context.agents.get(plain.id)).status).toBe("running");
+
+      await context.archive.archiveSession({ sessionId: top.id, force: true });
+      for (const id of [top.id, mid.session.id, low.session.id])
+        expect((await context.agents.get(id)).archivedAt).not.toBeNull();
+      expect(context.teams.get(top.id).paused).toBe(true);
+      expect(context.teams.get(mid.session.id).paused).toBe(true);
+      // Archiving a member leaves its lead alone.
+      expect((await context.agents.get(plain.id)).archivedAt).toBeNull();
     });
   });
 
