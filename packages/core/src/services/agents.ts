@@ -56,6 +56,7 @@ import {
   resolveProvider,
   sessionLaunchModel,
 } from "./providers";
+import { splitLines } from "./cloud-mark";
 import { teamDescendants } from "./team-tree";
 import type { DeliveryResult, SessionChannel } from "./session-channel";
 import { inboxWaiterAlive, leaveInInbox, usesInbox } from "./session-inbox";
@@ -2134,7 +2135,11 @@ export class AgentService {
       await leaveInInbox(
         this.config,
         agent.id,
-        `[message from session "${from.name}", not the user] ${text}`,
+        // Its lines after the first are indented, so none of them can pass
+        // for another note's header.
+        `[message from session "${from.name}", not the user] ${splitLines(
+          text.trim(),
+        ).join("\n  ")}`,
       );
       return agent;
     }

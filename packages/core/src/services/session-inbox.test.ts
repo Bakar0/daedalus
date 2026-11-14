@@ -107,6 +107,23 @@ describe("session inbox", () => {
     });
   });
 
+  test("a note keeps its line breaks", async () => {
+    await withHome(async (config) => {
+      const path = await ensureInbox(config, "s1");
+      expect(
+        await leaveInInbox(
+          config,
+          "s1",
+          "Which store?\r\n\n  - Redis\r  - Postgres\n",
+        ),
+      ).toBe(false);
+      expect(await startWaiter(path).ended).toEqual([
+        "Which store?\n\n  - Redis\n  - Postgres\n",
+        2,
+      ]);
+    });
+  });
+
   test("a note reaches a waiting session now, along with a pipe line", async () => {
     await withHome(async (config) => {
       const path = await ensureInbox(config, "s1");
