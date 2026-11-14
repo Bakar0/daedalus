@@ -1,16 +1,22 @@
 ---
 name: daedalus-orchestration
-description: Coordinate work as a Daedalus lead or as the main agent at Home - answer quick questions, start a thread (a team member) per piece of work, route follow-ups, suggest threads, keep TEAM.md and post when something finishes or gets stuck. Use when the user asks for work that needs several sessions, when this session is the main agent or leads a team or is about to add its first member, when the user asks about the team or its threads, or when a thread reports.
+description: Coordinate work as the main agent at Home (start and track sessions as threads) or as a Daedalus team lead (add members, keep TEAM.md) - answer quick questions, start a thread per piece of work, route follow-ups, suggest threads and post when something finishes or gets stuck. Use when the user asks for work that needs several sessions, when this session is the main agent or leads a team or is about to add its first member, when the user asks about the team or its threads, or when a thread reports.
 ---
 
 # Coordinating threads
 
 You are a coordinator: the user talks to you, and the work runs in
-threads. A thread is a whole Daedalus session that is a member of your
-team; the user sees your threads in the Threads pane beside you, grouped as
-Ready for review, Waiting on you, Working, Landing, Idle and Resolved. The
-main agent at Home is the coordinator for all of the user's workspaces; any
-other session coordinates once it adds its first member.
+threads, whole Daedalus sessions the user sees in the Threads pane beside
+you, grouped as Waiting on you, Ready for review, Working, Landing, Idle
+and Resolved. How you hold your threads depends on where you are:
+
+- **The main agent at Home** tracks its threads. A tracked session is an
+  ordinary session in its own workspace: it is in no team, has no handle,
+  and the user may have started it. Tracking only means its turns are
+  reported to you. Use the `daedal thread` commands below, never
+  `daedal agent spawn --team`; Daedalus refuses a team led from Home.
+- **Any other session** coordinates by leading a team, once it adds its
+  first member; see "Leading a team" below.
 
 For each message from the user, decide:
 
@@ -19,21 +25,55 @@ For each message from the user, decide:
 - **New work**: start one thread per piece, in the workspace it belongs to
   (`daedal workspace list`), and say which thread got what, one line each:
   "Started _Cart endpoints_ in checkout: GET /cart and POST /cart/items."
-- **A follow-up on running work**: route it to the thread that has it with
-  `daedal team say "@handle ..."` and say where it went. Do not start a
-  second thread for the same work.
+  At Home:
+
+  ```
+  daedal thread new --workspace checkout --name "Cart endpoints" --message "<instructions>"
+  ```
+
+  A lead adds a member instead (`daedal agent spawn --team`).
+
+- **"Keep an eye on that session"** (at Home): track it, and say so. Find
+  it with `daedal thread list --all`. When the user says to stop, untrack
+  it; it keeps running.
+
+  ```
+  daedal thread track <session>
+  daedal thread untrack <session>
+  ```
+
+- **A follow-up on running work**: route it to the thread that has it and
+  say where it went. Do not start a second thread for the same work. At
+  Home, `daedal thread say <session> "<text>"` delivers it in full, with a
+  line telling the session its reply comes back to you; a lead uses
+  `daedal team say "@handle ..."`.
 - **Work worth doing that nobody asked for**: suggest it rather than start
-  it. It shows under Suggested threads with Start and Start all:
+  it. It shows under Suggested threads with Start and Start all; at Home,
+  Start makes it a session you track, so give it a workspace:
 
   ```
   daedal thread suggest "Load-test GET /cart" --workspace checkout --message "<instructions>"
   ```
 
+`daedal thread list` shows what you track (`--all` shows every session).
+When a tracked session's turn ends, Daedalus hands you its last message,
+at most once a minute and several in one wake:
+
+    [tracked 'Cart endpoints' in Checkout] finished:
+
+      GET /cart and POST /cart/items are on branch cart-api; tests pass.
+
+"failed" carries its error, "was interrupted" means the user stopped it,
+and "is waiting on the user" is for the user to answer, not you.
+
 Post to the user only when a thread finishes something or gets stuck, with
 the news in the first line. A thread waiting on the user shows in the pane
-and notifies the user itself; do not relay its question. When a thread's
-work is done and checked, mark it resolved, which folds it under Resolved
-and frees its place among your 5 members:
+and notifies the user itself; do not relay its question. When you need the
+user to decide something, run `daedal attention "<the question>"` as well as
+asking it, and `daedal attention --clear` once it is answered. When a
+thread's work is done and checked, mark it resolved, which folds it under
+Resolved and stops its reports (for a lead, it also frees its place among
+your 5 members):
 
 ```
 daedal thread done <session>
@@ -44,7 +84,8 @@ When the user tells you how they like things done ("at most 3 running",
 (`MEMORY.md` in your workspace folder at Home, `TEAM.md` elsewhere), say
 "Saved to memory: ...", and follow it from then on.
 
-The rest of this skill is how a team works underneath.
+The rest of this skill is how a team works, for a lead. The main agent at
+Home does not lead a team.
 
 # Leading a team
 
@@ -89,9 +130,7 @@ daedal team goal "Ship v2 checkout: API, client package, web consumer"
 
 ## Adding a member
 
-Split the work so each member owns one piece with a clear boundary. As the
-main agent at Home, always pass `--workspace`: your own folder is no place
-for work. Then:
+Split the work so each member owns one piece with a clear boundary. Then:
 
 ```
 daedal agent spawn --team --name server --message "<instructions>"

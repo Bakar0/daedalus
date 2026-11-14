@@ -81,6 +81,12 @@ daedal team list [--team <lead>]
 daedal team tree [--team <lead>]
 daedal team goal [<text>] [--team <lead>]
 daedal team pause|resume [--team <lead>]
+daedal thread new --workspace <workspace> [--name <name>] --message <instructions> [--tracker <session>]
+daedal thread track|untrack <session> [--tracker <session>]
+daedal thread list [--all] [--tracker <session>]
+daedal thread say <session> "<text>" [--tracker <session>]
+daedal thread suggest "<title>" --workspace <workspace> [--message <instructions>]
+daedal thread done|reopen <session>
 ```
 
 `<session>` is a session id, or its name when only one live session has it.
@@ -91,6 +97,11 @@ top lead and 5 members a lead. Stopping or archiving a lead does the same to
 the members below it. The `daedalus-orchestration` and `daedalus-team` skills
 and `daedal team --help` describe it. A rebirth moves a session's team, pin
 and color to the successor, which gets ` · 2`.
+Tracking is not a team: `thread new` starts an ordinary session and tracks
+it, `thread track` tracks one already running, and a tracked session's turn
+ends are reported to the tracker (the calling session, else `--tracker`) at
+most once a minute. The main agent at Home tracks its threads and leads no
+team; `daedal thread --help` describes it.
 Routines are not an ability: they run on a schedule in a workspace, from the
 Routines page; `daedal routine --help` describes them.
 
