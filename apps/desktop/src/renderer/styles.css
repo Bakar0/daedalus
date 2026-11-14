@@ -11290,12 +11290,23 @@ button.routine-tick:hover {
   --thread-waiting: #f0a040;
   --thread-working: #8592ff;
   --thread-landing: #4cc3dc;
+  --thread-tracked: #b08cff;
 }
 .app[data-theme="light"] {
   --thread-review: #1f8a5c;
   --thread-waiting: #b8680c;
   --thread-working: #4b58d6;
   --thread-landing: #16839b;
+  --thread-tracked: #7a52c7;
+}
+/* The eye on a session the main agent tracks, on its card and in All. */
+.tracked-icon {
+  color: var(--thread-tracked);
+  flex: none;
+  height: 13px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  width: 13px;
 }
 .sidebar-home-link[aria-current="page"] {
   background: var(--raised-hover) !important;
@@ -11478,10 +11489,58 @@ button.routine-tick:hover {
   background: var(--raised-hover);
 }
 .threads-row-title {
+  align-items: center;
+  display: flex;
   font-weight: 500;
+  gap: 6px;
+  min-width: 0;
+}
+.threads-row-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.threads-row-title .tracked-icon {
+  margin-right: 0;
+}
+/* Track / Stop tracking: a text link over the row's second line, shown on
+   hover or focus, never a filled button. */
+.threads-row-item {
+  position: relative;
+}
+.threads-pane .threads-row-track {
+  background: var(--elevated);
+  bottom: 6px;
+  color: var(--muted);
+  position: absolute;
+  right: 8px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  visibility: hidden;
+}
+.threads-row-item:hover .threads-row-track,
+.threads-row-item:focus-within .threads-row-track {
+  visibility: visible;
+}
+.threads-pane .threads-row-track:hover {
+  color: var(--text);
+}
+/* Home's Tracked / All switch. */
+.threads-filter {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: inline-flex;
+  margin-left: auto;
+  overflow: hidden;
+}
+.threads-pane .threads-filter-option {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 10px;
+}
+.threads-pane .threads-filter-option[aria-pressed="true"] {
+  background: var(--raised-hover);
+  color: var(--text);
 }
 .threads-row-detail {
   color: var(--muted);

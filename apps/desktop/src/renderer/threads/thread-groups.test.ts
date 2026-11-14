@@ -9,6 +9,7 @@ import type {
 import {
   classifyThread,
   THREAD_IDLE_RESOLVE_MS,
+  homeThreadRows,
   threadRows,
   waitingCount,
   type ThreadInputs,
@@ -270,12 +271,79 @@ describe("thread groups", () => {
       }),
     );
     expect(rows.map((row) => [row.title, row.group])).toEqual([
-      ["crash", "review"],
       ["storage", "waiting"],
+      ["crash", "review"],
       ["audit", "idle"],
     ]);
     expect(rows[0]!.workspaceName).toBe("Checkout");
     expect(waitingCount(rows)).toBe(1);
     expect(threadRows("nobody", inputs())).toEqual([]);
+  });
+
+  test("Home lists what the main agent tracks, or every session, in the same groups", () => {
+    const home = inputs({
+      teams: [],
+      agents: [
+        session("main", { workspaceId: "home", teamId: null }),
+        session("discount", { teamId: null, teamHandle: null }),
+        session("stale", { teamId: null, teamHandle: null }),
+        session("refactor", { teamId: null, teamHandle: null }),
+        session("old", { teamId: null, archivedAt: minutesAgo(30) }),
+        session("shell", { teamId: null, kind: "terminal" }),
+        session("home-note", { workspaceId: "home", teamId: null }),
+      ],
+      attention: new Map([["stale", attention("stale", "Full cart?")]]),
+      worktrees: [tree("discount", pr({}))],
+      tracks: [
+        {
+          trackerSessionId: "main",
+          trackedSessionId: "discount",
+          createdAt: "",
+        },
+        { trackerSessionId: "main", trackedSessionId: "stale", createdAt: "" },
+        { trackerSessionId: "main", trackedSessionId: "old", createdAt: "" },
+        {
+          trackerSessionId: "other",
+          trackedSessionId: "refactor",
+          createdAt: "",
+        },
+      ],
+    });
+    const tracked = homeThreadRows("main", "home", "tracked", home);
+    expect(tracked.map((row) => [row.title, row.group, row.tracked])).toEqual([
+      ["stale", "waiting", true],
+      ["discount", "review", true],
+      ["old", "resolved", true],
+    ]);
+    expect(waitingCount(tracked)).toBe(1);
+
+    // All: live agent sessions anywhere but Home, the main agent left out.
+    const all = homeThreadRows("main", "home", "all", home);
+    expect(all.map((row) => [row.title, row.tracked]).sort()).toEqual([
+      ["discount", true],
+      ["refactor", false],
+      ["stale", true],
+    ]);
+    // The dot follows what the filter shows.
+    expect(
+      waitingCount(
+        homeThreadRows("main", "home", "all", {
+          ...home,
+          attention: new Map([
+            ["refactor", attention("refactor", "Which file?")],
+          ]),
+        }),
+      ),
+    ).toBe(1);
+    expect(
+      waitingCount(
+        homeThreadRows("main", "home", "tracked", {
+          ...home,
+          attention: new Map([
+            ["refactor", attention("refactor", "Which file?")],
+          ]),
+        }),
+      ),
+    ).toBe(0);
   });
 });

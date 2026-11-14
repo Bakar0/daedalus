@@ -8,6 +8,7 @@ import type { DesktopClient } from "../client-types";
 import { relativeTime } from "../routines/time";
 import {
   THREAD_GROUPS,
+  type ThreadFilter,
   type ThreadGroup,
   type ThreadRow,
 } from "./thread-groups";
@@ -54,7 +55,7 @@ export function HomeBar({ children }: { children: ReactNode }) {
     <section aria-label="Main agent" className="notice-bar home-bar">
       <div className="notice-bar-row">
         <span className="notice-bar-text">
-          <strong>Main agent</strong> · Home · coordinates threads across your
+          <strong>Main agent</strong> · Home · tracks what you ask, across your
           workspaces
         </span>
         <span className="notice-bar-actions">{children}</span>
@@ -72,17 +73,69 @@ function StateDot({ row }: { row: ThreadRow }) {
   );
 }
 
+/** The small eye that marks a session the main agent tracks. */
+export function TrackedIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-label="Tracked by the main agent"
+      className={className ? `tracked-icon ${className}` : "tracked-icon"}
+      fill="none"
+      role="img"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.6"
+      viewBox="0 0 16 16"
+    >
+      <title>Tracked by the main agent</title>
+      <path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8Z" />
+      <circle cx="8" cy="8" r="2" />
+    </svg>
+  );
+}
+
+/** Home's Tracked / All switch. */
+function FilterSwitch({
+  filter,
+  onFilter,
+}: {
+  filter: ThreadFilter;
+  onFilter: (filter: ThreadFilter) => void;
+}) {
+  return (
+    <span aria-label="Show" className="threads-filter" role="group">
+      {(["tracked", "all"] as const).map((value) => (
+        <button
+          aria-pressed={filter === value}
+          className="threads-filter-option"
+          key={value}
+          onClick={() => onFilter(value)}
+          type="button"
+        >
+          {value === "tracked" ? "Tracked" : "All"}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 /**
  * Beside a lead's terminal: its threads grouped by what they need, the
- * threads it suggests, and one thread opened in place.
+ * threads it suggests, and one thread opened in place. At Home the main
+ * agent's pane switches between what it tracks and every session, and each
+ * row can be tracked or stop being tracked.
  */
 export function ThreadsPane({
   client,
   lead,
   rows,
+  findRow,
   now,
   run,
   workspaceName,
+  filter,
+  onFilter,
+  onTrack,
   openThreadId,
   onOpenThread,
   onOpenSession,
@@ -91,7 +144,14 @@ export function ThreadsPane({
   client: DesktopClient;
   lead: AgentSessionDto;
   rows: readonly ThreadRow[];
+  /** Finds an open thread the filter leaves out, so it stays open. */
+  findRow?: (sessionId: string) => ThreadRow | undefined;
   now: number;
+  /** Home only: what the pane lists, and switching it. */
+  filter?: ThreadFilter;
+  onFilter?: (filter: ThreadFilter) => void;
+  /** Home only: start or stop the main agent tracking a session. */
+  onTrack?: (sessionId: string, tracked: boolean) => void;
   run: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
   /** A workspace's name by id, for a suggestion's row. */
   workspaceName: (id: string | null) => string;
@@ -145,7 +205,8 @@ export function ThreadsPane({
   };
 
   const opened = openThreadId
-    ? rows.find((row) => row.session.id === openThreadId)
+    ? (rows.find((row) => row.session.id === openThreadId) ??
+      findRow?.(openThreadId))
     : undefined;
   if (opened)
     return (
@@ -154,6 +215,7 @@ export function ThreadsPane({
           client={client}
           onBack={() => onOpenThread(undefined)}
           onOpenSession={onOpenSession}
+          {...(onTrack ? { onTrack } : {})}
           renderTerminal={renderTerminal}
           row={opened}
           run={run}
@@ -168,6 +230,9 @@ export function ThreadsPane({
         <span className="threads-count">
           {rows.filter((row) => row.group !== "resolved").length} open
         </span>
+        {filter && onFilter && (
+          <FilterSwitch filter={filter} onFilter={onFilter} />
+        )}
       </div>
       <div className="threads-list">
         {suggestions.length > 0 && (
@@ -216,12 +281,21 @@ export function ThreadsPane({
             )}
           </section>
         )}
-        {rows.length === 0 && suggestions.length === 0 && (
-          <p className="threads-empty">
-            No threads yet. Ask {lead.name} for work, and it starts a thread for
-            each piece.
-          </p>
-        )}
+        {rows.length === 0 &&
+          suggestions.length === 0 &&
+          (filter === "tracked" ? (
+            <p className="threads-empty">
+              The main agent is not tracking anything. Ask it for work, or
+              switch to All.
+            </p>
+          ) : filter === "all" ? (
+            <p className="threads-empty">No sessions are running.</p>
+          ) : (
+            <p className="threads-empty">
+              No threads yet. Ask {lead.name} for work, and it starts a thread
+              for each piece.
+            </p>
+          ))}
         {THREAD_GROUPS.map(({ group, label }) => {
           const members = rows.filter((row) => row.group === group);
           if (!members.length) return null;
@@ -249,19 +323,32 @@ export function ThreadsPane({
               </h3>
               {!isFolded &&
                 members.map((row) => (
-                  <button
-                    className="threads-row"
-                    key={row.session.id}
-                    onClick={() => onOpenThread(row.session.id)}
-                    type="button"
-                  >
-                    <StateDot row={row} />
-                    <span className="threads-row-title">{row.title}</span>
-                    <span className="threads-where">
-                      {row.workspaceName} · {relativeTime(row.at, now)}
-                    </span>
-                    <span className="threads-row-detail">{row.detail}</span>
-                  </button>
+                  <div className="threads-row-item" key={row.session.id}>
+                    <button
+                      className="threads-row"
+                      onClick={() => onOpenThread(row.session.id)}
+                      type="button"
+                    >
+                      <StateDot row={row} />
+                      <span className="threads-row-title">
+                        <span className="threads-row-name">{row.title}</span>
+                        {filter === "all" && row.tracked && <TrackedIcon />}
+                      </span>
+                      <span className="threads-where">
+                        {row.workspaceName} · {relativeTime(row.at, now)}
+                      </span>
+                      <span className="threads-row-detail">{row.detail}</span>
+                    </button>
+                    {onTrack && (
+                      <button
+                        className="threads-link threads-row-track"
+                        onClick={() => onTrack(row.session.id, !row.tracked)}
+                        type="button"
+                      >
+                        {row.tracked ? "Stop tracking" : "Track"}
+                      </button>
+                    )}
+                  </div>
                 ))}
             </section>
           );
@@ -271,13 +358,17 @@ export function ThreadsPane({
   );
 }
 
-/** One thread in the pane: what it asks, its terminal, a message box, Stop. */
+/**
+ * One thread in the pane: what it asks, its terminal, Open in full and Stop;
+ * at Home, Track or Stop tracking, elsewhere Mark done.
+ */
 function OpenThread({
   client,
   row,
   run,
   onBack,
   onOpenSession,
+  onTrack,
   renderTerminal,
 }: {
   client: DesktopClient;
@@ -285,6 +376,7 @@ function OpenThread({
   run: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
   onBack: () => void;
   onOpenSession: (session: AgentSessionDto) => void;
+  onTrack?: (sessionId: string, tracked: boolean) => void;
   renderTerminal: (session: AgentSessionDto) => ReactNode;
 }) {
   const { session } = row;
@@ -301,6 +393,15 @@ function OpenThread({
         <span className="threads-where">{row.workspaceName}</span>
       </div>
       <div className="threads-open-actions">
+        {onTrack && (
+          <button
+            className="threads-link"
+            onClick={() => onTrack(session.id, !row.tracked)}
+            type="button"
+          >
+            {row.tracked ? "Stop tracking" : "Track"}
+          </button>
+        )}
         <button
           className="threads-link"
           onClick={() => onOpenSession(session)}
@@ -308,23 +409,25 @@ function OpenThread({
         >
           Open in full
         </button>
-        <button
-          className="threads-link"
-          onClick={() =>
-            void run(
-              client.request.threadResolve({
-                sessionId: session.id,
-                resolved: !session.resolvedAt,
-              }),
-            )
-          }
-          type="button"
-        >
-          {session.resolvedAt ? "Reopen" : "Mark done"}
-        </button>
+        {!onTrack && (
+          <button
+            className="threads-link"
+            onClick={() =>
+              void run(
+                client.request.threadResolve({
+                  sessionId: session.id,
+                  resolved: !session.resolvedAt,
+                }),
+              )
+            }
+            type="button"
+          >
+            {session.resolvedAt ? "Reopen" : "Mark done"}
+          </button>
+        )}
         {live && (
           <button
-            className="threads-button threads-stop"
+            className="threads-link threads-stop"
             onClick={() =>
               void run(
                 client.request.agentStop({ id: session.id, force: false }),

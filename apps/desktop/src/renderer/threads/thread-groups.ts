@@ -3,6 +3,7 @@ import type {
   AgentSessionDto,
   PullRequestRefDto,
   SessionAttentionDto,
+  SessionTrackDto,
   SessionWorktreeDto,
   TeamDto,
   WorkspaceDto,
@@ -20,8 +21,8 @@ export const THREAD_GROUPS: readonly {
   group: ThreadGroup;
   label: string;
 }[] = [
-  { group: "review", label: "Ready for review" },
   { group: "waiting", label: "Waiting on you" },
+  { group: "review", label: "Ready for review" },
   { group: "working", label: "Working" },
   { group: "landing", label: "Landing" },
   { group: "idle", label: "Idle" },
@@ -43,7 +44,12 @@ export interface ThreadRow {
   pullRequest?: PullRequestRefDto;
   /** It failed, rather than asking: its dot is red. */
   failed: boolean;
+  /** At Home: whether the main agent tracks it. */
+  tracked?: boolean;
 }
+
+/** What the main agent's Threads pane lists. */
+export type ThreadFilter = "tracked" | "all";
 
 export interface ThreadInputs {
   agents: readonly AgentSessionDto[];
@@ -53,6 +59,8 @@ export interface ThreadInputs {
   attention: ReadonlyMap<string, SessionAttentionDto>;
   worktrees: readonly SessionWorktreeDto[];
   now: number;
+  /** Which sessions track which; only Home's pane reads it. */
+  tracks?: readonly SessionTrackDto[];
 }
 
 /** The team a session leads, if any. */
@@ -217,6 +225,30 @@ export function classifyThread(
   };
 }
 
+/** Rows grouped, newest change first within a group. */
+function groupedRows(
+  sessions: readonly AgentSessionDto[],
+  inputs: ThreadInputs,
+  tracked?: ReadonlySet<string>,
+): ThreadRow[] {
+  const names = new Map(inputs.workspaces.map((item) => [item.id, item.name]));
+  const order = new Map(
+    THREAD_GROUPS.map((item, index) => [item.group, index]),
+  );
+  return sessions
+    .map((session) => ({
+      session,
+      title: session.name,
+      workspaceName: names.get(session.workspaceId) ?? session.workspaceId,
+      ...classifyThread(session, inputs),
+      ...(tracked ? { tracked: tracked.has(session.id) } : {}),
+    }))
+    .sort(
+      (a, b) =>
+        order.get(a.group)! - order.get(b.group)! || b.at.localeCompare(a.at),
+    );
+}
+
 /**
  * A lead's threads: the members of the team it leads, grouped, newest
  * change first within a group.
@@ -224,22 +256,41 @@ export function classifyThread(
 export function threadRows(leadId: string, inputs: ThreadInputs): ThreadRow[] {
   const team = ledTeam(inputs.teams, leadId);
   if (!team) return [];
-  const names = new Map(inputs.workspaces.map((item) => [item.id, item.name]));
-  const order = new Map(
-    THREAD_GROUPS.map((item, index) => [item.group, index]),
+  return groupedRows(
+    inputs.agents.filter((session) => session.teamId === team.id),
+    inputs,
   );
-  return inputs.agents
-    .filter((session) => session.teamId === team.id)
-    .map((session) => ({
-      session,
-      title: session.name,
-      workspaceName: names.get(session.workspaceId) ?? session.workspaceId,
-      ...classifyThread(session, inputs),
-    }))
-    .sort(
-      (a, b) =>
-        order.get(a.group)! - order.get(b.group)! || b.at.localeCompare(a.at),
-    );
+}
+
+/**
+ * The main agent's threads. Tracked: the sessions it tracks, archived ones
+ * under Resolved. All: every agent session that is not archived in every
+ * workspace, never Home's row nor the main agent itself. Each row says
+ * whether it is tracked.
+ */
+export function homeThreadRows(
+  mainId: string,
+  homeWorkspaceId: string,
+  filter: ThreadFilter,
+  inputs: ThreadInputs,
+): ThreadRow[] {
+  const tracked = new Set(
+    (inputs.tracks ?? [])
+      .filter((track) => track.trackerSessionId === mainId)
+      .map((track) => track.trackedSessionId),
+  );
+  return groupedRows(
+    inputs.agents.filter((session) =>
+      filter === "tracked"
+        ? tracked.has(session.id)
+        : !session.archivedAt &&
+          session.kind === "agent" &&
+          session.workspaceId !== homeWorkspaceId &&
+          session.id !== mainId,
+    ),
+    inputs,
+    tracked,
+  );
 }
 
 /** How many threads wait on the user: the Threads button's dot. */

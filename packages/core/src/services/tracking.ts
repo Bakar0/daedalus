@@ -70,8 +70,8 @@ export class TrackingService {
   }
 
   /**
-   * What a tracker tracks, oldest first; with `all`, every session that is
-   * not archived in every workspace but Home, marked when it is tracked.
+   * What a tracker tracks, oldest first; with `all`, every agent session
+   * that is not archived in every workspace but Home, marked when tracked.
    */
   sessions(trackerId: string, options: { all?: boolean } = {}) {
     const tracker = this.session(trackerId);
@@ -91,6 +91,7 @@ export class TrackingService {
       .filter(
         (session) =>
           !session.archivedAt &&
+          session.kind === "agent" &&
           session.workspaceId !== home &&
           session.id !== tracker.id,
       )

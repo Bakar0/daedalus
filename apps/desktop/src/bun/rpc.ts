@@ -322,6 +322,7 @@ export async function desktopSnapshot(
     toasts: view.toasts.map(toastDto),
     abilities: view.abilities.map(sessionAbilityDto),
     teams: view.teams.map(teamDto),
+    tracks: view.tracks.map((track) => ({ ...track })),
     largeFiles: view.largeFiles.map((file) => ({ ...file })),
     workflowRuns: view.workflowRuns.map(workflowRunDto),
     unseenRoutineRuns: view.unseenRoutineRuns.length,
@@ -746,6 +747,12 @@ export function createDesktopRequestHandlers(
       mutate(async () => agentDto(await context.threads.start(id))),
     threadSuggestionDismiss: ({ id }) =>
       mutate(() => ({ id: context.threads.dismiss(id).id })),
+    threadTrack: ({ trackerId, sessionId, tracked }) =>
+      mutate(() => {
+        if (tracked) context.tracking.track(trackerId, sessionId);
+        else context.tracking.untrack(trackerId, sessionId);
+        return { trackerId, sessionId, tracked };
+      }),
     threadResolve: ({ sessionId, resolved }) =>
       mutate(() => agentDto(context.threads.resolve(sessionId, resolved))),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),

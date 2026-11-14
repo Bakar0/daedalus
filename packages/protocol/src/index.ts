@@ -152,6 +152,13 @@ export interface AgentSessionDto {
   resolvedAt?: string | null;
 }
 
+/** A session keeping an eye on another, as the main agent tracks its threads. */
+export interface SessionTrackDto {
+  trackerSessionId: string;
+  trackedSessionId: string;
+  createdAt: string;
+}
+
 /** Work a lead suggested as a thread, waiting for the user to start it. */
 export interface ThreadSuggestionDto {
   id: number;
@@ -1362,6 +1369,8 @@ export interface DesktopSnapshotDto {
   abilities: SessionAbilityDto[];
   /** Every team: a lead holding orchestration, and what it is called. */
   teams: TeamDto[];
+  /** Which sessions track which: the main agent's threads. */
+  tracks?: SessionTrackDto[];
   /** Workspace journals and team files grown past their compact size. */
   largeFiles?: LargeFileDto[];
   /** The newest workflow run of each session. */
@@ -1612,9 +1621,17 @@ export interface DesktopRpcSchema {
       >;
       /** The threads a lead suggested that wait on the user. */
       threadSuggestions: Request<{ leadId: string }, ThreadSuggestionDto[]>;
-      /** Starts a suggested thread as a new member of its lead's team. */
+      /**
+       * Starts a suggested thread: the main agent's as a session it tracks,
+       * another lead's as a new member of its team.
+       */
       threadSuggestionStart: Request<{ id: number }, AgentSessionDto>;
       threadSuggestionDismiss: Request<{ id: number }, { id: number }>;
+      /** Starts or stops a session tracking another; it keeps running. */
+      threadTrack: Request<
+        { trackerId: string; sessionId: string; tracked: boolean },
+        { trackerId: string; sessionId: string; tracked: boolean }
+      >;
       /** Marks a thread done, or open again. */
       threadResolve: Request<
         { sessionId: string; resolved: boolean },
