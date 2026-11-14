@@ -781,7 +781,9 @@ export class TeamService {
         author: DAEDALUS_HANDLE,
         tags: [LEAD_HANDLE],
         body,
-        kind: "handback",
+        // The user answers a member waiting on them, so the note rides along
+        // with the lead's next delivery instead of waking it for nothing.
+        kind: end === "waiting" ? "waiting" : "handback",
       });
       return "handed-back";
     } catch {
@@ -801,7 +803,10 @@ export class TeamService {
       if (!this.handBackDue(cursor)) continue;
       const waiting = this.repositories.teams
         .messages(team.id, cursor.deliveredThrough)
-        .some((message) => tagsReader(message, LEAD_HANDLE));
+        .some(
+          (message) =>
+            tagsReader(message, LEAD_HANDLE) && message.kind !== "waiting",
+        );
       if (!waiting) continue;
       // A lead that is not running gets them when it runs again; one whose
       // last delivery failed is tried again a minute later, not every tick.
@@ -898,11 +903,15 @@ export class TeamService {
             message.author !== reader.handle,
         );
       if (!pending.length) return { cursor, pending };
+      // A note that a member waits on the user wakes no one; it goes with
+      // the next delivery.
+      if (pending.every((message) => message.kind === "waiting"))
+        return { cursor, pending: [] };
       // Hand-backs alone reach a lead at most once a minute; anything else
       // goes now and takes them along.
       if (
         reader.role === "lead" &&
-        pending.every((message) => message.kind === "handback") &&
+        pending.every((message) => message.kind !== "message") &&
         !this.handBackDue(cursor)
       )
         return {
@@ -1048,7 +1057,7 @@ export class TeamService {
     for (const message of pending.slice(-shown)) {
       // A hand-back is about the member it names, not from Daedalus.
       const about =
-        message.kind === "handback"
+        message.kind !== "message"
           ? parseTags(message.body)[0]
           : message.author;
       if (about && about !== reader.handle && handles.has(about))

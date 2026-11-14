@@ -29,7 +29,8 @@ const messageFromRow = (row: TeamMessageRow): TeamMessage => ({
   body: row.body,
   tags: JSON.parse(row.tags) as string[],
   createdAt: row.created_at,
-  kind: row.kind === "handback" ? "handback" : "message",
+  kind:
+    row.kind === "handback" || row.kind === "waiting" ? row.kind : "message",
 });
 
 const cursorFromRow = (row: TeamCursorRow): TeamCursor => ({

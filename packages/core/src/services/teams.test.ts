@@ -1054,16 +1054,14 @@ describe("teams", () => {
         sessionId: server.session.id,
         reason: "Which database should I use?",
       });
-      // The user is notified on the member's card; the lead only hears why
-      // the member stopped.
+      // The user is notified on the member's card. The lead is not woken:
+      // the note waits for the lead's next delivery.
       expect(raised.notification).toBeDefined();
       expect(transport.to(server.session)).toHaveLength(0);
-      expect(transport.to(leader).map((each) => each.text)).toEqual([
-        '[team "Checkout API"] daedalus:\n' +
-          "  @server is waiting on the user: Which database should I use?\n\n" +
-          "  The user answers it in @server's own session; you need not pass it on.\n\n" +
-          'Reply with: daedal team say "@server ..."',
-      ]);
+      expect(transport.to(leader)).toHaveLength(0);
+      expect(context.repositories.teams.messages(team.id)[0]!.kind).toBe(
+        "waiting",
+      );
       // A permission prompt is the user's alone.
       await context.activity.record({
         sessionId: server.session.id,
@@ -1072,20 +1070,25 @@ describe("teams", () => {
         source: "hook",
       });
       expect(context.repositories.teams.messages(team.id)).toHaveLength(1);
-      // Archiving a running member stops it first; the lead hears once, at
-      // once, though a hand-back went within the minute.
+      // The desktop tick does not send a waiting note alone either.
+      await context.teams.flushDue();
+      expect(transport.to(leader)).toHaveLength(0);
+      // Archiving a running member stops it first; the lead hears at once,
+      // and the waiting note goes with it.
       await context.agents.archive(server.session.id, true);
-      expect(transport.to(leader)).toHaveLength(2);
-      expect(transport.to(leader)[1]!.text).toBe(
-        '[team "Checkout API"] daedalus:\n  @lead @server stopped running.\n\n' +
-          "Read the whole chat with: daedal team chat",
-      );
+      expect(transport.to(leader).map((each) => each.text)).toEqual([
+        '[team "Checkout API"] daedalus:\n' +
+          "  @server is waiting on the user: Which database should I use?\n\n" +
+          "  The user answers it in @server's own session; you need not pass it on.\n\n" +
+          '[team "Checkout API"] daedalus:\n  @lead @server stopped running.\n\n' +
+          'Reply with: daedal team say "@server ..."',
+      ]);
       // The lead needing the user is the user's business, not the team's.
       await context.activity.raise({
         sessionId: leader.id,
         reason: "Approve the plan?",
       });
-      expect(transport.to(leader)).toHaveLength(2);
+      expect(transport.to(leader)).toHaveLength(1);
       expect(context.repositories.teams.messages(team.id)).toHaveLength(2);
     });
   });

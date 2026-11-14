@@ -241,9 +241,17 @@ export async function planCommand(
       parsed.positionals.slice(2).join(" "),
     );
     const task = findPlanTask(plan, parsed.positionals[1]!);
+    // An agent that asks the plan is waiting on the user's answer, so its
+    // card, its lead and the Threads pane show it waiting, not done.
+    const session = await caller();
+    if (session)
+      await context.activity.raise({
+        sessionId: session.id,
+        reason: `Asked in plan "${plan.title ?? found.path}" under "${task.title}": ${parsed.positionals.slice(2).join(" ")}`,
+      });
     printResult({ file: found, task }, json, () =>
       console.log(
-        `Asked under "${task.title}"; the user sees it under Needs you${planTaskOwner(plan, task) ? `, answering @${planTaskOwner(plan, task)}` : ""}`,
+        `Asked under "${task.title}"; the user sees it under Needs you${planTaskOwner(plan, task) ? `, answering @${planTaskOwner(plan, task)}` : ""}${session ? ". Your session shows as waiting on the user; run daedal attention --clear once answered" : ""}`,
       ),
     );
     return 0;

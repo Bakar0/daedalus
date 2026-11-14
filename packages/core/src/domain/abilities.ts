@@ -49,7 +49,11 @@ export type TeamAuthor = string;
  * What a team message is: something a person or session wrote, or the
  * hand-back Daedalus posts to a lead when a member's turn ends.
  */
-export type TeamMessageKind = "message" | "handback";
+/**
+ * `handback` is Daedalus's note that a member's turn ended; `waiting` says a
+ * member stopped to wait on the user, which never wakes the lead by itself.
+ */
+export type TeamMessageKind = "message" | "handback" | "waiting";
 
 /** One message in a team's chat. */
 export interface TeamMessage {
