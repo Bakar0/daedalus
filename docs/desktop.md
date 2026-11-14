@@ -63,6 +63,25 @@ The chevron on a workspace card folds its list, and the fold button in the Works
 
 Opening a session switches to the session view: the terminal takes the center. Opening a file or a task from the side panel leaves it. A workspace remembered on the session view, or on the old Sessions tab, comes back to its last session, or to its board if it has none.
 
+## Home and threads
+
+**Home**, above Routines in the sidebar, opens the main agent: one Claude session that coordinates work across every workspace, the way Claude Code Projects does. It is made the first time Home is opened, in a hidden workspace row (`kind = 'home'`, migration 043) whose folder is `.home` under the workspaces root, not the root itself, so its generated `CLAUDE.md` is not read by every session below the root. The row is left out of the workspace list, the archive, the World, the phone and `daedal workspace list`. The main agent's launch prompt is the coordinator's role: answer quick questions itself, start one thread per piece of work with `agent spawn --team --workspace`, say which thread got what, route follow-ups to the thread that has the work, suggest threads with `daedal thread suggest`, post only when a thread finishes or gets stuck, and keep the user's preferences in `.home/MEMORY.md`. It may read every workspace's folder.
+
+Beside the main agent, and beside any session that leads a team, sits the **Threads** pane: the lead's members, grouped by the first rule that holds:
+
+| Group            | When                                                                                           |
+| ---------------- | ---------------------------------------------------------------------------------------------- |
+| Resolved         | marked done (`thread done`, or **Mark done**), its PR merged, archived, or idle 7 days; folded |
+| Waiting on you   | it asks, needs a permission, failed, or stopped unexpectedly                                   |
+| Working          | a turn is running                                                                              |
+| Landing          | its pull request is approved                                                                   |
+| Ready for review | its pull request is open and not a draft                                                       |
+| Idle             | anything else                                                                                  |
+
+The pane shows them as Ready for review, Waiting on you, Working, Landing, Idle, Resolved. A row has the title, the workspace, how long ago its state changed, and one line: what it is doing, or what it asks. **Suggested threads**, from the lead's `thread suggest`, sit on top with **Start** and **Start all**. Clicking a row opens the thread in the pane: what it waits on, its own terminal (where its question or permission prompt is answered), a box that types a message straight into it, **Mark done**, **Open in full** and **Stop**; **← Threads** goes back. Needs are never relayed up: a thread waiting on you is answered there, not through its lead. The **Threads** button in the bar above the terminal shows or hides the pane and has a dot while any thread waits on you. A thread open in the pane counts as on screen, so its alerts are held as the session in front is.
+
+Notifications follow Part 3's path: the main agent's or a lead's finished turn notifies with its reply, a thread that errors or needs input notifies as any session does, and none of these fire for what is on screen.
+
 ## Keyboard
 
 Every key is a command in one table (`COMMAND_SPECS` in `packages/protocol/src/commands.ts`), matched by one dispatcher in the renderer (`apps/desktop/src/renderer/commands/`). A terminal keeps a key from the shell only when an enabled command is bound to it, so ⌃C, ⌃R and the ⌥ keys always reach the program. There are few keys on purpose: ⌘K is the one place to go for everything else.
