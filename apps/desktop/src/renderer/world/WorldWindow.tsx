@@ -35,7 +35,7 @@ export function WorldWindow(props: { client: DesktopClient }) {
 
   // Active workspaces in the order the sidebar keeps them.
   const workspaces = (snapshot?.workspaces ?? [])
-    .filter((item) => !item.archivedAt)
+    .filter((item) => !item.archivedAt && item.kind !== "home")
     .sort((left, right) => left.position - right.position);
 
   return (

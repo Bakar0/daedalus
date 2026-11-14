@@ -210,6 +210,8 @@ const PALETTE_HIDDEN_COMMANDS = new Set<string>([
 ]);
 import { useCloudState } from "./CloudPanel";
 import { TeamBar, TeamPage } from "./teams/TeamPanel";
+import { HomeBar, ThreadsPane, ThreadsToggle } from "./threads/ThreadsPane";
+import { threadRows, waitingCount } from "./threads/thread-groups";
 import { RoutinesHome } from "./routines/RoutinesHome";
 import { ProBadge } from "./ProPlan";
 import { useMutation, useRpcQuery } from "./use-rpc";
@@ -2458,6 +2460,18 @@ export function WorkspaceApp({
     ),
   );
   const viewWorkspaceId = useRef(scopeKey);
+  // The Threads pane beside a lead's terminal: which leads have it hidden,
+  // and which thread each lead has open in it.
+  const [hiddenThreadPanes, setHiddenThreadPanes] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [openThreads, setOpenThreads] = useState<
+    Readonly<Record<string, string>>
+  >({});
+  const paneThreadId =
+    activeSessionId && !hiddenThreadPanes.has(activeSessionId)
+      ? openThreads[activeSessionId]
+      : undefined;
   // Where the World button returns to: the World spans every workspace, so
   // it toggles over whichever workspace view was open.
   const lastWorkspaceView = useRef<WorkspaceView>(
@@ -3094,7 +3108,10 @@ export function WorkspaceApp({
           (item) => item.id === current && !item.archivedAt,
         )
           ? current
-          : latest.workspaces.find((item) => !item.archivedAt)?.id,
+          : // Home is opened from its own entry, never fallen back to.
+            latest.workspaces.find(
+              (item) => !item.archivedAt && item.kind !== "home",
+            )?.id,
       );
       setSelectedTaskId((current) =>
         latest.tasks.some((item) => item.id === current) ? current : undefined,
@@ -3248,6 +3265,8 @@ export function WorkspaceApp({
             document.visibilityState === "visible" && document.hasFocus(),
           workspaceId: workspaceId ?? null,
           sessionId: activeSessionId ?? null,
+          // A thread open in the Threads pane is on screen too.
+          paneSessionId: paneThreadId ?? null,
         });
       } catch {
         // Presence is advisory; routing degrades to "no app", never to a crash.
@@ -3265,7 +3284,7 @@ export function WorkspaceApp({
       window.removeEventListener("blur", publish);
       document.removeEventListener("visibilitychange", publish);
     };
-  }, [activeSessionId, client, workspaceId]);
+  }, [activeSessionId, client, paneThreadId, workspaceId]);
   // Coming back to the window is when the user looks at the Repositories
   // panel again, so the host fetches stale base branches and looks at every
   // tree then, rather than at its next scheduled pass.
@@ -3853,14 +3872,29 @@ export function WorkspaceApp({
     if (revived) openSession(revived.id);
   }
 
+  // Home's main agent runs in a hidden row that no list of workspaces shows.
+  const homeWorkspace = (snapshot?.workspaces ?? []).find(
+    (item) => item.kind === "home" && !item.archivedAt,
+  );
   const activeWorkspaces = (snapshot?.workspaces ?? []).filter(
-    (item) => !item.archivedAt && !archivingWorkspaceIds.has(item.id),
+    (item) =>
+      !item.archivedAt &&
+      item.kind !== "home" &&
+      !archivingWorkspaceIds.has(item.id),
   );
   // Most recently archived first, so the one just put away is on top.
   const archivedWorkspaces = (snapshot?.workspaces ?? [])
-    .filter((item) => item.archivedAt && !deletingWorkspaceIds.has(item.id))
+    .filter(
+      (item) =>
+        item.archivedAt &&
+        item.kind !== "home" &&
+        !deletingWorkspaceIds.has(item.id),
+    )
     .sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
-  const workspace = activeWorkspaces.find((item) => item.id === workspaceId);
+  const atHome = Boolean(homeWorkspace && homeWorkspace.id === workspaceId);
+  const workspace = atHome
+    ? homeWorkspace
+    : activeWorkspaces.find((item) => item.id === workspaceId);
   const worktreeChanges = useWorktreeChanges(
     client,
     workspacePanelVisible ? workspace?.id : undefined,
@@ -5337,6 +5371,18 @@ export function WorkspaceApp({
       requestSessionFocus(id);
     // The scope effect restores the workspace's remembered view, most often
     // its last session; the side panel holds its tasks, files and repositories.
+  }
+
+  // Home's main agent, made the first time Home is opened.
+  const [homeOpening, setHomeOpening] = useState(false);
+  async function openHome() {
+    setHomeOpening(true);
+    try {
+      const home = await perform(client.request.homeAgent({}));
+      if (home) showSession(home.session.id, home.workspace.id);
+    } finally {
+      setHomeOpening(false);
+    }
   }
 
   /**
@@ -7656,11 +7702,123 @@ export function WorkspaceApp({
     knownTerminalIds.current = current;
   }, [files, terminalIds]);
 
+  // A lead's threads, beside its terminal: the main agent at Home, or any
+  // session leading a team.
+  const isMainAgent = Boolean(
+    activeSession &&
+    homeWorkspace &&
+    activeSession.workspaceId === homeWorkspace.id &&
+    !activeSession.teamId &&
+    activeSession.kind === "agent",
+  );
+  const threadsLead =
+    activeSession &&
+    (isMainAgent ||
+      (snapshot?.teams ?? []).some((team) => team.leadId === activeSession.id))
+      ? activeSession
+      : undefined;
+  const leadThreads = threadsLead
+    ? threadRows(threadsLead.id, {
+        agents,
+        teams: snapshot?.teams ?? [],
+        workspaces: snapshot?.workspaces ?? [],
+        activity: activityById,
+        attention: attentionById,
+        worktrees: snapshot?.worktrees ?? [],
+        now,
+      })
+    : [];
+  const threadsPaneOpen = Boolean(
+    threadsLead && !hiddenThreadPanes.has(threadsLead.id),
+  );
+  const threadsToggle = threadsLead ? (
+    <ThreadsToggle
+      onToggle={() =>
+        setHiddenThreadPanes((current) => {
+          const next = new Set(current);
+          if (next.has(threadsLead.id)) next.delete(threadsLead.id);
+          else next.add(threadsLead.id);
+          return next;
+        })
+      }
+      open={threadsPaneOpen}
+      waiting={waitingCount(leadThreads)}
+    />
+  ) : null;
+  const threadsPane =
+    threadsLead && threadsPaneOpen ? (
+      <ThreadsPane
+        client={client}
+        key={threadsLead.id}
+        lead={threadsLead}
+        now={now}
+        onOpenSession={(target) => showSession(target.id, target.workspaceId)}
+        onOpenThread={(threadId) =>
+          setOpenThreads((current) => {
+            const next = { ...current };
+            if (threadId) next[threadsLead.id] = threadId;
+            else delete next[threadsLead.id];
+            return next;
+          })
+        }
+        openThreadId={openThreads[threadsLead.id]}
+        renderTerminal={(thread) => (
+          <TerminalSurface
+            activity={activityById.get(thread.id)}
+            attention={attentionById.get(thread.id)}
+            fileLinks={fileLinksFrom([
+              thread.workingDirectory,
+              ...(snapshot?.worktrees ?? [])
+                .filter((item) => item.sessionId === thread.id)
+                .map((item) => item.path),
+            ])}
+            fitRevision={terminalFitRevision}
+            focused={false}
+            id={thread.id}
+            key={`thread:${thread.id}:${terminalMountRevision}`}
+            label={sessionName(thread)}
+            onClearAttention={() => void clearAttention(thread.id)}
+            onCopy={copyTerminalText}
+            onOpenLink={openTerminalLink}
+            session={thread}
+            status={thread.status}
+            target="agent"
+            terminalEndpoint={terminalEndpoint}
+          />
+        )}
+        rows={leadThreads}
+        run={perform}
+        workspaceName={(id) =>
+          workspaceById.get(id ?? threadsLead.workspaceId)?.name ??
+          id ??
+          "its lead's workspace"
+        }
+      />
+    ) : null;
+
   // The session tab shows whichever session the left column has open.
   const sessionPane = workspace ? (
     <section className="terminal-column">
-      {activeSessionTeam && activeSession && (
+      {isMainAgent && (
+        <HomeBar>
+          {threadsToggle}
+          {activeSessionTeam && (
+            <button
+              className="quiet"
+              data-panel-toggle
+              onClick={() => openTeamTab(activeSessionTeam.team)}
+              type="button"
+            >
+              Team chat
+            </button>
+          )}
+        </HomeBar>
+      )}
+      {activeSessionTeam && activeSession && !isMainAgent && (
         <TeamBar
+          actions={
+            activeSessionTeam.role === "lead" ? threadsToggle : undefined
+          }
           color={activeSession.color}
           handle={activeSessionTeam.handle}
           leadArchived={Boolean(
@@ -7703,52 +7861,58 @@ export function WorkspaceApp({
         )}
       {activeSession ? (
         // The drawer sits over the terminal, below the bars above it, so
-        // their buttons stay in reach while it is open.
-        <div className="terminal-stage">
-          {(() => {
-            const signIn = signInBySession.get(activeSession.id);
-            return signIn && signIn.phase !== "pasting" ? (
-              <CloudSignInPanel
-                busy={sessionActions.pending(`signin:${activeSession.id}`)}
-                onDismiss={() => dismissCloudSignIn(activeSession.id)}
-                onOpen={() =>
-                  signIn.requestId &&
-                  openCloudSignIn(signIn.requestId, activeSession.id)
-                }
-                signIn={signIn}
-              />
-            ) : null;
-          })()}
-          <TerminalSurface
-            activity={activityById.get(activeSession.id)}
-            attention={attentionById.get(activeSession.id)}
-            terminalEndpoint={terminalEndpoint}
-            focused={shouldFocusSession(focusedSessionId, activeSession.id)}
-            fitRevision={terminalFitRevision}
-            id={activeSession.id}
-            key={`${activeSession.id}:${terminalMountRevision}`}
-            label={sessionName(activeSession)}
-            locationLabel={
-              activeSessionRepository?.name ??
-              activeSessionWorkspace?.name ??
-              workspace.name
-            }
-            onClearAttention={() => void clearAttention(activeSession.id)}
-            onCopy={copyTerminalText}
-            onFocused={clearSessionFocusRequest}
-            onOpenLink={openTerminalLink}
-            fileLinks={fileLinksFrom([
-              activeSession.workingDirectory,
-              ...(snapshot?.worktrees ?? [])
-                .filter((item) => item.sessionId === activeSession.id)
-                .map((item) => item.path),
-            ])}
-            session={activeSession}
-            status={activeSession.status}
-            target="agent"
-            telemetry={activeSessionTelemetry}
-            worktree={activeSessionWorktree}
-          />
+        // their buttons stay in reach while it is open. A lead's Threads
+        // pane sits beside it.
+        <div
+          className={`terminal-with-threads${threadsPane ? " has-threads" : ""}`}
+        >
+          <div className="terminal-stage">
+            {(() => {
+              const signIn = signInBySession.get(activeSession.id);
+              return signIn && signIn.phase !== "pasting" ? (
+                <CloudSignInPanel
+                  busy={sessionActions.pending(`signin:${activeSession.id}`)}
+                  onDismiss={() => dismissCloudSignIn(activeSession.id)}
+                  onOpen={() =>
+                    signIn.requestId &&
+                    openCloudSignIn(signIn.requestId, activeSession.id)
+                  }
+                  signIn={signIn}
+                />
+              ) : null;
+            })()}
+            <TerminalSurface
+              activity={activityById.get(activeSession.id)}
+              attention={attentionById.get(activeSession.id)}
+              terminalEndpoint={terminalEndpoint}
+              focused={shouldFocusSession(focusedSessionId, activeSession.id)}
+              fitRevision={terminalFitRevision}
+              id={activeSession.id}
+              key={`${activeSession.id}:${terminalMountRevision}`}
+              label={sessionName(activeSession)}
+              locationLabel={
+                activeSessionRepository?.name ??
+                activeSessionWorkspace?.name ??
+                workspace.name
+              }
+              onClearAttention={() => void clearAttention(activeSession.id)}
+              onCopy={copyTerminalText}
+              onFocused={clearSessionFocusRequest}
+              onOpenLink={openTerminalLink}
+              fileLinks={fileLinksFrom([
+                activeSession.workingDirectory,
+                ...(snapshot?.worktrees ?? [])
+                  .filter((item) => item.sessionId === activeSession.id)
+                  .map((item) => item.path),
+              ])}
+              session={activeSession}
+              status={activeSession.status}
+              target="agent"
+              telemetry={activeSessionTelemetry}
+              worktree={activeSessionWorktree}
+            />
+          </div>
+          {threadsPane}
         </div>
       ) : openingLaunch ? (
         <SessionOpening
@@ -7953,6 +8117,21 @@ export function WorkspaceApp({
                 }}
               />
             </div>
+            <button
+              aria-current={atHome ? "page" : undefined}
+              className="sidebar-routines-link sidebar-home-link"
+              disabled={homeOpening}
+              onClick={() => void openHome()}
+              title="The main agent: it coordinates threads across your workspaces"
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 16 16">
+                <path d="M2.5 7.5 8 2.5l5.5 5M4 6.5v7h3v-4h2v4h3v-7" />
+              </svg>
+              <span>
+                {homeOpening ? "Home · starting the main agent…" : "Home"}
+              </span>
+            </button>
             <button
               className="sidebar-routines-link"
               onClick={() =>

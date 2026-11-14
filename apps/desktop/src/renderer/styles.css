@@ -343,7 +343,9 @@ button:not(
   .danger-link,
   .skills-group-head,
   .skills-row-head,
-  .plan-scroll button
+  .plan-scroll button,
+  .threads-pane button,
+  .threads-toggle
 ) {
   background: var(--accent);
   border: 0;
@@ -360,7 +362,9 @@ button:not(
     .danger-link,
     .skills-group-head,
     .skills-row-head,
-    .plan-scroll button
+    .plan-scroll button,
+    .threads-pane button,
+    .threads-toggle
   ):hover:not(:disabled) {
   background: var(--accent-hover);
 }
@@ -11274,5 +11278,322 @@ button.routine-tick:hover {
   }
   .plan-fold {
     transition: none;
+  }
+}
+
+/* Home and the Threads pane. A lead's threads sit beside its terminal,
+   grouped by what they need from the user; one opens in place. Every button
+   here is left out of the global accent rule, and nothing spins: a working
+   thread is a still half circle. */
+.app {
+  --thread-review: #58c79a;
+  --thread-waiting: #f0a040;
+  --thread-working: #8592ff;
+  --thread-landing: #4cc3dc;
+}
+.app[data-theme="light"] {
+  --thread-review: #1f8a5c;
+  --thread-waiting: #b8680c;
+  --thread-working: #4b58d6;
+  --thread-landing: #16839b;
+}
+.sidebar-home-link[aria-current="page"] {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.home-bar strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.threads-toggle {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 11px;
+  padding: 3px 9px;
+  position: relative;
+}
+.threads-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.threads-toggle:hover {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.threads-dot {
+  background: var(--thread-waiting);
+  border: 2px solid var(--center, var(--panel));
+  border-radius: 50%;
+  height: 9px;
+  position: absolute;
+  right: -4px;
+  top: -4px;
+  width: 9px;
+}
+.terminal-with-threads {
+  display: flex;
+  flex: 1;
+  gap: 10px;
+  min-height: 0;
+}
+.terminal-with-threads > .terminal-stage {
+  min-width: 0;
+}
+.threads-pane {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  display: flex;
+  flex: 0 0 clamp(300px, 34%, 430px);
+  flex-direction: column;
+  font-size: 13px;
+  min-height: 0;
+  overflow: hidden;
+}
+.threads-pane button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+}
+.threads-pane button:disabled {
+  opacity: 0.5;
+}
+.threads-head {
+  align-items: baseline;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.threads-head h2 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+.threads-count,
+.threads-where,
+.threads-group-count {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.threads-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  padding: 6px 8px 12px;
+}
+.threads-empty {
+  color: var(--muted);
+  margin: 8px 6px;
+}
+.threads-suggested {
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 2px 8px;
+  padding: 8px 10px;
+}
+.threads-suggested h3,
+.threads-group h3 {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.threads-suggestion {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+.threads-suggestion-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.threads-suggestion-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.threads-pane .threads-link {
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 12px;
+  padding: 2px 6px;
+}
+.threads-pane .threads-link:hover:not(:disabled) {
+  background: var(--raised-hover);
+}
+.threads-pane .threads-dismiss {
+  color: var(--muted);
+}
+.threads-pane .threads-button {
+  align-self: flex-start;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 3px 10px;
+}
+.threads-pane .threads-button:hover:not(:disabled) {
+  background: var(--raised-hover);
+}
+.threads-group {
+  margin-top: 8px;
+}
+.threads-pane .threads-group-toggle {
+  align-items: center;
+  color: inherit;
+  display: flex;
+  gap: 6px;
+  letter-spacing: inherit;
+  padding: 4px 6px;
+  text-transform: inherit;
+}
+.threads-group-count {
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.threads-pane .threads-row {
+  align-items: center;
+  border-radius: 7px;
+  display: grid;
+  gap: 2px 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 7px 8px;
+  text-align: left;
+  width: 100%;
+}
+.threads-pane .threads-row:hover {
+  background: var(--raised-hover);
+}
+.threads-row-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.threads-row-detail {
+  color: var(--muted);
+  font-size: 12.5px;
+  grid-column: 2 / 4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.threads-state {
+  border-radius: 50%;
+  flex: none;
+  height: 8px;
+  width: 8px;
+}
+.threads-state-review {
+  background: var(--thread-review);
+}
+.threads-state-waiting {
+  background: var(--thread-waiting);
+}
+.threads-state-failed {
+  background: var(--danger);
+}
+.threads-state-working {
+  background: conic-gradient(var(--thread-working) 0 50%, transparent 50% 100%);
+  box-shadow: inset 0 0 0 1.5px var(--thread-working);
+}
+.threads-state-landing {
+  background: var(--thread-landing);
+}
+.threads-state-idle {
+  background: var(--muted);
+  opacity: 0.6;
+}
+.threads-state-resolved {
+  box-shadow: inset 0 0 0 1.5px var(--muted);
+}
+.threads-open {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.threads-open-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px 4px;
+}
+.threads-open-title {
+  flex: 1;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.threads-open-actions {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+.threads-pane .threads-stop {
+  margin-left: auto;
+}
+.threads-asks {
+  background: color-mix(in srgb, var(--thread-waiting) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--thread-waiting) 45%, transparent);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 10px 0;
+  padding: 8px 10px;
+}
+.threads-asks-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.threads-terminal {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 160px;
+  padding: 8px;
+}
+.threads-message {
+  border-top: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.threads-message input {
+  background: var(--elevated);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  flex: 1;
+  font-size: 13px;
+  min-width: 0;
+  padding: 6px 9px;
+}
+.threads-pane .threads-message .threads-button {
+  align-self: stretch;
+}
+@media (max-width: 1100px) {
+  .terminal-with-threads.has-threads {
+    flex-direction: column;
+  }
+  .terminal-with-threads.has-threads .threads-pane {
+    flex: 0 0 45%;
   }
 }
