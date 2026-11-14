@@ -50,13 +50,6 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
   },
 };
 
-/**
- * The line every local agent session gets at launch: any session can lead a
- * team, and its first member makes it the lead.
- */
-export const teamHintLine = (skill: (id: string) => string): string =>
-  `To split work across sessions, lead a Daedalus team: 'daedal agent spawn --team --message "<instructions>"' adds a member and makes you its lead. Follow the ${skill(ORCHESTRATION_SKILL)} skill when you do.`;
-
 export const ABILITY_IDS = Object.keys(ABILITIES) as AbilityId[];
 
 export function abilityDefinition(id: string): AbilityDefinition {
@@ -159,22 +152,12 @@ export class AbilityService {
     return ids;
   }
 
-  /**
-   * What a session holding these abilities is told at launch. `teamHint`
-   * adds the line that it can lead a team, for a session that does not
-   * lead one already.
-   */
-  launchLines(
-    abilities: readonly AbilityId[],
-    options: { teamHint?: boolean } = {},
-  ): string[] {
-    const skill = (id: string) => this.skillName(id);
-    return [
-      ...abilities.flatMap((id) => ABILITIES[id].launchLine?.(skill) ?? []),
-      ...(options.teamHint && !abilities.includes("orchestration")
-        ? [teamHintLine(skill)]
-        : []),
-    ];
+  /** What a session holding these abilities is told at launch. */
+  launchLines(abilities: readonly AbilityId[]): string[] {
+    return abilities.flatMap(
+      (id) =>
+        ABILITIES[id].launchLine?.((skill) => this.skillName(skill)) ?? [],
+    );
   }
 
   /**

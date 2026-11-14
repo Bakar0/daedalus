@@ -292,13 +292,13 @@ describe("teams", () => {
         "accept",
       );
       // Any session may lead or join a team later, so every one accepts,
-      // and is told at launch how to lead one.
+      // and its Daedalus instructions say how to lead one.
       await context.agents.spawn({ workspace: "shop", provider: "claude" });
       expect(launchSettings(tmux.launches.at(-1)!).crossSessionInbound).toBe(
         "accept",
       );
-      expect(prompt(tmux.launches.at(-1)!)).toContain(
-        "'daedal agent spawn --team --message",
+      expect(tmux.launches.at(-1)!.args.join(" ")).toContain(
+        "`daedal agent spawn --team --message",
       );
       expect(context.teams.membership(session.id)?.reader.handle).toBe("lead");
       expect(() => context.teams.get("nobody")).toThrow("No team");

@@ -1439,9 +1439,7 @@ export class AgentService {
           ? await this.refinementInvocation(provider?.name)
           : undefined,
       message: [
-        ...this.abilities.launchLines(abilities, {
-          teamHint: provider?.name === "claude" || provider?.name === "codex",
-        }),
+        ...this.abilities.launchLines(abilities),
         ...(team ? this.teamLaunchLines(team) : []),
         input.message?.trim(),
       ]

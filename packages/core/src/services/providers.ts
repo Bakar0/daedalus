@@ -385,7 +385,8 @@ export const DAEDALUS_STATUS_INSTRUCTIONS = `You are running inside Daedalus, wh
 - Run \`daedal attention --clear\` as soon as that is resolved.
 - When you finish what you were asked, just end your turn. Daedalus marks it done.
 - When a command needs an API key, token or password, do not ask the user to paste it. Run \`daedal secret list\` and use one with \`daedal exec --secret NAME -- <command>\`. If it is not there, ask the user to add it from the key icon on the workspace's card in Daedalus (the key in the Workspaces heading for every workspace).
-- When you mention a pull request or issue, write its full URL (https://github.com/<owner>/<repo>/pull/<number>), not just \`#<number>\`. The terminal opens a URL on Cmd-click; a bare number opens nothing.`;
+- When you mention a pull request or issue, write its full URL (https://github.com/<owner>/<repo>/pull/<number>), not just \`#<number>\`. The terminal opens a URL on Cmd-click; a bare number opens nothing.
+- When work needs several sessions, you can lead a team: \`daedal agent spawn --team --message "<instructions>"\` adds a member and makes you its lead. The daedalus-orchestration skill says how to lead.`;
 
 const CLAUDE_APPEND_PROMPT = "--append-system-prompt";
 

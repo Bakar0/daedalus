@@ -46,10 +46,11 @@ daedal session abilities <session>
 ```
 
 - **Orchestration** adds one line to the launch prompt saying the session
-  leads a team and which skill to follow. Every other Claude or Codex session
-  on this Mac gets one line saying how to lead a team instead. Granted to a
-  running session with `session grant`, which starts a team with no members,
-  Daedalus sends one note, as described under Delivery below; until then
+  leads a team and which skill to follow. Every Claude and Codex session's
+  Daedalus instructions (its system prompt) carry one line on how to lead a
+  team. Granted to a running session with `session grant`, which starts a
+  team with no members, Daedalus sends one note, as described under Delivery
+  below; until then
   `session abilities` shows the note as waiting.
 - **Revoke** stops what the ability does and sends a note saying so. The row
   and its data stay, so granting it again brings everything back.
@@ -104,7 +105,7 @@ A team is a lead and its members: sessions working toward one goal. Any
 Claude or Codex session on this Mac can lead one, with no switch or grant: the
 first `agent spawn --team` run inside a session makes it the lead, and the
 user's `agent spawn --team <session>` makes that session one. Every agent
-session is told so in one line of its launch prompt. The lead plans the work,
+session is told so in one line of its Daedalus instructions. The lead plans the work,
 adds members, and sends each one the decisions that affect it. Members are
 ordinary sessions the user can open, answer and be reborn. The user is above
 the lead and can add a member too.

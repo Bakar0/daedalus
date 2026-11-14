@@ -343,9 +343,7 @@ describe("abilities", () => {
       const granted = context.abilities.grant(session.id, "orchestration", {
         live: true,
       });
-      expect(granted.pendingNote).toContain(
-        "now leads a team",
-      );
+      expect(granted.pendingNote).toContain("now leads a team");
       // The user is typing: the note waits.
       await tick(harness);
       expect(tmux.sent).toEqual([]);
@@ -367,9 +365,7 @@ describe("abilities", () => {
       const { session, ability } = await argus(harness);
       const revoked = context.abilities.revoke(session.id, "orchestration");
       expect(revoked).toMatchObject({ enabled: false });
-      expect(revoked.pendingNote).toContain(
-        "your team has ended",
-      );
+      expect(revoked.pendingNote).toContain("your team has ended");
       expect(() =>
         context.abilities.require(session.id, "orchestration"),
       ).toThrow("does not hold the orchestration ability");
