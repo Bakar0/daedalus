@@ -1511,8 +1511,9 @@ export function createDesktopRequestHandlers(
       }),
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
+    // A lead's members below it stop with it.
     agentStop: ({ id, force }) =>
-      mutate(async () => agentDto(await context.agents.stop(id, force))),
+      mutate(async () => agentDto(await context.agents.stopTree(id, force))),
     agentRemove: ({ id }) =>
       mutate(async () => agentDto(await context.agents.remove(id))),
     agentDelete: ({ id }) =>
