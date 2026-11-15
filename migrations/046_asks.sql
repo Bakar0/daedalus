@@ -21,7 +21,9 @@ CREATE TABLE asks (
   closed_at TEXT,
   -- When the owner was told it was answered or dismissed; null while that
   -- notice still waits to be delivered.
-  notice_delivered_at TEXT
+  notice_delivered_at TEXT,
+  -- When the user was notified that it was asked; null until then.
+  notified_at TEXT
 );
 CREATE INDEX asks_session ON asks (session_id, state);
 CREATE INDEX asks_workspace ON asks (workspace_id, state);

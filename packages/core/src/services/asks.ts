@@ -497,6 +497,16 @@ export class AskService {
   }
 
   /**
+   * The asks the user was not notified about yet, each once: the app's tick
+   * sends them, whichever process asked.
+   */
+  claimNew(): AskView[] {
+    return this.repositories.asks
+      .claimUnnotified(this.now().toISOString())
+      .map((ask) => this.view(ask));
+  }
+
+  /**
    * The line every message to a session with open asks ends with, or
    * undefined when it has none.
    */

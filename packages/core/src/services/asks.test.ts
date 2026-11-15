@@ -143,6 +143,9 @@ describe("Needs you asks", () => {
       });
       expect(again).toMatchObject({ updated: true, ask: { id: ask.id } });
       expect(context.asks.list().map((item) => item.id)).toEqual([ask.id]);
+      // The user is notified of it once, however often it is rewritten.
+      expect(context.asks.claimNew().map((item) => item.id)).toEqual([ask.id]);
+      expect(context.asks.claimNew()).toEqual([]);
       expect(context.asks.get(ask.id).context).toBe(
         "Both orgs never got account.created.",
       );

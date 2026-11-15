@@ -996,6 +996,18 @@ setInterval(async () => {
         delivered: delivery.delivered,
         error: delivery.error,
       });
+    // Each new ask notifies the user once, whichever process asked it.
+    for (const ask of context.asks.claimNew())
+      await context.notifications
+        .notify({
+          sessionId: ask.sessionId,
+          workspaceId: ask.workspaceId,
+          level: "info",
+          title: `${ask.sessionName ?? "A session"} asks you`,
+          subtitle: ask.workspaceName ?? undefined,
+          body: ask.title,
+        })
+        .catch(() => undefined);
     // The same for reports to a session tracking others, such as the main
     // agent.
     for (const delivery of await context.tracking.flushDue().catch(() => []))

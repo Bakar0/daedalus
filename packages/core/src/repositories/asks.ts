@@ -20,6 +20,7 @@ interface AskRow {
   updated_at: string;
   closed_at: string | null;
   notice_delivered_at: string | null;
+  notified_at: string | null;
 }
 
 const options = (text: string): string[] => {
@@ -233,6 +234,21 @@ export class AskRepository {
       )
       .get(at, id);
     return row ? askFromRow(row) : undefined;
+  }
+
+  /**
+   * Claims the open asks the user was not notified about yet, oldest
+   * first; each is claimed once, whoever asks.
+   */
+  claimUnnotified(at: string): Ask[] {
+    return this.database
+      .query<AskRow, [string]>(
+        `UPDATE asks SET notified_at = ? WHERE state = 'open'
+         AND notified_at IS NULL RETURNING *`,
+      )
+      .all(at)
+      .map(askFromRow)
+      .sort((a, b) => a.id - b.id);
   }
 
   /** A session's ended asks whose notice was not delivered yet, oldest first. */
