@@ -35,6 +35,7 @@ import {
 } from "./library-files";
 import type { PodMoveSide } from "./move-side";
 import { PodFiles } from "./pod-files";
+import { HOME_SKIPPED_FOLDERS } from "./search";
 import type { WorkspaceService } from "./workspaces";
 
 export const MAX_VIEWABLE_FILE_BYTES = 1024 * 1024;
@@ -1199,6 +1200,18 @@ export class WorkspaceFiles {
       segments.length > 1
     )
       throw new DaedalusError("CONFLICT", LIBRARY_READ_ONLY);
+    // The rest of the home's top level holds credentials, the database and
+    // logs. The panel and the palette hide them; the RPC surface is reachable
+    // without either, so they are refused here too.
+    if (
+      workspace.kind === "home" &&
+      (HOME_SKIPPED_FOLDERS.includes(segments[0]!) ||
+        (segments.length === 1 && /\.db(-wal|-shm)?$/.test(segments[0]!)))
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        "Daedalus's own files at the top of its home are not visible",
+      );
     if (!(await pathExists(target)))
       throw new DaedalusError(
         "NOT_FOUND",

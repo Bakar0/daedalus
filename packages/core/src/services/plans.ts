@@ -112,10 +112,21 @@ export interface PlanOutline {
   }[];
 }
 
+/** Home's folder under the workspaces root. */
+const HOME_FOLDER = ".home";
+
 const slash = (path: string) => path.split(sep).join("/");
 
 export class PlanService {
   constructor(private readonly ports: PlanPorts) {}
+
+  /**
+   * Home's own folder, `.home` under the workspaces root. Not the root
+   * itself: a workspace slugged `plans` lives at `<root>/plans`.
+   */
+  private homeRoot(): string {
+    return join(this.ports.workspaceRoot, HOME_FOLDER);
+  }
 
   /** The folder a scope's plans are in, and the folder they are relative to. */
   async root(
@@ -123,8 +134,8 @@ export class PlanService {
   ): Promise<{ root: string; folder: string; workspaceId: string | null }> {
     if ("home" in scope)
       return {
-        root: this.ports.workspaceRoot,
-        folder: join(this.ports.workspaceRoot, PLANS_FOLDER),
+        root: this.homeRoot(),
+        folder: join(this.homeRoot(), PLANS_FOLDER),
         workspaceId: null,
       };
     const workspace = await this.ports.workspace(scope.workspace);
@@ -224,14 +235,18 @@ export class PlanService {
           `No plan at ${absolutePath}; a plan's file ends in ${PLAN_SUFFIX}`,
         );
       const owner = (await this.ports.workspaces())
-        .filter((item) => absolutePath.startsWith(item.path + sep))
+        .filter(
+          (item) =>
+            item.path !== this.homeRoot() &&
+            absolutePath.startsWith(item.path + sep),
+        )
         .sort((a, b) => b.path.length - a.path.length)[0];
       const placed: PlanScope = owner
         ? { workspace: owner.id }
         : { home: true };
       return this.file(
         placed,
-        owner?.path ?? this.ports.workspaceRoot,
+        owner?.path ?? this.homeRoot(),
         owner?.id ?? null,
         absolutePath,
       );

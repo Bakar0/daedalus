@@ -633,7 +633,11 @@ export class WorkflowService {
     // question away.
     if (!waiting && run.steps.some((step) => step.state === "waiting"))
       this.activity.clear(session.id);
-    const { run: saved, looped, loopedGroup } = this.settle(run, steps);
+    const {
+      run: saved,
+      looped,
+      loopedGroup,
+    } = this.settle(run, steps, input.action === "start" ? index : undefined);
     if (waiting)
       await this.activity.raise({
         sessionId: session.id,
@@ -652,6 +656,8 @@ export class WorkflowService {
   private settle(
     run: WorkflowRun,
     changed: WorkflowRunStep[],
+    /** The step this change started, if it started one. */
+    started?: number,
   ): {
     run: WorkflowRun;
     looped: boolean;
@@ -676,6 +682,9 @@ export class WorkflowService {
       const from = steps.findIndex((step) => step.name === group.loopTo);
       const last = members[members.length - 1]!;
       if (from === -1) continue;
+      // Starting a step after the group finished its last step on the way:
+      // that is moving on, not another round.
+      if (started !== undefined && started > last) continue;
       const round = steps.slice(from, last + 1);
       history = [
         ...history,

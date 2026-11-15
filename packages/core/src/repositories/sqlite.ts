@@ -986,10 +986,6 @@ export class SqliteRepositories {
       .run(autoRebirthColumn(value), id);
   }
 
-  /**
-   * Team membership is its own write for the same reason as the labels:
-   * `updateAgent` leaves it alone.
-   */
   /** Marks a thread done, or (null) open again. */
   setAgentResolved(id: string, resolvedAt: string | null): void {
     this.database
@@ -1007,6 +1003,10 @@ export class SqliteRepositories {
     return row ? workspaceFromRow(row) : undefined;
   }
 
+  /**
+   * Team membership is its own write for the same reason as the labels:
+   * `updateAgent` leaves it alone.
+   */
   setAgentTeam(id: string, teamId: string | null, handle: string | null): void {
     this.database
       .query(

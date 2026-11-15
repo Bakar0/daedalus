@@ -363,6 +363,14 @@ export class SearchService {
     const absolute = join(root.path, path);
     if (relative(root.path, absolute).startsWith(".."))
       throw new DaedalusError("VALIDATION", `'${path}' is not under the root`);
+    // What the list leaves out (credentials, the database) is not previewed.
+    if (
+      isSkippedPath(
+        relative(root.path, absolute).split(sep).join("/"),
+        root.home,
+      )
+    )
+      throw new DaedalusError("VALIDATION", `'${path}' is not searched`);
     const info = await lstat(absolute).catch(() => undefined);
     if (!info?.isFile())
       throw new DaedalusError("NOT_FOUND", `No file at ${path}`);

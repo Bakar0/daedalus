@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { extname, isAbsolute, join } from "node:path";
+import { extname, isAbsolute, join, relative } from "node:path";
 import packageJson from "../../../../package.json";
 import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
@@ -643,6 +643,18 @@ export function createDesktopRequestHandlers(
     };
   };
   const liveContent = new LiveContentSearch(context.search);
+  // At Home the file panel's paths are relative to the Daedalus home, where
+  // the main agent runs, not to the Home row's own folder: a plan opened
+  // there is found by its full path, and so belongs to its workspace.
+  const atHome = (workspace: string) =>
+    workspace === context.repositories.findHomeWorkspace()?.id;
+  const planFile = (workspace: string, path: string) =>
+    atHome(workspace)
+      ? context.plans.find(
+          undefined,
+          isAbsolute(path) ? path : join(context.config.home, path),
+        )
+      : context.plans.find({ workspace }, path);
   /** The most plan files the palette reads. */
   const SEARCH_PLAN_LIMIT = 200;
 
@@ -1414,7 +1426,7 @@ export function createDesktopRequestHandlers(
       ),
     planView: ({ workspace, path, text }) =>
       result(async () => {
-        const file = await context.plans.find({ workspace }, path);
+        const file = await planFile(workspace, path);
         const plan = parsePlan(text);
         return {
           title: plan.title,
@@ -1426,12 +1438,20 @@ export function createDesktopRequestHandlers(
         };
       }),
     planCreate: ({ workspace, title }) =>
-      mutate(async () => ({
-        path: (await context.plans.create({ workspace }, { title })).path,
-      })),
+      mutate(async () => {
+        // Home's plans are in the workspaces root's plans/, shown relative
+        // to the Daedalus home like everything else in Home's panel.
+        if (atHome(workspace)) {
+          const file = await context.plans.create({ home: true }, { title });
+          return { path: relative(context.config.home, file.absolutePath) };
+        }
+        return {
+          path: (await context.plans.create({ workspace }, { title })).path,
+        };
+      }),
     planTaskStart: ({ workspace, path, task }) =>
       mutate(async () => {
-        const file = await context.plans.find({ workspace }, path);
+        const file = await planFile(workspace, path);
         const { session } = await context.plans.startTask(file, task);
         return {
           session: agentDto(session),
@@ -1440,7 +1460,7 @@ export function createDesktopRequestHandlers(
       }),
     planAsk: ({ workspace, path, ...input }) =>
       mutate(async () => {
-        const file = await context.plans.find({ workspace }, path);
+        const file = await planFile(workspace, path);
         const { session, message } = await context.plans.askOwner(file, input);
         return { sessionId: session.id, sessionName: session.name, message };
       }),

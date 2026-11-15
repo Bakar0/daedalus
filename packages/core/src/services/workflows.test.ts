@@ -1151,6 +1151,33 @@ describe("sub-workflows", () => {
     });
   });
 
+  test("starting the step after an included loop while its last step is active moves on", async () => {
+    await withWorkflows(async ({ context, workflows, session }) => {
+      await writeFlows(context.config.home, {
+        rounds:
+          "steps: [review, feedback]\nloop: review\nuntil: The user is happy.",
+        outer: "steps: [research, @rounds, deploy]",
+      });
+      const agent = session();
+      await workflows.start({ sessionId: agent.id, workflow: "outer" });
+      const go = (step: string, action: "start" | "done") =>
+        workflows.step({ sessionId: agent.id, step, action, note: step });
+      await go("research", "start");
+      await go("review", "start");
+      await go("feedback", "start");
+      // `deploy start` finishes the active `feedback` on the way.
+      const moved = await go("deploy", "start");
+      expect(moved.loopedGroup).toBeNull();
+      expect(states(moved.run)).toMatchObject({
+        "rounds/review": "done",
+        "rounds/feedback": "done",
+        deploy: "active",
+      });
+      expect(moved.run.groups[0]).toMatchObject({ iteration: 1 });
+      expect(moved.run.history).toHaveLength(0);
+    });
+  });
+
   test("steps added after an included step join its group; save writes @name back", async () => {
     await withWorkflows(async ({ context, workflows, session }) => {
       await writeFlows(context.config.home, {

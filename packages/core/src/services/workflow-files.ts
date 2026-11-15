@@ -631,6 +631,21 @@ export async function saveWorkflowFile(
     input.kind === "flow" ? parseWorkflowFile(input.text, previous) : null;
   const name = flow ? flow.name : parseStepFile(input.text, previous).name;
   if (flow) await refuseIncludeShape(root, flow, previous);
+  // Renaming an included workflow would leave `@previous` naming nothing,
+  // which deleting it refuses for the same reason.
+  if (flow && previous && previous !== name) {
+    const users = (await readWorkflowFiles(root)).flows
+      .filter(
+        (item) =>
+          item.name !== previous && item.steps?.includes(`@${previous}`),
+      )
+      .map((item) => item.name);
+    if (users.length)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Workflow '${previous}' is included by ${users.join(", ")}; take @${previous} out of them before renaming it`,
+      );
+  }
   const path = join(folder, `${name}.md`);
   if (previous !== name && (await pathExists(path)))
     throw new DaedalusError(

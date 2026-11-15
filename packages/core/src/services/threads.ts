@@ -78,31 +78,51 @@ export class ThreadService {
   async start(id: number): Promise<AgentSession> {
     const suggestion = this.open(id);
     const lead = this.lead(suggestion.leadSessionId);
-    const session =
-      lead.workspaceId === this.repositories.findHomeWorkspace()?.id
-        ? await this.tracking.start({
-            tracker: lead.id,
-            workspace: suggestion.workspaceId ?? "",
-            name: suggestion.title,
-            message: suggestion.message ?? suggestion.title,
-          })
-        : (
-            await this.teams.spawnMember({
-              team: suggestion.leadSessionId,
-              addedBy: "user",
-              name: suggestion.title,
-              instructions: suggestion.message ?? suggestion.title,
-              ...(suggestion.workspaceId
-                ? { workspace: suggestion.workspaceId }
-                : {}),
-            })
-          ).session;
+    // Claimed before the await, so a second Start (a double click, or the
+    // CLI and the app at once) cannot start a second session.
+    if (!this.repositories.threads.claim(id, this.now().toISOString()))
+      throw new DaedalusError(
+        "CONFLICT",
+        `Suggested thread ${id} is already being started, or was closed`,
+      );
+    let session: AgentSession;
+    try {
+      session = await this.spawnFor(suggestion, lead);
+    } catch (error) {
+      this.repositories.threads.release(id);
+      throw error;
+    }
     this.repositories.threads.close(
       suggestion.id,
       this.now().toISOString(),
       session.id,
     );
     return session;
+  }
+
+  /** The session a suggestion becomes: tracked at Home, else a member. */
+  private async spawnFor(
+    suggestion: ThreadSuggestion,
+    lead: AgentSession,
+  ): Promise<AgentSession> {
+    return lead.workspaceId === this.repositories.findHomeWorkspace()?.id
+      ? await this.tracking.start({
+          tracker: lead.id,
+          workspace: suggestion.workspaceId ?? "",
+          name: suggestion.title,
+          message: suggestion.message ?? suggestion.title,
+        })
+      : (
+          await this.teams.spawnMember({
+            team: suggestion.leadSessionId,
+            addedBy: "user",
+            name: suggestion.title,
+            instructions: suggestion.message ?? suggestion.title,
+            ...(suggestion.workspaceId
+              ? { workspace: suggestion.workspaceId }
+              : {}),
+          })
+        ).session;
   }
 
   dismiss(id: number): ThreadSuggestion {

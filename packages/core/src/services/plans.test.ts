@@ -92,10 +92,15 @@ describe("PlanService", () => {
     ).rejects.toThrow(/already exists/);
   });
 
-  test("Home plans live in the workspaces root", async () => {
+  test("Home plans live in .home, not where a workspace slugged plans would", async () => {
     const file = await service.create({ home: true }, { title: "Quarter" });
-    expect(file.absolutePath).toBe(join(root, "plans", "quarter.plan.md"));
+    expect(file.absolutePath).toBe(
+      join(root, ".home", "plans", "quarter.plan.md"),
+    );
     expect(file.workspaceId).toBeNull();
+    const found = await service.find(undefined, file.absolutePath);
+    expect(found.scope).toEqual({ home: true });
+    expect(found.path).toBe("plans/quarter.plan.md");
   });
 
   test("lists and finds plans by slug, name, path or absolute path", async () => {

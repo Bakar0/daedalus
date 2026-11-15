@@ -67,6 +67,31 @@ export class ThreadRepository {
       .map(suggestionFromRow);
   }
 
+  /**
+   * Closes a suggestion still open, for one start alone: true when this
+   * call closed it, false when it was already closed.
+   */
+  claim(id: number, closedAt: string): boolean {
+    return (
+      this.database
+        .query(
+          `UPDATE thread_suggestions SET closed_at = ?
+           WHERE id = ? AND closed_at IS NULL`,
+        )
+        .run(closedAt, id).changes > 0
+    );
+  }
+
+  /** Opens a claimed suggestion again, when its start failed. */
+  release(id: number): void {
+    this.database
+      .query(
+        `UPDATE thread_suggestions SET closed_at = NULL
+         WHERE id = ? AND started_session_id IS NULL`,
+      )
+      .run(id);
+  }
+
   /** Started (with the thread it became) or dismissed (without one). */
   close(id: number, closedAt: string, startedSessionId: string | null): void {
     this.database
