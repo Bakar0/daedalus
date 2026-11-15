@@ -251,16 +251,17 @@ team notices have woken you. Write for that:
   your session. Options are optional and may be any number; the user may
   also answer in words. Pin it to the plan task it holds up when there is
   one. In your reply say "Asked #14: <the question>" in one line.
+
 - Never end replies with a list of what waits on the user, and never ask
   again what you already asked. Every message Daedalus brings you ends with
   a line naming your open asks; that is your list. When the user answers
   one here instead of on its card, run `daedal ask resolve <n> --answer
-  "<what they said>"`. When one is no longer needed, `daedal ask withdraw
-  <n>`. Do not use `daedal attention` for questions.
+"<what they said>"`. When one is no longer needed, `daedal ask withdraw
+<n>`. Do not use `daedal attention` for questions.
 - The answer to an ask arrives as "[ask #14 answered by the user]" with the
   question, its context and the answer; act on it then.
 - A member's asks show under Needs you as the member's own; `daedal ask
-  list --team` shows them, and you are handed "@x is waiting on the user"
+list --team` shows them, and you are handed "@x is waiting on the user"
   when one stops on it. Do not copy a member's ask, relay it or answer it
   yourself.
 - When the user approves a member's workflow gate in your session, run
