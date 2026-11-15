@@ -31,7 +31,7 @@ import { sessionCommand, sessionHelp } from "./sessions";
 import { workflowCommand, workflowHelp } from "./workflows";
 import { planCommand, planHelp } from "./plans";
 import { threadCommand, threadHelp } from "./threads";
-import { askCommand, askHelp } from "./asks";
+import { activityAlias, activityCommand, activityHelp } from "./asks";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
 import { workspaceArchivedOrExplain } from "./archive";
@@ -106,7 +106,7 @@ Usage:
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
   daedal thread <new|track|untrack|list|say|suggest|suggestions|start|dismiss|done|reopen> ... [--json]
-  daedal ask "<question>" | ask <list|show|update|resolve|withdraw> ... [--json]
+  daedal activity <ask|list|show|update|resolve|withdraw> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
   daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
@@ -126,7 +126,7 @@ const commandHelp: Record<string, string> = {
   workflow: workflowHelp,
   plan: planHelp,
   thread: threadHelp,
-  ask: askHelp,
+  activity: activityHelp,
   account: accountHelp,
   secret: secretHelp,
   keys: keysHelp,
@@ -2497,7 +2497,10 @@ export async function runCli(
     }
   }
   const json = inputArgs.includes("--json");
-  const args = inputArgs.filter((argument) => argument !== "--json");
+  // `daedal ask` is the hidden alias of `daedal activity` from before.
+  const args = activityAlias(
+    inputArgs.filter((argument) => argument !== "--json"),
+  );
   // Hook sinks: they read their payload, hand it to core and return 0 on
   // every path, so a broken control plane never reaches the agent's session.
   if (args[0] === "agent" && args[1] === "telemetry") {
@@ -2573,7 +2576,7 @@ export async function runCli(
       "workflow",
       "plan",
       "thread",
-      "ask",
+      "activity",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2626,8 +2629,8 @@ export async function runCli(
       return await threadCommand(context, args.slice(1), json, () =>
         callerSession(context).catch(() => undefined),
       );
-    if (args[0] === "ask")
-      return await askCommand(context, args.slice(1), json, () =>
+    if (args[0] === "activity")
+      return await activityCommand(context, args.slice(1), json, () =>
         callerSession(context).catch(() => undefined),
       );
     return await agentCommand(context, args.slice(1), json, options);

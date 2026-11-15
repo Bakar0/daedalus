@@ -22,7 +22,7 @@ import Markdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { DesktopClient } from "../client-types";
 import { OWNER_STATE_TEXT } from "./plan-owner";
-import { markPlanTasks } from "../NeedsYouPage";
+import { markPlanTasks } from "../ActivityPage";
 
 /**
  * A `.plan.md` file drawn as the document it describes: its markdown as
@@ -271,7 +271,7 @@ function TaskItem({
             className={`plan-wait-tag ${waiting.mark}`}
             title={
               waiting.mark === "wait"
-                ? "A question waits on you under Needs you"
+                ? "A question waits on you under Activity"
                 : "Waits for the answer above it"
             }
           >
@@ -406,7 +406,7 @@ export function PlanView({
     [view],
   );
 
-  // Open asks pinned to this plan's tasks, from Needs you.
+  // Open asks pinned to this plan's tasks, from Activity.
   const [asks, setAsks] = useState<AskDto[]>([]);
   useEffect(() => {
     let live = true;
@@ -694,8 +694,8 @@ export function PlanView({
           </span>
         </header>
         {questions.length + asks.length > 0 && (
-          <section className="plan-needs" aria-label="Needs you">
-            <b>Needs you · {questions.length + asks.length}</b>
+          <section className="plan-needs" aria-label="Waiting on you">
+            <b>Waiting on you · {questions.length + asks.length}</b>
             {asks.map((item) => (
               <div key={`ask${item.id}`}>
                 {item.sessionName ? `${item.sessionName}: ` : ""}
@@ -712,7 +712,7 @@ export function PlanView({
                 >
                   #{item.id} {item.title}
                 </a>{" "}
-                <span className="plan-needs-where">answer under Needs you</span>
+                <span className="plan-needs-where">answer under Activity</span>
               </div>
             ))}
             {questions.map((item) => (

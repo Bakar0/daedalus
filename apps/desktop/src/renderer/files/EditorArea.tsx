@@ -36,7 +36,7 @@ import { isPlanPath, PlanView, type PlanLive } from "./PlanView";
 import { createPlan } from "./plan-actions";
 import { INSTRUCTIONS_ICON_PATH, WORKFLOW_ICON_PATH } from "../WorkflowPane";
 import { PLAN_ICON_PATH } from "../PlansPane";
-import { NEEDS_YOU_ICON_PATH } from "../NeedsYouPage";
+import { ACTIVITY_ICON_PATH } from "../ActivityPage";
 import {
   closeDocument,
   documentsIn,
@@ -98,8 +98,8 @@ export interface EditorAreaHandle {
   openWorkflows(): void;
   /** Shows the Plans tab, adding it first if it is not open. */
   openPlans(): void;
-  /** Shows the Needs you tab, adding it first if it is not open. */
-  openNeedsYou(): void;
+  /** Shows the Activity tab, adding it first if it is not open. */
+  openActivity(): void;
   /** Shows the Custom instructions tab, adding it first if it is not open. */
   openInstructions(): void;
   /** Shows the Routines page, adding it first if it is not open. */
@@ -177,8 +177,8 @@ export interface EditorAreaProps {
   renderWorkflows?(): React.ReactNode;
   /** The Plans tab's content, drawn by the app. */
   renderPlans?(): React.ReactNode;
-  /** The Needs you tab's content, drawn by the app. */
-  renderNeedsYou?(): React.ReactNode;
+  /** The Activity tab's content, drawn by the app. */
+  renderActivity?(): React.ReactNode;
   /** The Custom instructions tab's content, drawn by the app. */
   renderInstructions?(): React.ReactNode;
   /** The Routines page, drawn by the app. */
@@ -260,7 +260,7 @@ interface EditorContextValue {
   renderTerminal?(terminalId: string): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
   renderPlans?(): React.ReactNode;
-  renderNeedsYou?(): React.ReactNode;
+  renderActivity?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
@@ -359,7 +359,7 @@ export default function EditorArea({
   renderTerminal,
   renderWorkflows,
   renderPlans,
-  renderNeedsYou,
+  renderActivity,
   renderInstructions,
   renderRoutinesPage,
   renderTeam,
@@ -749,9 +749,9 @@ export default function EditorArea({
         whenReady(() =>
           placeApp("plans", { path: "", kind: "plans" }, "Plans"),
         ),
-      openNeedsYou: () =>
+      openActivity: () =>
         whenReady(() =>
-          placeApp("needs", { path: "", kind: "needs" }, "Needs you"),
+          placeApp("needs", { path: "", kind: "needs" }, "Activity"),
         ),
       openInstructions: () =>
         whenReady(() =>
@@ -1117,7 +1117,7 @@ export default function EditorArea({
     renderTerminal,
     renderWorkflows,
     renderPlans,
-    renderNeedsYou,
+    renderActivity,
     renderInstructions,
     renderRoutinesPage,
     renderTeam,
@@ -1155,7 +1155,7 @@ export default function EditorArea({
             terminal: TerminalPanel,
             workflows: WorkflowsPanel,
             plans: PlansPanel,
-            needs: NeedsYouPanel,
+            needs: ActivityPanel,
             instructions: InstructionsPanel,
             routinesPage: RoutinesPagePanel,
             team: TeamPanel,
@@ -1378,7 +1378,7 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
             : params.kind === "plans"
               ? "Plans"
               : params.kind === "needs"
-                ? "Needs you"
+                ? "Activity"
                 : params.kind === "instructions"
                   ? "Custom instructions"
                   : params.kind === "routinesPage"
@@ -1440,7 +1440,7 @@ function AppTabIcon({ kind }: { kind: AppPanelKind }) {
       ) : kind === "plans" ? (
         <path d={PLAN_ICON_PATH} />
       ) : kind === "needs" ? (
-        <path d={NEEDS_YOU_ICON_PATH} />
+        <path d={ACTIVITY_ICON_PATH} />
       ) : kind === "instructions" ? (
         <path d={INSTRUCTIONS_ICON_PATH} />
       ) : kind === "threads" ? (
@@ -1539,11 +1539,11 @@ function RoutinesPagePanel() {
   );
 }
 
-function NeedsYouPanel() {
+function ActivityPanel() {
   const context = useEditorContext();
   return (
     <div className="app-panel workflows-panel">
-      {context.renderNeedsYou?.()}
+      {context.renderActivity?.()}
     </div>
   );
 }

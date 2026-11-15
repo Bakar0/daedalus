@@ -34,7 +34,7 @@ export function homeAgentPrompt(
     '- Route a follow-up about running work to the thread that has it, `daedal thread say <session> "<text>"`, instead of starting a new one, and say where it went.',
     '- When you see work worth doing that the user did not ask for, suggest it instead of starting it: `daedal thread suggest "<title>" --workspace <workspace> --message "<instructions>"`. The user starts it from the Threads tab.',
     "- A tracked session's last message comes to you when its turn ends. Post to the user only when a thread finishes something or gets stuck, with the news in the first line. A thread waiting on the user shows in the Threads tab; do not relay its question.",
-    '- When you need the user to decide something, ask it once with `daedal ask "<the question>" --context "<what it is>"` (see `daedal ask --help`): it waits under Needs you until answered, and the answer comes back to you. Never list what waits on the user in your replies.',
+    '- When you need the user to decide something, ask it once with `daedal activity ask "<the question>" --context "<what it is>"` (see `daedal activity --help`): it waits under Activity until answered, and the answer comes back to you. Never list what waits on the user in your replies.',
     "- When a thread's work is done and checked, mark it resolved: `daedal thread done <session>`. It stops reporting to you.",
     "- Do not use `daedal agent spawn --team`: you track sessions, you do not lead a team.",
     "Follow the daedalus-orchestration skill.",
@@ -69,8 +69,44 @@ export class HomeService {
         message?: string;
       }): Promise<AgentSession>;
       restore(id: string): Promise<AgentSession>;
+      archive(id: string): Promise<AgentSession>;
     },
   ) {}
+
+  /**
+   * The Home row, made on first use, without starting an agent. Home shows
+   * Activity and Routines; it no longer opens the main agent.
+   */
+  async open(): Promise<Workspace> {
+    return this.workspaces.ensureHome();
+  }
+
+  /**
+   * Archives the main agent, if one is running: Home no longer has one.
+   * A session that cannot be archived is left as it is. Returns the
+   * sessions it archived.
+   */
+  async retireMainAgent(): Promise<string[]> {
+    const home = this.repositories.findHomeWorkspace();
+    if (!home) return [];
+    const retired: string[] = [];
+    for (const session of this.repositories.listAgents()) {
+      if (
+        session.workspaceId !== home.id ||
+        session.kind !== "agent" ||
+        session.teamId ||
+        session.archivedAt
+      )
+        continue;
+      try {
+        await this.sessions.archive(session.id);
+        retired.push(session.id);
+      } catch {
+        // Left running; the user can archive it by hand.
+      }
+    }
+    return retired;
+  }
 
   /**
    * Moves the members of any team led from Home to tracked sessions of their

@@ -58,9 +58,9 @@ test("the header shows progress, the owner and where the plan is", () => {
   expect(html).toContain("checkout · plans/cart-api-v2.plan.md");
 });
 
-test("Needs you lists the open questions with whoever answers them", () => {
+test("Waiting on you lists the open questions with whoever answers them", () => {
   const html = render();
-  expect(html).toContain("Needs you · 2");
+  expect(html).toContain("Waiting on you · 2");
   expect(html).toContain("@db: <a");
   expect(html).toContain("Ship behind the old provider");
 });

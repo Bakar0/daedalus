@@ -119,7 +119,7 @@ export interface ApplicationContext {
   home: HomeService;
   /** A lead's threads: suggested ones, and marking one resolved. */
   threads: ThreadService;
-  /** Needs you: questions for the user that sessions ask once. */
+  /** Activity: questions for the user that sessions ask once. */
   asks: AskService;
   /** Sessions the main agent (or any session) tracks, and their reports. */
   tracking: TrackingService;
@@ -425,6 +425,7 @@ export async function createApplicationContext(
   const home = new HomeService(repositories, config, workspaces, {
     spawn: (input) => agents.spawn(input),
     restore: (id) => agents.restore(id),
+    archive: (id) => agents.archive(id),
   });
   // The main agent once led its threads as a team; they are tracked now.
   home.adoptTeamMembers();
@@ -443,6 +444,8 @@ export async function createApplicationContext(
     // on the restored rows rather than on stale ones.
     await activity.restore();
     await activity.decay();
+    // Home no longer has a main agent; one left from before is put away.
+    await home.retireMainAgent();
   }
   workspaceContent.useCloudWorktrees(
     new CloudWorktrees({ config, repositories, workspaces, hosts }),

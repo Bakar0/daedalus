@@ -6,15 +6,15 @@ import {
 } from "@daedalus/core";
 import { parseArguments, printResult } from "./arguments";
 
-export const askHelp = `Ask commands — questions for the user, kept under Needs you until answered:
-  daedal ask "<question>" [--context "<text>" | --context-file <path>|-] [--why "<text>"] [--option "<text>"]... [--recommend <n>] [--plan <plan> ^<id>] [--session <session>]
-  daedal ask list [--team | --all] [--session <session>]
-  daedal ask show <n>
-  daedal ask update <n> [--title "<question>"] [--context ...] [--why ...] [--option ...]... [--recommend <n>] [--plan <plan> ^<id>]
-  daedal ask resolve <n> [--answer "<what the user said>"]
-  daedal ask withdraw <n> ["<why>"]
+export const activityHelp = `Activity commands — questions for the user, kept under Activity until answered:
+  daedal activity ask "<question>" [--context "<text>" | --context-file <path>|-] [--why "<text>"] [--option "<text>"]... [--recommend <n>] [--plan <plan> ^<id>] [--session <session>]
+  daedal activity list [--team | --all] [--session <session>]
+  daedal activity show <n>
+  daedal activity update <n> [--title "<question>"] [--context ...] [--why ...] [--option ...]... [--recommend <n>] [--plan <plan> ^<id>]
+  daedal activity resolve <n> [--answer "<what the user said>"]
+  daedal activity withdraw <n> ["<why>"]
 
-Ask the user once. The app keeps the question as a card under Needs you,
+Ask the user once. The app keeps the question as a card under Activity,
 with its context, its options and the plan task it waits on, until the user
 answers or dismisses it there. Do not repeat it in your replies: say "Asked
 #<n>" and go on with other work. Every message Daedalus brings you ends with
@@ -30,7 +30,7 @@ done or dropped. A task without an id gets one from its title.
 Asking the same question again while it is open rewrites it.
 When the user answers or dismisses it in the app, you are told, with the
 question and its context. When they answer it in your session instead, run
-'daedal ask resolve <n> --answer "<what they said>"' so the card closes.
+'daedal activity resolve <n> --answer "<what they said>"' so the card closes.
 'withdraw' closes an ask that is no longer needed. Archiving a session
 closes its asks.
 'list' shows your open asks and those ended in the last day; --team adds
@@ -88,7 +88,29 @@ function describe(ask: AskView): string {
   return lines.join("\n");
 }
 
-export async function askCommand(
+export const ACTIVITY_ACTIONS = [
+  "list",
+  "show",
+  "update",
+  "resolve",
+  "withdraw",
+];
+
+/**
+ * The CLI before Activity: `daedal ask "<question>"` and `daedal ask <sub>`.
+ * Running sessions may still have it in their instructions, so it stays as a
+ * hidden alias of `daedal activity ask` and `daedal activity <sub>`.
+ */
+export function activityAlias(args: string[]): string[] {
+  if (args[0] !== "ask") return args;
+  const rest = args.slice(1);
+  if (rest.length === 0) return ["activity"];
+  if (ACTIVITY_ACTIONS.includes(rest[0]!) || rest[0] === "help")
+    return ["activity", ...rest];
+  return ["activity", "ask", ...rest];
+}
+
+export async function activityCommand(
   context: ApplicationContext,
   args: string[],
   json: boolean,
@@ -96,11 +118,16 @@ export async function askCommand(
 ): Promise<number> {
   const first = args[0];
   if (!first || first === "help" || first === "--help") {
-    console.log(askHelp);
+    console.log(activityHelp);
     return 0;
   }
-  const actions = ["list", "show", "update", "resolve", "withdraw"];
-  const action = actions.includes(first) ? args.shift()! : "create";
+  if (first !== "ask" && !ACTIVITY_ACTIONS.includes(first))
+    throw new DaedalusError(
+      "VALIDATION",
+      `Unknown activity command '${first}'; see 'daedal activity --help'`,
+    );
+  args.shift();
+  const action = first === "ask" ? "create" : first;
   const options = takeRepeated(args, "option");
   const parsed = parseArguments(
     args,
@@ -169,7 +196,7 @@ export async function askCommand(
     });
     printResult({ ask, updated }, json, () =>
       console.log(
-        `${updated ? "Updated" : "Asked"} #${ask.id}. It shows under Needs you until the user answers; tell them "Asked #${ask.id}" and do not repeat it.`,
+        `${updated ? "Updated" : "Asked"} #${ask.id}. It shows under Activity until the user answers; tell them "Asked #${ask.id}" and do not repeat it.`,
       ),
     );
     return 0;
@@ -190,7 +217,7 @@ export async function askCommand(
     );
     return 0;
   }
-  const id = number(rest[0], `daedal ask ${action} <n>`);
+  const id = number(rest[0], `daedal activity ${action} <n>`);
   if (action === "show") {
     const ask = context.asks.get(id);
     printResult(ask, json, () => console.log(describe(ask)));

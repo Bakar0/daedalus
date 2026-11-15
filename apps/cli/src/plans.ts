@@ -45,7 +45,7 @@ directly for anything these commands do not cover.
 session's handle.
 'start' marks a task [/] and puts the owner on it: --owner, else you.
 'done', 'block' and 'drop' set [x], [!] and [-]. 'ask' asks the user, pinned to
-the task, as 'daedal ask --plan' does; the app shows it under Needs you.
+the task, as 'daedal activity ask --plan' does; the app shows it under Activity.
 An @owner is a session's team handle, or its name made into a handle
 (a session called "Cart endpoints" answers to @cart-endpoints).`;
 
@@ -82,7 +82,7 @@ function printPlan(
   );
   const questions = planQuestions(plan);
   if (questions.length) {
-    console.log(`\nNeeds you (${questions.length}):`);
+    console.log(`\nActivity (${questions.length}):`);
     for (const question of questions)
       console.log(
         `  ? ${question.text}  — ${question.task.title}${question.owner ? `, @${question.owner}` : ""}`,
@@ -238,7 +238,7 @@ export async function planCommand(
     if (!session)
       throw new DaedalusError(
         "VALIDATION",
-        'Ask from the session that waits on the answer, or use daedal ask "<question>" --session <session> --plan <plan> ^<id>',
+        'Ask from the session that waits on the answer, or use daedal activity ask "<question>" --session <session> --plan <plan> ^<id>',
       );
     const { ask } = await context.asks.create({
       session: session.id,
@@ -248,7 +248,7 @@ export async function planCommand(
     });
     printResult({ file: found, ask }, json, () =>
       console.log(
-        `Asked #${ask.id}, pinned to ^${ask.taskKey}; the user sees it under Needs you. Add context with 'daedal ask update ${ask.id} --context "..."'.`,
+        `Asked #${ask.id}, pinned to ^${ask.taskKey}; the user sees it under Activity. Add context with 'daedal activity update ${ask.id} --context "..."'.`,
       ),
     );
     return 0;

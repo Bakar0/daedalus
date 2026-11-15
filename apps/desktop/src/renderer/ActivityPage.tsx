@@ -1,5 +1,5 @@
 /**
- * Needs you: every question a session asked the user, as a card with its
+ * Activity: what waits on the user. Today that is every question a session asked the user, as a card with its
  * context, its options and where it sits in its plan, kept until the user
  * answers or dismisses it here, or it closes on its own. Answers go to the
  * asking session with the question and its context. Beside the cards, the
@@ -7,12 +7,12 @@
  * held behind it.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type React from "react";
 import type { AskDto, AskPlanDto } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 
-/** An inbox tray: Needs you's mark. */
-export const NEEDS_YOU_ICON_PATH =
-  "M2 9.5 4 3h8l2 6.5v3.5H2zM2 9.5h3.5l1 1.5h3l1-1.5H14";
+/** A pulse line: Activity's mark. */
+export const ACTIVITY_ICON_PATH = "M1.5 8h3l2-5 3 10 2-5h3";
 
 /** How often the page reads asks again while shown. */
 const REFRESH_MS = 5_000;
@@ -31,18 +31,35 @@ const ago = (from: string, now: number): string => {
   return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 };
 
-/** The number of open asks, for the sidebar's count. Polls while mounted. */
-export function useOpenAskCount(client: DesktopClient): number {
-  const [count, setCount] = useState(0);
+/** Open asks: all of them, and by workspace. */
+export interface OpenAskCounts {
+  total: number;
+  byWorkspace: ReadonlyMap<string, number>;
+}
+
+const NO_ASKS: OpenAskCounts = { total: 0, byWorkspace: new Map() };
+
+/**
+ * Open asks, counted for the sidebar's Activity and each workspace's
+ * Activity tab. Polls while mounted.
+ */
+export function useOpenAskCounts(client: DesktopClient): OpenAskCounts {
+  const [count, setCount] = useState(NO_ASKS);
   useEffect(() => {
     let live = true;
     const read = () =>
       void client.request.askList({}).then(
         (response) => {
-          if (live && response.ok)
-            setCount(
-              response.data.filter((ask) => ask.state === "open").length,
-            );
+          if (live && response.ok) {
+            const open = response.data.filter((ask) => ask.state === "open");
+            const byWorkspace = new Map<string, number>();
+            for (const ask of open)
+              byWorkspace.set(
+                ask.workspaceId,
+                (byWorkspace.get(ask.workspaceId) ?? 0) + 1,
+              );
+            setCount({ total: open.length, byWorkspace });
+          }
         },
         () => undefined,
       );
@@ -222,6 +239,7 @@ function AskCard({
   onDismiss,
   onUndo,
   onOpenSession,
+  children,
 }: {
   ask: AskDto;
   draft: Draft;
@@ -233,6 +251,8 @@ function AskCard({
   onDismiss: () => void;
   onUndo: () => void;
   onOpenSession: () => void;
+  /** What goes at the card's foot: its plan, in the side panel. */
+  children?: React.ReactNode;
 }) {
   const open = ask.state === "open";
   const answer = [ask.answer, ask.note ? `"${ask.note}"` : null]
@@ -243,7 +263,9 @@ function AskCard({
       aria-label={ask.title}
       className={`needs-card${open ? "" : " ended"}${selected ? " selected" : ""}`}
       onClick={(event) => {
-        if ((event.target as HTMLElement).closest("button,textarea,label"))
+        if (
+          (event.target as HTMLElement).closest("button,textarea,label,details")
+        )
           return;
         onSelect();
       }}
@@ -281,7 +303,7 @@ function AskCard({
           ))}
         </div>
       )}
-      {ask.planPath && ask.taskKey && (
+      {ask.planPath && ask.taskKey && !children && (
         <div className="needs-card-where">
           Waits in its plan at <span className="needs-pin">^{ask.taskKey}</span>
         </div>
@@ -355,21 +377,29 @@ function AskCard({
           )}
         </div>
       )}
+      {children}
     </article>
   );
 }
 
-export function NeedsYouPage({
+export function ActivityPage({
   client,
   onError,
   onOpenSession,
   onOpenPlan,
+  workspaceId,
 }: {
   client: DesktopClient;
   onError: (message: string) => void;
   onOpenSession: (sessionId: string) => void;
   onOpenPlan: (path: string, workspaceId: string) => void;
+  /**
+   * One workspace only, as the side panel's Activity tab shows it: one
+   * column, each card with its plan folded under it.
+   */
+  workspaceId?: string;
 }) {
+  const narrow = workspaceId !== undefined;
   const [asks, setAsks] = useState<AskDto[]>();
   const [selected, setSelected] = useState<number | null>(null);
   const [workspace, setWorkspace] = useState<string>("all");
@@ -404,8 +434,9 @@ export function NeedsYouPage({
         seen.set(ask.workspaceId, ask.workspaceName ?? "Workspace");
     return [...seen];
   }, [asks]);
+  const scope = workspaceId ?? workspace;
   const shown = (asks ?? []).filter(
-    (ask) => workspace === "all" || ask.workspaceId === workspace,
+    (ask) => scope === "all" || ask.workspaceId === scope,
   );
   const open = shown.filter((ask) => ask.state === "open").reverse();
   const ended = shown.filter((ask) => ask.state !== "open");
@@ -433,13 +464,16 @@ export function NeedsYouPage({
     drafts[id] ?? { option: null, note: "" };
 
   return (
-    <section aria-label="Needs you" className="needs-page">
+    <section
+      aria-label="Activity"
+      className={`needs-page${narrow ? " narrow" : ""}`}
+    >
       <header className="needs-head">
         <h2 className="needs-title">
-          Needs you
+          {narrow ? "Waiting on you" : "Activity"}
           <span className="needs-count">{open.length}</span>
         </h2>
-        {workspaces.length > 1 && (
+        {!narrow && workspaces.length > 1 && (
           <div className="needs-chips">
             {[["all", "All workspaces"] as const, ...workspaces].map(
               ([id, name]) => (
@@ -461,8 +495,9 @@ export function NeedsYouPage({
         <div className="needs-cards">
           {asks && open.length === 0 && (
             <p className="needs-empty">
-              Nothing waits on you. When a session asks you something with
-              daedal ask, it shows here with its context.
+              {narrow
+                ? "Nothing in this workspace waits on you."
+                : "Nothing waits on you. When a session asks you something with daedal activity ask, it shows here with its context."}
             </p>
           )}
           {open.map((ask) => (
@@ -493,8 +528,25 @@ export function NeedsYouPage({
                 });
               }}
               onUndo={() => undefined}
-              selected={current?.id === ask.id}
-            />
+              selected={!narrow && current?.id === ask.id}
+            >
+              {narrow && ask.planPath && (
+                <details className="needs-card-plan">
+                  <summary>Plan · ^{ask.taskKey}</summary>
+                  <PlanMap
+                    asks={(asks ?? []).filter(
+                      (other) =>
+                        other.state === "open" &&
+                        other.planPath === ask.planPath,
+                    )}
+                    client={client}
+                    onOpenPlan={(path) => onOpenPlan(path, ask.workspaceId)}
+                    path={ask.planPath}
+                    selectedTask={ask.taskKey}
+                  />
+                </details>
+              )}
+            </AskCard>
           ))}
           {ended.length > 0 && (
             <>
@@ -519,23 +571,25 @@ export function NeedsYouPage({
             </>
           )}
         </div>
-        <div className="needs-side">
-          {current?.planPath ? (
-            <PlanMap
-              asks={planAsks}
-              client={client}
-              onOpenPlan={(path) => onOpenPlan(path, current.workspaceId)}
-              path={current.planPath}
-              selectedTask={current.taskKey}
-            />
-          ) : (
-            current && (
-              <p className="needs-empty">
-                #{current.id} is not pinned to a plan task.
-              </p>
-            )
-          )}
-        </div>
+        {!narrow && (
+          <div className="needs-side">
+            {current?.planPath ? (
+              <PlanMap
+                asks={planAsks}
+                client={client}
+                onOpenPlan={(path) => onOpenPlan(path, current.workspaceId)}
+                path={current.planPath}
+                selectedTask={current.taskKey}
+              />
+            ) : (
+              current && (
+                <p className="needs-empty">
+                  #{current.id} is not pinned to a plan task.
+                </p>
+              )
+            )}
+          </div>
+        )}
       </div>
     </section>
   );

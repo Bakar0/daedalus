@@ -102,10 +102,10 @@ import { InstructionsEditor } from "./InstructionsEditor";
 import { InstructionsPane, useInstructionsSummary } from "./InstructionsPane";
 import { PlansPage, PlansPane, usePlanList } from "./PlansPane";
 import {
-  NEEDS_YOU_ICON_PATH,
-  NeedsYouPage,
-  useOpenAskCount,
-} from "./NeedsYouPage";
+  ACTIVITY_ICON_PATH,
+  ActivityPage,
+  useOpenAskCounts,
+} from "./ActivityPage";
 import { createPlan } from "./files/plan-actions";
 import { accountModelKey } from "./account-models";
 import {
@@ -228,7 +228,6 @@ import {
   homeThreadRows,
   threadMenuItems,
   threadRows,
-  waitingCount,
   type ThreadFilter,
   type ThreadInputs,
 } from "./threads/thread-groups";
@@ -356,7 +355,7 @@ const SIDE_PANEL_TABS = [
   ["files", "Files"],
   ["git", "Repositories"],
   ["tasks", "Tasks"],
-  ["threads", "Threads"],
+  ["activity", "Activity"],
 ] as const;
 
 /** The handle a member name becomes, as the core makes it. */
@@ -722,7 +721,7 @@ export const isLocalWebUrl = (url: string) => {
  * What the side panel can show, each a tab in its strip. Threads is there
  * only where it applies: at Home, and beside a session that leads a team.
  */
-export type SidePanelTab = "files" | "git" | "tasks" | "threads";
+export type SidePanelTab = "files" | "git" | "tasks" | "activity";
 const SIDE_PANEL_TAB_KEY = "daedalus.panel.tab";
 const storedSidePanelTab = (): SidePanelTab => {
   try {
@@ -730,7 +729,7 @@ const storedSidePanelTab = (): SidePanelTab => {
     return stored === "files" ||
       stored === "git" ||
       stored === "tasks" ||
-      stored === "threads"
+      stored === "activity"
       ? stored
       : "tasks";
   } catch {
@@ -759,9 +758,8 @@ function SidePanelTabIcon({ tab }: { tab: SidePanelTab }) {
           <circle cx="11.5" cy="4.5" r="1.6" />
           <path d="M4.5 5.1v5.8M11.5 6.1c0 3-7 2.1-7 4.8" />
         </>
-      ) : tab === "threads" ? (
-        // Speech bubbles: the lead's threads.
-        <path d="M2 3.5h8v5.5H5.5L3 11V9H2zM12 5.5h2v5.5h-1v2l-2.5-2H7" />
+      ) : tab === "activity" ? (
+        <path d={ACTIVITY_ICON_PATH} />
       ) : (
         <path d="M2.5 3.5l1 1 2-2M2.5 8l1 1 2-2M2.5 12.5l1 1 2-2M7.5 3.5h6M7.5 8h6M7.5 12.5h6" />
       )}
@@ -3368,10 +3366,10 @@ export function WorkspaceApp({
     return client.subscribeKeybindings?.(take);
   }, [client]);
   useCommand("view.board", { run: () => setView("board") });
-  // Home's main agent from anywhere, ⌘⇧H or ⌘K, as the sidebar's Home does.
+  // Activity at Home from anywhere, ⌘⇧H or ⌘K, as the sidebar's does.
   useCommand("view.home", {
     enabled: () => !homeOpening,
-    run: () => void openHome(),
+    run: () => void openAtHome("activity"),
   });
   useCommand("view.world", {
     enabled: () => Boolean(workspaceId),
@@ -4114,7 +4112,8 @@ export function WorkspaceApp({
     : sessions.find((item) => item.id === activeSessionId);
   // The side panel's Plans, read only while the dock that shows them is.
   // A cloud workspace's files are in its pod.
-  const openAsks = useOpenAskCount(client);
+  const askCounts = useOpenAskCounts(client);
+  const openAsks = askCounts.total;
   const planList = usePlanList(
     client,
     !workspacePanelCollapsed &&
@@ -5483,13 +5482,29 @@ export function WorkspaceApp({
     // its last session; the side panel holds its tasks, files and repositories.
   }
 
-  // Home's main agent, made the first time Home is opened.
+  // Activity and Routines each have one place, Home: clicking either goes
+  // there instead of opening a tab in the workspace on screen. The tab is
+  // opened once Home's editor has mounted, by the effect below.
   const [homeOpening, setHomeOpening] = useState(false);
-  async function openHome() {
+  const [homePage, setHomePage] = useState<"activity" | "routines">();
+  // Once Home's editor is on screen, show the page asked for there.
+  useEffect(() => {
+    if (!atHome || !homePage) return;
+    setHomePage(undefined);
+    files.withEditor((handle) =>
+      homePage === "activity"
+        ? handle.openActivity()
+        : handle.openRoutinesPage(),
+    );
+  }, [atHome, homePage, files]);
+  async function openAtHome(page: "activity" | "routines") {
     setHomeOpening(true);
     try {
-      const home = await perform(client.request.homeAgent({}));
-      if (home) showSession(home.session.id, home.workspace.id);
+      const home =
+        homeWorkspace ?? (await perform(client.request.homeOpen({})));
+      if (!home) return;
+      setHomePage(page);
+      enterWorkspace(home.id, "workspace");
     } finally {
       setHomeOpening(false);
     }
@@ -7909,11 +7924,40 @@ export function WorkspaceApp({
       : threadRows(lead.id, threadInputs);
   const threadsLeadName = (lead: AgentSessionDto) =>
     isMainAgentSession(lead) ? "Main agent" : sessionName(lead);
-  const leadThreads = threadsLead ? threadRowsOf(threadsLead) : [];
+  // Home is Activity itself, so its side panel has no Activity tab.
   const shownPanelTab: SidePanelTab =
-    panelTab === "threads" && !threadsLead ? "tasks" : panelTab;
+    panelTab === "activity" && atHome ? "tasks" : panelTab;
   const sidePanelTabs = SIDE_PANEL_TABS.filter(
-    ([tab]) => tab !== "threads" || threadsLead,
+    ([tab]) => tab !== "activity" || !atHome,
+  );
+  const workspaceAsks = workspace
+    ? (askCounts.byWorkspace.get(workspace.id) ?? 0)
+    : 0;
+  /** Activity: every workspace's at Home, one workspace's in its side panel. */
+  const renderActivityPage = (scope?: string) => (
+    <ActivityPage
+      {...(scope ? { workspaceId: scope } : {})}
+      client={client}
+      onError={setError}
+      onOpenPlan={(path, workspaceId) => {
+        const place = activeWorkspaces.find((item) => item.id === workspaceId);
+        if (place && path.startsWith(`${place.path}/`))
+          openFileTarget({
+            workspaceId: place.id,
+            path: path.slice(place.path.length + 1),
+          });
+        else
+          openFileTarget({
+            workspaceId: null,
+            path,
+            viewable: true,
+          });
+      }}
+      onOpenSession={(sessionId) => {
+        const target = sessionsById.get(sessionId);
+        if (target) showSession(target.id, target.workspaceId);
+      }}
+    />
   );
   /** The Threads list for a lead, in the side panel or in its own tab. */
   const renderThreadsList = (
@@ -8265,22 +8309,27 @@ export function WorkspaceApp({
               aria-current={atHome ? "page" : undefined}
               className="sidebar-routines-link sidebar-home-link"
               disabled={homeOpening}
-              onClick={() => void openHome()}
-              title="The main agent: it coordinates threads across your workspaces"
+              onClick={() => void openAtHome("activity")}
+              title="What waits on you, in every workspace"
               type="button"
             >
               <svg aria-hidden="true" viewBox="0 0 16 16">
-                <path d="M2.5 7.5 8 2.5l5.5 5M4 6.5v7h3v-4h2v4h3v-7" />
+                <path d={ACTIVITY_ICON_PATH} />
               </svg>
-              <span>
-                {homeOpening ? "Home · starting the main agent…" : "Home"}
-              </span>
+              <span>Activity</span>
+              {openAsks > 0 && (
+                <span
+                  aria-label={`${openAsks} open`}
+                  className="sidebar-routines-count sidebar-needs-count"
+                >
+                  {openAsks}
+                </span>
+              )}
             </button>
             <button
               className="sidebar-routines-link"
-              onClick={() =>
-                files.withEditor((handle) => handle.openRoutinesPage())
-              }
+              disabled={homeOpening}
+              onClick={() => void openAtHome("routines")}
               type="button"
             >
               <svg aria-hidden="true" viewBox="0 0 16 16">
@@ -8293,27 +8342,6 @@ export function WorkspaceApp({
                   className="sidebar-routines-count"
                 >
                   {snapshot?.unseenRoutineRuns}
-                </span>
-              )}
-            </button>
-            <button
-              className="sidebar-routines-link"
-              onClick={() =>
-                files.withEditor((handle) => handle.openNeedsYou())
-              }
-              title="Questions your sessions asked you, with their context"
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 16 16">
-                <path d={NEEDS_YOU_ICON_PATH} />
-              </svg>
-              <span>Needs you</span>
-              {openAsks > 0 && (
-                <span
-                  aria-label={`${openAsks} open`}
-                  className="sidebar-routines-count sidebar-needs-count"
-                >
-                  {openAsks}
                 </span>
               )}
             </button>
@@ -8874,32 +8902,7 @@ export function WorkspaceApp({
                 renderWorkflows={() => (
                   <WorkflowsEditor client={client} onError={setError} />
                 )}
-                renderNeedsYou={() => (
-                  <NeedsYouPage
-                    client={client}
-                    onError={setError}
-                    onOpenPlan={(path, workspaceId) => {
-                      const place = activeWorkspaces.find(
-                        (item) => item.id === workspaceId,
-                      );
-                      if (place && path.startsWith(`${place.path}/`))
-                        openFileTarget({
-                          workspaceId: place.id,
-                          path: path.slice(place.path.length + 1),
-                        });
-                      else
-                        openFileTarget({
-                          workspaceId: null,
-                          path,
-                          viewable: true,
-                        });
-                    }}
-                    onOpenSession={(sessionId) => {
-                      const target = sessionsById.get(sessionId);
-                      if (target) showSession(target.id, target.workspaceId);
-                    }}
-                  />
-                )}
+                renderActivity={() => renderActivityPage()}
                 renderPlans={() => (
                   <PlansPage
                     client={client}
@@ -8931,7 +8934,9 @@ export function WorkspaceApp({
                       if (target) showSession(target.id, target.workspaceId);
                     }}
                     onOpenAgent={async () => {
-                      const home = workspace?.id ?? activeWorkspaces[0]?.id;
+                      const home =
+                        (atHome ? undefined : workspace?.id) ??
+                        activeWorkspaces[0]?.id;
                       if (!home) return;
                       const agent = await perform(
                         client.request.routinesAgent({ workspaceId: home }),
@@ -8942,7 +8947,9 @@ export function WorkspaceApp({
                         handle.showSessionBesideRoutines(),
                       );
                     }}
-                    {...(workspace ? { currentWorkspaceId: workspace.id } : {})}
+                    {...(workspace && !atHome
+                      ? { currentWorkspaceId: workspace.id }
+                      : {})}
                     run={perform}
                     workspaces={activeWorkspaces.map((item) => ({
                       id: item.id,
@@ -9115,8 +9122,8 @@ export function WorkspaceApp({
                 {sidePanelTabs.map(([tab, label], index) => (
                   <button
                     aria-label={
-                      tab === "threads" && waitingCount(leadThreads) > 0
-                        ? `${label}, ${waitingCount(leadThreads)} waiting on you`
+                      tab === "activity" && workspaceAsks > 0
+                        ? `${label}, ${workspaceAsks} waiting on you`
                         : label
                     }
                     aria-selected={
@@ -9148,7 +9155,7 @@ export function WorkspaceApp({
                     {tab === "tasks" && taskAttentionCount > 0 && (
                       <i aria-hidden="true" className="side-panel-tab-badge" />
                     )}
-                    {tab === "threads" && waitingCount(leadThreads) > 0 && (
+                    {tab === "activity" && workspaceAsks > 0 && (
                       <i
                         aria-hidden="true"
                         className="side-panel-tab-badge threads-tab-badge"
@@ -9157,10 +9164,9 @@ export function WorkspaceApp({
                   </button>
                 ))}
               </div>
-              {workspacePanelCollapsed ? null : shownPanelTab === "threads" &&
-                threadsLead ? (
-                <div className="side-panel-threads">
-                  {renderThreadsList(threadsLead, { inTab: false })}
+              {workspacePanelCollapsed ? null : shownPanelTab === "activity" ? (
+                <div className="side-panel-activity">
+                  {renderActivityPage(workspace.id)}
                 </div>
               ) : shownPanelTab === "files" ? (
                 !workspaceContent ||

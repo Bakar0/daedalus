@@ -60,15 +60,15 @@ message, and a very long one is cut.
 
 ## Waiting on the user
 
-When you need the user, ask once with `daedal ask "<question>" --context
+When you need the user, ask once with `daedal activity ask "<question>" --context
 "<what it is>" --why "<what waits on it>"`, with `--option` for each choice
 when there are choices, and `--plan <plan> ^<id>` for the plan task it
-holds up. The user sees it as a card under Needs you and answers there;
+holds up. The user sees it as a card under Activity and answers there;
 the answer comes to you with the question and its context. Your lead sees
-your asks with `daedal ask list --team`, so do not pass the question to
+your asks with `daedal activity list --team`, so do not pass the question to
 the lead too. Work on what does not wait on the answer, or stop. Do not
 ask again while you wait: every message you get ends with your open asks.
-When the user answers in your session instead, run `daedal ask resolve <n>
+When the user answers in your session instead, run `daedal activity resolve <n>
 --answer "<what they said>"`.
 
 At a workflow gate the lead approves for you on the user's word, with

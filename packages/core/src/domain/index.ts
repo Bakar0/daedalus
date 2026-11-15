@@ -233,7 +233,7 @@ export type AskState = "open" | "answered" | "dismissed" | "closed";
 /**
  * A question for the user, kept until it is answered, dismissed or closed.
  * One session owns it; it may be pinned to a task of a plan in the same
- * workspace. The app shows open ones under Needs you.
+ * workspace. The app shows open ones under Activity.
  */
 export interface Ask {
   id: number;

@@ -8799,11 +8799,12 @@ button.routine-tick:hover {
 .side-panel-tab-badge.threads-tab-badge {
   background: var(--thread-waiting);
 }
-.side-panel-threads {
+.side-panel-activity {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  overflow: auto;
 }
 .side-panel > .section-heading {
   padding: 12px 12px 4px;
@@ -10297,10 +10298,52 @@ button.routine-tick:hover {
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
   min-height: 0;
 }
-@media (max-width: 900px) {
+/* One column when the page is narrow, a split pane included: the plan goes
+   under the cards and the whole page scrolls. */
+.needs-page {
+  container-type: inline-size;
+}
+@container (max-width: 760px) {
   .needs-columns {
     grid-template-columns: 1fr;
+    overflow: auto;
   }
+  .needs-columns > .needs-cards,
+  .needs-columns > .needs-side {
+    overflow: visible;
+  }
+}
+/* The side panel's Activity tab: one workspace, one column, each card's
+   plan folded under it. */
+.side-panel-activity .needs-page {
+  height: auto;
+  padding: 10px 10px 0;
+}
+.needs-page.narrow .needs-title {
+  font-size: 13px;
+}
+.needs-page.narrow .needs-columns {
+  grid-template-columns: 1fr;
+}
+.needs-page.narrow .needs-cards {
+  overflow: visible;
+}
+.needs-card-plan {
+  border-top: 1px dashed var(--line);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+.needs-card-plan > summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.needs-card-plan[open] > summary {
+  margin-bottom: 6px;
+}
+.needs-card-plan .needs-plan {
+  border: 0;
+  padding: 0;
 }
 .needs-cards,
 .needs-side {

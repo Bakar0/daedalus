@@ -14,7 +14,7 @@ export const ASK_TITLE_MAX = 160;
 export const ASK_TEXT_MAX = 4_000;
 /** The most options an ask offers. */
 export const ASK_OPTIONS_MAX = 8;
-/** How long an ended ask still shows under Needs you, as "today". */
+/** How long an ended ask still shows under Activity, as "today". */
 export const ASK_ENDED_SHOWN_MS = 24 * 60 * 60_000;
 
 /** What an agent writes when it asks. */
@@ -62,7 +62,7 @@ const indent = (text: string) =>
     .join("\n");
 
 /**
- * Needs you: questions for the user that a session asks once and the app
+ * Activity: questions for the user that a session asks once and the app
  * keeps until the user answers or dismisses them there, or they close: the
  * agent got its answer in its session, its plan task ended, or the session
  * was archived. When the user answers or dismisses one, the asking session
@@ -128,7 +128,7 @@ export class AskService {
     if (!title)
       throw new DaedalusError(
         "VALIDATION",
-        'An ask needs a question: daedal ask "<question>"',
+        'An ask needs a question: daedal activity ask "<question>"',
       );
     if (title.length > ASK_TITLE_MAX)
       throw new DaedalusError(
@@ -527,7 +527,7 @@ export class AskService {
     const items = open
       .map((ask) => `#${ask.id} ${ask.title} (${age(ask.createdAt, now)})`)
       .join("; ");
-    return `[Needs you] Open asks: ${items}. They show to the user until answered; do not repeat them. 'daedal ask resolve <n>' when the user answers one here.`;
+    return `[Activity] Open asks: ${items}. They show to the user until answered; do not repeat them. 'daedal activity resolve <n>' when the user answers one here.`;
   }
 
   /** The notice for an ask that ended, with what the session needs to act. */
@@ -571,7 +571,7 @@ export class AskService {
           .recoverCodexThread(session)
           .catch(() => session),
         text: claimed.map((ask) => this.noticeText(ask)).join("\n\n"),
-        from: "[Needs you] the user",
+        from: "[Activity] the user",
       });
       return true;
     } catch {

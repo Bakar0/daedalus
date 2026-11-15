@@ -307,8 +307,8 @@ function toolCall(payload: Record<string, unknown>): {
 /**
  * Whether a shell call is the agent raising its own badge with
  * `daedal attention "<reason>"`. `--clear` takes it down, so that one may
- * retract like any other tool. `daedal ask` and `daedal plan ask` do not
- * count: an ask waits under Needs you while the agent goes on working.
+ * retract like any other tool. `daedal activity ask` and `daedal plan ask` do
+ * not count: an ask waits under Activity while the agent goes on working.
  */
 export function raisesAttention(
   toolName: string | undefined,

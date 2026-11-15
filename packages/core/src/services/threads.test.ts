@@ -135,7 +135,7 @@ describe("Home", () => {
       expect(prompt).toContain("Start one thread per piece of work");
       expect(prompt).toContain("daedal thread new --workspace");
       expect(prompt).toContain("daedal thread track <session>");
-      expect(prompt).toContain("daedal ask");
+      expect(prompt).toContain("daedal activity ask");
       expect(prompt).toContain(join(first.workspace.path, "MEMORY.md"));
       expect(prompt).toContain(
         `You run at the Daedalus home, ${context.config.home}`,
@@ -154,6 +154,18 @@ describe("Home", () => {
       expect(again.session.id).toBe(first.session.id);
       expect(tmux.launches).toHaveLength(1);
       expect(context.home.isHome(first.session)).toBe(true);
+    });
+  });
+
+  test("Home opens without an agent, and a main agent left from before is archived", async () => {
+    await withHome(async ({ context, tmux }) => {
+      const workspace = await context.home.open();
+      expect(workspace.kind).toBe("home");
+      expect(tmux.launches).toHaveLength(0);
+      const { session } = await context.home.agent();
+      expect(await context.home.retireMainAgent()).toEqual([session.id]);
+      expect((await context.agents.get(session.id)).archivedAt).toBeTruthy();
+      expect(await context.home.retireMainAgent()).toEqual([]);
     });
   });
 

@@ -791,6 +791,7 @@ export function createDesktopRequestHandlers(
           session: agentDto(home.session),
         };
       }),
+    homeOpen: () => mutate(async () => workspaceDto(await context.home.open())),
     askList: ({ plan }) =>
       result(async () => {
         // Reading is not a change; only asks it closed are announced.

@@ -159,7 +159,7 @@ export interface SessionTrackDto {
   createdAt: string;
 }
 
-/** A question a session asked the user, as Needs you shows it. */
+/** A question a session asked the user, as Activity shows it. */
 export interface AskDto {
   id: number;
   workspaceId: string;
@@ -184,7 +184,7 @@ export interface AskDto {
   undoable: boolean;
 }
 
-/** A plan's tasks, for the map beside Needs you. */
+/** A plan's tasks, for the map beside Activity. */
 export interface AskPlanDto {
   path: string;
   title: string;
@@ -1769,8 +1769,10 @@ export interface DesktopRpcSchema {
         Record<string, never>,
         { workspace: WorkspaceDto; session: AgentSessionDto }
       >;
+      /** The hidden Home row, made on first use. Starts no agent. */
+      homeOpen: Request<Record<string, never>, WorkspaceDto>;
       /**
-       * Needs you: open asks and those ended in the last day, newest first,
+       * Activity: open asks and those ended in the last day, newest first,
        * in every workspace. Asks whose plan task is done close first.
        */
       askList: Request<

@@ -114,7 +114,7 @@ plan: Cutover
 - [ ] Run batch 2
 `;
 
-describe("Needs you asks", () => {
+describe("Activity asks", () => {
   test("an ask is kept once; asking again rewrites it", async () => {
     await withHome(async ({ context }) => {
       const lead = await context.agents.spawn({
