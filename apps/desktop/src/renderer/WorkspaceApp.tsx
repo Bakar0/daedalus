@@ -219,6 +219,7 @@ import {
 } from "./threads/ThreadsPane";
 import {
   homeThreadRows,
+  threadMenuItems,
   threadRows,
   waitingCount,
   type ThreadFilter,
@@ -348,6 +349,7 @@ const SIDE_PANEL_TABS = [
   ["files", "Files"],
   ["git", "Repositories"],
   ["tasks", "Tasks"],
+  ["threads", "Threads"],
 ] as const;
 
 /** The handle a member name becomes, as the core makes it. */
@@ -709,13 +711,19 @@ export const isLocalWebUrl = (url: string) => {
   }
 };
 
-/** What the side panel can show, each a tab in its strip. */
-export type SidePanelTab = "files" | "git" | "tasks";
+/**
+ * What the side panel can show, each a tab in its strip. Threads is there
+ * only where it applies: at Home, and beside a session that leads a team.
+ */
+export type SidePanelTab = "files" | "git" | "tasks" | "threads";
 const SIDE_PANEL_TAB_KEY = "daedalus.panel.tab";
 const storedSidePanelTab = (): SidePanelTab => {
   try {
     const stored = window.localStorage.getItem(SIDE_PANEL_TAB_KEY);
-    return stored === "files" || stored === "git" || stored === "tasks"
+    return stored === "files" ||
+      stored === "git" ||
+      stored === "tasks" ||
+      stored === "threads"
       ? stored
       : "tasks";
   } catch {
@@ -744,6 +752,9 @@ function SidePanelTabIcon({ tab }: { tab: SidePanelTab }) {
           <circle cx="11.5" cy="4.5" r="1.6" />
           <path d="M4.5 5.1v5.8M11.5 6.1c0 3-7 2.1-7 4.8" />
         </>
+      ) : tab === "threads" ? (
+        // Speech bubbles: the lead's threads.
+        <path d="M2 3.5h8v5.5H5.5L3 11V9H2zM12 5.5h2v5.5h-1v2l-2.5-2H7" />
       ) : (
         <path d="M2.5 3.5l1 1 2-2M2.5 8l1 1 2-2M2.5 12.5l1 1 2-2M7.5 3.5h6M7.5 8h6M7.5 12.5h6" />
       )}
@@ -2472,21 +2483,9 @@ export function WorkspaceApp({
     ),
   );
   const viewWorkspaceId = useRef(scopeKey);
-  // The Threads pane beside a lead's terminal: which leads have it hidden,
-  // and which thread each lead has open in it.
-  const [hiddenThreadPanes, setHiddenThreadPanes] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
-  const [openThreads, setOpenThreads] = useState<
-    Readonly<Record<string, string>>
-  >({});
-  // The main agent's pane lists what it tracks, or every session.
+  // The main agent's Threads list shows what it tracks, or every session.
   const [homeThreadFilter, setHomeThreadFilter] =
     useState<ThreadFilter>("tracked");
-  const paneThreadId =
-    activeSessionId && !hiddenThreadPanes.has(activeSessionId)
-      ? openThreads[activeSessionId]
-      : undefined;
   // Where the World button returns to: the World spans every workspace, so
   // it toggles over whichever workspace view was open.
   const lastWorkspaceView = useRef<WorkspaceView>(
@@ -3280,8 +3279,6 @@ export function WorkspaceApp({
             document.visibilityState === "visible" && document.hasFocus(),
           workspaceId: workspaceId ?? null,
           sessionId: activeSessionId ?? null,
-          // A thread open in the Threads pane is on screen too.
-          paneSessionId: paneThreadId ?? null,
         });
       } catch {
         // Presence is advisory; routing degrades to "no app", never to a crash.
@@ -3299,7 +3296,7 @@ export function WorkspaceApp({
       window.removeEventListener("blur", publish);
       document.removeEventListener("visibilitychange", publish);
     };
-  }, [activeSessionId, client, paneThreadId, workspaceId]);
+  }, [activeSessionId, client, workspaceId]);
   // Coming back to the window is when the user looks at the Repositories
   // panel again, so the host fetches stale base branches and looks at every
   // tree then, rather than at its next scheduled pass.
@@ -3751,6 +3748,39 @@ export function WorkspaceApp({
       : view;
   };
 
+  /** A session's thread actions (`threadMenuItems`), for its menu. */
+  const threadMenuActions = (session: AgentSessionDto): MenuAction[] =>
+    threadMenuItems(session, {
+      mainId: homeMainAgent?.id,
+      homeWorkspaceId: homeWorkspace?.id,
+      tracked: trackedByMain.has(session.id),
+      member: teamOf(session)?.role === "member",
+    }).map((item) => ({
+      id: item.id,
+      label: item.label,
+      run: () => {
+        if (item.id === "track")
+          void perform(
+            client.request.threadTrack({
+              trackerId: homeMainAgent?.id ?? "",
+              sessionId: session.id,
+              tracked: item.tracked,
+            }),
+          );
+        else if (item.id === "thread-done")
+          void perform(
+            client.request.threadResolve({
+              sessionId: session.id,
+              resolved: item.resolved,
+            }),
+          );
+        else
+          void perform(
+            client.request.agentStop({ id: session.id, force: false }),
+          );
+      },
+    }));
+
   /** A session's card actions, for its menu with their pins. */
   const sessionMenuActions = (session: AgentSessionDto): MenuAction[] => {
     const agent =
@@ -3785,6 +3815,7 @@ export function WorkspaceApp({
             },
           ]
         : []),
+      ...threadMenuActions(session),
       ...(team?.role === "lead" && session.status === "running"
         ? [
             {
@@ -3966,6 +3997,17 @@ export function WorkspaceApp({
       ? { ...session, archivedAt: archivingStartedAt.current }
       : session,
   );
+  // The main agent: Home's own agent session, in no team.
+  const isMainAgentSession = (session: AgentSessionDto) =>
+    Boolean(
+      homeWorkspace &&
+      session.workspaceId === homeWorkspace.id &&
+      !session.teamId &&
+      session.kind === "agent",
+    );
+  const homeMainAgent = agents.find(
+    (session) => isMainAgentSession(session) && !session.archivedAt,
+  );
   const inScope = (id: string) => id === workspaceId;
   const allTasks = (snapshot?.tasks ?? []).filter((item) =>
     inScope(item.workspaceId),
@@ -4094,15 +4136,24 @@ export function WorkspaceApp({
   const activeSessionTeam = activeSession ? teamOf(activeSession) : undefined;
   // A Team tab goes once its team does, however that happened: revoked
   // here or from the CLI, or its lead archived.
+  // A Threads tab goes once its lead stops leading, or the main agent is
+  // archived.
   const teamIds = (snapshot?.teams ?? []).map((team) => team.id).join(" ");
+  const leadIds = [
+    ...(snapshot?.teams ?? []).map((team) => team.leadId),
+    ...(homeMainAgent ? [homeMainAgent.id] : []),
+  ].join(" ");
   const snapshotLoaded = Boolean(snapshot);
   useEffect(() => {
     if (!snapshotLoaded) return;
     const ids = (text: string) => new Set(text ? text.split(" ") : []);
     files.withEditor((handle) =>
-      handle.closeAbilityTabsExcept({ teams: ids(teamIds) }),
+      handle.closeAbilityTabsExcept({
+        teams: ids(teamIds),
+        leads: ids(leadIds),
+      }),
     );
-  }, [files, snapshotLoaded, teamIds]);
+  }, [files, leadIds, snapshotLoaded, teamIds]);
   const activeSessionWorkspace = activeSession
     ? workspaceById.get(activeSession.workspaceId)
     : undefined;
@@ -7778,21 +7829,31 @@ export function WorkspaceApp({
     knownTerminalIds.current = current;
   }, [files, terminalIds]);
 
-  // A lead's threads, beside its terminal: the main agent at Home, or any
-  // session leading a team.
+  // A lead's threads, in the side panel's Threads tab or a tab of their
+  // own: the main agent's at Home, or a team lead's members.
   const isMainAgent = Boolean(
-    activeSession &&
-    homeWorkspace &&
-    activeSession.workspaceId === homeWorkspace.id &&
-    !activeSession.teamId &&
-    activeSession.kind === "agent",
+    activeSession && isMainAgentSession(activeSession),
   );
-  const threadsLead =
-    activeSession &&
-    (isMainAgent ||
-      (snapshot?.teams ?? []).some((team) => team.leadId === activeSession.id))
-      ? activeSession
+  const leadsTeam = (session: AgentSessionDto) =>
+    (snapshot?.teams ?? []).some((team) => team.leadId === session.id);
+  // The session in front when it leads; a member's lead, and the main
+  // agent for a session it tracks, so opening a thread from the list keeps
+  // the list beside it; at Home, the main agent whichever session is in
+  // front. Elsewhere there is no Threads tab.
+  const memberOf =
+    activeSessionTeam?.role === "member"
+      ? agents.find(
+          (session) =>
+            session.id === activeSessionTeam.team.leadId && !session.archivedAt,
+        )
       : undefined;
+  const threadsLead =
+    activeSession && (isMainAgent || leadsTeam(activeSession))
+      ? activeSession
+      : (memberOf ??
+        (atHome || (activeSession && trackedByMain.has(activeSession.id))
+          ? homeMainAgent
+          : undefined));
   const threadInputs: ThreadInputs = {
     agents,
     teams: snapshot?.teams ?? [],
@@ -7803,89 +7864,69 @@ export function WorkspaceApp({
     now,
     tracks: snapshot?.tracks ?? [],
   };
-  // The main agent tracks sessions rather than leading a team: its pane
-  // lists what it tracks, or every session.
-  const homeRows = (filter: ThreadFilter) =>
-    threadsLead && homeWorkspace
-      ? homeThreadRows(threadsLead.id, homeWorkspace.id, filter, threadInputs)
-      : [];
-  const leadThreads = threadsLead
-    ? isMainAgent
-      ? homeRows(homeThreadFilter)
-      : threadRows(threadsLead.id, threadInputs)
-    : [];
-  const threadsPaneOpen = Boolean(
-    threadsLead && !hiddenThreadPanes.has(threadsLead.id),
+  // The main agent tracks sessions rather than leading a team: its list
+  // shows what it tracks, or every session.
+  const threadRowsOf = (lead: AgentSessionDto) =>
+    isMainAgentSession(lead) && homeWorkspace
+      ? homeThreadRows(
+          lead.id,
+          homeWorkspace.id,
+          homeThreadFilter,
+          threadInputs,
+        )
+      : threadRows(lead.id, threadInputs);
+  const threadsLeadName = (lead: AgentSessionDto) =>
+    isMainAgentSession(lead) ? "Main agent" : sessionName(lead);
+  const leadThreads = threadsLead ? threadRowsOf(threadsLead) : [];
+  const shownPanelTab: SidePanelTab =
+    panelTab === "threads" && !threadsLead ? "tasks" : panelTab;
+  const sidePanelTabs = SIDE_PANEL_TABS.filter(
+    ([tab]) => tab !== "threads" || threadsLead,
   );
   const threadsToggle = threadsLead ? (
     <ThreadsToggle
-      onToggle={() =>
-        setHiddenThreadPanes((current) => {
-          const next = new Set(current);
-          if (next.has(threadsLead.id)) next.delete(threadsLead.id);
-          else next.add(threadsLead.id);
-          return next;
-        })
+      onOpen={() => showPanelTab("threads")}
+      open={
+        workspacePanelVisible &&
+        !workspacePanelCollapsed &&
+        shownPanelTab === "threads"
       }
-      open={threadsPaneOpen}
       waiting={waitingCount(leadThreads)}
     />
   ) : null;
-  const threadsPane =
-    threadsLead && threadsPaneOpen ? (
+  /** The Threads list for a lead, in the side panel or in its own tab. */
+  const renderThreadsList = (
+    lead: AgentSessionDto,
+    { inTab, visible = true }: { inTab: boolean; visible?: boolean },
+  ) => {
+    const main = isMainAgentSession(lead);
+    return (
       <ThreadsPane
         client={client}
-        key={threadsLead.id}
-        lead={threadsLead}
+        key={lead.id}
+        lead={lead}
+        leadLabel={main ? "Main agent · Home" : `${sessionName(lead)}'s team`}
         now={now}
-        onOpenSession={(target) => showSession(target.id, target.workspaceId)}
-        onOpenThread={(threadId) =>
-          setOpenThreads((current) => {
-            const next = { ...current };
-            if (threadId) next[threadsLead.id] = threadId;
-            else delete next[threadsLead.id];
-            return next;
-          })
-        }
-        openThreadId={openThreads[threadsLead.id]}
-        renderTerminal={(thread) => (
-          <TerminalSurface
-            activity={activityById.get(thread.id)}
-            attention={attentionById.get(thread.id)}
-            fileLinks={fileLinksFrom([
-              thread.workingDirectory,
-              ...(snapshot?.worktrees ?? [])
-                .filter((item) => item.sessionId === thread.id)
-                .map((item) => item.path),
-            ])}
-            fitRevision={terminalFitRevision}
-            focused={false}
-            id={thread.id}
-            key={`thread:${thread.id}:${terminalMountRevision}`}
-            label={sessionName(thread)}
-            onClearAttention={() => void clearAttention(thread.id)}
-            onCopy={copyTerminalText}
-            onOpenLink={openTerminalLink}
-            session={thread}
-            status={thread.status}
-            target="agent"
-            terminalEndpoint={terminalEndpoint}
-          />
-        )}
-        rows={leadThreads}
+        onOpenThread={(target) => showSession(target.id, target.workspaceId)}
+        {...(inTab
+          ? {}
+          : {
+              onOpenAsTab: () =>
+                files.withEditor((handle) =>
+                  handle.openThreads(lead.id, threadsLeadName(lead)),
+                ),
+            })}
+        poll={visible}
+        rows={threadRowsOf(lead)}
         run={perform}
-        {...(isMainAgent
+        {...(main
           ? {
               filter: homeThreadFilter,
               onFilter: setHomeThreadFilter,
-              findRow: (threadId: string) =>
-                [...homeRows("tracked"), ...homeRows("all")].find(
-                  (row) => row.session.id === threadId,
-                ),
               onTrack: (sessionId: string, tracked: boolean) =>
                 void perform(
                   client.request.threadTrack({
-                    trackerId: threadsLead.id,
+                    trackerId: lead.id,
                     sessionId,
                     tracked,
                   }),
@@ -7893,12 +7934,13 @@ export function WorkspaceApp({
             }
           : {})}
         workspaceName={(id) =>
-          workspaceById.get(id ?? threadsLead.workspaceId)?.name ??
+          workspaceById.get(id ?? lead.workspaceId)?.name ??
           id ??
           "its lead's workspace"
         }
       />
-    ) : null;
+    );
+  };
 
   // The session tab shows whichever session the left column has open.
   const sessionPane = workspace ? (
@@ -7951,58 +7993,52 @@ export function WorkspaceApp({
         )}
       {activeSession ? (
         // The drawer sits over the terminal, below the bars above it, so
-        // their buttons stay in reach while it is open. A lead's Threads
-        // pane sits beside it.
-        <div
-          className={`terminal-with-threads${threadsPane ? " has-threads" : ""}`}
-        >
-          <div className="terminal-stage">
-            {(() => {
-              const signIn = signInBySession.get(activeSession.id);
-              return signIn && signIn.phase !== "pasting" ? (
-                <CloudSignInPanel
-                  busy={sessionActions.pending(`signin:${activeSession.id}`)}
-                  onDismiss={() => dismissCloudSignIn(activeSession.id)}
-                  onOpen={() =>
-                    signIn.requestId &&
-                    openCloudSignIn(signIn.requestId, activeSession.id)
-                  }
-                  signIn={signIn}
-                />
-              ) : null;
-            })()}
-            <TerminalSurface
-              activity={activityById.get(activeSession.id)}
-              attention={attentionById.get(activeSession.id)}
-              terminalEndpoint={terminalEndpoint}
-              focused={shouldFocusSession(focusedSessionId, activeSession.id)}
-              fitRevision={terminalFitRevision}
-              id={activeSession.id}
-              key={`${activeSession.id}:${terminalMountRevision}`}
-              label={sessionName(activeSession)}
-              locationLabel={
-                activeSessionRepository?.name ??
-                activeSessionWorkspace?.name ??
-                workspace.name
-              }
-              onClearAttention={() => void clearAttention(activeSession.id)}
-              onCopy={copyTerminalText}
-              onFocused={clearSessionFocusRequest}
-              onOpenLink={openTerminalLink}
-              fileLinks={fileLinksFrom([
-                activeSession.workingDirectory,
-                ...(snapshot?.worktrees ?? [])
-                  .filter((item) => item.sessionId === activeSession.id)
-                  .map((item) => item.path),
-              ])}
-              session={activeSession}
-              status={activeSession.status}
-              target="agent"
-              telemetry={activeSessionTelemetry}
-              worktree={activeSessionWorktree}
-            />
-          </div>
-          {threadsPane}
+        // their buttons stay in reach while it is open.
+        <div className="terminal-stage">
+          {(() => {
+            const signIn = signInBySession.get(activeSession.id);
+            return signIn && signIn.phase !== "pasting" ? (
+              <CloudSignInPanel
+                busy={sessionActions.pending(`signin:${activeSession.id}`)}
+                onDismiss={() => dismissCloudSignIn(activeSession.id)}
+                onOpen={() =>
+                  signIn.requestId &&
+                  openCloudSignIn(signIn.requestId, activeSession.id)
+                }
+                signIn={signIn}
+              />
+            ) : null;
+          })()}
+          <TerminalSurface
+            activity={activityById.get(activeSession.id)}
+            attention={attentionById.get(activeSession.id)}
+            terminalEndpoint={terminalEndpoint}
+            focused={shouldFocusSession(focusedSessionId, activeSession.id)}
+            fitRevision={terminalFitRevision}
+            id={activeSession.id}
+            key={`${activeSession.id}:${terminalMountRevision}`}
+            label={sessionName(activeSession)}
+            locationLabel={
+              activeSessionRepository?.name ??
+              activeSessionWorkspace?.name ??
+              workspace.name
+            }
+            onClearAttention={() => void clearAttention(activeSession.id)}
+            onCopy={copyTerminalText}
+            onFocused={clearSessionFocusRequest}
+            onOpenLink={openTerminalLink}
+            fileLinks={fileLinksFrom([
+              activeSession.workingDirectory,
+              ...(snapshot?.worktrees ?? [])
+                .filter((item) => item.sessionId === activeSession.id)
+                .map((item) => item.path),
+            ])}
+            session={activeSession}
+            status={activeSession.status}
+            target="agent"
+            telemetry={activeSessionTelemetry}
+            worktree={activeSessionWorktree}
+          />
         </div>
       ) : openingLaunch ? (
         <SessionOpening
@@ -8829,9 +8865,22 @@ export function WorkspaceApp({
                     }))}
                   />
                 )}
-                abilityTabName={(_kind, id) =>
-                  snapshot?.teams.find((team) => team.id === id)?.name
-                }
+                abilityTabName={(kind, id) => {
+                  if (kind === "team")
+                    return snapshot?.teams.find((team) => team.id === id)?.name;
+                  const lead = sessionsById.get(id);
+                  return lead ? threadsLeadName(lead) : undefined;
+                }}
+                renderThreads={(leadId, visible) => {
+                  const lead = sessionsById.get(leadId);
+                  return lead ? (
+                    renderThreadsList(lead, { inTab: true, visible })
+                  ) : (
+                    <div className="terminal-empty">
+                      <strong>This session no longer leads threads</strong>
+                    </div>
+                  );
+                }}
                 renderTeam={(teamId, visible) => (
                   <TeamPage
                     busy={busy}
@@ -8978,23 +9027,29 @@ export function WorkspaceApp({
                 onKeyDown={(event) => onTabListKeyDown(event)}
                 role="tablist"
               >
-                {SIDE_PANEL_TABS.map(([tab, label], index) => (
+                {sidePanelTabs.map(([tab, label], index) => (
                   <button
-                    aria-label={label}
-                    aria-selected={!workspacePanelCollapsed && panelTab === tab}
+                    aria-label={
+                      tab === "threads" && waitingCount(leadThreads) > 0
+                        ? `${label}, ${waitingCount(leadThreads)} waiting on you`
+                        : label
+                    }
+                    aria-selected={
+                      !workspacePanelCollapsed && shownPanelTab === tab
+                    }
                     className="side-panel-tab"
                     key={tab}
                     tabIndex={rovingTabIndex(
                       index,
                       workspacePanelCollapsed
                         ? -1
-                        : SIDE_PANEL_TABS.findIndex(
-                            ([item]) => item === panelTab,
+                        : sidePanelTabs.findIndex(
+                            ([item]) => item === shownPanelTab,
                           ),
                     )}
                     onClick={() => {
                       if (workspacePanelCollapsed) toggleBoardDetailPanel();
-                      else if (panelTab === tab) {
+                      else if (shownPanelTab === tab) {
                         toggleBoardDetailPanel();
                         return;
                       }
@@ -9008,10 +9063,21 @@ export function WorkspaceApp({
                     {tab === "tasks" && taskAttentionCount > 0 && (
                       <i aria-hidden="true" className="side-panel-tab-badge" />
                     )}
+                    {tab === "threads" && waitingCount(leadThreads) > 0 && (
+                      <i
+                        aria-hidden="true"
+                        className="side-panel-tab-badge threads-tab-badge"
+                      />
+                    )}
                   </button>
                 ))}
               </div>
-              {workspacePanelCollapsed ? null : panelTab === "files" ? (
+              {workspacePanelCollapsed ? null : shownPanelTab === "threads" &&
+                threadsLead ? (
+                <div className="side-panel-threads">
+                  {renderThreadsList(threadsLead, { inTab: false })}
+                </div>
+              ) : shownPanelTab === "files" ? (
                 !workspaceContent ||
                 workspaceContent.workspaceId !== workspace.id ? (
                   <div className="empty">Loading files…</div>
@@ -9029,7 +9095,7 @@ export function WorkspaceApp({
                     workspace={filesWorkspace!}
                   />
                 )
-              ) : panelTab === "git" ? (
+              ) : shownPanelTab === "git" ? (
                 <>
                   <div className="section-heading">
                     <h2>Repositories</h2>

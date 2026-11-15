@@ -10,7 +10,7 @@ export const THREAD_TITLE_MAX = 120;
 
 /**
  * Threads: the sessions the main agent tracks, or a lead's team members, as
- * the Threads pane shows them; the threads either suggests for the user to
+ * the Threads tab shows them; the threads either suggests for the user to
  * start; and marking one resolved.
  */
 export class ThreadService {
@@ -24,7 +24,7 @@ export class ThreadService {
 
   /**
    * Saves a thread the lead suggests. Nothing starts until the user presses
-   * Start in the Threads pane.
+   * Start in the Threads tab.
    */
   async suggest(input: {
     lead: string;

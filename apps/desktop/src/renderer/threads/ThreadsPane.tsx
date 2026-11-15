@@ -13,34 +13,31 @@ import {
   type ThreadRow,
 } from "./thread-groups";
 
-/** How often an open pane asks for new suggestions; they move without the snapshot. */
+/** How often a shown list asks for new suggestions; they move without the snapshot. */
 const SUGGESTIONS_MS = 4_000;
 
 /**
- * The header button that shows or hides the Threads pane, with a dot while
- * a thread waits on the user.
+ * The bar button that opens the side panel on its Threads tab, with a dot
+ * while a thread waits on the user.
  */
 export function ThreadsToggle({
   open,
   waiting,
-  onToggle,
+  onOpen,
 }: {
+  /** Whether the side panel shows the Threads tab now. */
   open: boolean;
   waiting: number;
-  onToggle: () => void;
+  onOpen: () => void;
 }) {
   return (
     <button
       aria-label={
-        waiting
-          ? `Threads, ${waiting} waiting on you`
-          : open
-            ? "Hide threads"
-            : "Show threads"
+        waiting ? `Threads, ${waiting} waiting on you` : "Show threads"
       }
       aria-pressed={open}
       className="threads-toggle"
-      onClick={onToggle}
+      onClick={onOpen}
       type="button"
     >
       Threads
@@ -120,32 +117,32 @@ function FilterSwitch({
 }
 
 /**
- * Beside a lead's terminal: its threads grouped by what they need, the
- * threads it suggests, and one thread opened in place. At Home the main
- * agent's pane switches between what it tracks and every session, and each
- * row can be tracked or stop being tracked.
+ * A lead's threads, in the side panel's Threads tab or in a tab of their
+ * own: grouped by what they need, with the threads it suggests on top.
+ * Clicking a row opens that session as a normal session tab. At Home the
+ * main agent's list switches between what it tracks and every session, and
+ * each row can be tracked or stop being tracked.
  */
 export function ThreadsPane({
   client,
   lead,
+  leadLabel,
   rows,
-  findRow,
   now,
   run,
   workspaceName,
   filter,
   onFilter,
   onTrack,
-  openThreadId,
   onOpenThread,
-  onOpenSession,
-  renderTerminal,
+  onOpenAsTab,
+  poll = true,
 }: {
   client: DesktopClient;
   lead: AgentSessionDto;
+  /** Whose threads these are, under the heading: "Main agent", a lead's name. */
+  leadLabel?: string;
   rows: readonly ThreadRow[];
-  /** Finds an open thread the filter leaves out, so it stays open. */
-  findRow?: (sessionId: string) => ThreadRow | undefined;
   now: number;
   /** Home only: what the pane lists, and switching it. */
   filter?: ThreadFilter;
@@ -155,11 +152,12 @@ export function ThreadsPane({
   run: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
   /** A workspace's name by id, for a suggestion's row. */
   workspaceName: (id: string | null) => string;
-  openThreadId: string | undefined;
-  onOpenThread: (sessionId: string | undefined) => void;
-  /** Opens the thread's own session in the center. */
-  onOpenSession: (session: AgentSessionDto) => void;
-  renderTerminal: (session: AgentSessionDto) => ReactNode;
+  /** Opens the thread's own session as a session tab. */
+  onOpenThread: (session: AgentSessionDto) => void;
+  /** The side panel only: the same list as an editor tab. */
+  onOpenAsTab?: () => void;
+  /** Whether to ask for suggestions; off while a tab is out of sight. */
+  poll?: boolean;
 }) {
   const [folded, setFolded] = useState<ReadonlySet<ThreadGroup>>(
     () => new Set<ThreadGroup>(["resolved"]),
@@ -179,10 +177,11 @@ export function ThreadsPane({
     }
   }, [client, lead.id]);
   useEffect(() => {
+    if (!poll) return;
     void loadSuggestions();
     const timer = setInterval(() => void loadSuggestions(), SUGGESTIONS_MS);
     return () => clearInterval(timer);
-  }, [loadSuggestions]);
+  }, [loadSuggestions, poll]);
 
   const start = async (ids: readonly number[]) => {
     setStarting((current) => new Set([...current, ...ids]));
@@ -204,36 +203,32 @@ export function ThreadsPane({
     await loadSuggestions();
   };
 
-  const opened = openThreadId
-    ? (rows.find((row) => row.session.id === openThreadId) ??
-      findRow?.(openThreadId))
-    : undefined;
-  if (opened)
-    return (
-      <aside aria-label="Threads" className="threads-pane">
-        <OpenThread
-          client={client}
-          onBack={() => onOpenThread(undefined)}
-          onOpenSession={onOpenSession}
-          {...(onTrack ? { onTrack } : {})}
-          renderTerminal={renderTerminal}
-          row={opened}
-          run={run}
-        />
-      </aside>
-    );
-
   return (
-    <aside aria-label="Threads" className="threads-pane">
+    <section aria-label="Threads" className="threads-pane">
       <div className="threads-head">
         <h2>Threads</h2>
         <span className="threads-count">
           {rows.filter((row) => row.group !== "resolved").length} open
         </span>
-        {filter && onFilter && (
-          <FilterSwitch filter={filter} onFilter={onFilter} />
+        {onOpenAsTab && (
+          <button
+            className="threads-link threads-open-tab"
+            onClick={onOpenAsTab}
+            title="Open the threads as a tab you can move and split"
+            type="button"
+          >
+            Open as tab
+          </button>
         )}
       </div>
+      {(leadLabel || (filter && onFilter)) && (
+        <div className="threads-subhead">
+          {leadLabel && <span className="threads-where">{leadLabel}</span>}
+          {filter && onFilter && (
+            <FilterSwitch filter={filter} onFilter={onFilter} />
+          )}
+        </div>
+      )}
       <div className="threads-list">
         {suggestions.length > 0 && (
           <section aria-label="Suggested threads" className="threads-suggested">
@@ -271,7 +266,7 @@ export function ThreadsPane({
             ))}
             {suggestions.length > 1 && (
               <button
-                className="threads-button"
+                className="threads-link threads-start-all"
                 disabled={starting.size > 0}
                 onClick={() => void start(suggestions.map((item) => item.id))}
                 type="button"
@@ -326,7 +321,8 @@ export function ThreadsPane({
                   <div className="threads-row-item" key={row.session.id}>
                     <button
                       className="threads-row"
-                      onClick={() => onOpenThread(row.session.id)}
+                      onClick={() => onOpenThread(row.session)}
+                      title={`Open ${row.title}`}
                       type="button"
                     >
                       <StateDot row={row} />
@@ -354,103 +350,6 @@ export function ThreadsPane({
           );
         })}
       </div>
-    </aside>
-  );
-}
-
-/**
- * One thread in the pane: what it asks, its terminal, Open in full and Stop;
- * at Home, Track or Stop tracking, elsewhere Mark done.
- */
-function OpenThread({
-  client,
-  row,
-  run,
-  onBack,
-  onOpenSession,
-  onTrack,
-  renderTerminal,
-}: {
-  client: DesktopClient;
-  row: ThreadRow;
-  run: <T>(operation: Promise<RpcResult<T>>) => Promise<T | undefined>;
-  onBack: () => void;
-  onOpenSession: (session: AgentSessionDto) => void;
-  onTrack?: (sessionId: string, tracked: boolean) => void;
-  renderTerminal: (session: AgentSessionDto) => ReactNode;
-}) {
-  const { session } = row;
-  const live = session.status === "running" || session.status === "starting";
-  return (
-    <div className="threads-open">
-      <div className="threads-open-head">
-        <button className="threads-link" onClick={onBack} type="button">
-          ← Threads
-        </button>
-        <span className="threads-open-title" title={row.title}>
-          {row.title}
-        </span>
-        <span className="threads-where">{row.workspaceName}</span>
-      </div>
-      <div className="threads-open-actions">
-        {onTrack && (
-          <button
-            className="threads-link"
-            onClick={() => onTrack(session.id, !row.tracked)}
-            type="button"
-          >
-            {row.tracked ? "Stop tracking" : "Track"}
-          </button>
-        )}
-        <button
-          className="threads-link"
-          onClick={() => onOpenSession(session)}
-          type="button"
-        >
-          Open in full
-        </button>
-        {!onTrack && (
-          <button
-            className="threads-link"
-            onClick={() =>
-              void run(
-                client.request.threadResolve({
-                  sessionId: session.id,
-                  resolved: !session.resolvedAt,
-                }),
-              )
-            }
-            type="button"
-          >
-            {session.resolvedAt ? "Reopen" : "Mark done"}
-          </button>
-        )}
-        {live && (
-          <button
-            className="threads-link threads-stop"
-            onClick={() =>
-              void run(
-                client.request.agentStop({ id: session.id, force: false }),
-              )
-            }
-            type="button"
-          >
-            Stop
-          </button>
-        )}
-      </div>
-      {row.group === "waiting" && (
-        <div className="threads-asks" role="status">
-          <strong>{row.failed ? "It failed" : "It waits on you"}</strong>
-          <span>{row.detail}</span>
-          {!row.failed && (
-            <span className="threads-asks-hint">
-              Answer or approve it in its terminal below.
-            </span>
-          )}
-        </div>
-      )}
-      <div className="threads-terminal">{renderTerminal(session)}</div>
-    </div>
+    </section>
   );
 }

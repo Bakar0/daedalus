@@ -10,7 +10,7 @@ import type {
 } from "@daedalus/protocol";
 
 /**
- * The Threads pane's groups, in the order it shows them. A thread is in
+ * The Threads list's groups, in the order it shows them. A thread is in
  * exactly one: the first of these rules that holds, with Resolved first so a
  * finished thread never asks for anything again.
  */
@@ -48,7 +48,7 @@ export interface ThreadRow {
   tracked?: boolean;
 }
 
-/** What the main agent's Threads pane lists. */
+/** What the main agent's Threads list shows. */
 export type ThreadFilter = "tracked" | "all";
 
 export interface ThreadInputs {
@@ -296,4 +296,51 @@ export function homeThreadRows(
 /** How many threads wait on the user: the Threads button's dot. */
 export function waitingCount(rows: readonly ThreadRow[]): number {
   return rows.filter((row) => row.group === "waiting").length;
+}
+
+/** A thread action in a session's menu. */
+export type ThreadMenuItem =
+  | { id: "track"; label: string; tracked: boolean }
+  | { id: "thread-done"; label: string; resolved: boolean }
+  | { id: "stop"; label: string };
+
+/**
+ * What a session's menu offers about threads, now that a thread opens as
+ * its own tab: Track or Stop tracking for any session the main agent can
+ * track, and Mark done (or Reopen) and Stop on a thread, tracked or a
+ * team's member.
+ */
+export function threadMenuItems(
+  session: AgentSessionDto,
+  context: {
+    /** The main agent, when Home has one. */
+    mainId: string | undefined;
+    homeWorkspaceId: string | undefined;
+    tracked: boolean;
+    member: boolean;
+  },
+): ThreadMenuItem[] {
+  const trackable =
+    Boolean(context.mainId) &&
+    !session.archivedAt &&
+    session.kind === "agent" &&
+    session.workspaceId !== context.homeWorkspaceId &&
+    session.id !== context.mainId;
+  const thread = context.tracked || context.member;
+  const live = session.status === "running" || session.status === "starting";
+  const items: ThreadMenuItem[] = [];
+  if (trackable)
+    items.push({
+      id: "track",
+      label: context.tracked ? "Stop tracking" : "Track in Home",
+      tracked: !context.tracked,
+    });
+  if (thread && !session.archivedAt)
+    items.push({
+      id: "thread-done",
+      label: session.resolvedAt ? "Reopen thread" : "Mark done",
+      resolved: !session.resolvedAt,
+    });
+  if (thread && live) items.push({ id: "stop", label: "Stop" });
+  return items;
 }

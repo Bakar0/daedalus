@@ -10,6 +10,7 @@ import {
   classifyThread,
   THREAD_IDLE_RESOLVE_MS,
   homeThreadRows,
+  threadMenuItems,
   threadRows,
   waitingCount,
   type ThreadInputs,
@@ -345,5 +346,66 @@ describe("thread groups", () => {
         }),
       ),
     ).toBe(0);
+  });
+});
+
+describe("threadMenuItems", () => {
+  const context = {
+    mainId: "main",
+    homeWorkspaceId: "home",
+    tracked: false,
+    member: false,
+  };
+  const ids = (items: ReturnType<typeof threadMenuItems>) =>
+    items.map((item) => item.label);
+
+  test("any session the main agent can track offers Track in Home, and nothing else", () => {
+    expect(
+      ids(threadMenuItems(session("a", { kind: "agent" }), context)),
+    ).toEqual(["Track in Home"]);
+  });
+
+  test("a tracked running session offers Stop tracking, Mark done and Stop", () => {
+    expect(
+      ids(
+        threadMenuItems(session("a", { kind: "agent", status: "running" }), {
+          ...context,
+          tracked: true,
+        }),
+      ),
+    ).toEqual(["Stop tracking", "Mark done", "Stop"]);
+  });
+
+  test("a resolved member that ended offers Reopen thread, and no Stop", () => {
+    expect(
+      ids(
+        threadMenuItems(
+          session("a", {
+            kind: "agent",
+            status: "exited",
+            resolvedAt: minutesAgo(1),
+          }),
+          { ...context, mainId: undefined, member: true },
+        ),
+      ),
+    ).toEqual(["Reopen thread"]);
+  });
+
+  test("the main agent, Home's sessions and archived ones are not trackable", () => {
+    expect(
+      threadMenuItems(session("main", { kind: "agent" }), context),
+    ).toEqual([]);
+    expect(
+      threadMenuItems(
+        session("b", { kind: "agent", workspaceId: "home" }),
+        context,
+      ),
+    ).toEqual([]);
+    expect(
+      threadMenuItems(
+        session("c", { kind: "agent", archivedAt: minutesAgo(1) }),
+        context,
+      ),
+    ).toEqual([]);
   });
 });

@@ -73,7 +73,7 @@ function addLead(
   return id;
 }
 
-test("thread suggest saves a suggestion for the lead's Threads pane", async () => {
+test("thread suggest saves a suggestion for the lead's Threads tab", async () => {
   await withTemporaryDaedalusHome(async (home) => {
     expect((await cli(home, ["workspace", "create", "Shop"])).exitCode).toBe(0);
     const lead = addLead(home);

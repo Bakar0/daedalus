@@ -206,7 +206,8 @@ export interface FilesEditorProps {
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
-  abilityTabName?(kind: "team", id: string): string | undefined;
+  renderThreads?(leadId: string, visible: boolean): React.ReactNode;
+  abilityTabName?(kind: "team" | "threads", id: string): string | undefined;
   onNewTerminal?(): void;
   onTerminalTabClosed?(terminalId: string): void;
   onOpenExternal?(url: string): void;

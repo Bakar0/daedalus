@@ -242,7 +242,7 @@ export async function planCommand(
     );
     const task = findPlanTask(plan, parsed.positionals[1]!);
     // An agent that asks the plan is waiting on the user's answer, so its
-    // card, its lead and the Threads pane show it waiting, not done.
+    // card, its lead and the Threads tab show it waiting, not done.
     const session = await caller();
     if (session)
       await context.activity.raise({

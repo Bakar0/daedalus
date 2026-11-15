@@ -31,13 +31,13 @@ workspace that is not archived, with the tracked ones marked.
 'say' delivers the text in full to a tracked session, with a line saying its
 turn-end reply comes back to the tracker.
 The tracker is the calling session unless --tracker names one.
-'suggest' lists work under Suggested threads in the Threads pane, with Start
+'suggest' lists work under Suggested threads in the Threads tab, with Start
 and Start all; nothing runs until the user starts it. The main agent's
 suggestion starts as a session it tracks, so it needs --workspace; another
 lead's joins its team, in --workspace or the lead's own. --message is the
 instructions (the title when left out). The lead is the calling session
 unless --lead names one.
-'start' and 'dismiss' do what the pane's buttons do.
+'start' and 'dismiss' do what the Threads tab's links do.
 'done' marks a thread resolved: it folds under Resolved, stops reporting to
 its tracker and stops counting against a lead's 5 members. It keeps running
 until stopped or archived. 'reopen' takes the mark off.`;
@@ -214,7 +214,7 @@ export async function threadCommand(
     });
     printResult(suggestion, json, () =>
       console.log(
-        `Suggested thread ${suggestion.id}: ${suggestion.title}. The user starts it from the Threads pane.`,
+        `Suggested thread ${suggestion.id}: ${suggestion.title}. The user starts it from the Threads tab.`,
       ),
     );
     return 0;

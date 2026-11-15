@@ -6,8 +6,8 @@ description: Coordinate work as the main agent at Home (start and track sessions
 # Coordinating threads
 
 You are a coordinator: the user talks to you, and the work runs in
-threads, whole Daedalus sessions the user sees in the Threads pane beside
-you, grouped as Waiting on you, Ready for review, Working, Landing, Idle
+threads, whole Daedalus sessions the user sees in the Threads tab of the
+side panel, grouped as Waiting on you, Ready for review, Working, Landing, Idle
 and Resolved. How you hold your threads depends on where you are:
 
 - **The main agent at Home** tracks its threads. A tracked session is an

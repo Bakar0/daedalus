@@ -39,23 +39,22 @@ const rows = [
 ];
 
 const pane = (
-  openThreadId?: string,
   home?: Pick<
     Parameters<typeof ThreadsPane>[0],
     "filter" | "onFilter" | "onTrack"
   >,
   shown: readonly ThreadRow[] = rows,
+  options: { onOpenAsTab?: () => void } = {},
 ) =>
   renderToStaticMarkup(
     <ThreadsPane
       {...home}
+      {...options}
       client={{} as DesktopClient}
       lead={session("lead", { name: "Main agent", teamId: null })}
       now={now}
-      onOpenSession={() => {}}
       onOpenThread={() => {}}
-      openThreadId={openThreadId}
-      renderTerminal={(thread) => <div>terminal of {thread.id}</div>}
+      poll={false}
       rows={shown}
       run={async () => undefined}
       workspaceName={(id) => id ?? "here"}
@@ -77,20 +76,26 @@ describe("Threads pane", () => {
     expect(html).toContain("2 open");
   });
 
-  test("an open thread shows what it asks, its terminal and Stop, and no second message box", () => {
-    const html = pane("Cart storage");
-    expect(html).toContain("← Threads");
-    expect(html).toContain("It waits on you");
-    expect(html).toContain("terminal of Cart storage");
-    expect(html).not.toContain("Message this thread directly");
-    expect(html).toContain(">Stop<");
-    expect(html).toContain("Mark done");
-    // A lead's pane has no filter and no tracking.
+  test("rows open their session; no thread opens in place, with no terminal of its own", () => {
+    const html = pane();
+    expect(html).toContain('title="Open Cart storage"');
+    expect(html).not.toContain("← Threads");
+    expect(html).not.toContain("terminal of");
+    expect(html).not.toContain("Open in full");
+    // A lead's list has no filter and no tracking.
     expect(html).not.toContain("Stop tracking");
-    expect(pane()).not.toContain("Tracked");
+    expect(html).not.toContain("Tracked");
   });
 
-  test("at Home: Tracked / All, a Track link on each row, and Track in the open thread", () => {
+  test("Open as tab is offered in the side panel, as a text link, and not in the tab", () => {
+    const panel = pane(undefined, rows, { onOpenAsTab: () => {} });
+    expect(panel).toContain(
+      'class="threads-link threads-open-tab" title="Open the threads as a tab you can move and split" type="button">Open as tab<',
+    );
+    expect(pane()).not.toContain("Open as tab");
+  });
+
+  test("at Home: Tracked / All and a Track link on each row", () => {
     const home = {
       filter: "all" as const,
       onFilter: () => {},
@@ -100,7 +105,7 @@ describe("Threads pane", () => {
       ...each,
       tracked: index === 0,
     }));
-    const html = pane(undefined, home, tracked);
+    const html = pane(home, tracked);
     expect(html).toContain('aria-pressed="false"');
     expect(html).toContain(">Tracked<");
     expect(html).toContain(
@@ -113,20 +118,14 @@ describe("Threads pane", () => {
     // No filled buttons: every one is a text link.
     expect(html).not.toContain("threads-button");
 
-    const open = pane("Cart storage", home, tracked);
-    expect(open).toContain(">Track<");
-    expect(open).toContain("Open in full");
-    expect(open).toContain(">Stop<");
-    expect(open).not.toContain("Mark done");
-
-    const empty = pane(undefined, { ...home, filter: "tracked" }, []);
+    const empty = pane({ ...home, filter: "tracked" }, []);
     expect(empty).toContain("The main agent is not tracking anything");
   });
 
   test("the Threads button has a dot only while something waits on you", () => {
     const toggle = (waiting: number) =>
       renderToStaticMarkup(
-        <ThreadsToggle onToggle={() => {}} open waiting={waiting} />,
+        <ThreadsToggle onOpen={() => {}} open waiting={waiting} />,
       );
     expect(toggle(1)).toContain("threads-dot");
     expect(toggle(1)).toContain("1 waiting on you");
