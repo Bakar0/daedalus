@@ -1231,15 +1231,21 @@ export function buildAgentPrompt(input: {
    * `draft-brief` asks for the brief to be written back, not the work done.
    * `continue` starts a session that picks up where an earlier one stopped,
    * in the same working directory and in the same state: waiting on the user
-   * if it was, working if it was. `note` says whether it left one.
+   * if it was, working if it was. `note` says whether it left one in
+   * `REBIRTH.md` in the working directory, or is the note's path when it
+   * left one elsewhere.
    */
   mode?: "execute" | "draft-brief" | "continue";
-  note?: boolean;
+  note?: boolean | string;
 }): string | undefined {
   if (input.mode === "continue") {
     const work = input.taskNumber ? `task #${input.taskNumber}` : "the work";
+    const where =
+      typeof input.note === "string"
+        ? input.note
+        : `${REBIRTH_FILE} in your working directory`;
     const source = input.note
-      ? `It left a note in ${REBIRTH_FILE} in your working directory. Read that first, then check the worktree's actual state with git before relying on it.`
+      ? `It left a note in ${where}. Read that first, then check the worktree's actual state with git before relying on it.`
       : "It left no note, so rebuild the picture from the task brief, JOURNAL.md and the worktree's git state and history.";
     return [
       `Continue ${work}. An earlier session worked on it in this same working directory and was reborn as you because its context was full. ${source} Pick up in the state it stopped in. If it was waiting for the user, show the user the same question or plan again, run \`daedal attention\` with it, and wait for their answer. If it was in the middle of work, carry on from its next step. Instructions from the user in the note come first. Do not redo finished work.`,

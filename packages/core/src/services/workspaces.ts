@@ -225,10 +225,11 @@ export class WorkspaceService {
   }
 
   /**
-   * The hidden row the main agent at Home runs in, made on first use. Its
-   * folder is `.home` under the workspaces root rather than the root itself:
-   * a CLAUDE.md or AGENTS.md written at the root would be read by every
-   * session in every workspace below it.
+   * The hidden row that owns the main agent at Home, made on first use. The
+   * agent itself runs at the Daedalus home; the row's folder, `.home` under
+   * the workspaces root, holds its memory and the generated workspace files,
+   * never the home or the workspaces root: a CLAUDE.md or AGENTS.md written
+   * at either would be read by every session in every workspace below it.
    */
   async ensureHome(): Promise<Workspace> {
     const existing = this.repositories.findHomeWorkspace();

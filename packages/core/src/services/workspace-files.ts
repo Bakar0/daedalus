@@ -286,7 +286,9 @@ export class WorkspaceFiles {
     return entries
       .filter(
         (entry) =>
-          entry.name !== ".git" && (relativePath || entry.name !== ".daedalus"),
+          entry.name !== ".git" &&
+          ((relativePath && workspace.kind !== "home") ||
+            entry.name !== ".daedalus"),
       )
       .map((entry) => {
         const path = join(relativePath, entry.name);
@@ -425,7 +427,13 @@ export class WorkspaceFiles {
       workspace,
       input.path,
     );
-    if (relativePath.split(/[\\/]/)[0] === "repos")
+    const inRepos = (path: string) => path.split(/[\\/]/)[0] === "repos";
+    if (
+      (!isAbsolute(input.path) && inRepos(relativePath)) ||
+      (workspace.kind === "home" &&
+        !isAbsolute(input.path) &&
+        inRepos(this.workspaceAt(target)?.relativePath ?? ""))
+    )
       throw new DaedalusError(
         "CONFLICT",
         "Workspace repository references are read-only; edit a session worktree instead",
@@ -480,7 +488,7 @@ export class WorkspaceFiles {
       workspace,
       input.parentPath ?? "",
     );
-    this.assertWritable(parent.relativePath);
+    this.assertWritable(parent.relativePath, workspace);
     if (!(await lstat(parent.target)).isDirectory())
       throw new DaedalusError("VALIDATION", "New entries require a folder");
     const path = join(parent.relativePath, name);
@@ -581,7 +589,7 @@ export class WorkspaceFiles {
       workspace,
       input.destinationPath,
     );
-    this.assertWritable(folder.relativePath);
+    this.assertWritable(folder.relativePath, workspace);
     if (!(await lstat(folder.target)).isDirectory())
       throw new DaedalusError(
         "VALIDATION",
@@ -813,7 +821,7 @@ export class WorkspaceFiles {
       workspace,
       input.destinationPath,
     );
-    this.assertWritable(folder.relativePath);
+    this.assertWritable(folder.relativePath, workspace);
     if (!(await lstat(folder.target)).isDirectory())
       throw new DaedalusError(
         "VALIDATION",
@@ -875,7 +883,71 @@ export class WorkspaceFiles {
     relativePath: string;
     target: string;
   }): { code: "VALIDATION" | "CONFLICT"; message: string } | undefined {
+    if (input.workspaceId === this.repositories.findHomeWorkspace()?.id)
+      return this.homeImmutableReason(input);
     return immutableReason(this.repositories, input);
+  }
+
+  /**
+   * The folder a workspace's files are listed and resolved under: its own
+   * folder, or at Home the whole Daedalus home, which the main agent runs in.
+   */
+  private root(workspace: Workspace): string {
+    return workspace.kind === "home" ? this.config.home : workspace.path;
+  }
+
+  /**
+   * The workspace a path at Home falls in, with the path relative to that
+   * workspace's folder, or undefined when it is in none.
+   */
+  private workspaceAt(
+    target: string,
+  ): { workspace: Workspace; relativePath: string } | undefined {
+    const workspace = this.repositories
+      .listWorkspaces()
+      .find(
+        (candidate) =>
+          candidate.kind !== "home" &&
+          (resolve(candidate.path) === resolve(target) ||
+            isPathInside(candidate.path, target)),
+      );
+    return workspace
+      ? { workspace, relativePath: relative(workspace.path, target) }
+      : undefined;
+  }
+
+  /**
+   * Home lists the whole Daedalus home. Its own top level (`workspaces/`,
+   * `repos/`, the database, accounts) and each workspace folder are
+   * Daedalus's, and inside a workspace the workspace's own rules hold.
+   */
+  private homeImmutableReason(input: {
+    relativePath: string;
+    target: string;
+  }): { code: "VALIDATION" | "CONFLICT"; message: string } | undefined {
+    const segments = input.relativePath.split(/[\\/]/);
+    if (input.relativePath === "" || segments.length === 1)
+      return {
+        code: "CONFLICT",
+        message: "Daedalus manages the top of its home folder",
+      };
+    if (segments[0] === "repos")
+      return {
+        code: "CONFLICT",
+        message: "Reference checkouts are read-only",
+      };
+    const inside = this.workspaceAt(input.target);
+    if (!inside) return undefined;
+    if (inside.relativePath === "")
+      return {
+        code: "CONFLICT",
+        message: "A workspace folder — archive the workspace instead",
+      };
+    return immutableReason(this.repositories, {
+      workspaceId: inside.workspace.id,
+      relativePath: inside.relativePath,
+      target: input.target,
+    });
   }
 
   private async describeEntry(
@@ -904,7 +976,22 @@ export class WorkspaceFiles {
    * checked again here because a service that trusts its caller is not a
    * guard — the RPC surface is reachable without the UI.
    */
-  private assertWritable(relativePath: string): void {
+  private assertWritable(relativePath: string, workspace?: Workspace): void {
+    if (workspace?.kind === "home") {
+      // Nothing is made at the top of the Daedalus home: a CLAUDE.md or
+      // AGENTS.md there would be read by every session in every workspace.
+      if (relativePath === "")
+        throw new DaedalusError(
+          "CONFLICT",
+          "Daedalus manages the top of its home folder",
+        );
+      const inside = this.workspaceAt(join(this.config.home, relativePath));
+      if (inside?.relativePath.split(/[\\/]/)[0] === "repos")
+        throw new DaedalusError(
+          "CONFLICT",
+          "Workspace repository references are managed and read-only",
+        );
+    }
     if (relativePath.split(/[\\/]/)[0] === "repos")
       throw new DaedalusError(
         "CONFLICT",
@@ -949,7 +1036,7 @@ export class WorkspaceFiles {
       workspace,
       dirname(requestedPath) === "." ? "" : dirname(requestedPath),
     );
-    this.assertWritable(parent.relativePath);
+    this.assertWritable(parent.relativePath, workspace);
     const name = basename(requestedPath);
     if (parent.relativePath === "" && name === ".daedalus")
       throw new DaedalusError(
@@ -1021,16 +1108,14 @@ export class WorkspaceFiles {
   ): Promise<{ target: string; relativePath: string }> {
     if (isAbsolute(requestedPath))
       throw new DaedalusError("VALIDATION", "Workspace paths must be relative");
-    const target = resolve(workspace.path, requestedPath || ".");
-    if (
-      target !== resolve(workspace.path) &&
-      !isPathInside(workspace.path, target)
-    )
+    const root = this.root(workspace);
+    const target = resolve(root, requestedPath || ".");
+    if (target !== resolve(root) && !isPathInside(root, target))
       throw new DaedalusError(
         "VALIDATION",
         "Workspace path escapes the workspace root",
       );
-    const relativePath = relative(workspace.path, target);
+    const relativePath = relative(root, target);
     if (
       relativePath
         .split(/[\\/]/)
@@ -1046,7 +1131,7 @@ export class WorkspaceFiles {
         `Workspace path '${requestedPath}' was not found`,
       );
     const [workspaceCanonical, targetCanonical] = await Promise.all([
-      canonicalPath(workspace.path),
+      canonicalPath(root),
       canonicalPath(target),
     ]);
     if (

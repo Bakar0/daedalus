@@ -1311,7 +1311,8 @@ export class AgentService {
      * take over its worktrees, and launch with the continuation prompt.
      */
     continueFrom?: AgentSession;
-    note?: boolean;
+    /** Whether a note was left, or where when it is not in the working directory. */
+    note?: boolean | string;
     /** Abilities the session holds from the start, such as `orchestration`. */
     abilities?: string[];
     color?: SessionColor;
@@ -1478,8 +1479,6 @@ export class AgentService {
                   repository.referencePath ?? repository.canonicalPath,
               ),
             ),
-            // The main agent at Home reads across every workspace.
-            ...(workspace.kind === "home" ? [this.config.workspaceRoot] : []),
           ],
         });
     const session: AgentSession = {
@@ -1814,6 +1813,13 @@ export class AgentService {
       rebirthRequestedAt: new Date().toISOString(),
     });
     let session: AgentSession;
+    // The main agent runs at the Daedalus home, where nothing is written, so
+    // its note goes in the Home folder and the successor is told the path.
+    const home = this.repositories.findHomeWorkspace();
+    const notePath =
+      home?.id === predecessor.workspaceId
+        ? join(home.path, REBIRTH_FILE)
+        : undefined;
     try {
       const note = input.note?.trim();
       if (note && predecessor.hostId) {
@@ -1831,7 +1837,7 @@ export class AgentService {
         ]);
       } else if (note)
         await writeFile(
-          join(predecessor.workingDirectory, REBIRTH_FILE),
+          notePath ?? join(predecessor.workingDirectory, REBIRTH_FILE),
           `${note}\n`,
           "utf8",
         );
@@ -1850,7 +1856,7 @@ export class AgentService {
         ...(input.account !== undefined ? { account: input.account } : {}),
         message: input.message,
         continueFrom: predecessor,
-        note: Boolean(note),
+        note: note ? (notePath ?? true) : false,
       });
     } catch (error) {
       // No successor, so the mark would claim a rebirth that is not

@@ -1,3 +1,5 @@
+import { Database } from "bun:sqlite";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
@@ -115,9 +117,14 @@ describe("Home", () => {
         path: join(context.config.workspaceRoot, ".home"),
       });
       expect(first.session.name).toBe("Main agent");
+      // It runs at the Daedalus home itself, not in a session folder.
+      expect(first.session.workingDirectory).toBe(context.config.home);
+      expect(tmux.launches[0]!.cwd).toBe(context.config.home);
       expect(
-        first.session.workingDirectory.startsWith(first.workspace.path),
-      ).toBe(true);
+        await Bun.file(
+          join(first.workspace.path, "worktrees", "unassigned"),
+        ).exists(),
+      ).toBe(false);
       // Its prompt is the coordinator's, with the memory file.
       const prompt = tmux.launches[0]!.args.at(-1)!;
       expect(prompt).toContain("Start one thread per piece of work");
@@ -125,16 +132,117 @@ describe("Home", () => {
       expect(prompt).toContain("daedal thread track <session>");
       expect(prompt).toContain("daedal attention");
       expect(prompt).toContain(join(first.workspace.path, "MEMORY.md"));
+      expect(prompt).toContain(
+        `You run at the Daedalus home, ${context.config.home}`,
+      );
+      expect(prompt).toContain("start a thread there for the change");
+      expect(prompt).toContain(
+        "Do not read accounts/, remote/, claude-settings/, inbox/ or the .db files",
+      );
+      expect(prompt).toContain("Never create CLAUDE.md or AGENTS.md");
+      expect(prompt).toContain(join(first.workspace.path, "REBIRTH.md"));
       expect(
         await Bun.file(join(first.workspace.path, "MEMORY.md")).exists(),
       ).toBe(true);
-      // Its launch reaches every workspace.
-      expect(tmux.launches[0]!.args).toContain(context.config.workspaceRoot);
 
       const again = await context.home.agent();
       expect(again.session.id).toBe(first.session.id);
       expect(tmux.launches).toHaveLength(1);
       expect(context.home.isHome(first.session)).toBe(true);
+    });
+  });
+
+  test("nothing Daedalus writes for Home lands at the top of its home", async () => {
+    await withHome(async ({ context, tmux }) => {
+      const before = await readdir(context.config.home);
+      const { session } = await context.home.agent();
+      await context.workspaceContent.get(HOME_WORKSPACE_ID);
+      await context.workspaces.ensureHome();
+      const { session: next } = await context.agents.continueSession({
+        id: session.id,
+        note: "# Rebirth\n\nGreet the user.",
+      });
+      const added = (await readdir(context.config.home)).filter(
+        (name) => !before.includes(name),
+      );
+      for (const name of ["CLAUDE.md", "AGENTS.md", "REBIRTH.md", "MEMORY.md"])
+        expect(added).not.toContain(name);
+      // The successor runs there too and finds its note in the Home folder.
+      const folder = context.home.workspace()!.path;
+      expect(next.workingDirectory).toBe(context.config.home);
+      expect(await Bun.file(join(folder, "REBIRTH.md")).text()).toBe(
+        "# Rebirth\n\nGreet the user.\n",
+      );
+      expect(tmux.launches.at(-1)!.args.at(-1)!).toContain(
+        `It left a note in ${join(folder, "REBIRTH.md")}.`,
+      );
+    });
+  });
+
+  test("a main agent started in its old folder keeps it; its successor moves to the home", async () => {
+    await withHome(async ({ context, tmux }) => {
+      const { session, workspace } = await context.home.agent();
+      const old = join(workspace.path, "worktrees", "unassigned", "claude-1");
+      await mkdir(old, { recursive: true });
+      // As an earlier build left it: in a session folder under `.home`.
+      const database = new Database(context.config.databasePath);
+      database
+        .query("UPDATE agent_sessions SET working_directory = ? WHERE id = ?")
+        .run(old, session.id);
+      database.close();
+      expect(context.home.current()!.workingDirectory).toBe(old);
+      const { session: next } = await context.agents.continueSession({
+        id: session.id,
+      });
+      expect(next.workingDirectory).toBe(context.config.home);
+      expect(tmux.launches.at(-1)!.cwd).toBe(context.config.home);
+      expect(context.home.current()!.id).toBe(next.id);
+    });
+  });
+
+  test("Home's files are the whole Daedalus home, its top level kept", async () => {
+    await withHome(async ({ context }) => {
+      await context.home.agent();
+      const top =
+        await context.workspaceContent.listDirectory(HOME_WORKSPACE_ID);
+      const workspacesEntry = top.find((entry) => entry.name === "workspaces");
+      expect(workspacesEntry).toMatchObject({ kind: "directory" });
+      expect(workspacesEntry!.mutable).toBe(false);
+      const checkout = await context.workspaceContent.readFile(
+        HOME_WORKSPACE_ID,
+        "workspaces/checkout/BRIEF.md",
+      );
+      expect(checkout.path).toBe("workspaces/checkout/BRIEF.md");
+      // Nothing is made at the top, and a workspace's own rules hold inside it.
+      await expect(
+        context.workspaceContent.createEntry({
+          workspace: HOME_WORKSPACE_ID,
+          name: "CLAUDE.md",
+          kind: "file",
+        }),
+      ).rejects.toThrow("top of its home folder");
+      const inCheckout = await context.workspaceContent.listDirectory(
+        HOME_WORKSPACE_ID,
+        "workspaces/checkout",
+      );
+      expect(
+        inCheckout.find((entry) => entry.name === "artifacts")!.mutable,
+      ).toBe(false);
+      expect(inCheckout.map((entry) => entry.name)).not.toContain(".daedalus");
+      const note = await context.workspaceContent.createEntry({
+        workspace: HOME_WORKSPACE_ID,
+        parentPath: "workspaces/checkout/artifacts",
+        name: "note.md",
+        kind: "file",
+      });
+      expect(note.path).toBe("workspaces/checkout/artifacts/note.md");
+      expect(note.mutable).toBe(true);
+      // Other workspaces still list their own folder.
+      expect(
+        (await context.workspaceContent.listDirectory("checkout")).map(
+          (entry) => entry.name,
+        ),
+      ).toContain("BRIEF.md");
     });
   });
 

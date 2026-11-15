@@ -1,9 +1,10 @@
+import { dirname, join } from "node:path";
 import type { DaedalusConfig } from "../config";
 import type { AgentSession, Workspace } from "../domain";
 import type { SqliteRepositories } from "../repositories";
 import { ORCHESTRATION_SKILL } from "./abilities";
 import { installedSkill } from "./installed-skills";
-import { buildSkillInvocation } from "./providers";
+import { buildSkillInvocation, REBIRTH_FILE } from "./providers";
 import type { WorkspaceService } from "./workspaces";
 
 /** The file at Home the main agent keeps the user's preferences in. */
@@ -11,11 +12,18 @@ export const HOME_MEMORY_FILE = "MEMORY.md";
 
 /**
  * What the main agent is told at launch: the coordinator's role, as Claude
- * Code Projects runs it. `{memory}` is the path of its memory file.
+ * Code Projects runs it. `memoryPath` is its memory file, in the Home folder;
+ * `daedalusHome` is the Daedalus home it runs in.
  */
-export function homeAgentPrompt(memoryPath: string): string {
+export function homeAgentPrompt(
+  memoryPath: string,
+  daedalusHome: string,
+): string {
+  const folder = dirname(memoryPath);
   return [
     "You are the main agent at Daedalus Home. You coordinate the user's work across all of their workspaces. Work runs in threads: ordinary Daedalus sessions in the user's workspaces that you track. They are in no team and have no handle; tracking only means their turns are reported to you.",
+    `- You run at the Daedalus home, ${daedalusHome}, and can read everything under it: workspaces/ (each workspace's BRIEF.md, JOURNAL.md, artifacts, plans and worktrees), repos/, instructions/ and workflows/. Do not edit files in a workspace yourself; start a thread there for the change. Do not read accounts/, remote/, claude-settings/, inbox/ or the .db files unless the user asks you to.`,
+    `- Never create CLAUDE.md or AGENTS.md in ${daedalusHome}: every session in every workspace below it would read them. Keep your own files in ${folder}; for a rebirth, write the note to ${join(folder, REBIRTH_FILE)}, not in your working directory.`,
     `- Read ${memoryPath} now. It holds what the user asked you to remember. When the user states a preference ("keep it to 3 running", "always use codex for docs"), save it there in one line, say "Saved to memory: ...", and follow it from then on.`,
     "- Answer quick questions yourself, here. Do not start a thread for a question you can answer from the CLI or a file.",
     '- Start one thread per piece of work: `daedal thread new --workspace <workspace> --name "<short name>" --message "<instructions>"`. It starts an ordinary session there and tracks it. Pick the workspace the work belongs to (`daedal workspace list`); never leave --workspace out. Then say which thread got what, one line each.',
@@ -32,8 +40,10 @@ export function homeAgentPrompt(memoryPath: string): string {
 
 /**
  * Home's main agent: one Claude session in the hidden Home workspace, made on
- * first use. It tracks its threads, ordinary sessions in any workspace; it
- * leads no team.
+ * first use. The row owns its sessions and the Home folder (`.home` under the
+ * workspaces root, with MEMORY.md); the session itself runs at the Daedalus
+ * home. It tracks its threads, ordinary sessions in any workspace; it leads
+ * no team.
  */
 export class HomeService {
   constructor(
@@ -133,7 +143,7 @@ export class HomeService {
       "claude",
       ORCHESTRATION_SKILL,
     );
-    const memory = `${workspace.path}/${HOME_MEMORY_FILE}`;
+    const memory = join(workspace.path, HOME_MEMORY_FILE);
     const file = Bun.file(memory);
     if (!(await file.exists()))
       await Bun.write(
@@ -146,7 +156,7 @@ export class HomeService {
       provider: "claude",
       message: [
         ...(skill ? [buildSkillInvocation("claude", skill)] : []),
-        homeAgentPrompt(memory),
+        homeAgentPrompt(memory, this.config.home),
       ].join("\n\n"),
     });
     return { workspace, session };
