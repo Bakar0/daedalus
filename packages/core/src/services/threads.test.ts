@@ -126,8 +126,12 @@ describe("Home", () => {
           join(first.workspace.path, "worktrees", "unassigned"),
         ).exists(),
       ).toBe(false);
-      // Its prompt is the coordinator's, with the memory file.
-      const prompt = tmux.launches[0]!.args.at(-1)!;
+      // Its role is in the system prompt, with the memory file, and there is
+      // no visible first message.
+      const args = tmux.launches[0]!.args;
+      const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+      expect(args.at(-1)).toBe("Main agent");
+      expect(args.join(" ")).not.toContain("/daedalus-orchestration");
       expect(prompt).toContain("Start one thread per piece of work");
       expect(prompt).toContain("daedal thread new --workspace");
       expect(prompt).toContain("daedal thread track <session>");

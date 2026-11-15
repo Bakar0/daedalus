@@ -2,17 +2,19 @@ import { dirname, join } from "node:path";
 import type { DaedalusConfig } from "../config";
 import type { AgentSession, Workspace } from "../domain";
 import type { SqliteRepositories } from "../repositories";
-import { ORCHESTRATION_SKILL } from "./abilities";
-import { installedSkill } from "./installed-skills";
-import { buildSkillInvocation, REBIRTH_FILE } from "./providers";
+import { REBIRTH_FILE } from "./providers";
 import type { WorkspaceService } from "./workspaces";
 
 /** The file at Home the main agent keeps the user's preferences in. */
 export const HOME_MEMORY_FILE = "MEMORY.md";
 
+/** The Home row's folder under the workspaces root. */
+const HOME_WORKSPACE_FOLDER = ".home";
+
 /**
- * What the main agent is told at launch: the coordinator's role, as Claude
- * Code Projects runs it. `memoryPath` is its memory file, in the Home folder;
+ * The main agent's system prompt, appended at every launch and resume of a
+ * session at the Daedalus home: the coordinator's role, as Claude Code
+ * Projects runs it. It is not a visible first message. `memoryPath` is its memory file, in the Home folder;
  * `daedalusHome` is the Daedalus home it runs in.
  */
 export function homeAgentPrompt(
@@ -25,7 +27,7 @@ export function homeAgentPrompt(
     `- You run at the Daedalus home, ${daedalusHome}, and can read everything under it: workspaces/ (each workspace's BRIEF.md, JOURNAL.md, artifacts, plans and worktrees), repos/, instructions/ and workflows/. Do not edit files in a workspace yourself; start a thread there for the change. Do not read accounts/, remote/, claude-settings/, inbox/ or the .db files unless the user asks you to.`,
     `- repos/ holds the repository library as bare mirrors named <id>.git: \`daedal repo library list\` maps ids to names and default branches, and \`git --git-dir ${daedalusHome}/repos/<id>.git show <branch>:<path>\` reads a file.`,
     `- Never create CLAUDE.md or AGENTS.md in ${daedalusHome}: every session in every workspace below it would read them. Keep your own files in ${folder}; for a rebirth, write the note to ${join(folder, REBIRTH_FILE)}, not in your working directory.`,
-    `- Read ${memoryPath} now. It holds what the user asked you to remember. When the user states a preference ("keep it to 3 running", "always use codex for docs"), save it there in one line, say "Saved to memory: ...", and follow it from then on.`,
+    `- At the start of a conversation, read ${memoryPath}. It holds what the user asked you to remember. When the user states a preference ("keep it to 3 running", "always use codex for docs"), save it there in one line, say "Saved to memory: ...", and follow it from then on.`,
     "- Answer quick questions yourself, here. Do not start a thread for a question you can answer from the CLI or a file.",
     '- Start one thread per piece of work: `daedal thread new --workspace <workspace> --name "<short name>" --message "<instructions>"`. It starts an ordinary session there and tracks it. Pick the workspace the work belongs to (`daedal workspace list`); never leave --workspace out. Then say which thread got what, one line each.',
     '- When the user points you at a session ("keep an eye on the stale-write session"), track it: `daedal thread track <session>`; find it with `daedal thread list --all`. When they tell you to stop, `daedal thread untrack <session>`; it keeps running.',
@@ -35,8 +37,16 @@ export function homeAgentPrompt(
     '- When you need the user to decide something, run `daedal attention "<the question>"` as well as asking it, and `daedal attention --clear` once answered. A question only in your reply shows as done, not waiting on the user.',
     "- When a thread's work is done and checked, mark it resolved: `daedal thread done <session>`. It stops reporting to you.",
     "- Do not use `daedal agent spawn --team`: you track sessions, you do not lead a team.",
-    "Follow the daedalus-orchestration skill. Then greet the user in one line and wait.",
+    "Follow the daedalus-orchestration skill.",
   ].join("\n");
+}
+
+/** The main agent's system prompt for a Daedalus home. */
+export function homeSystemPrompt(config: DaedalusConfig): string {
+  return homeAgentPrompt(
+    join(config.workspaceRoot, HOME_WORKSPACE_FOLDER, HOME_MEMORY_FILE),
+    config.home,
+  );
 }
 
 /**
@@ -139,11 +149,6 @@ export class HomeService {
           ? await this.sessions.restore(existing.id)
           : existing,
       };
-    const skill = await installedSkill(
-      this.config,
-      "claude",
-      ORCHESTRATION_SKILL,
-    );
     const memory = join(workspace.path, HOME_MEMORY_FILE);
     const file = Bun.file(memory);
     if (!(await file.exists()))
@@ -151,14 +156,12 @@ export class HomeService {
         memory,
         "# Main agent memory\n\nWhat the user asked the main agent to remember, one line each.\n",
       );
+    // No first message: the coordinator's role goes in the system prompt
+    // (`homeSystemPrompt`), so the conversation starts empty.
     const session = await this.sessions.spawn({
       workspace: workspace.id,
       name: "Main agent",
       provider: "claude",
-      message: [
-        ...(skill ? [buildSkillInvocation("claude", skill)] : []),
-        homeAgentPrompt(memory, this.config.home),
-      ].join("\n\n"),
     });
     return { workspace, session };
   }
