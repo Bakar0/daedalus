@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { AgentSession } from "../domain";
 import { findPlanTask } from "../domain/plans";
-import { PlanService, type PlanPorts } from "./plans";
+import {
+  planBoardRank,
+  PlanService,
+  sortPlanBoard,
+  type PlanPorts,
+} from "./plans";
 
 const FIXTURE = join(
   import.meta.dir,
@@ -58,7 +63,9 @@ beforeEach(async () => {
       path: join(root, "checkout"),
       defaultProvider: null,
     }),
-    workspaces: async () => [{ id: "w1", path: join(root, "checkout") }],
+    workspaces: async () => [
+      { id: "w1", name: "Checkout", path: join(root, "checkout") },
+    ],
     sessions: async () => sessions,
     activity: (id) => (id === "api-1" ? "working" : "idle"),
     needsAttention: (id) => id === "db-new",
@@ -212,5 +219,116 @@ describe("PlanService", () => {
         quote: "x",
       }),
     ).rejects.toThrow(/No session answers to @ui/);
+  });
+});
+
+describe("the side panel's plans", () => {
+  const plan = (title: string, tasks: string, owner?: string) =>
+    [
+      "---",
+      `plan: ${title}`,
+      ...(owner ? [`owner: ${owner}`] : []),
+      "---",
+      "",
+      `# ${title}`,
+      "",
+      "## Tasks",
+      "",
+      tasks,
+      "",
+    ].join("\n");
+
+  test("ranks plans that need the user, then unfinished, then done", () => {
+    const sorted = sortPlanBoard([
+      { title: "Done", done: 2, total: 2, questions: 0 },
+      { title: "beta", done: 0, total: 3, questions: 0 },
+      { title: "Empty", done: 0, total: 0, questions: 0 },
+      { title: "Asks", done: 2, total: 2, questions: 1 },
+      { title: "Alpha", done: 1, total: 3, questions: 0 },
+    ]);
+    expect(sorted.map((item) => item.title)).toEqual([
+      "Asks",
+      "Alpha",
+      "beta",
+      "Empty",
+      "Done",
+    ]);
+    expect(planBoardRank({ done: 0, total: 0, questions: 0 })).toBe(1);
+  });
+
+  test("a workspace's board is sorted, with the owner's live state", async () => {
+    const folder = join(root, "checkout", "plans");
+    await writeFile(
+      join(folder, "finished.plan.md"),
+      plan("Finished", "- [x] One\n- [x] Two"),
+    );
+    await writeFile(
+      join(folder, "started.plan.md"),
+      plan("Started", "- [/] One\n- [ ] Two", "api"),
+    );
+    const board = await service.board({ workspace: "checkout" });
+    expect(
+      board.map((item) => [item.title, item.done, item.total, item.questions]),
+    ).toEqual([
+      ["Cart API v2", 3, 9, 2],
+      ["Started", 0, 2, 0],
+      ["Finished", 2, 2, 0],
+    ]);
+    expect(board[1]!.ownerView).toMatchObject({
+      handle: "api",
+      sessionId: "api-1",
+      state: "working",
+    });
+    expect(board[2]!.ownerView).toBeNull();
+    // @checkout-lead is the "Checkout lead" session, which is idle.
+    expect(board[0]!.ownerView).toMatchObject({
+      sessionId: "lead",
+      state: "idle",
+    });
+  });
+
+  test("at Home: Home's own first, then each workspace by name, empty ones left out", async () => {
+    const workspaces = [
+      {
+        id: "w1",
+        slug: "checkout",
+        name: "Checkout",
+        path: join(root, "checkout"),
+      },
+      { id: "w2", slug: "api", name: "api", path: join(root, "api") },
+      { id: "w3", slug: "empty", name: "Empty", path: join(root, "empty") },
+    ];
+    await mkdir(join(root, "api", "plans"), { recursive: true });
+    await writeFile(
+      join(root, "api", "plans", "v3.plan.md"),
+      plan("API v3", "- [ ] One"),
+    );
+    const home = new PlanService({
+      ...(service as unknown as { ports: PlanPorts }).ports,
+      workspace: async (reference) => {
+        const found = workspaces.find(
+          (item) => item.id === reference || item.slug === reference,
+        );
+        if (!found) throw new Error(`no ${reference}`);
+        return { ...found, defaultProvider: null };
+      },
+      workspaces: async () => workspaces,
+    });
+    await home.create({ home: true }, { title: "Quarter" });
+    const groups = await home.boardEverywhere();
+    expect(
+      groups.map((group) => [
+        group.workspaceId,
+        group.name,
+        group.plans.map((item) => item.title),
+      ]),
+    ).toEqual([
+      [null, "Home", ["Quarter"]],
+      ["w2", "api", ["API v3"]],
+      ["w1", "Checkout", ["Cart API v2"]],
+    ]);
+    expect(groups[0]!.plans[0]!.absolutePath).toBe(
+      join(root, ".home", "plans", "quarter.plan.md"),
+    );
   });
 });

@@ -100,6 +100,8 @@ import { WORKFLOWS_SKILL } from "./SkillsPanel";
 import { WorkflowsEditor } from "./WorkflowsEditor";
 import { InstructionsEditor } from "./InstructionsEditor";
 import { InstructionsPane, useInstructionsSummary } from "./InstructionsPane";
+import { PlansPane, usePlanList } from "./PlansPane";
+import { createPlan } from "./files/plan-actions";
 import { accountModelKey } from "./account-models";
 import {
   accountCostLabel,
@@ -181,7 +183,12 @@ import { KeyHints, Tooltip } from "./keyboard-ui";
 import { CommandPalette, type PaletteRow } from "./palette/CommandPalette";
 import type { PaletteSearchSource } from "./palette/use-palette-search";
 import { ShortcutsSheet } from "./palette/ShortcutsSheet";
-import { loadRecent, recordRecent, saveRecent } from "./palette/palette-model";
+import {
+  loadRecent,
+  recordRecent,
+  saveRecent,
+  type PaletteScope,
+} from "./palette/palette-model";
 
 /** What the palette suggests when nothing is typed, as row keys. */
 const PALETTE_SUGGESTIONS = [
@@ -4100,6 +4107,16 @@ export function WorkspaceApp({
   const activeSession = openingLaunch
     ? undefined
     : sessions.find((item) => item.id === activeSessionId);
+  // The side panel's Plans, read only while the dock that shows them is.
+  // A cloud workspace's files are in its pod.
+  const planList = usePlanList(
+    client,
+    !workspacePanelCollapsed &&
+      activeSession?.kind === "agent" &&
+      workspace?.place !== "cloud"
+      ? workspace?.id
+      : undefined,
+  );
   // A session that was asked for a rebirth, by a click or by the automatic
   // sweep, is followed to its successor: the fresh session in the same
   // working directory that started after the request. Looked up across the
@@ -7124,6 +7141,7 @@ export function WorkspaceApp({
   const [palette, setPalette] = useState<{
     context: CommandContext;
     startInActions: boolean;
+    scope?: PaletteScope;
   }>();
   const [recentRows, setRecentRows] = useState(() => loadRecent());
   const [shortcutsAreas, setShortcutsAreas] =
@@ -7133,8 +7151,16 @@ export function WorkspaceApp({
     if (palette || modal || shortcutsAreas) setSwitcher(undefined);
   }, [palette, modal, shortcutsAreas]);
   // Kept as the palette's own context: it is what runs the rows.
-  const openPalette = (context: CommandContext, startInActions = false) =>
-    setPalette({ context: { ...context, source: "palette" }, startInActions });
+  const openPalette = (
+    context: CommandContext,
+    startInActions = false,
+    scope?: PaletteScope,
+  ) =>
+    setPalette({
+      context: { ...context, source: "palette" },
+      startInActions,
+      ...(scope ? { scope } : {}),
+    });
   useCommand("palette.open", { run: (context) => openPalette(context) });
   useCommand("help.shortcuts", {
     run: (context) => setShortcutsAreas(context.areas),
@@ -9173,6 +9199,24 @@ export function WorkspaceApp({
                         : undefined
                     }
                   />
+                  <PlansPane
+                    list={planList}
+                    onCreate={() => {
+                      if (!workspace) return;
+                      const target = workspace.id;
+                      void createPlan(client, target, setError).then((path) => {
+                        if (!path) return;
+                        openFileTarget({ workspaceId: target, path });
+                      });
+                    }}
+                    onOpen={() =>
+                      openPalette(focusContext("menu"), false, "plans")
+                    }
+                    onOpenPlan={(path) => {
+                      if (workspace)
+                        openFileTarget({ workspaceId: workspace.id, path });
+                    }}
+                  />
                   <InstructionsPane
                     onOpen={() =>
                       files.withEditor((handle) => handle.openInstructions())
@@ -10133,6 +10177,7 @@ export function WorkspaceApp({
             recent={recentRows}
             selectedKey={paletteShown.selectedKey}
             startInActions={palette.startInActions}
+            {...(palette.scope ? { initialScope: palette.scope } : {})}
             suggestions={PALETTE_SUGGESTIONS}
           />
         )}

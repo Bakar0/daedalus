@@ -545,6 +545,34 @@ export interface SearchPreviewDto {
   lines: string[];
 }
 
+/** A plan as the side panel's Plans section lists it. */
+export interface PlanListItemDto {
+  /** Relative to the file panel's root: the workspace, or at Home the Daedalus home. */
+  path: string;
+  title: string;
+  done: number;
+  total: number;
+  /** Open questions for the user. */
+  questions: number;
+  /** The plan's owner, live; null when it names none. */
+  owner: PlanOwnerDto | null;
+}
+
+export interface PlanListGroupDto {
+  /** Null for Home's own plans. */
+  workspaceId: string | null;
+  name: string;
+  /** Questions for the user first, then unfinished, then finished. */
+  plans: PlanListItemDto[];
+}
+
+export interface PlanListDto {
+  /** At Home: Home's own and every workspace's, in groups. */
+  home: boolean;
+  /** Only groups with plans; one group in a workspace. */
+  groups: PlanListGroupDto[];
+}
+
 export interface PlanViewDto {
   title: string | null;
   owner: string | null;
@@ -2269,6 +2297,11 @@ export interface DesktopRpcSchema {
         { workspace: string; path: string; text: string },
         PlanViewDto
       >;
+      /**
+       * The workspace's plans, or at Home every workspace's and Home's own,
+       * for the side panel.
+       */
+      planList: Request<{ workspace: string }, PlanListDto>;
       /** Writes `plans/<slug>.plan.md`; the path is workspace-relative. */
       planCreate: Request<
         { workspace: string; title: string },

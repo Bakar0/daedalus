@@ -20,6 +20,7 @@ import {
 import Markdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { DesktopClient } from "../client-types";
+import { OWNER_STATE_TEXT } from "./plan-owner";
 
 /**
  * A `.plan.md` file drawn as the document it describes: its markdown as
@@ -107,15 +108,6 @@ function StateMark({ state }: { state: PlanTaskStateDto }) {
     </svg>
   );
 }
-
-const OWNER_STATE_TEXT: Record<PlanOwnerDto["state"], string> = {
-  working: "working",
-  waiting: "waiting on you",
-  idle: "idle",
-  error: "stopped on an error",
-  stopped: "not running",
-  none: "no session",
-};
 
 function OwnerChip({ owner }: { owner: PlanOwnerDto }) {
   return (

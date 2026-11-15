@@ -110,6 +110,7 @@ export function CommandPalette({
   entries,
   selectedKey,
   startInActions = false,
+  initialScope = "all",
   recent,
   suggestions,
   boost,
@@ -125,6 +126,8 @@ export function CommandPalette({
   selectedKey?: string;
   /** Open on the selected row's Actions panel (⇧F10 on a board card). */
   startInActions?: boolean;
+  /** The scope chip it opens on (the side panel's Plans › Open opens Plans). */
+  initialScope?: PaletteScope;
   recent: readonly string[];
   suggestions: readonly string[];
   boost: readonly string[];
@@ -139,7 +142,7 @@ export function CommandPalette({
   useFocusScope(section);
   const listId = useId();
   const [query, setQuery] = useState("");
-  const [scope, setScope] = useState<PaletteScope>("all");
+  const [scope, setScope] = useState<PaletteScope>(initialScope);
   // The active row by its key, not its place: rows are rebuilt while the
   // palette is open (a session's status changes), and Enter must run the
   // row that is highlighted, wherever it moved.

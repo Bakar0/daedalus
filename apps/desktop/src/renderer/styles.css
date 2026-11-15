@@ -344,6 +344,7 @@ button:not(
   .skills-group-head,
   .skills-row-head,
   .plan-scroll button,
+  .plans-pane button,
   .palette button,
   .threads-pane button
 ) {
@@ -363,6 +364,7 @@ button:not(
     .skills-group-head,
     .skills-row-head,
     .plan-scroll button,
+    .plans-pane button,
     .palette button,
     .threads-pane button
   ):hover:not(:disabled) {
@@ -10102,6 +10104,91 @@ button.routine-tick:hover {
   padding: 3px 7px;
 }
 
+/* The plans, in the dock between the Workflow and Custom instructions
+   panes: text links and plain rows, no filled buttons. */
+.plans-pane {
+  --plan-done: var(--success);
+  --plan-doing: #8592ff;
+  --plan-todo: #6b7280;
+  --plan-risk: #f0a040;
+  --plan-bad: var(--danger);
+}
+.plans-pane-new {
+  flex: none;
+  font-size: 11px;
+  margin-right: 4px;
+  text-decoration: none;
+}
+.workflow-pane-empty .plans-pane-new {
+  font-size: inherit;
+  margin: 0;
+  text-decoration: underline;
+}
+.plans-pane-body {
+  max-height: 200px;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 6px 8px;
+}
+.plans-pane-group-name {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 6px 6px 2px;
+  text-transform: uppercase;
+}
+.plans-pane-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.plans-pane-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 12px;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 6px;
+  text-align: left;
+  width: 100%;
+}
+.plans-pane-row:hover {
+  background: var(--raised-hover);
+}
+.plans-pane-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plans-pane-asks {
+  color: var(--plan-risk);
+  flex: none;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.plans-pane-progress {
+  color: var(--muted);
+  flex: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.plans-pane-progress.done {
+  color: var(--plan-done);
+}
+.plans-pane-owner {
+  display: inline-flex;
+  flex: none;
+}
+
 /* The workflows editor, a center tab: files on the left, one file's text on the right. */
 .workflows-panel {
   overflow: hidden;
@@ -11117,7 +11204,7 @@ button.routine-tick:hover {
   padding: 16px 20px 40px;
   position: relative;
 }
-.app[data-theme="light"] .plan-scroll {
+.app[data-theme="light"] :is(.plan-scroll, .plans-pane) {
   --plan-doing: #5b63d6;
   --plan-todo: #9aa1ae;
   --plan-risk: #c46a06;

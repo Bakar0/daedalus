@@ -52,8 +52,11 @@ export interface PlanPorts {
     path: string;
     defaultProvider: "claude" | "codex" | null;
   }>;
-  /** Every workspace, to place an absolute path in one. */
-  workspaces(): Promise<{ id: string; path: string }[]>;
+  /**
+   * Every workspace, to place an absolute path in one and to list every
+   * workspace's plans at Home.
+   */
+  workspaces(): Promise<{ id: string; name: string; path: string }[]>;
   /** Sessions owners may name: one workspace's, or all for Home. */
   sessions(workspaceId: string | undefined): Promise<AgentSession[]>;
   activity(sessionId: string): AgentActivity | undefined;
@@ -96,6 +99,43 @@ export interface PlanSummary extends PlanFile {
   done: number;
   total: number;
   questions: number;
+}
+
+/** A plan as the side panel lists it: its summary and its owner's state. */
+export interface PlanBoardEntry extends PlanSummary {
+  /** The plan's own owner, live; null when the plan names none. */
+  ownerView: PlanOwnerView | null;
+}
+
+/** One workspace's plans at Home, or Home's own (`workspaceId` null). */
+export interface PlanBoardGroup {
+  workspaceId: string | null;
+  name: string;
+  plans: PlanBoardEntry[];
+}
+
+/**
+ * Where a plan sorts in the side panel: plans with questions for the user
+ * first, then the rest that are not finished, then the finished ones.
+ */
+export function planBoardRank(plan: {
+  done: number;
+  total: number;
+  questions: number;
+}): number {
+  if (plan.questions > 0) return 0;
+  return plan.total > 0 && plan.done === plan.total ? 2 : 1;
+}
+
+/** Sorted by rank, then by title; a new array. */
+export function sortPlanBoard<
+  T extends { title: string; done: number; total: number; questions: number },
+>(plans: readonly T[]): T[] {
+  return [...plans].sort(
+    (a, b) =>
+      planBoardRank(a) - planBoardRank(b) ||
+      a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+  );
 }
 
 export interface PlanOutline {
@@ -183,7 +223,10 @@ export class PlanService {
     const out: PlanSummary[] = [];
     for (const name of names.filter(isPlanPath).sort()) {
       const absolutePath = join(folder, name);
-      const plan = parsePlan(await readFile(absolutePath, "utf8"));
+      // A plan deleted or unreadable since the folder was read is skipped.
+      const source = await readFile(absolutePath, "utf8").catch(() => null);
+      if (source === null) continue;
+      const plan = parsePlan(source);
       out.push({
         ...this.file(scope, root, workspaceId, absolutePath),
         title: plan.title ?? name.slice(0, -PLAN_SUFFIX.length),
@@ -312,19 +355,65 @@ export class PlanService {
     if (plan.owner) handles.add(plan.owner);
     for (const task of planTasks(plan)) if (task.owner) handles.add(task.owner);
     const sessions = await this.ports.sessions(file.workspaceId ?? undefined);
-    return [...handles].map((handle) => {
-      const session = resolvePlanOwner(handle, sessions);
-      return {
-        handle,
-        sessionId: session?.id ?? null,
-        sessionName: session?.name ?? null,
-        state: planOwnerState(
-          session,
-          session ? this.ports.activity(session.id) : undefined,
-          session ? this.ports.needsAttention(session.id) : false,
-        ),
-      };
-    });
+    return [...handles].map((handle) => this.ownerView(handle, sessions));
+  }
+
+  private ownerView(handle: string, sessions: AgentSession[]): PlanOwnerView {
+    const session = resolvePlanOwner(handle, sessions);
+    return {
+      handle,
+      sessionId: session?.id ?? null,
+      sessionName: session?.name ?? null,
+      state: planOwnerState(
+        session,
+        session ? this.ports.activity(session.id) : undefined,
+        session ? this.ports.needsAttention(session.id) : false,
+      ),
+    };
+  }
+
+  /**
+   * A scope's plans for the side panel, sorted (`sortPlanBoard`), each with
+   * its owner's live state.
+   */
+  async board(scope: PlanScope): Promise<PlanBoardEntry[]> {
+    const plans = await this.list(scope);
+    const owned = plans.filter((plan) => plan.owner);
+    const sessions = owned.length
+      ? await this.ports.sessions(plans[0]!.workspaceId ?? undefined)
+      : [];
+    return sortPlanBoard(
+      plans.map((plan) => ({
+        ...plan,
+        ownerView: plan.owner ? this.ownerView(plan.owner, sessions) : null,
+      })),
+    );
+  }
+
+  /**
+   * Every plan, for Home: Home's own first, then each workspace's by
+   * workspace name. A scope without plans has no group.
+   */
+  async boardEverywhere(): Promise<PlanBoardGroup[]> {
+    const workspaces = [...(await this.ports.workspaces())]
+      .filter((item) => item.path !== this.homeRoot())
+      .sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+      );
+    const groups: PlanBoardGroup[] = [
+      {
+        workspaceId: null,
+        name: "Home",
+        plans: await this.board({ home: true }),
+      },
+    ];
+    for (const workspace of workspaces)
+      groups.push({
+        workspaceId: workspace.id,
+        name: workspace.name,
+        plans: await this.board({ workspace: workspace.id }),
+      });
+    return groups.filter((group) => group.plans.length > 0);
   }
 
   /**

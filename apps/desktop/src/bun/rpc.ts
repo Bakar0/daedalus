@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { extname, isAbsolute, join, relative } from "node:path";
+import { extname, isAbsolute, join, relative, sep } from "node:path";
 import packageJson from "../../../../package.json";
 import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
@@ -26,6 +26,7 @@ import {
   type CloudOverview,
   type IntegratedTerminal,
   type PendingNotification,
+  type PlanBoardEntry,
   type PresenceState,
   LiveContentSearch,
   type RepositoryLibraryEntry,
@@ -1435,6 +1436,51 @@ export function createDesktopRequestHandlers(
           hasTasksSection: plan.hasTasksSection,
           absolutePath: file.absolutePath,
           owners: await context.plans.owners(file, plan),
+        };
+      }),
+    planList: ({ workspace }) =>
+      result(async () => {
+        const item = (entry: PlanBoardEntry, path: string) => ({
+          path,
+          title: entry.title,
+          done: entry.done,
+          total: entry.total,
+          questions: entry.questions,
+          owner: entry.ownerView,
+        });
+        if (atHome(workspace)) {
+          // Paths are the Home file panel's: relative to the Daedalus home.
+          // A workspace kept outside the home has no path there to open.
+          const groups = (await context.plans.boardEverywhere()).map(
+            (group) => ({
+              workspaceId: group.workspaceId,
+              name: group.name,
+              plans: group.plans.flatMap((entry) => {
+                const path = relative(context.config.home, entry.absolutePath)
+                  .split(sep)
+                  .join("/");
+                return path.startsWith("../") ? [] : [item(entry, path)];
+              }),
+            }),
+          );
+          return {
+            home: true,
+            groups: groups.filter((group) => group.plans.length > 0),
+          };
+        }
+        const { name } = await context.workspaces.get(workspace);
+        const plans = await context.plans.board({ workspace });
+        return {
+          home: false,
+          groups: plans.length
+            ? [
+                {
+                  workspaceId: workspace,
+                  name,
+                  plans: plans.map((entry) => item(entry, entry.path)),
+                },
+              ]
+            : [],
         };
       }),
     planCreate: ({ workspace, title }) =>
