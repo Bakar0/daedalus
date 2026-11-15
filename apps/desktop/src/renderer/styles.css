@@ -337,17 +337,16 @@ textarea {
   resize: vertical;
 }
 
+/* The containers below sit in :where() so they add no weight: in :not() a
+   `.x button` would count as a class and an element and beat every
+   `.x button` rule that styles its own buttons. */
 button:not(
-  .workspace-item,
-  .quiet,
-  .danger-link,
-  .skills-group-head,
-  .skills-row-head,
-  .plan-scroll button,
-  .plans-pane button,
-  .palette button,
-  .threads-pane button
-) {
+    .workspace-item,
+    .quiet,
+    .danger-link,
+    .skills-group-head,
+    .skills-row-head
+  ):not(:where(.plan-scroll, .plans-pane, .palette, .threads-pane) button) {
   background: var(--accent);
   border: 0;
   border-radius: 8px;
@@ -362,11 +361,9 @@ button:not(
     .quiet,
     .danger-link,
     .skills-group-head,
-    .skills-row-head,
-    .plan-scroll button,
-    .plans-pane button,
-    .palette button,
-    .threads-pane button
+    .skills-row-head
+  ):not(
+    :where(.plan-scroll, .plans-pane, .palette, .threads-pane) button
   ):hover:not(:disabled) {
   background: var(--accent-hover);
 }

@@ -99,8 +99,14 @@ test("rendered blocks carry their source lines for Ask", () => {
 
 test("plan buttons are left out of the global blue button rule", () => {
   const css = readFileSync(join(import.meta.dir, "../styles.css"), "utf8");
-  const rules = css.match(/button:not\([^)]*\)/g) ?? [];
+  const rules = (css.match(/^button:not\([^{]*\{/gm) ?? []).filter((rule) =>
+    rule.includes(".workspace-item"),
+  );
   expect(rules.length).toBeGreaterThanOrEqual(2);
-  for (const rule of rules.filter((item) => item.includes(".workspace-item")))
-    expect(rule).toContain(".plan-scroll button");
+  for (const rule of rules) {
+    expect(rule).toMatch(/:where\([^)]*\.plan-scroll[^)]*\) button/);
+    // A `.x button` outside :where() raises the rule over every
+    // `.x button` rule, and Settings' sections turn blue.
+    expect(rule.replace(/:where\([^)]*\)/g, "")).not.toMatch(/\.[\w-]+ button/);
+  }
 });
