@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type {
   AgentSessionDto,
   RpcResult,
@@ -16,38 +16,8 @@ import {
 /** How often a shown list asks for new suggestions; they move without the snapshot. */
 const SUGGESTIONS_MS = 4_000;
 
-/**
- * The bar button that opens the side panel on its Threads tab, with a dot
- * while a thread waits on the user.
- */
-export function ThreadsToggle({
-  open,
-  waiting,
-  onOpen,
-}: {
-  /** Whether the side panel shows the Threads tab now. */
-  open: boolean;
-  waiting: number;
-  onOpen: () => void;
-}) {
-  return (
-    <button
-      aria-label={
-        waiting ? `Threads, ${waiting} waiting on you` : "Show threads"
-      }
-      aria-pressed={open}
-      className="threads-toggle"
-      onClick={onOpen}
-      type="button"
-    >
-      Threads
-      {waiting > 0 && <span aria-hidden="true" className="threads-dot" />}
-    </button>
-  );
-}
-
 /** The bar above the main agent's terminal at Home. */
-export function HomeBar({ children }: { children: ReactNode }) {
+export function HomeBar() {
   return (
     <section aria-label="Main agent" className="notice-bar home-bar">
       <div className="notice-bar-row">
@@ -55,7 +25,6 @@ export function HomeBar({ children }: { children: ReactNode }) {
           <strong>Main agent</strong> · Home · tracks what you ask, across your
           workspaces
         </span>
-        <span className="notice-bar-actions">{children}</span>
       </div>
     </section>
   );

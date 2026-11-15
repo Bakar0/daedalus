@@ -345,8 +345,7 @@ button:not(
   .skills-row-head,
   .plan-scroll button,
   .palette button,
-  .threads-pane button,
-  .threads-toggle
+  .threads-pane button
 ) {
   background: var(--accent);
   border: 0;
@@ -365,8 +364,7 @@ button:not(
     .skills-row-head,
     .plan-scroll button,
     .palette button,
-    .threads-pane button,
-    .threads-toggle
+    .threads-pane button
   ):hover:not(:disabled) {
   background: var(--accent-hover);
 }
@@ -11489,33 +11487,6 @@ button.routine-tick:hover {
 .home-bar strong {
   color: var(--text);
   font-weight: 600;
-}
-.threads-toggle {
-  background: transparent;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  color: var(--secondary);
-  font-size: 11px;
-  padding: 3px 9px;
-  position: relative;
-}
-.threads-toggle[aria-pressed="true"] {
-  border-color: var(--accent);
-  color: var(--text);
-}
-.threads-toggle:hover {
-  background: var(--raised-hover);
-  color: var(--text);
-}
-.threads-dot {
-  background: var(--thread-waiting);
-  border: 2px solid var(--center, var(--panel));
-  border-radius: 50%;
-  height: 9px;
-  position: absolute;
-  right: -4px;
-  top: -4px;
-  width: 9px;
 }
 /* The Threads list: the side panel's Threads tab, or a tab of its own. */
 .threads-pane {

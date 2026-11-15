@@ -211,12 +211,7 @@ const PALETTE_HIDDEN_COMMANDS = new Set<string>([
 ]);
 import { useCloudState } from "./CloudPanel";
 import { TeamBar, TeamPage } from "./teams/TeamPanel";
-import {
-  HomeBar,
-  ThreadsPane,
-  ThreadsToggle,
-  TrackedIcon,
-} from "./threads/ThreadsPane";
+import { HomeBar, ThreadsPane, TrackedIcon } from "./threads/ThreadsPane";
 import {
   homeThreadRows,
   threadMenuItems,
@@ -7883,17 +7878,6 @@ export function WorkspaceApp({
   const sidePanelTabs = SIDE_PANEL_TABS.filter(
     ([tab]) => tab !== "threads" || threadsLead,
   );
-  const threadsToggle = threadsLead ? (
-    <ThreadsToggle
-      onOpen={() => showPanelTab("threads")}
-      open={
-        workspacePanelVisible &&
-        !workspacePanelCollapsed &&
-        shownPanelTab === "threads"
-      }
-      waiting={waitingCount(leadThreads)}
-    />
-  ) : null;
   /** The Threads list for a lead, in the side panel or in its own tab. */
   const renderThreadsList = (
     lead: AgentSessionDto,
@@ -7945,12 +7929,9 @@ export function WorkspaceApp({
   // The session tab shows whichever session the left column has open.
   const sessionPane = workspace ? (
     <section className="terminal-column">
-      {isMainAgent && <HomeBar>{threadsToggle}</HomeBar>}
+      {isMainAgent && <HomeBar />}
       {activeSessionTeam && activeSession && !isMainAgent && (
         <TeamBar
-          actions={
-            activeSessionTeam.role === "lead" ? threadsToggle : undefined
-          }
           color={activeSession.color}
           handle={activeSessionTeam.handle}
           leadArchived={Boolean(

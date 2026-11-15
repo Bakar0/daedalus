@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import type { AgentSessionDto } from "@daedalus/protocol";
 import type { DesktopClient } from "../client-types";
-import { ThreadsPane, ThreadsToggle } from "./ThreadsPane";
+import { ThreadsPane } from "./ThreadsPane";
 import type { ThreadRow } from "./thread-groups";
 
 const now = Date.parse("2026-11-14T12:00:00Z");
@@ -120,15 +120,5 @@ describe("Threads pane", () => {
 
     const empty = pane({ ...home, filter: "tracked" }, []);
     expect(empty).toContain("The main agent is not tracking anything");
-  });
-
-  test("the Threads button has a dot only while something waits on you", () => {
-    const toggle = (waiting: number) =>
-      renderToStaticMarkup(
-        <ThreadsToggle onOpen={() => {}} open waiting={waiting} />,
-      );
-    expect(toggle(1)).toContain("threads-dot");
-    expect(toggle(1)).toContain("1 waiting on you");
-    expect(toggle(0)).not.toContain("threads-dot");
   });
 });
