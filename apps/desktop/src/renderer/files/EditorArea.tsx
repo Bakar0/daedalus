@@ -36,6 +36,7 @@ import { isPlanPath, PlanView, type PlanLive } from "./PlanView";
 import { createPlan } from "./plan-actions";
 import { INSTRUCTIONS_ICON_PATH, WORKFLOW_ICON_PATH } from "../WorkflowPane";
 import { PLAN_ICON_PATH } from "../PlansPane";
+import { NEEDS_YOU_ICON_PATH } from "../NeedsYouPage";
 import {
   closeDocument,
   documentsIn,
@@ -97,6 +98,8 @@ export interface EditorAreaHandle {
   openWorkflows(): void;
   /** Shows the Plans tab, adding it first if it is not open. */
   openPlans(): void;
+  /** Shows the Needs you tab, adding it first if it is not open. */
+  openNeedsYou(): void;
   /** Shows the Custom instructions tab, adding it first if it is not open. */
   openInstructions(): void;
   /** Shows the Routines page, adding it first if it is not open. */
@@ -129,6 +132,7 @@ type AppPanelKind =
   | "terminal"
   | "workflows"
   | "plans"
+  | "needs"
   | "instructions"
   | "routinesPage"
   | "team"
@@ -143,6 +147,7 @@ export type CenterPanelKind =
   | "terminal"
   | "workflows"
   | "plans"
+  | "needs"
   | "instructions"
   | "routinesPage"
   | "team"
@@ -172,6 +177,8 @@ export interface EditorAreaProps {
   renderWorkflows?(): React.ReactNode;
   /** The Plans tab's content, drawn by the app. */
   renderPlans?(): React.ReactNode;
+  /** The Needs you tab's content, drawn by the app. */
+  renderNeedsYou?(): React.ReactNode;
   /** The Custom instructions tab's content, drawn by the app. */
   renderInstructions?(): React.ReactNode;
   /** The Routines page, drawn by the app. */
@@ -253,6 +260,7 @@ interface EditorContextValue {
   renderTerminal?(terminalId: string): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
   renderPlans?(): React.ReactNode;
+  renderNeedsYou?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
@@ -351,6 +359,7 @@ export default function EditorArea({
   renderTerminal,
   renderWorkflows,
   renderPlans,
+  renderNeedsYou,
   renderInstructions,
   renderRoutinesPage,
   renderTeam,
@@ -740,6 +749,10 @@ export default function EditorArea({
         whenReady(() =>
           placeApp("plans", { path: "", kind: "plans" }, "Plans"),
         ),
+      openNeedsYou: () =>
+        whenReady(() =>
+          placeApp("needs", { path: "", kind: "needs" }, "Needs you"),
+        ),
       openInstructions: () =>
         whenReady(() =>
           placeApp(
@@ -1104,6 +1117,7 @@ export default function EditorArea({
     renderTerminal,
     renderWorkflows,
     renderPlans,
+    renderNeedsYou,
     renderInstructions,
     renderRoutinesPage,
     renderTeam,
@@ -1141,6 +1155,7 @@ export default function EditorArea({
             terminal: TerminalPanel,
             workflows: WorkflowsPanel,
             plans: PlansPanel,
+            needs: NeedsYouPanel,
             instructions: InstructionsPanel,
             routinesPage: RoutinesPagePanel,
             team: TeamPanel,
@@ -1362,15 +1377,17 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
             ? "Workflows"
             : params.kind === "plans"
               ? "Plans"
-              : params.kind === "instructions"
-                ? "Custom instructions"
-                : params.kind === "routinesPage"
-                  ? "Routines"
-                  : params.kind === "team"
-                    ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
-                    : params.kind === "threads"
-                      ? `Threads · ${context.abilityTabName?.("threads", params.leadId ?? "") ?? params.title ?? ""}`
-                      : (params.url ?? "Web");
+              : params.kind === "needs"
+                ? "Needs you"
+                : params.kind === "instructions"
+                  ? "Custom instructions"
+                  : params.kind === "routinesPage"
+                    ? "Routines"
+                    : params.kind === "team"
+                      ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
+                      : params.kind === "threads"
+                        ? `Threads · ${context.abilityTabName?.("threads", params.leadId ?? "") ?? params.title ?? ""}`
+                        : (params.url ?? "Web");
   return (
     <div
       className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
@@ -1422,6 +1439,8 @@ function AppTabIcon({ kind }: { kind: AppPanelKind }) {
         <path d={WORKFLOW_ICON_PATH} />
       ) : kind === "plans" ? (
         <path d={PLAN_ICON_PATH} />
+      ) : kind === "needs" ? (
+        <path d={NEEDS_YOU_ICON_PATH} />
       ) : kind === "instructions" ? (
         <path d={INSTRUCTIONS_ICON_PATH} />
       ) : kind === "threads" ? (
@@ -1516,6 +1535,15 @@ function RoutinesPagePanel() {
   return (
     <div className="app-panel workflows-panel">
       {context.renderRoutinesPage?.()}
+    </div>
+  );
+}
+
+function NeedsYouPanel() {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel workflows-panel">
+      {context.renderNeedsYou?.()}
     </div>
   );
 }

@@ -159,6 +159,44 @@ export interface SessionTrackDto {
   createdAt: string;
 }
 
+/** A question a session asked the user, as Needs you shows it. */
+export interface AskDto {
+  id: number;
+  workspaceId: string;
+  workspaceName: string | null;
+  sessionId: string;
+  sessionName: string | null;
+  title: string;
+  context: string | null;
+  why: string | null;
+  options: string[];
+  recommended: number | null;
+  /** The plan it is pinned to, an absolute path. */
+  planPath: string | null;
+  taskKey: string | null;
+  state: "open" | "answered" | "dismissed" | "closed";
+  answer: string | null;
+  note: string | null;
+  closedReason: string | null;
+  createdAt: string;
+  closedAt: string | null;
+}
+
+/** A plan's tasks, for the map beside Needs you. */
+export interface AskPlanDto {
+  path: string;
+  title: string;
+  owner: string | null;
+  tasks: {
+    key: string;
+    id: string | null;
+    title: string;
+    state: "todo" | "doing" | "done" | "blocked" | "dropped";
+    owner: string | null;
+    depth: number;
+  }[];
+}
+
 /** Work a lead suggested as a thread, waiting for the user to start it. */
 export interface ThreadSuggestionDto {
   id: number;
@@ -1729,6 +1767,21 @@ export interface DesktopRpcSchema {
         Record<string, never>,
         { workspace: WorkspaceDto; session: AgentSessionDto }
       >;
+      /**
+       * Needs you: open asks and those ended in the last day, newest first,
+       * in every workspace. Asks whose plan task is done close first.
+       */
+      askList: Request<Record<string, never>, AskDto[]>;
+      /** The user answers an ask: an option's index, words, or both. */
+      askAnswer: Request<
+        { id: number; option: number | null; note: string | null },
+        AskDto
+      >;
+      askDismiss: Request<{ id: number }, AskDto>;
+      /** Undo: an answered, dismissed or closed ask is open again. */
+      askReopen: Request<{ id: number }, AskDto>;
+      /** The tasks of the plan an ask is pinned to; null when unreadable. */
+      askPlan: Request<{ path: string }, AskPlanDto | null>;
       /** The threads a lead suggested that wait on the user. */
       threadSuggestions: Request<{ leadId: string }, ThreadSuggestionDto[]>;
       /**

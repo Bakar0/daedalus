@@ -17,12 +17,14 @@ import {
   isPlanPath,
   normalizeError,
   parsePlan,
+  planTasks,
   ReadModel,
   updateSettings,
   type AccountProfile,
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
+  type AskView,
   type CloudOverview,
   type IntegratedTerminal,
   type PendingNotification,
@@ -56,6 +58,7 @@ import type {
   AppUpdateDto,
   QuitChoice,
   AgentSessionDto,
+  AskDto,
   CloudMcpServersDto,
   CloudStateDto,
   DesktopRpcSchema,
@@ -168,6 +171,26 @@ const workflowRunDto = (run: WorkflowRun): WorkflowRunDto => ({
   ...run,
   steps: run.steps.map(({ waitingSessionId: _, ...step }) => step),
   groups: run.groups.map(({ lastRound: _, ...group }) => group),
+});
+const askDto = (ask: AskView): AskDto => ({
+  id: ask.id,
+  workspaceId: ask.workspaceId,
+  workspaceName: ask.workspaceName,
+  sessionId: ask.sessionId,
+  sessionName: ask.sessionName,
+  title: ask.title,
+  context: ask.context,
+  why: ask.why,
+  options: [...ask.options],
+  recommended: ask.recommended,
+  planPath: ask.planPath,
+  taskKey: ask.taskKey,
+  state: ask.state,
+  answer: ask.answer,
+  note: ask.note,
+  closedReason: ask.closedReason,
+  createdAt: ask.createdAt,
+  closedAt: ask.closedAt,
 });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
@@ -764,6 +787,47 @@ export function createDesktopRequestHandlers(
           workspace: workspaceDto(home.workspace),
           session: agentDto(home.session),
         };
+      }),
+    askList: () =>
+      mutate(async () => {
+        await context.asks.sweepPlans();
+        return context.asks.list().map(askDto);
+      }),
+    askAnswer: ({ id, option, note }) =>
+      mutate(async () =>
+        askDto(
+          context.asks.get(
+            (await context.asks.answer(id, { option, note })).id,
+          ),
+        ),
+      ),
+    askDismiss: ({ id }) =>
+      mutate(async () =>
+        askDto(context.asks.get((await context.asks.dismiss(id)).id)),
+      ),
+    askReopen: ({ id }) =>
+      mutate(() => askDto(context.asks.get(context.asks.reopen(id).id))),
+    askPlan: ({ path }) =>
+      result(async () => {
+        try {
+          const file = await context.plans.find(undefined, path);
+          const { plan } = await context.plans.read(file);
+          return {
+            path: file.absolutePath,
+            title: plan.title ?? file.path,
+            owner: plan.owner,
+            tasks: planTasks(plan).map((task) => ({
+              key: task.key,
+              id: task.id,
+              title: task.title,
+              state: task.state,
+              owner: task.owner,
+              depth: task.depth,
+            })),
+          };
+        } catch {
+          return null;
+        }
       }),
     threadSuggestions: ({ leadId }) =>
       result(() =>

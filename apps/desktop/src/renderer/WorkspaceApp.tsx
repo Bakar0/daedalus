@@ -101,6 +101,11 @@ import { WorkflowsEditor } from "./WorkflowsEditor";
 import { InstructionsEditor } from "./InstructionsEditor";
 import { InstructionsPane, useInstructionsSummary } from "./InstructionsPane";
 import { PlansPage, PlansPane, usePlanList } from "./PlansPane";
+import {
+  NEEDS_YOU_ICON_PATH,
+  NeedsYouPage,
+  useOpenAskCount,
+} from "./NeedsYouPage";
 import { createPlan } from "./files/plan-actions";
 import { accountModelKey } from "./account-models";
 import {
@@ -4109,6 +4114,7 @@ export function WorkspaceApp({
     : sessions.find((item) => item.id === activeSessionId);
   // The side panel's Plans, read only while the dock that shows them is.
   // A cloud workspace's files are in its pod.
+  const openAsks = useOpenAskCount(client);
   const planList = usePlanList(
     client,
     !workspacePanelCollapsed &&
@@ -8290,6 +8296,27 @@ export function WorkspaceApp({
                 </span>
               )}
             </button>
+            <button
+              className="sidebar-routines-link"
+              onClick={() =>
+                files.withEditor((handle) => handle.openNeedsYou())
+              }
+              title="Questions your sessions asked you, with their context"
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 16 16">
+                <path d={NEEDS_YOU_ICON_PATH} />
+              </svg>
+              <span>Needs you</span>
+              {openAsks > 0 && (
+                <span
+                  aria-label={`${openAsks} open`}
+                  className="sidebar-routines-count sidebar-needs-count"
+                >
+                  {openAsks}
+                </span>
+              )}
+            </button>
             <div className="section-heading workspace-column-heading">
               <div className="workspace-column-title">
                 <h1>Workspaces</h1>
@@ -8846,6 +8873,32 @@ export function WorkspaceApp({
                 }
                 renderWorkflows={() => (
                   <WorkflowsEditor client={client} onError={setError} />
+                )}
+                renderNeedsYou={() => (
+                  <NeedsYouPage
+                    client={client}
+                    onError={setError}
+                    onOpenPlan={(path, workspaceId) => {
+                      const place = activeWorkspaces.find(
+                        (item) => item.id === workspaceId,
+                      );
+                      if (place && path.startsWith(`${place.path}/`))
+                        openFileTarget({
+                          workspaceId: place.id,
+                          path: path.slice(place.path.length + 1),
+                        });
+                      else
+                        openFileTarget({
+                          workspaceId: null,
+                          path,
+                          viewable: true,
+                        });
+                    }}
+                    onOpenSession={(sessionId) => {
+                      const target = sessionsById.get(sessionId);
+                      if (target) showSession(target.id, target.workspaceId);
+                    }}
+                  />
                 )}
                 renderPlans={() => (
                   <PlansPage
