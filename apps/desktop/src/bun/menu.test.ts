@@ -91,6 +91,7 @@ describe("desktop application menu", () => {
     expect(Object.fromEntries(shortcuts ?? [])).toEqual({
       // ⌘1 to ⌘9 are the center's tabs now; the views keep their items.
       "view.workspace": undefined,
+      "view.home": "Command+Shift+H",
       "view.board": undefined,
       "view.session": undefined,
       "view.world": undefined,
@@ -119,6 +120,7 @@ describe("desktop application menu", () => {
       ),
     ).toEqual([
       "view.workspace",
+      "view.home",
       "view.board",
       "view.session",
       "view.world",

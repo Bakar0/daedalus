@@ -3356,6 +3356,11 @@ export function WorkspaceApp({
     return client.subscribeKeybindings?.(take);
   }, [client]);
   useCommand("view.board", { run: () => setView("board") });
+  // Home's main agent from anywhere, ⌘⇧H or ⌘K, as the sidebar's Home does.
+  useCommand("view.home", {
+    enabled: () => !homeOpening,
+    run: () => void openHome(),
+  });
   useCommand("view.world", {
     enabled: () => Boolean(workspaceId),
     run: () =>
