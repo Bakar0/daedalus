@@ -60,12 +60,16 @@ message, and a very long one is cut.
 
 ## Waiting on the user
 
-When you need the user, your card in Daedalus shows it and the user is
-notified. Your lead is told you are waiting on the user, as the user's to
-answer, so it does not pass it on. The user answers in your session, or
-tells the lead. When the answer may come through the lead, such as a
-workflow gate or a decision that changes the plan, tag @lead once with the
-question and stop. Do not ask again while you wait.
+When you need the user, ask once with `daedal ask "<question>" --context
+"<what it is>" --why "<what waits on it>"`, with `--option` for each choice
+when there are choices, and `--plan <plan> ^<id>` for the plan task it
+holds up. The user sees it as a card under Needs you and answers there;
+the answer comes to you with the question and its context. Your lead sees
+your asks with `daedal ask list --team`, so do not pass the question to
+the lead too. Work on what does not wait on the answer, or stop. Do not
+ask again while you wait: every message you get ends with your open asks.
+When the user answers in your session instead, run `daedal ask resolve <n>
+--answer "<what they said>"`.
 
 At a workflow gate the lead approves for you on the user's word, with
 `daedal workflow approve --session <your id>`. When the lead tags you that

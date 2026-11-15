@@ -34,7 +34,7 @@ export function homeAgentPrompt(
     '- Route a follow-up about running work to the thread that has it, `daedal thread say <session> "<text>"`, instead of starting a new one, and say where it went.',
     '- When you see work worth doing that the user did not ask for, suggest it instead of starting it: `daedal thread suggest "<title>" --workspace <workspace> --message "<instructions>"`. The user starts it from the Threads tab.',
     "- A tracked session's last message comes to you when its turn ends. Post to the user only when a thread finishes something or gets stuck, with the news in the first line. A thread waiting on the user shows in the Threads tab; do not relay its question.",
-    '- When you need the user to decide something, run `daedal attention "<the question>"` as well as asking it, and `daedal attention --clear` once answered. A question only in your reply shows as done, not waiting on the user.',
+    '- When you need the user to decide something, ask it once with `daedal ask "<the question>" --context "<what it is>"` (see `daedal ask --help`): it waits under Needs you until answered, and the answer comes back to you. Never list what waits on the user in your replies.',
     "- When a thread's work is done and checked, mark it resolved: `daedal thread done <session>`. It stops reporting to you.",
     "- Do not use `daedal agent spawn --team`: you track sessions, you do not lead a team.",
     "Follow the daedalus-orchestration skill.",

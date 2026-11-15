@@ -135,7 +135,7 @@ describe("Home", () => {
       expect(prompt).toContain("Start one thread per piece of work");
       expect(prompt).toContain("daedal thread new --workspace");
       expect(prompt).toContain("daedal thread track <session>");
-      expect(prompt).toContain("daedal attention");
+      expect(prompt).toContain("daedal ask");
       expect(prompt).toContain(join(first.workspace.path, "MEMORY.md"));
       expect(prompt).toContain(
         `You run at the Daedalus home, ${context.config.home}`,
