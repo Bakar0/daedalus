@@ -10,6 +10,30 @@ import { join } from "node:path";
  */
 export const FOREIGN_KEYS_OFF_MARKER = "-- daedalus:foreign-keys-off";
 
+/**
+ * `ALTER TABLE t ADD [COLUMN] c ...;` starting a line, up to the statement's
+ * end. A commented-out line starts with `--` and never matches.
+ */
+const ADD_COLUMN =
+  /^[ \t]*ALTER\s+TABLE\s+["`]?(\w+)["`]?\s+ADD\s+(?:COLUMN\s+)?["`]?(\w+)["`]?[^;]*;?/gim;
+
+/**
+ * The migration without the columns the database already has. A build that
+ * never shipped (a local or branch build) can have added a column under
+ * another migration's name; adding it again would stop the app at start
+ * with "duplicate column name".
+ */
+export function withoutExistingColumns(
+  sql: string,
+  hasColumn: (table: string, column: string) => boolean,
+): string {
+  return sql.replace(ADD_COLUMN, (statement, table: string, column: string) =>
+    hasColumn(table, column)
+      ? `-- skipped, the column already exists: ${table}.${column}`
+      : statement,
+  );
+}
+
 export async function runMigrations(
   databasePath: string,
   migrationsDirectory: string,
@@ -31,9 +55,16 @@ export async function runMigrations(
     const files = (await readdir(migrationsDirectory))
       .filter((file) => file.endsWith(".sql"))
       .sort();
+    const hasColumn = (table: string, column: string) =>
+      database
+        .query<{ name: string }, []>(
+          `PRAGMA table_info("${table.replace(/"/g, '""')}")`,
+        )
+        .all()
+        .some((row) => row.name.toLowerCase() === column.toLowerCase());
     const apply = database.transaction(
       (version: string, sql: string, checkForeignKeys: boolean) => {
-        database.exec(sql);
+        database.exec(withoutExistingColumns(sql, hasColumn));
         if (checkForeignKeys) {
           const broken = database
             .query<{ table: string }, []>("PRAGMA foreign_key_check")
