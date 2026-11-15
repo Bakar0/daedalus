@@ -3909,6 +3909,16 @@ export function WorkspaceApp({
   const workspace = atHome
     ? homeWorkspace
     : activeWorkspaces.find((item) => item.id === workspaceId);
+  // Home's files are the whole Daedalus home, where the main agent runs, so
+  // the file panel and editor take that as the folder their paths are under.
+  const daedalusHome = snapshot?.settings.home;
+  const filesWorkspace = useMemo(
+    () =>
+      workspace && atHome && daedalusHome
+        ? { ...workspace, path: daedalusHome }
+        : workspace,
+    [workspace, atHome, daedalusHome],
+  );
   const worktreeChanges = useWorktreeChanges(
     client,
     workspacePanelVisible ? workspace?.id : undefined,
@@ -8716,7 +8726,7 @@ export function WorkspaceApp({
                 onWorkspaceDocumentSaved={() => void refreshWorkspaceContent()}
                 journalTarget={journalTarget}
                 theme={theme}
-                workspace={workspace}
+                workspace={filesWorkspace!}
                 worktreeBases={worktreeBases}
                 onActivePanel={followCenterTab}
                 onAppPanelClosed={(kind) => {
@@ -8976,7 +8986,7 @@ export function WorkspaceApp({
                     onOpenFile={() => {
                       if (view !== "workspace") setView("workspace");
                     }}
-                    workspace={workspace}
+                    workspace={filesWorkspace!}
                   />
                 )
               ) : panelTab === "git" ? (
