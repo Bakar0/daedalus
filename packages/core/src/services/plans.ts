@@ -342,6 +342,18 @@ export class PlanService {
     });
   }
 
+  /**
+   * The id of a task, `^id` or `L<line>`, giving it one from its title when
+   * it has none, so an ask stays pinned while lines move.
+   */
+  async pinTask(file: PlanFile, task: string): Promise<string> {
+    const { source } = await this.read(file);
+    const pinned = ensurePlanTaskId(source, task);
+    if (pinned.source !== source)
+      await writeFileAtomic(file.absolutePath, pinned.source);
+    return pinned.id;
+  }
+
   /** Adds a question for the user under a task. */
   ask(file: PlanFile, task: string, question: string): Promise<PlanDocument> {
     return this.edit(file, (source) =>

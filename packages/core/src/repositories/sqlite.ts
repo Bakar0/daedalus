@@ -28,6 +28,7 @@ import { accountModelKey, derivedDefaultModel } from "../domain";
 import { DaedalusError } from "../errors";
 import { AbilityRepository } from "./abilities";
 import { RoutineRepository } from "./routines";
+import { AskRepository } from "./asks";
 import { ThreadRepository } from "./threads";
 import { TrackRepository } from "./tracks";
 import { SecretRepository } from "./secrets";
@@ -434,6 +435,7 @@ export class SqliteRepositories {
   readonly secrets: SecretRepository;
   readonly workflows: WorkflowRepository;
   readonly routines: RoutineRepository;
+  readonly asks: AskRepository;
   readonly threads: ThreadRepository;
   readonly tracks: TrackRepository;
 
@@ -447,6 +449,7 @@ export class SqliteRepositories {
     this.secrets = new SecretRepository(this.database);
     this.workflows = new WorkflowRepository(this.database);
     this.routines = new RoutineRepository(this.database);
+    this.asks = new AskRepository(this.database);
     this.threads = new ThreadRepository(this.database);
     this.tracks = new TrackRepository(this.database);
   }

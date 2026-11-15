@@ -227,6 +227,45 @@ export interface TrackNote {
 }
 
 /** Work a lead suggested as a thread, for the user to start or dismiss. */
+/** Where an ask is: waiting on the user, or finished one of three ways. */
+export type AskState = "open" | "answered" | "dismissed" | "closed";
+
+/**
+ * A question for the user, kept until it is answered, dismissed or closed.
+ * One session owns it; it may be pinned to a task of a plan in the same
+ * workspace. The app shows open ones under Needs you.
+ */
+export interface Ask {
+  id: number;
+  workspaceId: string;
+  sessionId: UUID;
+  title: string;
+  /** What it is about, in markdown; null when the title says it all. */
+  context: string | null;
+  /** What waits on the answer. */
+  why: string | null;
+  /** Choices to pick from; empty for a question answered in words. */
+  options: string[];
+  /** The index of the option the asker recommends. */
+  recommended: number | null;
+  /** The plan it is pinned to, relative to the workspace folder. */
+  planPath: string | null;
+  /** The task's `^id` in that plan, without the caret. */
+  taskKey: string | null;
+  state: AskState;
+  /** The option the user picked. */
+  answer: string | null;
+  /** What the user wrote, alone or beside an option. */
+  note: string | null;
+  /** Why it closed, when it closed without the user answering here. */
+  closedReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+  /** When the owner was told how it ended; null while that waits. */
+  noticeDeliveredAt: string | null;
+}
+
 export interface ThreadSuggestion {
   id: number;
   leadSessionId: UUID;

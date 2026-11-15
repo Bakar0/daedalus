@@ -66,6 +66,7 @@ import { WorkflowService } from "./workflows";
 import { PlanService } from "./plans";
 import { SearchService } from "./search";
 import { HomeService } from "./home";
+import { AskService, OpenAsksTransport } from "./asks";
 import { ThreadService } from "./threads";
 import { TrackingService } from "./tracking";
 import {
@@ -118,6 +119,8 @@ export interface ApplicationContext {
   home: HomeService;
   /** A lead's threads: suggested ones, and marking one resolved. */
   threads: ThreadService;
+  /** Needs you: questions for the user that sessions ask once. */
+  asks: AskService;
   /** Sessions the main agent (or any session) tracks, and their reports. */
   tracking: TrackingService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
@@ -296,6 +299,8 @@ export async function createApplicationContext(
     sessionChannel,
     (sessionId) => {
       activity.forget(sessionId);
+      // An archived session's asks close; one that only stopped keeps them.
+      asks.closeForSession(sessionId);
       // Archiving a running session stops it first, which ends it twice.
       const last = endedNoted.get(sessionId) ?? 0;
       if (Date.now() - last < 10_000) return;
@@ -380,7 +385,7 @@ export async function createApplicationContext(
     sweep: () =>
       sweepProviderActivity({ config, repositories, activity, tmux }),
   });
-  const teamTransport = new HostTeamTransport(
+  const rawTransport = new HostTeamTransport(
     options.teamTransport ??
       new ProviderTeamTransport(config, (session) =>
         agents.codexExecutable(session),
@@ -388,6 +393,19 @@ export async function createApplicationContext(
     sessionChannel,
     (sessionId) => activity.get(sessionId),
   );
+  let plans!: PlanService;
+  // Every message Daedalus brings a session ends with its open asks.
+  const asks = new AskService(
+    repositories,
+    () => plans,
+    agents,
+    () => teamTransport,
+    options.now,
+  );
+  const teamTransport = new OpenAsksTransport(rawTransport, (sessionId) =>
+    asks.openLine(sessionId),
+  );
+  agents.onSessionRunning((session) => asks.flushSession(session.id));
   teams = new TeamService(
     repositories,
     abilities,
@@ -501,7 +519,7 @@ export async function createApplicationContext(
       () => workflowsEnabled(config),
       options.now,
     ),
-    plans: new PlanService({
+    plans: (plans = new PlanService({
       workspaceRoot: config.workspaceRoot,
       workspace: (reference) => workspaces.getActive(reference),
       workspaces: () => workspaces.list(),
@@ -511,7 +529,7 @@ export async function createApplicationContext(
       spawn: (input) => agents.spawn(input),
       send: (sessionId, text, from) =>
         agents.send(sessionId, text, from ? { from } : {}),
-    }),
+    })),
     search: new SearchService(),
     home,
     threads: new ThreadService(
@@ -522,6 +540,7 @@ export async function createApplicationContext(
       options.now,
     ),
     tracking,
+    asks,
     abilityNotes,
     routines: new RoutineService(
       repositories,
