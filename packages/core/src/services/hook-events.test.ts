@@ -113,10 +113,14 @@ describe("Claude hook payloads", () => {
     expect(
       after('~/.daedalus/bin/daedal attention "Merge PR #147"')?.ifNotActivity,
     ).toContain("needs_input");
+    // An ask waits under Needs you; the agent goes on working.
     expect(
       after('daedal plan ask cart ^stale "Full cart or version?"')
         ?.ifNotActivity,
-    ).toContain("needs_input");
+    ).toBeUndefined();
+    expect(
+      after('daedal ask "Full cart or version?"')?.ifNotActivity,
+    ).toBeUndefined();
     expect(after("daedal attention --clear")?.ifNotActivity).toBeUndefined();
     expect(after("daedal agent list")?.ifNotActivity).toBeUndefined();
   });

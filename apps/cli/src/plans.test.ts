@@ -76,7 +76,8 @@ test("plan new, start, ask, done and show through the CLI", async () => {
         ])
       ).stdout,
     ).toContain("[/] Endpoints @api");
-    await cli(home, [
+    // An ask needs the session that waits on it; outside one it is refused.
+    const asked = await cli(home, [
       "plan",
       "ask",
       "cart-api-v2",
@@ -84,6 +85,8 @@ test("plan new, start, ask, done and show through the CLI", async () => {
       "Which index?",
       ...scope,
     ]);
+    expect(asked.exitCode).not.toBe(0);
+    expect(asked.stderr).toContain("--session <session>");
     await cli(home, ["plan", "done", path, "^endpoints"]);
     expect(await readFile(path, "utf8")).toBe(
       [
@@ -98,20 +101,18 @@ test("plan new, start, ask, done and show through the CLI", async () => {
         "",
         "- [x] Endpoints @api ^endpoints",
         "- [ ] Storage ^storage",
-        "  > ? Which index?",
         "",
       ].join("\n"),
     );
 
     const shown = await cli(home, ["plan", "show", "cart-api-v2", ...scope]);
     expect(shown.stdout).toContain("1 of 2 tasks done");
-    expect(shown.stdout).toContain("? Which index?");
     const listed = await cli(home, ["plan", "list", "--json", ...scope]);
     expect(JSON.parse(listed.stdout).data[0]).toMatchObject({
       path: "plans/cart-api-v2.plan.md",
       done: 1,
       total: 2,
-      questions: 1,
+      questions: 0,
     });
 
     const missing = await cli(home, [

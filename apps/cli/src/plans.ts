@@ -4,7 +4,6 @@ import {
   findPlanTask,
   planProgress,
   planQuestions,
-  planTaskOwner,
   sessionPlanHandle,
   type ApplicationContext,
   type AgentSession,
@@ -45,8 +44,8 @@ directly for anything these commands do not cover.
 --body-file ('-' reads stdin). The owner is --owner, else the calling
 session's handle.
 'start' marks a task [/] and puts the owner on it: --owner, else you.
-'done', 'block' and 'drop' set [x], [!] and [-]. 'ask' adds a question for
-the user under the task; the app shows it under "Needs you".
+'done', 'block' and 'drop' set [x], [!] and [-]. 'ask' asks the user, pinned to
+the task, as 'daedal ask --plan' does; the app shows it under Needs you.
 An @owner is a session's team handle, or its name made into a handle
 (a session called "Cart endpoints" answers to @cart-endpoints).`;
 
@@ -235,23 +234,21 @@ export async function planCommand(
         'Usage: daedal plan ask <plan> ^<id> "<question>"',
       );
     const found = await file(parsed.positionals[0]!);
-    const plan = await context.plans.ask(
-      found,
-      parsed.positionals[1]!,
-      parsed.positionals.slice(2).join(" "),
-    );
-    const task = findPlanTask(plan, parsed.positionals[1]!);
-    // An agent that asks the plan is waiting on the user's answer, so its
-    // card, its lead and the Threads tab show it waiting, not done.
     const session = await caller();
-    if (session)
-      await context.activity.raise({
-        sessionId: session.id,
-        reason: `Asked in plan "${plan.title ?? found.path}" under "${task.title}": ${parsed.positionals.slice(2).join(" ")}`,
-      });
-    printResult({ file: found, task }, json, () =>
+    if (!session)
+      throw new DaedalusError(
+        "VALIDATION",
+        'Ask from the session that waits on the answer, or use daedal ask "<question>" --session <session> --plan <plan> ^<id>',
+      );
+    const { ask } = await context.asks.create({
+      session: session.id,
+      title: parsed.positionals.slice(2).join(" "),
+      plan: found.absolutePath,
+      task: parsed.positionals[1]!,
+    });
+    printResult({ file: found, ask }, json, () =>
       console.log(
-        `Asked under "${task.title}"; the user sees it under Needs you${planTaskOwner(plan, task) ? `, answering @${planTaskOwner(plan, task)}` : ""}${session ? ". Your session shows as waiting on the user; run daedal attention --clear once answered" : ""}`,
+        `Asked #${ask.id}, pinned to ^${ask.taskKey}; the user sees it under Needs you. Add context with 'daedal ask update ${ask.id} --context "..."'.`,
       ),
     );
     return 0;
