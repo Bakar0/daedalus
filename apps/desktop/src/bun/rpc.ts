@@ -14,6 +14,7 @@ import {
   DaedalusError,
   isUnseenRun,
   INSTALL_COMMANDS,
+  isPlanPath,
   normalizeError,
   parsePlan,
   ReadModel,
@@ -27,6 +28,7 @@ import {
   type PendingNotification,
   type PresenceState,
   type RepositoryLibraryEntry,
+  type SearchRoot,
   type SessionAbility,
   type Team,
   type TeamMessage,
@@ -625,6 +627,22 @@ export function createDesktopRequestHandlers(
     if (response.ok) onMutation();
     return response;
   };
+
+  // The ⌘K palette searches the workspace on screen, or at Home the whole
+  // Daedalus home. One content search runs at a time: a new query stops the
+  // one before it.
+  const searchRoot = async (workspace: string | null): Promise<SearchRoot> => {
+    const home = context.repositories.findHomeWorkspace();
+    if (workspace === null || workspace === home?.id)
+      return { path: context.config.home, home: true };
+    return {
+      path: (await context.workspaces.get(workspace)).path,
+      home: false,
+    };
+  };
+  let contentSearch: AbortController | undefined;
+  /** The most plan files the palette reads. */
+  const SEARCH_PLAN_LIMIT = 200;
 
   return {
     // The cloud's parts change only with an announcement that names no
@@ -1349,6 +1367,63 @@ export function createDesktopRequestHandlers(
         workspaceRepositoryDto(
           await context.workspaceContent.detachRepository(id),
         ),
+      ),
+    searchFiles: ({ workspace, refresh }) =>
+      result(async () => {
+        const root = await searchRoot(workspace);
+        const list = await context.search.listFiles(root, refresh ?? false);
+        return {
+          root: root.path,
+          home: root.home,
+          files: list.files,
+          truncated: list.truncated,
+        };
+      }),
+    searchContent: ({ workspace, query }) =>
+      result(async () => {
+        contentSearch?.abort();
+        const controller = new AbortController();
+        contentSearch = controller;
+        try {
+          const root = await searchRoot(workspace);
+          const found = await context.search.searchContent(root, query, {
+            signal: controller.signal,
+          });
+          return {
+            root: root.path,
+            query,
+            matches: found.matches,
+            truncated: found.truncated,
+            ...(found.unavailable ? { unavailable: found.unavailable } : {}),
+          };
+        } finally {
+          if (contentSearch === controller) contentSearch = undefined;
+        }
+      }),
+    searchPlans: ({ workspace }) =>
+      result(async () => {
+        const root = await searchRoot(workspace);
+        const { files } = await context.search.listFiles(root);
+        const paths = files.filter(isPlanPath).slice(0, SEARCH_PLAN_LIMIT);
+        const plans = await Promise.all(
+          paths.map(async (path) => {
+            try {
+              return [
+                {
+                  path,
+                  ...(await context.plans.outline(join(root.path, path))),
+                },
+              ];
+            } catch {
+              return [];
+            }
+          }),
+        );
+        return { root: root.path, plans: plans.flat() };
+      }),
+    searchPreview: ({ workspace, path, line }) =>
+      result(async () =>
+        context.search.preview(await searchRoot(workspace), path, line),
       ),
     planView: ({ workspace, path, text }) =>
       result(async () => {

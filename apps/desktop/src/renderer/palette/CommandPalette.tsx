@@ -11,23 +11,47 @@
  * back. It is a dialog with the app's focus scope, so the page behind is
  * inert while it is open.
  *
+ * Scope chips under the field narrow it: All, Files, Content, Sessions,
+ * Plans, Commands. Tab and Shift-Tab cycle them, a `/` typed first goes to
+ * Content, and each chip counts its matches. All shows the best three of
+ * each kind with "All N →" to the kind's scope. Files, content and plans
+ * come from `usePaletteSearch`; a preview of the highlighted file is on the
+ * right.
+ *
  * Built here rather than on cmdk: cmdk brings Radix's dialog and its own
  * focus trap, which would fight `useFocusScope`, and the ranking is the
  * palette's own anyway; see `palette-model.ts`.
  */
-import { type KeyboardEvent, useId, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { chordsFromEvent, parseKey, sameChord } from "@daedalus/protocol";
 import { commandKeys, isComposingKey, shortcutLabel } from "../commands";
 import type { ItemAction } from "../item-actions";
 import { KeyGlyphs } from "../keyboard-ui";
 import { useFocusScope } from "../use-focus-scope";
 import {
+  cycleScope,
   filterActions,
   flattenGroups,
+  highlightRanges,
   KIND_LABELS,
+  PALETTE_SCOPES,
   type PaletteEntry,
-  rankPalette,
+  type PaletteScope,
+  rankScoped,
+  scopedInput,
 } from "./palette-model";
+import { Highlighted, PalettePreview } from "./PalettePreview";
+import {
+  type PaletteSearchSource,
+  usePaletteSearch,
+} from "./use-palette-search";
 
 export interface PaletteRow extends PaletteEntry {
   /** What Enter does, as the footer says it: `Open Session`, `Run`. */
@@ -41,6 +65,10 @@ export interface PaletteRow extends PaletteEntry {
   confirm?: string;
   /** A session's status, drawn as a dot: its tone, and whether it needs you. */
   status?: { tone: string; attention: boolean };
+  /** Where the query is in the title; worked out from the query if omitted. */
+  highlight?: [number, number][];
+  /** A file under the search root the preview pane shows, at `line`. */
+  preview?: { path: string; line?: number };
 }
 
 /** The Actions panel's own first row, Enter's action on the row. */
@@ -85,11 +113,14 @@ export function CommandPalette({
   recent,
   suggestions,
   boost,
+  search,
   onChoose,
   onChooseAction,
   onClose,
 }: {
   entries: readonly PaletteRow[];
+  /** Files, content and plans to search; without it only `entries` show. */
+  search?: PaletteSearchSource;
   /** The item that had focus: the first row, and highlighted. */
   selectedKey?: string;
   /** Open on the selected row's Actions panel (⇧F10 on a board card). */
@@ -108,6 +139,7 @@ export function CommandPalette({
   useFocusScope(section);
   const listId = useId();
   const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<PaletteScope>("all");
   // The active row by its key, not its place: rows are rebuilt while the
   // palette is open (a session's status changes), and Enter must run the
   // row that is highlighted, wherever it moved.
@@ -123,19 +155,38 @@ export function CommandPalette({
   );
   const [activeAction, setActiveAction] = useState<string>();
 
-  const groups = useMemo(
+  const searchQuery = panel ? panel.query : query;
+  const searched = usePaletteSearch(search, searchQuery, scope);
+  const ranked = useMemo(
     () =>
-      rankPalette(entries, panel ? panel.query : query, {
-        recent,
-        suggestions,
-        boost,
-        ...(selectedKey ? { selected: selectedKey } : {}),
-      }),
-    [entries, panel, query, recent, suggestions, boost, selectedKey],
+      rankScoped(
+        searched.plans.length > 0 ? [...entries, ...searched.plans] : entries,
+        { files: searched.files, content: searched.content },
+        searchQuery,
+        scope,
+        {
+          recent,
+          suggestions,
+          boost,
+          ...(selectedKey ? { selected: selectedKey } : {}),
+        },
+      ),
+    [
+      entries,
+      searched,
+      searchQuery,
+      scope,
+      recent,
+      suggestions,
+      boost,
+      selectedKey,
+    ],
   );
+  const groups = ranked.groups;
   const rows = flattenGroups(groups);
   const panelRow = panel
-    ? entries.find((row) => row.key === panel.rowKey)
+    ? (entries.find((row) => row.key === panel.rowKey) ??
+      rows.find((row) => row.key === panel.rowKey))
     : undefined;
   const actions = useMemo(
     () => (panelRow ? filterActions(panelActions(panelRow), query) : []),
@@ -185,6 +236,15 @@ export function CommandPalette({
     setArmed(undefined);
     return true;
   };
+  const showScope = (next: PaletteScope) => {
+    setScope(next);
+    setActiveKey(undefined);
+    setArmed(undefined);
+  };
+  // A new scope starts at its top row.
+  useEffect(() => {
+    document.getElementById(listId)?.scrollTo({ top: 0 });
+  }, [scope, listId]);
   const closeActions = () => {
     if (!panel) return;
     setQuery(panel.query);
@@ -223,7 +283,10 @@ export function CommandPalette({
       event.preventDefault();
       event.stopPropagation();
     };
-    if (event.key === "ArrowDown") {
+    if (event.key === "Tab" && !panel) {
+      handled();
+      showScope(cycleScope(scope, event.shiftKey));
+    } else if (event.key === "ArrowDown") {
       handled();
       move(activeIndex + 1);
     } else if (event.key === "ArrowUp") {
@@ -285,156 +348,234 @@ export function CommandPalette({
             <span className="palette-crumb-title">{panelRow.title}</span>
           </div>
         )}
-        <input
-          aria-activedescendant={activeOption}
-          aria-autocomplete="list"
-          aria-controls={listId}
-          aria-expanded="true"
-          aria-label={
-            panelRow
-              ? `Search actions for ${panelRow.title}`
-              : "Search sessions, tasks, workspaces and actions"
-          }
-          autoFocus
-          className="palette-input"
-          onChange={(event) => {
-            setQuery(event.target.value);
-            if (panel) setActiveAction(undefined);
-            else setActiveKey(undefined);
-            setArmed(undefined);
-          }}
-          onKeyDown={onKeyDown}
-          placeholder={
-            panelRow
-              ? `Search actions for ${panelRow.title}…`
-              : "Search sessions, tasks, workspaces and actions…"
-          }
-          ref={input}
-          role="combobox"
-          spellCheck={false}
-          type="text"
-          value={query}
-        />
-        <div
-          aria-label={panelRow ? "Actions" : "Results"}
-          className="palette-list"
-          id={listId}
-          role="listbox"
-        >
-          {panel
-            ? actions.map((action) => {
-                const isActive = action === currentAction;
-                const armedHere = armed === `action:${action.id}`;
-                return (
-                  <div
-                    aria-checked={action.checked}
-                    aria-disabled={action.disabled || undefined}
-                    aria-selected={isActive}
-                    className="palette-row"
-                    data-active={isActive ? "true" : undefined}
-                    data-danger={action.danger ? "true" : undefined}
-                    id={optionId(action.id)}
-                    key={action.id}
-                    onClick={() => chooseAction(action)}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onMouseMove={() => {
-                      if (!isActive) {
-                        setActiveAction(action.id);
-                        setArmed(undefined);
-                      }
-                    }}
-                    role="option"
-                  >
-                    <span className="palette-row-title">
-                      {armedHere && action.confirm
-                        ? `${action.label}: ${action.confirm} Press Enter again to confirm.`
-                        : action.label}
-                      {action.checked !== undefined && (
-                        <span className="palette-row-state">
-                          {action.checked ? " · on" : " · off"}
-                        </span>
-                      )}
-                    </span>
-                    {action.description && !armedHere && (
-                      <span className="palette-row-detail">
-                        {action.description}
-                      </span>
-                    )}
-                    {action.keys && <KeyGlyphs glyphs={action.keys} />}
-                  </div>
-                );
-              })
-            : groups.map((group) => (
-                <div
-                  aria-labelledby={`${listId}-${group.id}`}
-                  className="palette-group"
-                  key={group.id}
-                  role="group"
-                >
-                  <div
-                    className="palette-group-title"
-                    id={`${listId}-${group.id}`}
-                    role="presentation"
-                  >
-                    {group.title}
-                  </div>
-                  {group.entries.map((row) => {
-                    const isActive = row === current;
-                    return (
-                      <div
-                        aria-disabled={row.disabled || undefined}
-                        aria-selected={isActive}
-                        className="palette-row"
-                        data-active={isActive ? "true" : undefined}
-                        id={optionId(row.key)}
-                        key={row.key}
-                        onClick={() => choose(row)}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onMouseMove={() => {
-                          if (!isActive) {
-                            setActiveKey(row.key);
-                            setArmed(undefined);
-                          }
-                        }}
-                        role="option"
-                      >
-                        {row.status && (
-                          <span
-                            aria-hidden="true"
-                            className="palette-dot"
-                            data-attention={
-                              row.status.attention ? "true" : undefined
-                            }
-                            data-tone={row.status.tone}
-                          />
-                        )}
-                        <span className="palette-row-title">
-                          {armed === row.key && row.confirm
-                            ? `${row.title}: ${row.confirm} Press Enter again to confirm.`
-                            : row.title}
-                        </span>
-                        {row.subtitle && (
-                          <span className="palette-row-detail">
-                            {row.subtitle}
+        <div className="palette-field">
+          <input
+            aria-activedescendant={activeOption}
+            aria-autocomplete="list"
+            aria-controls={listId}
+            aria-expanded="true"
+            aria-label={
+              panelRow
+                ? `Search actions for ${panelRow.title}`
+                : "Search sessions, files, plans and actions"
+            }
+            autoFocus
+            className="palette-input"
+            onChange={(event) => {
+              if (panel) {
+                setQuery(event.target.value);
+                setActiveAction(undefined);
+              } else {
+                const next = scopedInput(query, event.target.value, scope);
+                setQuery(next.query);
+                setScope(next.scope);
+                setActiveKey(undefined);
+              }
+              setArmed(undefined);
+            }}
+            onKeyDown={onKeyDown}
+            placeholder={
+              panelRow
+                ? `Search actions for ${panelRow.title}…`
+                : "Search sessions, files, plans and actions…"
+            }
+            ref={input}
+            role="combobox"
+            spellCheck={false}
+            type="text"
+            value={query}
+          />
+          {search && !panel && (
+            <span className="palette-where">{search.where}</span>
+          )}
+        </div>
+        {!panel && (
+          <div aria-label="Search in" className="palette-scopes" role="toolbar">
+            {PALETTE_SCOPES.map((item) => (
+              <button
+                aria-pressed={scope === item.id}
+                className="palette-scope"
+                key={item.id}
+                onClick={() => showScope(item.id)}
+                onMouseDown={(event) => event.preventDefault()}
+                tabIndex={-1}
+                type="button"
+              >
+                {item.label}
+                {item.id !== "all" && searchQuery.trim() && (
+                  <span className="palette-scope-count">
+                    {ranked.counts[item.id]}
+                  </span>
+                )}
+              </button>
+            ))}
+            <span className="palette-scope-hint">
+              <KeyGlyphs glyphs="⇥" /> next · or type <kbd>/</kbd> for Content
+            </span>
+          </div>
+        )}
+        <div className="palette-body">
+          <div
+            aria-label={panelRow ? "Actions" : "Results"}
+            className="palette-list"
+            id={listId}
+            role="listbox"
+          >
+            {panel
+              ? actions.map((action) => {
+                  const isActive = action === currentAction;
+                  const armedHere = armed === `action:${action.id}`;
+                  return (
+                    <div
+                      aria-checked={action.checked}
+                      aria-disabled={action.disabled || undefined}
+                      aria-selected={isActive}
+                      className="palette-row"
+                      data-active={isActive ? "true" : undefined}
+                      data-danger={action.danger ? "true" : undefined}
+                      id={optionId(action.id)}
+                      key={action.id}
+                      onClick={() => chooseAction(action)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onMouseMove={() => {
+                        if (!isActive) {
+                          setActiveAction(action.id);
+                          setArmed(undefined);
+                        }
+                      }}
+                      role="option"
+                    >
+                      <span className="palette-row-title">
+                        {armedHere && action.confirm
+                          ? `${action.label}: ${action.confirm} Press Enter again to confirm.`
+                          : action.label}
+                        {action.checked !== undefined && (
+                          <span className="palette-row-state">
+                            {action.checked ? " · on" : " · off"}
                           </span>
                         )}
-                        {row.shortcut && <KeyGlyphs glyphs={row.shortcut} />}
-                        <span className="palette-row-kind">
-                          {KIND_LABELS[row.kind]}
+                      </span>
+                      {action.description && !armedHere && (
+                        <span className="palette-row-detail">
+                          {action.description}
                         </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-          {keys.length === 0 && (
-            <p className="palette-empty" role="status">
-              {panel
-                ? "No action matches."
-                : query.trim()
-                  ? "Nothing matches."
-                  : "Type to search sessions, tasks, workspaces and actions."}
-            </p>
+                      )}
+                      {action.keys && <KeyGlyphs glyphs={action.keys} />}
+                    </div>
+                  );
+                })
+              : groups.map((group) => (
+                  <div
+                    aria-labelledby={`${listId}-${group.id}`}
+                    className="palette-group"
+                    key={group.id}
+                    role="group"
+                  >
+                    <div
+                      className="palette-group-title"
+                      id={`${listId}-${group.id}`}
+                      role="presentation"
+                    >
+                      <span>{group.title}</span>
+                      {group.scope && group.total !== undefined && (
+                        <button
+                          className="palette-group-more"
+                          onClick={() => group.scope && showScope(group.scope)}
+                          onMouseDown={(event) => event.preventDefault()}
+                          tabIndex={-1}
+                          type="button"
+                        >
+                          All {group.total} →
+                        </button>
+                      )}
+                    </div>
+                    {group.entries.map((row) => {
+                      const isActive = row === current;
+                      return (
+                        <div
+                          aria-disabled={row.disabled || undefined}
+                          aria-selected={isActive}
+                          className="palette-row"
+                          data-active={isActive ? "true" : undefined}
+                          id={optionId(row.key)}
+                          key={row.key}
+                          onClick={() => choose(row)}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseMove={() => {
+                            if (!isActive) {
+                              setActiveKey(row.key);
+                              setArmed(undefined);
+                            }
+                          }}
+                          role="option"
+                        >
+                          {row.status && (
+                            <span
+                              aria-hidden="true"
+                              className="palette-dot"
+                              data-attention={
+                                row.status.attention ? "true" : undefined
+                              }
+                              data-tone={row.status.tone}
+                            />
+                          )}
+                          <span
+                            className="palette-row-title"
+                            data-code={
+                              row.kind === "content" ? "true" : undefined
+                            }
+                          >
+                            {armed === row.key && row.confirm ? (
+                              `${row.title}: ${row.confirm} Press Enter again to confirm.`
+                            ) : (
+                              <Highlighted
+                                ranges={
+                                  row.highlight ??
+                                  (searchQuery.trim()
+                                    ? highlightRanges(searchQuery, row.title)
+                                    : [])
+                                }
+                                text={row.title}
+                              />
+                            )}
+                          </span>
+                          {row.subtitle && (
+                            <span
+                              className="palette-row-detail"
+                              data-code={row.preview ? "true" : undefined}
+                            >
+                              {row.subtitle}
+                            </span>
+                          )}
+                          {row.shortcut && <KeyGlyphs glyphs={row.shortcut} />}
+                          <span className="palette-row-kind">
+                            {KIND_LABELS[row.kind]}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+            {!panel && searched.contentNote && scope === "content" && (
+              <p className="palette-note" role="status">
+                {searched.contentNote}
+              </p>
+            )}
+            {keys.length === 0 &&
+              !(scope === "content" && searched.contentNote) && (
+                <p className="palette-empty" role="status">
+                  {emptyText(
+                    Boolean(panel),
+                    searchQuery,
+                    scope,
+                    search,
+                    searched.fileCount,
+                  )}
+                </p>
+              )}
+          </div>
+          {!panel && search && (
+            <PalettePreview query={searchQuery} row={current} source={search} />
           )}
         </div>
         <footer aria-hidden="true" className="palette-footer">
@@ -444,6 +585,11 @@ export function CommandPalette({
           {enterLabel && (
             <span className="palette-footer-hint">
               <KeyGlyphs glyphs="↩" /> {enterLabel}
+            </span>
+          )}
+          {!panel && (
+            <span className="palette-footer-hint">
+              <KeyGlyphs glyphs="⇥" /> Scope
             </span>
           )}
           {panel ? (
@@ -463,4 +609,32 @@ export function CommandPalette({
       </section>
     </div>
   );
+}
+
+/** What the list says when it has no rows. */
+function emptyText(
+  inPanel: boolean,
+  query: string,
+  scope: PaletteScope,
+  search: PaletteSearchSource | undefined,
+  fileCount: number | undefined,
+): string {
+  if (inPanel) return "No action matches.";
+  if (query.trim()) return "Nothing matches.";
+  switch (scope) {
+    case "files":
+      return fileCount === undefined
+        ? `Type to search the files in ${search?.where ?? "this workspace"}.`
+        : `Type to search ${fileCount.toLocaleString()} files in ${search?.where ?? "this workspace"}.`;
+    case "content":
+      return "Type 3 characters to search inside files.";
+    case "sessions":
+      return "No sessions.";
+    case "plans":
+      return "No plan files here.";
+    case "commands":
+      return "No commands.";
+    default:
+      return "Type to search sessions, tasks, workspaces, files and actions.";
+  }
 }

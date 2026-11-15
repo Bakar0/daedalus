@@ -482,6 +482,65 @@ export interface PlanOwnerDto {
   state: PlanOwnerStateDto;
 }
 
+/**
+ * The ⌘K palette's search. The root is the workspace's folder, or at Home
+ * the Daedalus home; paths are relative to it, with forward slashes.
+ */
+export interface SearchFilesDto {
+  root: string;
+  home: boolean;
+  files: string[];
+  /** The tree held more files than the list does. */
+  truncated: boolean;
+}
+
+export interface SearchContentMatchDto {
+  path: string;
+  line: number;
+  /** The matching line, cut around its first hit when long. */
+  text: string;
+  /** Where the hits are in `text`, as [start, end) characters. */
+  ranges: [number, number][];
+}
+
+export interface SearchContentDto {
+  root: string;
+  /** The query this answers, so a late answer can be told apart. */
+  query: string;
+  matches: SearchContentMatchDto[];
+  /** More lines matched than were returned. */
+  truncated: boolean;
+  /** Why nothing was searched: there is no ripgrep. */
+  unavailable?: string;
+}
+
+export interface SearchPlanDto {
+  path: string;
+  title: string;
+  owner: string | null;
+  done: number;
+  total: number;
+  tasks: {
+    key: string;
+    title: string;
+    state: PlanTaskStateDto;
+    owner: string | null;
+    line: number;
+  }[];
+}
+
+export interface SearchPlansDto {
+  root: string;
+  plans: SearchPlanDto[];
+}
+
+export interface SearchPreviewDto {
+  /** The first line's number. */
+  start: number;
+  /** Empty for a file that is not text. */
+  lines: string[];
+}
+
 export interface PlanViewDto {
   title: string | null;
   owner: string | null;
@@ -2215,6 +2274,25 @@ export interface DesktopRpcSchema {
           quote: string;
         },
         { sessionId: string; sessionName: string; message: string }
+      >;
+      /**
+       * The ⌘K palette's search in a workspace's folder, or in the Daedalus
+       * home when `workspace` is Home's or null.
+       */
+      searchFiles: Request<
+        { workspace: string | null; refresh?: boolean },
+        SearchFilesDto
+      >;
+      /** Cancels the window's previous content search, if still running. */
+      searchContent: Request<
+        { workspace: string | null; query: string },
+        SearchContentDto
+      >;
+      /** The plan files under the search root, with their tasks. */
+      searchPlans: Request<{ workspace: string | null }, SearchPlansDto>;
+      searchPreview: Request<
+        { workspace: string | null; path: string; line?: number },
+        SearchPreviewDto
       >;
       workspaceJournalAppend: Request<
         {

@@ -179,6 +179,7 @@ import {
 } from "./item-actions";
 import { KeyHints, Tooltip } from "./keyboard-ui";
 import { CommandPalette, type PaletteRow } from "./palette/CommandPalette";
+import type { PaletteSearchSource } from "./palette/use-palette-search";
 import { ShortcutsSheet } from "./palette/ShortcutsSheet";
 import { loadRecent, recordRecent, saveRecent } from "./palette/palette-model";
 
@@ -7375,6 +7376,45 @@ export function WorkspaceApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [palette, snapshot, editingTask],
   );
+  // What the palette searches: the files, content and plans of the workspace
+  // on screen, or at Home of the whole Daedalus home. Made when it opens.
+  // A cloud workspace's files are in its pod, so it has no search here.
+  const paletteSearch = useMemo((): PaletteSearchSource | undefined => {
+    if (!palette) return undefined;
+    if (workspace?.place === "cloud") return undefined;
+    const target = atHome || !workspace ? null : workspace.id;
+    const openIn = homeWorkspace && target === null ? homeWorkspace.id : target;
+    const data = async <T,>(
+      response: Promise<
+        { ok: true; data: T } | { ok: false; error: { message: string } }
+      >,
+    ) => {
+      const settled = await response;
+      if (!settled.ok) throw new Error(settled.error.message);
+      return settled.data;
+    };
+    return {
+      where: target === null ? "Home" : workspace!.name,
+      listFiles: () => data(client.request.searchFiles({ workspace: target })),
+      searchContent: (query) =>
+        data(client.request.searchContent({ workspace: target, query })),
+      plans: () => data(client.request.searchPlans({ workspace: target })),
+      preview: (path, line) =>
+        data(
+          client.request.searchPreview({
+            workspace: target,
+            path,
+            ...(line ? { line } : {}),
+          }),
+        ),
+      open: (_root, path, line) => {
+        if (openIn) openFileTarget({ workspaceId: openIn, path }, line);
+      },
+    };
+    // Read when the palette opens; the workspace on screen cannot change
+    // while it is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [palette]);
   // The sessions shown lately rank a little higher; read when it opens.
   const paletteBoost = useMemo(
     () =>
@@ -10032,6 +10072,7 @@ export function WorkspaceApp({
           <CommandPalette
             boost={paletteBoost}
             entries={paletteShown.rows}
+            search={paletteSearch}
             onChoose={(row) => closePaletteFor(row.key, row.run)}
             onChooseAction={(row, action) =>
               closePaletteFor(row.key, action.run)
