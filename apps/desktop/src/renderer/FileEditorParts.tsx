@@ -82,6 +82,7 @@ export function FileDetail({
   path,
   saving,
   title,
+  tools,
   view,
 }: {
   /** Why the last save was refused, or what is wrong with the file. */
@@ -102,6 +103,8 @@ export function FileDetail({
   path: string;
   saving: boolean;
   title: string;
+  /** Shown under the markdown while editing, such as the step picker. */
+  tools?: ReactNode;
   view?: ReactNode;
 }) {
   const reading = !editing && view !== undefined;
@@ -168,6 +171,7 @@ export function FileDetail({
             spellCheck={false}
             value={draft}
           />
+          {tools}
           <p className="workflows-hint">{hint}</p>
         </>
       )}

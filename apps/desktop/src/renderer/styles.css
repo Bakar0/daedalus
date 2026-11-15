@@ -10025,6 +10025,28 @@ button.routine-tick:hover {
   line-height: 1.35;
   margin: 8px 6px 0;
 }
+/* An included workflow: its name as a heading, its steps indented under it. */
+.workflow-group {
+  display: grid;
+  gap: 1px;
+}
+.workflow-group-name {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 6px;
+  padding: 6px 6px 2px;
+}
+.workflow-group-name .workflow-step-when {
+  margin-left: auto;
+}
+.workflow-group > .workflow-steps {
+  border-left: 1.5px solid var(--line);
+  margin-left: 12px;
+  padding-left: 4px;
+}
 /* The run's own row under the header: which workflow, its tags, its task. */
 .workflow-pane-run {
   align-items: center;
@@ -10450,6 +10472,30 @@ button.routine-tick:hover {
   line-height: 1.45;
   overflow: hidden;
   white-space: pre-line;
+}
+.step-timeline-card.included .step-timeline-name {
+  color: var(--secondary);
+}
+/* Under a workflow's markdown: steps and workflows to add to its steps. */
+.step-picker {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+.step-picker-label {
+  color: var(--muted);
+  font-size: 11px;
+  margin-right: 4px;
+}
+.step-picker-item {
+  align-items: center;
+  border-color: var(--line);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px 9px;
 }
 .step-timeline-missing {
   color: var(--danger);

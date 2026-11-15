@@ -4,7 +4,7 @@
  * The agent reports the steps and asks for approvals in the conversation;
  * the pane only shows a gated step waiting for the user, and folds. The dock it sits in (SidePanelDock) resizes it.
  */
-import { useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 import type { WorkflowRunDto, WorkflowStepStateDto } from "@daedalus/protocol";
 import { timelineWhen } from "./TaskTimeline";
 import { GATE_LABELS } from "./workflow-gates";
@@ -120,6 +120,53 @@ function StepMark({ state }: { state: WorkflowStepStateDto }) {
   );
 }
 
+type RunStep = WorkflowRunDto["steps"][number];
+
+/** The run's steps as a tree: an included workflow holds its steps. */
+export type StepNode =
+  | { kind: "step"; step: RunStep }
+  | { kind: "group"; id: string; name: string; children: StepNode[] };
+
+/**
+ * Groups the run's flat steps under their included workflows: a step named
+ * `release/review` goes under a `release` group, `a/b/review` under `b`
+ * inside `a`. A run with no included workflow is one level of steps.
+ */
+export function stepTree(steps: RunStep[]): StepNode[] {
+  const root: StepNode[] = [];
+  const stack: { id: string; children: StepNode[] }[] = [
+    { id: "", children: root },
+  ];
+  for (const step of steps) {
+    const parts = step.name.split("/").slice(0, -1);
+    const path = parts.join("/");
+    while (stack.length > 1) {
+      const top = stack[stack.length - 1]!.id;
+      if (path === top || path.startsWith(`${top}/`)) break;
+      stack.pop();
+    }
+    for (let depth = stack.length - 1; depth < parts.length; depth++) {
+      const group: StepNode & { kind: "group" } = {
+        kind: "group",
+        id: parts.slice(0, depth + 1).join("/"),
+        name: parts[depth]!,
+        children: [],
+      };
+      stack[stack.length - 1]!.children.push(group);
+      stack.push(group);
+    }
+    stack[stack.length - 1]!.children.push({ kind: "step", step });
+  }
+  return root;
+}
+
+const isFinished = (step: RunStep) =>
+  step.state === "done" || step.state === "skipped";
+
+/** Every step under a node, at any depth. */
+const stepsUnder = (node: StepNode): RunStep[] =>
+  node.kind === "step" ? [node.step] : node.children.flatMap(stepsUnder);
+
 /** Dynamic, changed for this run, and which time round a loop is on. */
 function RunTags({ run }: { run: WorkflowRunDto }) {
   return (
@@ -135,6 +182,11 @@ function RunTags({ run }: { run: WorkflowRunDto }) {
           title="Steps were added or removed for this run; the workflow file is unchanged"
         >
           changed
+        </span>
+      )}
+      {run.steps.length > 0 && (
+        <span className="workflow-tag" title="Steps finished, of all steps">
+          {run.steps.filter(isFinished).length}/{run.steps.length}
         </span>
       )}
       {run.loopTo && (
@@ -168,50 +220,71 @@ export function WorkflowSteps({ run }: { run: WorkflowRunDto }) {
   const openRow = useOpenRow();
   const endLine = run.endedAt && run.endNote ? `Stopped: ${run.endNote}` : null;
   const end = openRow("end", endLine);
-  return (
-    <>
-      <ol className="workflow-steps">
-        {run.steps.map((step) => {
-          const line = stepLine(step);
-          const { open, ...row } = openRow(step.name, line);
-          return (
-            <li
-              aria-current={step.state === "active" ? "step" : undefined}
-              className={rowClass(
-                `workflow-step state-${step.state}`,
-                open,
-                line,
-              )}
-              key={step.name}
-              {...row}
-            >
-              <StepMark state={step.state} />
-              <span className="workflow-step-name">
-                {step.name}
-                {step.gate && (
-                  <span
-                    className="workflow-gate"
-                    title={GATE_LABELS[step.gate].title}
-                  >
-                    {GATE_LABELS[step.gate].tag}
-                  </span>
-                )}
-              </span>
-              <time className="workflow-step-when">
-                {stepTime(step.endedAt ?? step.startedAt)}
-              </time>
-              {step.state === "waiting" && (
-                <span className="workflow-waiting">
-                  {step.gate
-                    ? GATE_LABELS[step.gate].waiting
-                    : "waiting for you"}
+  const renderNodes = (nodes: StepNode[]): ReactNode =>
+    nodes.map((node) => {
+      if (node.kind === "group") {
+        const group = run.groups?.find((item) => item.id === node.id);
+        const all = stepsUnder(node);
+        return (
+          <li className="workflow-group" key={`group:${node.id}`}>
+            <span className="workflow-group-name">
+              <WorkflowIcon />
+              {group?.workflow ?? node.name}
+              {group?.loopTo && (
+                <span
+                  className="workflow-tag"
+                  title={`Goes back to ${group.loopTo} after its last step${group.until ? `, until: ${group.until}` : ""}`}
+                >
+                  ↻ {group.iteration}
                 </span>
               )}
-              {line && <span className="workflow-step-note">{line}</span>}
-            </li>
-          );
-        })}
-      </ol>
+              <span className="workflow-step-when">
+                {all.filter(isFinished).length}/{all.length}
+              </span>
+            </span>
+            <ol className="workflow-steps">{renderNodes(node.children)}</ol>
+          </li>
+        );
+      }
+      const { step } = node;
+      // Under its group's heading, a step goes by its own name.
+      const label = step.name.slice(step.name.lastIndexOf("/") + 1);
+      const line = stepLine(step);
+      const { open, ...row } = openRow(step.name, line);
+      return (
+        <li
+          aria-current={step.state === "active" ? "step" : undefined}
+          className={rowClass(`workflow-step state-${step.state}`, open, line)}
+          key={step.name}
+          {...row}
+        >
+          <StepMark state={step.state} />
+          <span className="workflow-step-name" title={step.name}>
+            {label}
+            {step.gate && (
+              <span
+                className="workflow-gate"
+                title={GATE_LABELS[step.gate].title}
+              >
+                {GATE_LABELS[step.gate].tag}
+              </span>
+            )}
+          </span>
+          <time className="workflow-step-when">
+            {stepTime(step.endedAt ?? step.startedAt)}
+          </time>
+          {step.state === "waiting" && (
+            <span className="workflow-waiting">
+              {step.gate ? GATE_LABELS[step.gate].waiting : "waiting for you"}
+            </span>
+          )}
+          {line && <span className="workflow-step-note">{line}</span>}
+        </li>
+      );
+    });
+  return (
+    <>
+      <ol className="workflow-steps">{renderNodes(stepTree(run.steps))}</ol>
       {run.until && !run.endedAt && (
         <p className="workflow-footnote">until: {run.until}</p>
       )}
@@ -225,7 +298,14 @@ export function WorkflowSteps({ run }: { run: WorkflowRunDto }) {
       )}
       {run.history.length > 0 && (
         <details className="workflow-history">
-          <summary>Earlier iterations ({run.iteration - 1})</summary>
+          <summary>
+            Earlier iterations (
+            {Math.max(
+              run.iteration - 1,
+              ...(run.groups ?? []).map((group) => group.iteration - 1),
+            )}
+            )
+          </summary>
           <ol className="workflow-steps">
             {run.history.map((record, index) => {
               const key = `${record.iteration}:${record.name}:${index}`;

@@ -14,6 +14,8 @@ import type {
 import { SplitList } from "./SplitList";
 import { GATE_LABELS } from "./workflow-gates";
 import { MarkdownView, StepView, WorkflowView } from "./FileViews";
+import { WorkflowIcon } from "./WorkflowPane";
+import { addToSteps } from "./workflow-steps-text";
 import type { DesktopClient } from "./client-types";
 import { askConfirm } from "./dialogs";
 import {
@@ -76,7 +78,7 @@ function titleOf(selection: Selection): string {
 }
 
 const HINTS: Record<Selection["kind"], string> = {
-  flow: "Frontmatter: name, description, when, steps: [a, b] or steps: dynamic (the agent names its own), and optionally loop: <step> and until. Runs already started keep their copy; a change applies from the next run.",
+  flow: "Frontmatter: name, description, when, steps: [a, b] or steps: dynamic (the agent names its own), and optionally loop: <step> and until. @name in steps includes another workflow. Runs already started keep their copy; a change applies from the next run.",
   step: "Frontmatter: name, description, and optionally gate: start (you give the go-ahead before it starts) or gate: result (you approve what it produced). The body is what the agent does in this step.",
   choosing:
     "The rules an agent reads, in order, to pick a workflow for the work.",
@@ -85,16 +87,92 @@ const HINTS: Record<Selection["kind"], string> = {
 const plural = (count: number, word: string) =>
   `${count} ${word}${count === 1 ? "" : "s"}`;
 
-/** "6 steps · 1 gate", or "dynamic" for a workflow whose agent names them. */
-function flowMeta(flow: WorkflowFileDto, steps: WorkflowFileDto[]): string {
+/**
+ * A workflow's steps with included workflows expanded, as a run lists them.
+ * `seen` stops a loop of workflows including each other, which the file
+ * list flags anyway.
+ */
+function expandedSteps(
+  flow: WorkflowFileDto,
+  flows: WorkflowFileDto[],
+  seen: string[] = [flow.name],
+): string[] {
+  return (flow.steps ?? []).flatMap((entry) => {
+    if (!entry.startsWith("@")) return [entry];
+    const name = entry.slice(1);
+    const included = flows.find((item) => item.name === name);
+    if (!included || seen.includes(name)) return [];
+    return expandedSteps(included, flows, [...seen, name]);
+  });
+}
+
+/**
+ * "6 steps · 1 gate", counting included workflows' steps, or "dynamic" for
+ * a workflow whose agent names them.
+ */
+function flowMeta(
+  flow: WorkflowFileDto,
+  flows: WorkflowFileDto[],
+  steps: WorkflowFileDto[],
+): string {
   if (flow.dynamic) return "dynamic";
-  const names = flow.steps ?? [];
+  const names = expandedSteps(flow, flows);
   const gates = names.filter(
     (name) => steps.find((step) => step.name === name)?.gate,
   ).length;
   return [plural(names.length, "step"), gates ? plural(gates, "gate") : ""]
     .filter(Boolean)
     .join(" · ");
+}
+
+/**
+ * Under a workflow's markdown while it is edited: every step and every
+ * other workflow, marked with the workflow icon. Clicking one adds it to
+ * the end of `steps`, a workflow as `@name`.
+ */
+export function StepPicker({
+  files,
+  onAdd,
+  self,
+}: {
+  files: WorkflowFilesDto;
+  onAdd: (entry: string) => void;
+  /** The workflow being edited, which may not include itself. */
+  self: string | null;
+}) {
+  const steps = files.steps.filter((step) => !step.problem);
+  const flows = files.flows.filter(
+    (flow) => !flow.problem && !flow.dynamic && flow.name !== self,
+  );
+  if (!steps.length && !flows.length) return null;
+  return (
+    <div aria-label="Add to steps" className="step-picker" role="group">
+      <span className="step-picker-label">Add to steps</span>
+      {steps.map((step) => (
+        <button
+          className="quiet step-picker-item"
+          key={`step:${step.name}`}
+          onClick={() => onAdd(step.name)}
+          title={step.description || step.name}
+          type="button"
+        >
+          {step.name}
+        </button>
+      ))}
+      {flows.map((flow) => (
+        <button
+          className="quiet step-picker-item workflow"
+          key={`flow:${flow.name}`}
+          onClick={() => onAdd(`@${flow.name}`)}
+          title={`Include workflow '${flow.name}' as @${flow.name}${flow.description ? `: ${flow.description}` : ""}`}
+          type="button"
+        >
+          <WorkflowIcon />
+          {flow.name}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export function WorkflowsEditor({
@@ -258,7 +336,7 @@ export function WorkflowsEditor({
               {files.flows.map((file) => (
                 <FileRow
                   key={file.name}
-                  meta={flowMeta(file, files.steps)}
+                  meta={flowMeta(file, files.flows, files.steps)}
                   name={file.name}
                   onSelect={() =>
                     void select({ kind: "flow", name: file.name })
@@ -323,6 +401,17 @@ export function WorkflowsEditor({
           path={path}
           saving={saving}
           title={titleOf(selection)}
+          {...(selection.kind === "flow"
+            ? {
+                tools: (
+                  <StepPicker
+                    files={files}
+                    onAdd={(entry) => setDraft(addToSteps(draft, entry))}
+                    self={selection.name}
+                  />
+                ),
+              }
+            : {})}
           {...("name" in selection && selection.name
             ? { onDelete: () => void remove() }
             : {})}
@@ -335,6 +424,8 @@ export function WorkflowsEditor({
             ) : !current ? undefined : selection.kind === "flow" ? (
               <WorkflowView
                 flow={current}
+                flows={files.flows}
+                onFlow={(name) => void select({ kind: "flow", name })}
                 onStep={(name) => void select({ kind: "step", name })}
                 steps={files.steps}
               />

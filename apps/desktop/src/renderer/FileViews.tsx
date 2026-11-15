@@ -9,6 +9,7 @@ import type { ReactNode } from "react";
 import type { InstructionFilesDto, WorkflowFileDto } from "@daedalus/protocol";
 import { MarkdownPreview } from "./markdown-preview";
 import { GATE_LABELS } from "./workflow-gates";
+import { WorkflowIcon } from "./WorkflowPane";
 
 /** A rule is a top-level bullet or numbered item; indented lines belong to it. */
 const isRule = (line: string) => /^(?:[-*+]|\d+[.)])\s+\S/.test(line);
@@ -78,13 +79,20 @@ function Empty({ children }: { children: ReactNode }) {
   return <p className="file-view-empty">{children}</p>;
 }
 
-/** A workflow: what it is for, when it fits, and its steps in order. */
+/**
+ * A workflow: what it is for, when it fits, and its steps in order. An
+ * included workflow (`@name`) is a card of its own that opens it.
+ */
 export function WorkflowView({
   flow,
+  flows,
+  onFlow,
   onStep,
   steps,
 }: {
   flow: WorkflowFileDto;
+  flows: WorkflowFileDto[];
+  onFlow: (name: string) => void;
   onStep: (name: string) => void;
   steps: WorkflowFileDto[];
 }) {
@@ -113,6 +121,50 @@ export function WorkflowView({
       ) : (
         <ol className="step-timeline">
           {(flow.steps ?? []).map((name, index) => {
+            if (name.startsWith("@")) {
+              const included = flows.find(
+                (item) => item.name === name.slice(1),
+              );
+              return (
+                <li key={name}>
+                  <span aria-hidden="true" className="step-timeline-number">
+                    {index + 1}
+                  </span>
+                  <button
+                    className="step-timeline-card included"
+                    onClick={() => onFlow(name.slice(1))}
+                    type="button"
+                  >
+                    <span className="step-timeline-name">
+                      <WorkflowIcon />
+                      {name.slice(1)}
+                      <span className="workflow-tag">workflow</span>
+                      {flow.loop === name && (
+                        <span className="workflow-tag">↻ loops back here</span>
+                      )}
+                    </span>
+                    {included ? (
+                      <>
+                        {included.description && (
+                          <span className="step-timeline-description">
+                            {included.description}
+                          </span>
+                        )}
+                        <span className="step-timeline-preview">
+                          {included.dynamic
+                            ? "steps: dynamic"
+                            : (included.steps ?? []).join(" → ")}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="step-timeline-missing">
+                        No workflow file; a run cannot start until there is one.
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            }
             const step = steps.find((item) => item.name === name);
             return (
               <li key={name}>
