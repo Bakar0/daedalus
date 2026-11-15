@@ -1,12 +1,18 @@
 import { join } from "node:path";
 import { ensureDirectory, pathExists, writeTextFile } from "@daedalus/platform";
-import type {
-  AgentSession,
-  WorkflowGate,
-  WorkflowRun,
-  WorkflowRunStep,
-  WorkflowStepDefinition,
-  WorkflowStepState,
+import {
+  includedWorkflow,
+  inStepGroup,
+  stepBaseName,
+  stepGroupId,
+  type AgentSession,
+  type WorkflowGate,
+  type WorkflowRun,
+  type WorkflowRunGroup,
+  type WorkflowRunStep,
+  type WorkflowStepDefinition,
+  type WorkflowStepRecord,
+  type WorkflowStepState,
 } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
@@ -14,6 +20,7 @@ import type { ActivityService } from "./activity";
 import {
   deleteWorkflowFile,
   ensureWorkflowsFolder,
+  expandWorkflow,
   readWorkflowCatalog,
   readWorkflowFiles,
   saveWorkflowFile,
@@ -53,6 +60,54 @@ export interface WorkflowStepOutcome {
   waiting: boolean;
   /** The last step finished and a circular run went round again. */
   looped: boolean;
+  /**
+   * The last step of an included workflow with its own loop finished, and
+   * that group went round again: the group, with its new iteration.
+   */
+  loopedGroup: WorkflowRunGroup | null;
+}
+
+const record = (
+  step: WorkflowRunStep,
+  iteration: number,
+): WorkflowStepRecord => ({
+  iteration,
+  name: step.name,
+  state: step.state,
+  startedAt: step.startedAt,
+  endedAt: step.endedAt,
+  note: step.note,
+});
+
+/** How many workflows deep a group id is: `release` 1, `a/b` 2. */
+const depth = (groupId: string) => groupId.split("/").length;
+
+/** The positions of a group's steps in the run, in order. */
+const groupMembers = (steps: WorkflowRunStep[], groupId: string): number[] =>
+  steps.flatMap((step, index) =>
+    inStepGroup(step.name, groupId) ? [index] : [],
+  );
+
+/**
+ * Finds a step by its id, or by the end of it when that names one step
+ * only: `review` for `release/review`. A step's full id always works.
+ */
+export function resolveStepIndex(run: WorkflowRun, name: string): number {
+  const exact = run.steps.findIndex((step) => step.name === name);
+  if (exact !== -1) return exact;
+  const matches = run.steps.flatMap((step, index) =>
+    step.name.endsWith(`/${name}`) ? [index] : [],
+  );
+  if (matches.length === 1) return matches[0]!;
+  if (matches.length > 1)
+    throw new DaedalusError(
+      "VALIDATION",
+      `Step '${name}' is in more than one place in workflow '${run.workflow}': ${matches.map((index) => run.steps[index]!.name).join(", ")}. Name the one you mean in full.`,
+    );
+  throw new DaedalusError(
+    "VALIDATION",
+    `Workflow '${run.workflow}' has no step '${name}'. Steps: ${run.steps.map((step) => step.name).join(", ") || "none"}`,
+  );
 }
 
 const runStep = (
@@ -138,15 +193,26 @@ export class WorkflowService {
   }> {
     const catalog = await this.catalog();
     return {
-      notes:
+      // An included workflow's own notes follow the run's, each headed with
+      // the group they apply to.
+      notes: [
         catalog.workflows.find((item) => item.name === run.workflow)?.body ??
-        "",
+          "",
+        ...run.groups.map((group) => {
+          const body = catalog.workflows
+            .find((item) => item.name === group.workflow)
+            ?.body.trim();
+          return body ? `In ${group.id}:\n${body}` : "";
+        }),
+      ]
+        .filter((text) => text.trim())
+        .join("\n\n"),
       steps: run.steps.map((step) => ({
         name: step.name,
         gate: step.gate,
         body:
-          catalog.steps.find((item) => item.name === step.name)?.body ??
-          step.description,
+          catalog.steps.find((item) => item.name === stepBaseName(step.name))
+            ?.body ?? step.description,
       })),
     };
   }
@@ -240,6 +306,7 @@ export class WorkflowService {
         `Step '${repeated}' is listed twice; a run goes back to a step by starting it again`,
       );
     let steps: WorkflowRunStep[];
+    let groups: WorkflowRunGroup[] = [];
     let loopTo: string | null;
     let until: string;
     let dynamic = !named;
@@ -260,10 +327,15 @@ export class WorkflowService {
           `Workflow '${label}' has its own steps; build a dynamic workflow with --steps and no name instead`,
         );
       dynamic = workflow.dynamic;
-      steps = workflow.dynamic
-        ? ownSteps(input.steps ?? [])
-        : this.fileSteps(catalog, workflow);
-      loopTo = workflow.loop;
+      if (workflow.dynamic) {
+        steps = ownSteps(input.steps ?? []);
+        loopTo = workflow.loop;
+      } else {
+        const expanded = this.fileSteps(catalog, workflow);
+        steps = expanded.steps;
+        groups = expanded.groups;
+        loopTo = expanded.loopTo;
+      }
       until = workflow.until;
     }
     const now = this.now().toISOString();
@@ -273,6 +345,7 @@ export class WorkflowService {
       sessionId: session.id,
       workflow: label,
       steps,
+      groups,
       dynamic,
       modified: false,
       loopTo,
@@ -301,20 +374,33 @@ export class WorkflowService {
     );
   }
 
-  /** A maintained workflow's steps, each from its file. */
+  /**
+   * A maintained workflow's steps, each from its file, with included
+   * workflows expanded in place under qualified ids, and its groups.
+   */
   private fileSteps(
     catalog: WorkflowCatalog,
     workflow: WorkflowCatalog["workflows"][number],
-  ): WorkflowRunStep[] {
-    return workflow.steps.map((name) => {
-      const step = catalog.steps.find((item) => item.name === name);
-      if (!step)
-        throw new DaedalusError(
-          "VALIDATION",
-          `Workflow '${workflow.name}' names step '${name}', which has no file`,
-        );
-      return runStep(step, false);
-    });
+  ): {
+    steps: WorkflowRunStep[];
+    groups: WorkflowRunGroup[];
+    loopTo: string | null;
+  } {
+    const expanded = expandWorkflow(workflow, catalog);
+    return {
+      steps: expanded.steps.map(({ id, step }) =>
+        runStep({ ...step, name: id }, false),
+      ),
+      groups: expanded.groups.map((group) => ({
+        id: group.id,
+        workflow: group.workflow.name,
+        loopTo: group.loopTo,
+        until: group.workflow.until,
+        iteration: 1,
+        lastRound: null,
+      })),
+      loopTo: expanded.loopTo,
+    };
   }
 
   /**
@@ -359,20 +445,27 @@ export class WorkflowService {
     gate?: boolean;
   }): Promise<WorkflowRun> {
     const run = this.requireOpen(this.requireSession(input.sessionId));
-    const name = workflowName(input.step, "step");
+    const base = workflowName(input.step, "step");
+    // A step added after one inside an included workflow joins its group.
+    const afterIndex =
+      input.after === undefined ? -1 : resolveStepIndex(run, input.after);
+    const group =
+      afterIndex === -1 ? "" : stepGroupId(run.steps[afterIndex]!.name);
+    const name = group ? `${group}/${base}` : base;
     if (run.steps.some((step) => step.name === name))
       throw new DaedalusError(
         "CONFLICT",
         `The run already has step '${name}'; start it again to go back to it`,
       );
     const file = (await this.catalog()).steps.find(
-      (item) => item.name === name,
+      (item) => item.name === base,
     );
     const description = input.description?.trim();
     const step = file
       ? runStep(
           {
             ...file,
+            name,
             ...(description ? { description } : {}),
             gate: input.gate ? "result" : file.gate,
           },
@@ -387,19 +480,15 @@ export class WorkflowService {
           true,
         );
     const steps = [...run.steps];
-    if (input.after) {
-      const index = steps.findIndex((item) => item.name === input.after);
-      if (index === -1) throw this.unknownStep(run, input.after);
-      steps.splice(index + 1, 0, step);
-    } else steps.push(step);
+    if (afterIndex !== -1) steps.splice(afterIndex + 1, 0, step);
+    else steps.push(step);
     return this.save({ ...run, steps, modified: !run.dynamic });
   }
 
   /** Takes a step that has not started out of the open run. */
   remove(input: { sessionId: string; step: string }): WorkflowRun {
     const run = this.requireOpen(this.requireSession(input.sessionId));
-    const step = run.steps.find((item) => item.name === input.step);
-    if (!step) throw this.unknownStep(run, input.step);
+    const step = run.steps[resolveStepIndex(run, input.step)]!;
     if (step.state !== "pending")
       throw new DaedalusError(
         "CONFLICT",
@@ -407,10 +496,16 @@ export class WorkflowService {
       );
     const steps = run.steps.filter((item) => item !== step);
     const loopTo = run.loopTo === step.name ? null : run.loopTo;
+    // A group left with no steps goes; one whose loop step went loses it.
+    const groups = run.groups
+      .filter((group) => groupMembers(steps, group.id).length > 0)
+      .map((group) =>
+        group.loopTo === step.name ? { ...group, loopTo: null } : group,
+      );
     const finished =
       steps.length > 0 && steps.every((item) => FINISHED.has(item.state));
     return this.save(
-      { ...run, steps, modified: !run.dynamic, loopTo },
+      { ...run, steps, groups, modified: !run.dynamic, loopTo },
       finished && !loopTo,
     );
   }
@@ -459,9 +554,8 @@ export class WorkflowService {
     note?: string;
   }): Promise<WorkflowStepOutcome> {
     const session = this.requireSession(input.sessionId);
-    const run = this.requireOpen(session);
-    const index = run.steps.findIndex((step) => step.name === input.step);
-    if (index === -1) throw this.unknownStep(run, input.step);
+    const open = this.requireOpen(session);
+    const index = resolveStepIndex(open, input.step);
     const note = input.note?.trim() || null;
     if (!note)
       throw new DaedalusError(
@@ -472,6 +566,9 @@ export class WorkflowService {
             ? 'Say what came out of this step with --note "<one line>"'
             : 'Say why the step is skipped with --note "<one line>"',
       );
+    // Moving past an included workflow that just went round, before any of
+    // its new round started, leaves its loop: its last round comes back.
+    const run = leaveGroupLoops(open, index);
     const now = this.now().toISOString();
     const steps = run.steps.map((step) => ({ ...step }));
     const target = steps[index]!;
@@ -536,7 +633,7 @@ export class WorkflowService {
     // question away.
     if (!waiting && run.steps.some((step) => step.state === "waiting"))
       this.activity.clear(session.id);
-    const { run: saved, looped } = this.settle(run, steps);
+    const { run: saved, looped, loopedGroup } = this.settle(run, steps);
     if (waiting)
       await this.activity.raise({
         sessionId: session.id,
@@ -545,7 +642,7 @@ export class WorkflowService {
             ? `Approve starting step '${target.name}' of workflow '${run.workflow}': ${note}`
             : `Approve the result of step '${target.name}' of workflow '${run.workflow}': ${note}`,
       });
-    return { run: saved, waiting, looped };
+    return { run: saved, waiting, looped, loopedGroup };
   }
 
   /**
@@ -555,36 +652,82 @@ export class WorkflowService {
   private settle(
     run: WorkflowRun,
     changed: WorkflowRunStep[],
-  ): { run: WorkflowRun; looped: boolean } {
+  ): {
+    run: WorkflowRun;
+    looped: boolean;
+    loopedGroup: WorkflowRunGroup | null;
+  } {
     let steps = changed;
+    let history = run.history;
+    let groups = run.groups;
+    // A group's loop first, the deepest first: it goes round when this
+    // change finished its last step, which keeps the run from finishing.
+    let loopedGroup: WorkflowRunGroup | null = null;
+    for (const group of [...groups].sort((a, b) => depth(b.id) - depth(a.id))) {
+      if (!group.loopTo) continue;
+      const members = groupMembers(steps, group.id);
+      const done = (list: WorkflowRunStep[]) =>
+        members.every((position) => FINISHED.has(list[position]!.state));
+      const before = groupMembers(run.steps, group.id);
+      const wasDone =
+        before.length === members.length &&
+        before.every((position) => FINISHED.has(run.steps[position]!.state));
+      if (!members.length || !done(steps) || wasDone) continue;
+      const from = steps.findIndex((step) => step.name === group.loopTo);
+      const last = members[members.length - 1]!;
+      if (from === -1) continue;
+      const round = steps.slice(from, last + 1);
+      history = [
+        ...history,
+        ...round.map((step) => record(step, group.iteration)),
+      ];
+      steps = steps.map((step, position) =>
+        position < from || position > last ? step : runStep(step, step.dynamic),
+      );
+      loopedGroup = {
+        ...group,
+        iteration: group.iteration + 1,
+        lastRound: round,
+      };
+      const went = loopedGroup;
+      groups = groups.map((item) =>
+        item.id === went.id
+          ? went
+          : inStepGroup(`${item.id}/`, went.id) &&
+              round.some((step) => inStepGroup(step.name, item.id))
+            ? { ...item, iteration: 1, lastRound: null }
+            : item,
+      );
+      break;
+    }
     const finished = steps.every((step) => FINISHED.has(step.state));
     let iteration = run.iteration;
-    let history = run.history;
     const looped = finished && run.loopTo !== null;
     if (looped) {
       const from = steps.findIndex((step) => step.name === run.loopTo);
       history = [
         ...history,
-        ...steps.slice(from).map((step) => ({
-          iteration,
-          name: step.name,
-          state: step.state,
-          startedAt: step.startedAt,
-          endedAt: step.endedAt,
-          note: step.note,
-        })),
+        ...steps.slice(from).map((step) => record(step, iteration)),
       ];
+      const reset = steps.slice(from);
       steps = steps.map((step, position) =>
         position < from ? step : runStep(step, step.dynamic),
+      );
+      // Groups inside the part that goes round start counting again.
+      groups = groups.map((group) =>
+        reset.some((step) => inStepGroup(step.name, group.id))
+          ? { ...group, iteration: 1, lastRound: null }
+          : group,
       );
       iteration += 1;
     }
     return {
       run: this.save(
-        { ...run, steps, iteration, history },
+        { ...run, steps, groups, iteration, history },
         finished && !looped,
       ),
       looped,
+      loopedGroup,
     };
   }
 
@@ -593,15 +736,24 @@ export class WorkflowService {
    * records: a `before` step starts, and a `user` step is done with what
    * came out. The session's attention clears.
    */
-  approve(sessionId: string): WorkflowRun {
+  approve(sessionId: string, step?: string): WorkflowRun {
     const session = this.requireSession(sessionId);
     const run = this.requireOpen(session);
-    const target = run.steps.find((step) => step.state === "waiting");
+    const target = run.steps.find((item) => item.state === "waiting");
     if (!target)
       throw new DaedalusError(
         "CONFLICT",
         `Workflow '${run.workflow}' is not waiting for an approval`,
       );
+    // Naming the step checks the approval is for the one that waits.
+    if (step !== undefined) {
+      const named = run.steps[resolveStepIndex(run, step)]!;
+      if (named !== target)
+        throw new DaedalusError(
+          "CONFLICT",
+          `Step '${named.name}' is not waiting for an approval; '${target.name}' is`,
+        );
+    }
     const now = this.now().toISOString();
     const steps = run.steps.map((step) =>
       step !== target
@@ -652,6 +804,8 @@ export class WorkflowService {
     await ensureDirectory(steps);
     for (const step of run.steps) {
       const stepPath = join(steps, `${step.name}.md`);
+      // A step inside an included workflow is carried by its `@name`.
+      if (stepGroupId(step.name)) continue;
       if (!step.dynamic || (await pathExists(stepPath))) continue;
       // A step named at start has no description; what the agent planned
       // in it this time is the best first draft of its instructions.
@@ -674,9 +828,9 @@ export class WorkflowService {
         name,
         description: input.description?.trim() ?? "",
         when: input.when?.trim() ?? "",
-        steps: run.steps.map((step) => step.name),
+        steps: savedEntries(run),
         dynamic: false,
-        loop: run.loopTo,
+        loop: run.loopTo && savedLoop(run, run.loopTo),
         until: run.until,
         body: "",
       }),
@@ -692,13 +846,6 @@ export class WorkflowService {
       updatedAt: now,
       endedAt: end ? now : run.endedAt,
     });
-  }
-
-  private unknownStep(run: WorkflowRun, name: string): DaedalusError {
-    return new DaedalusError(
-      "VALIDATION",
-      `Workflow '${run.workflow}' has no step '${name}'. Steps: ${run.steps.map((step) => step.name).join(", ") || "none"}`,
-    );
   }
 
   private requireOpen(session: AgentSession): WorkflowRun {
@@ -717,6 +864,69 @@ export class WorkflowService {
       throw new DaedalusError("NOT_FOUND", `No agent session '${sessionId}'`);
     return session;
   }
+}
+
+/**
+ * A run's `steps` as a workflow file lists them: its own steps by name, and
+ * each top-level group once, as `@workflow`.
+ */
+function savedEntries(run: WorkflowRun): string[] {
+  const entries: string[] = [];
+  for (const step of run.steps) {
+    const group = step.name.split("/")[0]!;
+    const entry =
+      group === step.name
+        ? step.name
+        : `@${run.groups.find((item) => item.id === group)?.workflow ?? group}`;
+    if (!entries.includes(entry)) entries.push(entry);
+  }
+  return entries;
+}
+
+/** The entry a saved workflow loops to: a step, or the group it starts. */
+function savedLoop(run: WorkflowRun, loopTo: string): string {
+  const group = loopTo.split("/")[0]!;
+  return group === loopTo
+    ? loopTo
+    : `@${run.groups.find((item) => item.id === group)?.workflow ?? group}`;
+}
+
+/**
+ * Puts back the last round of each included workflow that just went round
+ * and has not started its new one, when the step at `index` lies after it:
+ * moving on is how a run leaves a group's loop.
+ */
+function leaveGroupLoops(run: WorkflowRun, index: number): WorkflowRun {
+  let { steps, history, groups } = run;
+  for (const group of run.groups) {
+    if (!group.lastRound) continue;
+    const members = groupMembers(steps, group.id);
+    const last = members[members.length - 1];
+    const roundNames = new Set(group.lastRound.map((step) => step.name));
+    const untouched = steps.every(
+      (step) =>
+        !roundNames.has(step.name) ||
+        (step.state === "pending" && step.startedAt === null),
+    );
+    if (last === undefined || index <= last || !untouched) continue;
+    const round = new Map(group.lastRound.map((step) => [step.name, step]));
+    steps = steps.map((step) => round.get(step.name) ?? step);
+    // The records the loop wrote for that round go: it is current again.
+    const remaining = [...history];
+    for (const name of roundNames) {
+      const at = remaining.findLastIndex(
+        (item) => item.name === name && item.iteration === group.iteration - 1,
+      );
+      if (at !== -1) remaining.splice(at, 1);
+    }
+    history = remaining;
+    groups = groups.map((item) =>
+      item.id === group.id
+        ? { ...item, iteration: item.iteration - 1, lastRound: null }
+        : item,
+    );
+  }
+  return steps === run.steps ? run : { ...run, steps, history, groups };
 }
 
 /** ` at step 'review' (3 of 8)`, or nothing before the first step starts. */

@@ -8,6 +8,8 @@ import {
   writeTextFile,
 } from "@daedalus/platform";
 import {
+  includedWorkflow,
+  MAX_WORKFLOW_NESTING,
   parseGate,
   type WorkflowDefinition,
   type WorkflowGate,
@@ -61,6 +63,27 @@ export function workflowName(value: string, what = "workflow"): string {
   return name;
 }
 
+/**
+ * `@release` in a `steps` or `loop` field is how a workflow includes another,
+ * but YAML reserves a leading `@`. Such a token is quoted before the YAML is
+ * read, in those two fields only, so the user writes it bare.
+ */
+export function quoteIncludes(yaml: string): string {
+  let key = "";
+  return yaml
+    .split("\n")
+    .map((line) => {
+      const field = /^([A-Za-z_][\w-]*)\s*:/.exec(line);
+      if (field) key = field[1]!;
+      if (key !== "steps" && key !== "loop") return line;
+      return line.replace(
+        /(^\s*-\s+|^[\w-]+\s*:\s+|[[,]\s*)@([a-z0-9][a-z0-9-]*)(?=\s*(?:[\],#]|$))/g,
+        (_all, before: string, name: string) => `${before}"@${name}"`,
+      );
+    })
+    .join("\n");
+}
+
 function frontmatter(
   text: string,
   what: string,
@@ -73,7 +96,9 @@ function frontmatter(
     );
   let data: unknown;
   try {
-    data = Bun.YAML.parse(match[1]!);
+    data = Bun.YAML.parse(
+      what === "workflow" ? quoteIncludes(match[1]!) : match[1]!,
+    );
   } catch (error) {
     throw new DaedalusError(
       "VALIDATION",
@@ -133,7 +158,7 @@ export function parseWorkflowFile(
   )
     throw new DaedalusError(
       "VALIDATION",
-      "'steps' must be a list of step names, such as [research, review], or dynamic",
+      "'steps' must be a list of step names, such as [research, review], or dynamic; @name includes another workflow",
     );
   if (dynamic && (fields.loop !== undefined || fields.until !== undefined))
     throw new DaedalusError(
@@ -142,12 +167,19 @@ export function parseWorkflowFile(
     );
   const steps = dynamic
     ? []
-    : (fields.steps as string[]).map((step) => workflowName(step, "step"));
+    : (fields.steps as string[]).map((step) => {
+        const included = includedWorkflow(step.trim());
+        return included === null
+          ? workflowName(step, "step")
+          : `@${workflowName(included)}`;
+      });
   const repeated = steps.find((step, index) => steps.indexOf(step) !== index);
   if (repeated)
     throw new DaedalusError(
       "VALIDATION",
-      `Step '${repeated}' is listed twice; a run goes back to a step by starting it again`,
+      includedWorkflow(repeated)
+        ? `Workflow '${repeated.slice(1)}' is included twice; a run goes back to a step by starting it again`
+        : `Step '${repeated}' is listed twice; a run goes back to a step by starting it again`,
     );
   let loop: string | null = null;
   if (fields.loop === true) loop = steps[0]!;
@@ -278,12 +310,22 @@ export async function readWorkflowCatalog(
     problems,
   );
   const known = new Set(steps.map((step) => step.name));
+  const byName = new Map(workflows.map((item) => [item.name, item]));
   for (const workflow of workflows) {
-    const missing = workflow.steps.filter((step) => !known.has(step));
-    if (missing.length)
+    const missing = missingSteps(workflow, known);
+    const included = includeProblem(workflow, byName, known);
+    const message = [
+      missing.length
+        ? `No step file for ${missing.map((step) => `'${step}'`).join(", ")} in ${workflowStepsPath(root)}`
+        : "",
+      included?.message ?? "",
+    ]
+      .filter(Boolean)
+      .join(". ");
+    if (message)
       problems.push({
         path: join(workflowsPath(root), `${workflow.name}.md`),
-        message: `No step file for ${missing.map((step) => `'${step}'`).join(", ")} in ${workflowStepsPath(root)}`,
+        message,
       });
   }
   const choosingPath = workflowChoosingPath(root);
@@ -291,6 +333,157 @@ export async function readWorkflowCatalog(
     ? await readTextFile(choosingPath)
     : "";
   return { workflows, steps, problems, choosing };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Included workflows                                                         */
+/* -------------------------------------------------------------------------- */
+
+/** A workflow's own steps, not its included workflows, that have no file. */
+const missingSteps = (
+  workflow: Pick<WorkflowDefinition, "steps">,
+  known: ReadonlySet<string>,
+): string[] =>
+  workflow.steps.filter(
+    (step) => includedWorkflow(step) === null && !known.has(step),
+  );
+
+/**
+ * What stops a workflow's `@name` entries from expanding: a loop of
+ * workflows including each other, nesting deeper than
+ * {@link MAX_WORKFLOW_NESTING}, a missing or dynamic workflow, or an
+ * included workflow missing a step. `cycle` and `depth` are the shape of the
+ * files themselves, which the editor refuses to save; the rest may be fixed
+ * by writing the missing file, so they are only flagged.
+ */
+export interface WorkflowIncludeProblem {
+  kind: "cycle" | "depth" | "missing" | "dynamic" | "steps";
+  message: string;
+}
+
+/** Only what including needs: a name, its entries and whether it is dynamic. */
+type IncludeShape = Pick<WorkflowDefinition, "name" | "steps" | "dynamic">;
+
+export function includeProblem(
+  workflow: IncludeShape,
+  workflows: ReadonlyMap<string, IncludeShape>,
+  knownSteps: ReadonlySet<string>,
+): WorkflowIncludeProblem | null {
+  const walk = (
+    current: IncludeShape,
+    chain: string[],
+  ): WorkflowIncludeProblem | null => {
+    for (const entry of current.steps) {
+      const name = includedWorkflow(entry);
+      if (name === null) continue;
+      const path = [...chain, name];
+      const seen = chain.indexOf(name);
+      if (seen !== -1)
+        return {
+          kind: "cycle",
+          message:
+            path.length === 2
+              ? `Workflow '${name}' includes itself`
+              : `Workflows include each other in a loop: ${path.slice(seen).join(" → ")}`,
+        };
+      if (path.length - 1 > MAX_WORKFLOW_NESTING)
+        return {
+          kind: "depth",
+          message: `Included workflows nest more than ${MAX_WORKFLOW_NESTING} levels deep: ${path.join(" → ")}`,
+        };
+      const included = workflows.get(name);
+      if (!included)
+        return {
+          kind: "missing",
+          message: `No workflow '${name}' to include as @${name}`,
+        };
+      if (included.dynamic)
+        return {
+          kind: "dynamic",
+          message: `Workflow '${name}' has steps: dynamic, so it cannot be included; include a workflow with fixed steps`,
+        };
+      const missing = missingSteps(included, knownSteps);
+      if (missing.length)
+        return {
+          kind: "steps",
+          message: `Included workflow '${name}' has no step file for ${missing.map((step) => `'${step}'`).join(", ")}`,
+        };
+      const deeper = walk(included, path);
+      if (deeper) return deeper;
+    }
+    return null;
+  };
+  return walk(workflow, [workflow.name]);
+}
+
+/** A step of an expanded workflow: its qualified id and its file. */
+export interface ExpandedStep {
+  id: string;
+  step: WorkflowStepDefinition;
+}
+
+/** An included workflow in an expanded one: its group id and its file. */
+export interface ExpandedGroup {
+  id: string;
+  workflow: WorkflowDefinition;
+  /** The step id its own loop goes back to, or null. */
+  loopTo: string | null;
+}
+
+/**
+ * A workflow with every `@name` entry replaced by that workflow's steps,
+ * their ids qualified by the group (`release/review`), and the step id its
+ * own loop goes back to. Throws with the reason when it cannot expand.
+ */
+export function expandWorkflow(
+  workflow: WorkflowDefinition,
+  catalog: Pick<WorkflowCatalog, "workflows" | "steps">,
+): { steps: ExpandedStep[]; groups: ExpandedGroup[]; loopTo: string | null } {
+  const byName = new Map(catalog.workflows.map((item) => [item.name, item]));
+  const files = new Map(catalog.steps.map((item) => [item.name, item]));
+  const problem = includeProblem(workflow, byName, new Set(files.keys()));
+  if (problem)
+    throw new DaedalusError(
+      "VALIDATION",
+      `Workflow '${workflow.name}' cannot start: ${problem.message}`,
+    );
+  const steps: ExpandedStep[] = [];
+  const groups: ExpandedGroup[] = [];
+  const qualify = (prefix: string, name: string) =>
+    prefix ? `${prefix}/${name}` : name;
+  /** The id of an entry's first step: a step's own, or its group's first. */
+  const firstIds = new Map<string, string>();
+  const expand = (current: WorkflowDefinition, prefix: string) => {
+    for (const entry of current.steps) {
+      const included = includedWorkflow(entry);
+      const start = steps.length;
+      if (included === null) {
+        const step = files.get(entry);
+        if (!step)
+          throw new DaedalusError(
+            "VALIDATION",
+            `Workflow '${current.name}' names step '${entry}', which has no file`,
+          );
+        steps.push({ id: qualify(prefix, entry), step });
+      } else {
+        const child = byName.get(included)!;
+        const id = qualify(prefix, included);
+        const group: ExpandedGroup = { id, workflow: child, loopTo: null };
+        groups.push(group);
+        expand(child, id);
+        group.loopTo = child.loop
+          ? (firstIds.get(qualify(id, child.loop)) ?? null)
+          : null;
+      }
+      firstIds.set(qualify(prefix, entry), steps[start]!.id);
+    }
+  };
+  expand(workflow, "");
+  return {
+    steps,
+    groups,
+    loopTo: workflow.loop ? (firstIds.get(workflow.loop) ?? null) : null,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -340,6 +533,21 @@ async function readFiles(
   });
 }
 
+/** The workflow files that parse, as {@link includeProblem} reads them. */
+const includeShapes = (flows: WorkflowFile[]) =>
+  new Map(
+    flows
+      .filter((flow) => !flow.problem)
+      .map((flow) => [
+        flow.name,
+        {
+          name: flow.name,
+          steps: flow.steps ?? [],
+          dynamic: Boolean(flow.dynamic),
+        },
+      ]),
+  );
+
 /** Every workflow and step file as written, for the editor. */
 export async function readWorkflowFiles(root: string): Promise<WorkflowFiles> {
   const steps = await readFiles(workflowStepsPath(root), (text, name) => {
@@ -366,10 +574,20 @@ export async function readWorkflowFiles(root: string): Promise<WorkflowFiles> {
       loop: flow.loop,
     };
   });
+  const shapes = includeShapes(flows);
   for (const flow of flows) {
-    const missing = (flow.steps ?? []).filter((step) => !known.has(step));
-    if (!flow.problem && missing.length)
-      flow.problem = `No step file for ${missing.map((step) => `'${step}'`).join(", ")}`;
+    if (flow.problem) continue;
+    const missing = missingSteps({ steps: flow.steps ?? [] }, known);
+    const included = includeProblem(shapes.get(flow.name)!, shapes, known);
+    flow.problem =
+      [
+        missing.length
+          ? `No step file for ${missing.map((step) => `'${step}'`).join(", ")}`
+          : "",
+        included?.message ?? "",
+      ]
+        .filter(Boolean)
+        .join(". ") || null;
   }
   const choosingPath = workflowChoosingPath(root);
   return {
@@ -409,10 +627,10 @@ export async function saveWorkflowFile(
         input.kind === "flow" ? "workflow" : "step",
       )
     : undefined;
-  const name =
-    input.kind === "flow"
-      ? parseWorkflowFile(input.text, previous).name
-      : parseStepFile(input.text, previous).name;
+  const flow =
+    input.kind === "flow" ? parseWorkflowFile(input.text, previous) : null;
+  const name = flow ? flow.name : parseStepFile(input.text, previous).name;
+  if (flow) await refuseIncludeShape(root, flow, previous);
   const path = join(folder, `${name}.md`);
   if (previous !== name && (await pathExists(path)))
     throw new DaedalusError(
@@ -425,7 +643,49 @@ export async function saveWorkflowFile(
     await unlink(join(folder, `${previous}.md`)).catch(() => undefined);
 }
 
-/** Deletes a workflow, or a step no workflow uses. */
+/**
+ * Refuses a workflow whose saving would leave workflows including each
+ * other in a loop, or nested too deep: no run could start from them. The
+ * check covers every workflow, since saving one can make another too deep.
+ */
+async function refuseIncludeShape(
+  root: string,
+  flow: WorkflowDefinition,
+  previous: string | undefined,
+): Promise<void> {
+  if (!flow.steps.some((step) => includedWorkflow(step) !== null)) return;
+  const files = await readWorkflowFiles(root);
+  const known = new Set(
+    files.steps.filter((step) => !step.problem).map((step) => step.name),
+  );
+  const shapes = includeShapes(
+    files.flows.filter(
+      (item) => item.name !== previous && item.name !== flow.name,
+    ),
+  );
+  const before = includeShapes(files.flows);
+  shapes.set(flow.name, {
+    name: flow.name,
+    steps: flow.steps,
+    dynamic: flow.dynamic,
+  });
+  for (const shape of [shapes.get(flow.name)!, ...shapes.values()]) {
+    const problem = includeProblem(shape, shapes, known);
+    if (!problem || (problem.kind !== "cycle" && problem.kind !== "depth"))
+      continue;
+    const earlier = before.get(shape.name);
+    const had = earlier && includeProblem(earlier, before, known);
+    if (shape.name !== flow.name && had && had.kind === problem.kind) continue;
+    throw new DaedalusError(
+      "VALIDATION",
+      shape.name === flow.name
+        ? problem.message
+        : `Saving this makes workflow '${shape.name}' unusable: ${problem.message}`,
+    );
+  }
+}
+
+/** Deletes a workflow no other workflow includes, or a step no workflow uses. */
 export async function deleteWorkflowFile(
   root: string,
   input: { kind: "flow" | "step"; name: string },
@@ -434,16 +694,17 @@ export async function deleteWorkflowFile(
     input.name,
     input.kind === "flow" ? "workflow" : "step",
   );
-  if (input.kind === "step") {
-    const users = (await readWorkflowFiles(root)).flows
-      .filter((flow) => flow.steps?.includes(name))
-      .map((flow) => flow.name);
-    if (users.length)
-      throw new DaedalusError(
-        "CONFLICT",
-        `Step '${name}' is used by ${users.join(", ")}; take it out of them first`,
-      );
-  }
+  const entry = input.kind === "step" ? name : `@${name}`;
+  const users = (await readWorkflowFiles(root)).flows
+    .filter((flow) => flow.steps?.includes(entry))
+    .map((flow) => flow.name);
+  if (users.length)
+    throw new DaedalusError(
+      "CONFLICT",
+      input.kind === "step"
+        ? `Step '${name}' is used by ${users.join(", ")}; take it out of them first`
+        : `Workflow '${name}' is included by ${users.join(", ")}; take @${name} out of them first`,
+    );
   const folder =
     input.kind === "flow" ? workflowsPath(root) : workflowStepsPath(root);
   await unlink(join(folder, `${name}.md`)).catch((error: unknown) => {

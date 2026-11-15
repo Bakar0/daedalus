@@ -1474,6 +1474,19 @@ export interface WorkflowRunStepDto {
   dynamic: boolean;
 }
 
+/**
+ * A workflow included in a run with `@name`: its steps are the run's steps
+ * whose names start with `<id>/`.
+ */
+export interface WorkflowRunGroupDto {
+  id: string;
+  workflow: string;
+  /** The step the group goes back to after its last; null for none. */
+  loopTo: string | null;
+  until: string;
+  iteration: number;
+}
+
 /** A step as one finished iteration of a circular run left it. */
 export interface WorkflowStepRecordDto {
   iteration: number;
@@ -1498,7 +1511,7 @@ export interface WorkflowFileDto {
   until?: string;
   /** What follows the frontmatter: a step's instructions, a workflow's notes. */
   body?: string;
-  /** For a workflow: its steps; for a step: whether it is gated. */
+  /** For a workflow: its steps, `@name` for an included workflow. */
   steps?: string[];
   /** A workflow with `steps: dynamic`: each run names its own steps. */
   dynamic?: boolean;
@@ -1528,7 +1541,13 @@ export interface WorkflowRunDto {
   workspaceId: string;
   sessionId: string | null;
   workflow: string;
+  /**
+   * In order. A step of an included workflow is named by its group, such as
+   * `release/review`.
+   */
   steps: WorkflowRunStepDto[];
+  /** Included workflows, outermost first; absent or empty for none. */
+  groups?: WorkflowRunGroupDto[];
   /** Built for this run alone, with no workflow file. */
   dynamic: boolean;
   /** Steps were added or removed after a maintained workflow started. */

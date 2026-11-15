@@ -166,6 +166,7 @@ const taskDto = (task: Task): TaskDto => ({ ...task });
 const workflowRunDto = (run: WorkflowRun): WorkflowRunDto => ({
   ...run,
   steps: run.steps.map(({ waitingSessionId: _, ...step }) => step),
+  groups: run.groups.map(({ lastRound: _, ...group }) => group),
 });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,

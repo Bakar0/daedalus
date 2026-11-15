@@ -32,14 +32,14 @@ comes back.
 
 ### A workflow file
 
-| Field         | Meaning                                                                      |
-| ------------- | ---------------------------------------------------------------------------- |
-| `name`        | the file's name, used by `daedal workflow start <name>`                      |
-| `description` | one line on what it does                                                     |
-| `when`        | the work it fits; agents read this when choosing                             |
-| `steps`       | `[a, b, c]`, each a file in `steps/`, or `dynamic` for steps named each run  |
-| `loop`        | optional: the step to go back to after the last one, for work done in rounds |
-| `until`       | optional, with `loop`: when to stop going round                              |
+| Field         | Meaning                                                                                                     |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| `name`        | the file's name, used by `daedal workflow start <name>`                                                     |
+| `description` | one line on what it does                                                                                    |
+| `when`        | the work it fits; agents read this when choosing                                                            |
+| `steps`       | `[a, b, c]`, each a file in `steps/` or `@name` for another workflow, or `dynamic` for steps named each run |
+| `loop`        | optional: the step to go back to after the last one, for work done in rounds                                |
+| `until`       | optional, with `loop`: when to stop going round                                                             |
 
 The body is optional and goes to the agent when the run starts.
 
@@ -57,6 +57,39 @@ command or a skill.
 A run copies its workflow when it starts, so editing a file changes the next
 run, not one already going. The Workflows tab refuses to save a file a run
 could not use and says why; `daedal workflow list` marks such files with `!`.
+
+### Sub-workflows
+
+A workflow's `steps` can include another workflow with `@name`. Write the
+shared part once, such as release, and include it wherever it belongs:
+
+```markdown
+steps: [plan, prototype, build, @release, feedback]
+```
+
+Any workflow can be started on its own or included. When a run starts, each
+`@name` is replaced by that workflow's steps, so the run is one list and its
+progress counts every step. The Workflow pane shows the included workflow as
+a heading with its steps under it.
+
+- **Step ids.** An included step's id names its workflow: `release/review`,
+  and `a/b/review` when `a` includes `b`. Agents report that id
+  (`daedal workflow step release/review start`). A bare `review` works too
+  while only one step in the run has that name; when two do, the command is
+  refused and lists both.
+- **Gates** work as they do anywhere: the included step waits for you.
+- **Loops.** An included workflow's own `loop` goes round inside it only.
+  When its last step finishes, it goes back to its loop step; the agent
+  leaves the loop by starting the step after it. A `loop: @name` in the
+  including workflow goes back to that workflow's first step.
+- **Not allowed.** A workflow that includes itself, directly or through
+  another, and nesting more than 3 workflows deep (`a/b/c/step` is the
+  deepest). The Workflows tab refuses to save either and names the chain;
+  `daedal workflow list` marks it with `!`. An `@name` with no workflow
+  file, or naming a `steps: dynamic` workflow, is marked the same way and
+  the run does not start: a dynamic workflow has no steps to include.
+- A workflow another one includes cannot be deleted until `@name` is taken
+  out of it.
 
 ## Examples
 
@@ -131,19 +164,49 @@ description: Get the change merged and out.
 Commit, push and open a pull request, and give its full URL. Wait for CI. Read every review comment, fix or answer each one, and push again until CI is green and no thread is open. The user merges. Then release, or deploy and promote from dev to stage to prod, as the repository's instructions say, checking each environment before the next.
 ```
 
-### feature: plan, prototype, build, prove, ship, watch
+### release: review, prove, ship
 
-For a new feature or a larger change. Prototype and ship wait for your
-approval.
+The end of every change that ships, written once and included by feature
+and bug with `@release`. It also runs on its own, for a branch that is
+already built.
+
+`flows/release.md`
+
+```markdown
+---
+name: release
+description: Review the change, prove it works, ship it.
+when: A built change that is ready to review and ship.
+steps: [review, proof, ship]
+---
+```
+
+`steps/review.md`
+
+```markdown
+---
+name: review
+description: Review the diff before anyone else does.
+---
+
+Read the whole diff as a reviewer would. Run the code-review skill on it if it is installed, fix what it finds, and run the full test and type checks again.
+```
+
+### feature: plan, prototype, build, release, watch
+
+For a new feature or a larger change. Prototype waits for your approval,
+and release's proof step for your word that it works. A run of it lists
+`release/review`, `release/proof` and `release/ship` under a release
+heading.
 
 `flows/feature.md`
 
 ```markdown
 ---
 name: feature
-description: Plan, prototype, build, prove, ship, then watch it in use.
+description: Plan, prototype, build, release, then watch it in use.
 when: A new feature or a larger change that ships.
-steps: [plan, prototype, build, proof, ship, feedback]
+steps: [plan, prototype, build, @release, feedback]
 ---
 ```
 
@@ -181,7 +244,7 @@ description: Watch the shipped work in the form users get, and go back if it fal
 Check the work where it runs: the installed app, the logs and metrics of the deployed service (with the CLI the workspace names, such as the Coralogix CLI), its errors, and what the user reports. Compare that with the goal. If it falls short, write down what you found and start the step that fixes it again, build or fix. If it holds, finish with a note of the evidence.
 ```
 
-### bug: reproduce, find the cause, fix, prove, ship, watch
+### bug: reproduce, find the cause, fix, release, watch
 
 For something broken, failing, slow or behaving wrong.
 
@@ -190,9 +253,9 @@ For something broken, failing, slow or behaving wrong.
 ```markdown
 ---
 name: bug
-description: Reproduce, find the cause, fix, prove, ship, then watch it stays fixed.
+description: Reproduce, find the cause, fix, release, then watch it stays fixed.
 when: Something broken, failing, slow or behaving wrong.
-steps: [reproduce, root-cause, fix, proof, ship, feedback]
+steps: [reproduce, root-cause, fix, @release, feedback]
 ---
 ```
 
@@ -328,6 +391,6 @@ Agents run these through the daedalus-workflows skill; you can run them too.
 | `daedal workflow start <name>`                  | starts a run of a workflow in this session       |
 | `daedal workflow start --steps a,b --name <x>`  | starts a dynamic run with steps named for it     |
 | `daedal workflow step <step> start\|done\|skip` | reports a step, with `--note` saying what or why |
-| `daedal workflow approve`                       | records the user's approval of a gated step      |
+| `daedal workflow approve [<step>]`              | records the user's approval of a gated step      |
 | `daedal workflow end --note "<why>"`            | ends the run                                     |
 | `daedal workflow save <name> --when "<work>"`   | saves this run as a workflow                     |

@@ -34,13 +34,49 @@ export interface WorkflowStepDefinition {
   body: string;
 }
 
+/**
+ * A `steps` entry naming another workflow rather than a step: `@release`.
+ * Returns the workflow's name, or null for a plain step.
+ */
+export function includedWorkflow(entry: string): string | null {
+  return entry.startsWith("@") ? entry.slice(1) : null;
+}
+
+/**
+ * How deep included workflows may nest: a workflow including one that
+ * includes one that includes one, so a step id has at most three workflow
+ * names before it (`a/b/c/step`).
+ */
+export const MAX_WORKFLOW_NESTING = 3;
+
+/**
+ * A run step's id is its step name, qualified by the included workflows it
+ * came from: `review`, `release/review`, `a/b/review`. Step and workflow
+ * names never hold a `/`, so the id splits back unambiguously.
+ */
+export const stepBaseName = (id: string): string =>
+  id.slice(id.lastIndexOf("/") + 1);
+
+/** The included workflow a step id belongs to, `a/b` for `a/b/step`; empty at the top. */
+export const stepGroupId = (id: string): string => {
+  const slash = id.lastIndexOf("/");
+  return slash === -1 ? "" : id.slice(0, slash);
+};
+
+/** Whether a step id lies inside an included workflow's group, at any depth. */
+export const inStepGroup = (id: string, groupId: string): boolean =>
+  id.startsWith(`${groupId}/`);
+
 /** An ordered list of steps, and when the agent should pick it. */
 export interface WorkflowDefinition {
   name: string;
   description: string;
   /** What work this workflow fits, in the user's words. */
   when: string;
-  /** Empty for a dynamic workflow: the agent names the steps at start. */
+  /**
+   * Empty for a dynamic workflow: the agent names the steps at start. An
+   * entry `@name` includes that workflow's steps in its place.
+   */
   steps: string[];
   /** `steps: dynamic`: no fixed steps; each run lists its own. */
   dynamic: boolean;
@@ -86,6 +122,29 @@ export interface WorkflowRunStep {
   dynamic: boolean;
 }
 
+/**
+ * A workflow included in a run with `@name`, expanded in place: its steps
+ * are the run's steps whose ids start with `<id>/`. Its own `loop` goes
+ * round inside the group only.
+ */
+export interface WorkflowRunGroup {
+  /** `release`, or `feature-part/release` when nested. */
+  id: string;
+  /** The included workflow's name: the id's last part. */
+  workflow: string;
+  /** The step id the group goes back to after its last step; null for none. */
+  loopTo: string | null;
+  until: string;
+  /** Which time round the group is on, from 1. */
+  iteration: number;
+  /**
+   * The group's steps as they were before it last went round, while none of
+   * the new round has started: moving past the group puts them back, which
+   * is how a run leaves a group's loop.
+   */
+  lastRound: WorkflowRunStep[] | null;
+}
+
 /** A step as one finished iteration of a circular run left it. */
 export interface WorkflowStepRecord {
   iteration: number;
@@ -108,7 +167,10 @@ export interface WorkflowRun {
   /** The session the run belongs to; a rebirth moves it to the successor. */
   sessionId: UUID | null;
   workflow: string;
+  /** In order, included workflows' steps expanded in place with qualified ids. */
   steps: WorkflowRunStep[];
+  /** The workflows included with `@name`, outermost first; empty for none. */
+  groups: WorkflowRunGroup[];
   /** Built for this run alone; `workflow` is its label, not a file. */
   dynamic: boolean;
   /** Steps were added or removed after a maintained workflow started. */

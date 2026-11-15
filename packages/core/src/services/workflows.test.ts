@@ -873,3 +873,341 @@ describe("WorkflowService", () => {
     });
   });
 });
+
+/** Writes more workflow files for one test, beside the fixtures. */
+async function writeFlows(
+  home: string,
+  flows: Record<string, string>,
+): Promise<void> {
+  const root = workflowsHomePath(home);
+  for (const [name, fields] of Object.entries(flows))
+    await writeFile(
+      join(root, "flows", `${name}.md`),
+      `---\nname: ${name}\nwhen: Tests.\n${fields}\n---\n`,
+    );
+}
+
+const names = (run: { steps: Array<{ name: string }> }) =>
+  run.steps.map((step) => step.name);
+
+describe("sub-workflows", () => {
+  test("a run expands an included workflow in place, with qualified step ids", async () => {
+    await withWorkflows(async ({ context, workflows, session }) => {
+      await writeFlows(context.config.home, {
+        release: "steps: [review, deploy]",
+        ship: "steps: [research, @release, feedback]",
+      });
+      const agent = session();
+      const run = await workflows.start({
+        sessionId: agent.id,
+        workflow: "ship",
+      });
+      expect(names(run)).toEqual([
+        "research",
+        "release/review",
+        "release/deploy",
+        "feedback",
+      ]);
+      expect(run.groups).toEqual([
+        {
+          id: "release",
+          workflow: "release",
+          loopTo: null,
+          until: "",
+          iteration: 1,
+          lastRound: null,
+        },
+      ]);
+      // The gate of an included step comes with it, and its instructions.
+      expect(run.steps[2]!.gate).toBe("result");
+      const { steps } = await workflows.instructions(run);
+      expect(steps[1]).toMatchObject({
+        name: "release/review",
+        body: "Find the bugs.",
+      });
+      // A loop to an included workflow goes back to its first step.
+      await writeFlows(context.config.home, {
+        again: "steps: [@release, feedback]\nloop: '@release'",
+      });
+      const again = await workflows.start({
+        sessionId: session().id,
+        workflow: "again",
+      });
+      expect(again.loopTo).toBe("release/review");
+      // The included workflow still runs on its own.
+      const alone = await workflows.start({
+        sessionId: session().id,
+        workflow: "release",
+      });
+      expect(names(alone)).toEqual(["review", "deploy"]);
+    });
+  });
+
+  test("a step is reported by its full id, or by its name when only one step has it", async () => {
+    await withWorkflows(async ({ context, workflows, session }) => {
+      await writeFlows(context.config.home, {
+        release: "steps: [review, deploy]",
+        audit: "steps: [review, check]",
+        both: "steps: [research, @release, @audit]",
+      });
+      const agent = session();
+      await workflows.start({ sessionId: agent.id, workflow: "both" });
+      const full = await workflows.step({
+        sessionId: agent.id,
+        step: "release/review",
+        action: "start",
+        note: "Reading the diff",
+      });
+      expect(states(full.run)["release/review"]).toBe("active");
+      const bare = await workflows.step({
+        sessionId: agent.id,
+        step: "check",
+        action: "start",
+        note: "Checking",
+      });
+      expect(states(bare.run)).toMatchObject({
+        "release/review": "done",
+        "audit/check": "active",
+      });
+      await expect(
+        workflows.step({
+          sessionId: agent.id,
+          step: "review",
+          action: "start",
+          note: "Which one?",
+        }),
+      ).rejects.toThrow(
+        "Step 'review' is in more than one place in workflow 'both': release/review, audit/review",
+      );
+      await expect(
+        workflows.step({
+          sessionId: agent.id,
+          step: "nope",
+          action: "start",
+          note: "n",
+        }),
+      ).rejects.toThrow("has no step 'nope'");
+    });
+  });
+
+  test("an included step's gate waits, and approve takes its qualified id", async () => {
+    await withWorkflows(async ({ context, workflows, session, raised }) => {
+      await writeFlows(context.config.home, {
+        release: "steps: [review, deploy]",
+        ship: "steps: [@release, feedback]",
+      });
+      const agent = session();
+      await workflows.start({ sessionId: agent.id, workflow: "ship" });
+      await workflows.step({
+        sessionId: agent.id,
+        step: "deploy",
+        action: "start",
+        note: "Ship 1.2",
+      });
+      const done = await workflows.step({
+        sessionId: agent.id,
+        step: "deploy",
+        action: "done",
+        note: "1.2 is out",
+      });
+      expect(done.waiting).toBe(true);
+      expect(raised.at(-1)?.reason).toContain(
+        "Approve the result of step 'release/deploy' of workflow 'ship'",
+      );
+      await expect(
+        workflows.step({
+          sessionId: agent.id,
+          step: "feedback",
+          action: "start",
+          note: "Too soon",
+        }),
+      ).rejects.toThrow("Step 'release/deploy' waits for the user");
+      expect(() => workflows.approve(agent.id, "review")).toThrow(
+        "Step 'release/review' is not waiting for an approval; 'release/deploy' is",
+      );
+      const approved = workflows.approve(agent.id, "release/deploy");
+      expect(states(approved)["release/deploy"]).toBe("done");
+    });
+  });
+
+  test("workflows including themselves, too deep, missing or dynamic are flagged and do not start", async () => {
+    await withWorkflows(async ({ context, workflows, session }) => {
+      await writeFlows(context.config.home, {
+        selfish: "steps: [do, @selfish]",
+        ping: "steps: [do, @pong]",
+        pong: "steps: [check, @ping]",
+        l1: "steps: [do, @l2]",
+        l2: "steps: [do, @l3]",
+        l3: "steps: [do, @l4]",
+        l4: "steps: [do, @l5]",
+        l5: "steps: [check]",
+        ghostly: "steps: [do, @ghost]",
+        loose: "steps: [do, @todo]",
+      });
+      const catalog = await workflows.catalog();
+      const problem = (name: string) =>
+        catalog.problems.find((item) => item.path.endsWith(`/${name}.md`))
+          ?.message;
+      expect(problem("selfish")).toBe("Workflow 'selfish' includes itself");
+      expect(problem("ping")).toBe(
+        "Workflows include each other in a loop: ping → pong → ping",
+      );
+      expect(problem("l1")).toBe(
+        "Included workflows nest more than 3 levels deep: l1 → l2 → l3 → l4 → l5",
+      );
+      expect(problem("l2")).toBeUndefined();
+      expect(problem("ghostly")).toBe(
+        "No workflow 'ghost' to include as @ghost",
+      );
+      expect(problem("loose")).toContain(
+        "steps: dynamic, so it cannot be included",
+      );
+      const agent = session();
+      for (const [name, message] of [
+        ["ping", "Workflows include each other in a loop: ping → pong → ping"],
+        ["l1", "nest more than 3 levels deep"],
+        ["ghostly", "No workflow 'ghost'"],
+        ["loose", "cannot be included"],
+      ] as const)
+        await expect(
+          workflows.start({ sessionId: agent.id, workflow: name }),
+        ).rejects.toThrow(message);
+      // Three levels is the deepest: l2 includes l3, l4 and l5.
+      const deep = await workflows.start({
+        sessionId: agent.id,
+        workflow: "l2",
+      });
+      expect(names(deep)).toEqual([
+        "do",
+        "l3/do",
+        "l3/l4/do",
+        "l3/l4/l5/check",
+      ]);
+      expect(deep.groups.map((group) => group.id)).toEqual([
+        "l3",
+        "l3/l4",
+        "l3/l4/l5",
+      ]);
+    });
+  });
+
+  test("an included workflow's loop goes round inside its group, and moving past it leaves", async () => {
+    await withWorkflows(async ({ context, workflows, session }) => {
+      await writeFlows(context.config.home, {
+        rounds:
+          "steps: [review, feedback]\nloop: review\nuntil: The user is happy.",
+        outer: "steps: [research, @rounds, deploy]",
+      });
+      const agent = session();
+      const run = await workflows.start({
+        sessionId: agent.id,
+        workflow: "outer",
+      });
+      expect(run.loopTo).toBeNull();
+      expect(run.groups[0]).toMatchObject({
+        loopTo: "rounds/review",
+        until: "The user is happy.",
+      });
+      const go = (step: string, action: "start" | "done") =>
+        workflows.step({ sessionId: agent.id, step, action, note: step });
+      await go("research", "start");
+      await go("review", "start");
+      await go("feedback", "start");
+      const first = await go("feedback", "done");
+      expect(first.looped).toBe(false);
+      expect(first.loopedGroup).toMatchObject({ id: "rounds", iteration: 2 });
+      expect(first.run.endedAt).toBeNull();
+      expect(states(first.run)).toMatchObject({
+        research: "done",
+        "rounds/review": "pending",
+        "rounds/feedback": "pending",
+        deploy: "pending",
+      });
+      expect(first.run.history.map((item) => item.name)).toEqual([
+        "rounds/review",
+        "rounds/feedback",
+      ]);
+      // A second round, then moving on to the step after the group.
+      await go("review", "start");
+      await go("feedback", "start");
+      const second = await go("feedback", "done");
+      expect(second.loopedGroup?.iteration).toBe(3);
+      expect(second.run.history).toHaveLength(4);
+      const left = await go("deploy", "start");
+      expect(left.loopedGroup).toBeNull();
+      expect(states(left.run)).toMatchObject({
+        "rounds/review": "done",
+        "rounds/feedback": "done",
+        deploy: "active",
+      });
+      expect(left.run.groups[0]).toMatchObject({
+        iteration: 2,
+        lastRound: null,
+      });
+      expect(left.run.history).toHaveLength(2);
+      await go("deploy", "done");
+      const ended = workflows.approve(agent.id);
+      expect(ended.endedAt).not.toBeNull();
+    });
+  });
+
+  test("steps added after an included step join its group; save writes @name back", async () => {
+    await withWorkflows(async ({ context, workflows, session }) => {
+      await writeFlows(context.config.home, {
+        release: "steps: [review, deploy]",
+        ship: "steps: [research, @release]",
+      });
+      const agent = session();
+      await workflows.start({ sessionId: agent.id, workflow: "ship" });
+      const added = await workflows.add({
+        sessionId: agent.id,
+        step: "test",
+        after: "review",
+      });
+      expect(names(added)).toEqual([
+        "research",
+        "release/review",
+        "release/test",
+        "release/deploy",
+      ]);
+      const removed = workflows.remove({
+        sessionId: agent.id,
+        step: "release/test",
+      });
+      expect(names(removed)).not.toContain("release/test");
+      const saved = await workflows.saveAs({
+        sessionId: agent.id,
+        name: "ship-copy",
+      });
+      expect(saved.written).toHaveLength(1);
+      const catalog = await workflows.catalog();
+      expect(
+        catalog.workflows.find((item) => item.name === "ship-copy")?.steps,
+      ).toEqual(["research", "@release"]);
+    });
+  });
+
+  test("a run stored before sub-workflows reads with no groups", async () => {
+    await withWorkflows(async ({ context, workflows, session }) => {
+      const agent = session();
+      const run = await workflows.start({
+        sessionId: agent.id,
+        workflow: "quick",
+      });
+      // A row written without the groups column, as before the migration.
+      const columns =
+        "workspace_id, session_id, workflow, steps, dynamic, modified, loop_to, until_text, iteration, history, end_note, updated_at, ended_at";
+      context.repositories.database
+        .query(
+          `INSERT INTO workflow_runs (id, started_at, ${columns})
+           SELECT 'old-run', '2999-01-01T00:00:00.000Z', ${columns}
+           FROM workflow_runs WHERE id = ?`,
+        )
+        .run(run.id);
+      const old = workflows.current(agent.id);
+      expect(old?.id).toBe("old-run");
+      expect(old?.groups).toEqual([]);
+      expect(names(old!)).toEqual(["do", "check"]);
+    });
+  });
+});

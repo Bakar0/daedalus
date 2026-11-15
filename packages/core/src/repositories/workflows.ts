@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import {
   parseGate,
   type WorkflowRun,
+  type WorkflowRunGroup,
   type WorkflowRunStep,
   type WorkflowStepRecord,
 } from "../domain";
@@ -12,6 +13,7 @@ interface WorkflowRunRow {
   session_id: string | null;
   workflow: string;
   steps: string;
+  groups: string;
   dynamic: number;
   modified: number;
   loop_to: string | null;
@@ -36,6 +38,7 @@ const runFromRow = (row: WorkflowRunRow): WorkflowRun => ({
     plan: step.plan ?? null,
     gate: parseGate(step.gate) ?? null,
   })),
+  groups: JSON.parse(row.groups) as WorkflowRunGroup[],
   dynamic: row.dynamic === 1,
   modified: row.modified === 1,
   loopTo: row.loop_to,
@@ -59,12 +62,13 @@ export class WorkflowRepository {
     this.database
       .query(
         `INSERT INTO workflow_runs
-           (id, workspace_id, session_id, workflow, steps,
+           (id, workspace_id, session_id, workflow, steps, groups,
             dynamic, modified, loop_to, until_text, iteration, history,
             end_note, started_at, updated_at, ended_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            steps = excluded.steps,
+           groups = excluded.groups,
            modified = excluded.modified,
            loop_to = excluded.loop_to,
            until_text = excluded.until_text,
@@ -80,6 +84,7 @@ export class WorkflowRepository {
         run.sessionId,
         run.workflow,
         JSON.stringify(run.steps),
+        JSON.stringify(run.groups),
         run.dynamic ? 1 : 0,
         run.modified ? 1 : 0,
         run.loopTo,
@@ -149,7 +154,7 @@ export class WorkflowRepository {
     return this.database
       .query<{ version: string }, []>(
         `SELECT id || ':' || iteration || ':' || coalesce(ended_at, '')
-                || ':' || steps AS version
+                || ':' || steps || ':' || groups AS version
          FROM workflow_runs ORDER BY rowid`,
       )
       .all()
