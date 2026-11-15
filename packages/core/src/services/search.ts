@@ -49,6 +49,12 @@ export const HOME_SKIPPED_FOLDERS = [
  */
 export const HOME_SKIPPED_WORKTREES = "workspaces/*/worktrees";
 
+/**
+ * Hidden folders in `workspaces/` at Home: no workspace is named with a dot,
+ * so they are leftovers (an older build's main agent kept a `.home` there).
+ */
+export const HOME_SKIPPED_HIDDEN_WORKSPACES = "workspaces/.*";
+
 /** File names skipped at Home: SQLite and its sidecars. */
 export const HOME_SKIPPED_FILES = ["*.db", "*.db-wal", "*.db-shm"];
 
@@ -77,6 +83,7 @@ export function ripgrepSkipArgs(root: SearchRoot): string[] {
       ? [
           ...HOME_SKIPPED_FOLDERS.map((name) => `!/${name}/`),
           `!/${HOME_SKIPPED_WORKTREES}/`,
+          `!/${HOME_SKIPPED_HIDDEN_WORKSPACES}/`,
           ...HOME_SKIPPED_FILES.map((name) => `!${name}`),
         ]
       : []),
@@ -96,6 +103,7 @@ export function isSkippedPath(relativePath: string, home: boolean): boolean {
   if (!home) return false;
   if (HOME_SKIPPED_FOLDERS.includes(parts[0]!)) return true;
   if (parts[0] === "workspaces" && parts[2] === "worktrees") return true;
+  if (parts[0] === "workspaces" && parts[1]?.startsWith(".")) return true;
   const name = parts[parts.length - 1] ?? "";
   return /\.db(-wal|-shm)?$/.test(name);
 }

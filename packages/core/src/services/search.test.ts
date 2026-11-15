@@ -101,6 +101,12 @@ describe("skip rules", () => {
     expect(isSkippedPath("worktrees/s/r/a.ts", false)).toBe(false);
   });
 
+  test("Home skips hidden folders in workspaces/, which are leftovers", () => {
+    expect(isSkippedPath("workspaces/.home/repos/r/a.ts", true)).toBe(true);
+    expect(isSkippedPath("workspaces/w/.github/ci.yml", true)).toBe(false);
+    expect(isSkippedPath("workspaces/.home/a.ts", false)).toBe(false);
+  });
+
   test("only Home skips its machinery folders, and only at the top", () => {
     expect(isSkippedPath("accounts/a/profile.json", true)).toBe(true);
     expect(isSkippedPath("logs/app.log", true)).toBe(true);
@@ -146,6 +152,7 @@ describe("SearchService on a real tree", () => {
     await write("workspaces/w/accounts/plan.md", "needle kept\n");
     await write("workspaces/w/worktrees/s/notes.md", "needle in worktree\n");
     await write("repos/lib.git/HEAD", "needle in bare repo\n");
+    await write("workspaces/.home/repos/r/a.md", "needle in leftover\n");
   });
 
   afterAll(async () => {

@@ -100,7 +100,7 @@ import { WORKFLOWS_SKILL } from "./SkillsPanel";
 import { WorkflowsEditor } from "./WorkflowsEditor";
 import { InstructionsEditor } from "./InstructionsEditor";
 import { InstructionsPane, useInstructionsSummary } from "./InstructionsPane";
-import { PlansPane, usePlanList } from "./PlansPane";
+import { PlansPage, PlansPane, usePlanList } from "./PlansPane";
 import { createPlan } from "./files/plan-actions";
 import { accountModelKey } from "./account-models";
 import {
@@ -8847,6 +8847,26 @@ export function WorkspaceApp({
                 renderWorkflows={() => (
                   <WorkflowsEditor client={client} onError={setError} />
                 )}
+                renderPlans={() => (
+                  <PlansPage
+                    client={client}
+                    onCreate={() => {
+                      if (!workspace) return;
+                      const target = workspace.id;
+                      void createPlan(client, target, setError).then((path) => {
+                        if (!path) return;
+                        openFileTarget({ workspaceId: target, path });
+                      });
+                    }}
+                    onOpenPlan={(path) => {
+                      if (workspace)
+                        openFileTarget({ workspaceId: workspace.id, path });
+                    }}
+                    workspaceId={
+                      workspace?.place === "cloud" ? undefined : workspace?.id
+                    }
+                  />
+                )}
                 renderInstructions={() => (
                   <InstructionsEditor client={client} onError={setError} />
                 )}
@@ -9210,7 +9230,7 @@ export function WorkspaceApp({
                       });
                     }}
                     onOpen={() =>
-                      openPalette(focusContext("menu"), false, "plans")
+                      files.withEditor((handle) => handle.openPlans())
                     }
                     onOpenPlan={(path) => {
                       if (workspace)

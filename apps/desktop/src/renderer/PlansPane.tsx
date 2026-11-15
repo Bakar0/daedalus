@@ -81,22 +81,54 @@ function OwnerDot({ owner }: { owner: PlanOwnerDto }) {
   );
 }
 
-export function PlansPane({
+function PlanGroups({
   list,
-  onCreate,
-  onOpen,
   onOpenPlan,
 }: {
-  list?: PlanListDto;
-  /** Asks for a title and makes the plan, as File › New Plan… does. */
-  onCreate: () => void;
-  /** Shows every plan: the ⌘K palette on its Plans scope. */
-  onOpen: () => void;
-  /** Opens a plan's file; the path is the file panel's. */
+  list: PlanListDto;
   onOpenPlan: (path: string) => void;
 }) {
-  const groups = list?.groups ?? [];
-  const newLink = (
+  return (
+    <div className="plans-pane-body">
+      {list.groups.map((group) => (
+        <div className="plans-pane-group" key={group.workspaceId ?? ""}>
+          {list.home && (
+            <div className="plans-pane-group-name">{group.name}</div>
+          )}
+          <ul className="plans-pane-list">
+            {group.plans.map((plan) => (
+              <li key={plan.path}>
+                <button
+                  className="plans-pane-row"
+                  onClick={() => onOpenPlan(plan.path)}
+                  title={plan.path}
+                  type="button"
+                >
+                  <span className="plans-pane-title">{plan.title}</span>
+                  {plan.questions > 0 && (
+                    <span className="plans-pane-asks">
+                      {plan.questions} for you
+                    </span>
+                  )}
+                  <span
+                    className={`plans-pane-progress${plan.total > 0 && plan.done === plan.total ? " done" : ""}`}
+                    title="Tasks done, of all tasks"
+                  >
+                    {plan.done}/{plan.total}
+                  </span>
+                  {plan.owner && <OwnerDot owner={plan.owner} />}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NewPlanLink({ onCreate }: { onCreate: () => void }) {
+  return (
     <button
       className="workflow-pane-link plans-pane-new"
       onClick={onCreate}
@@ -106,32 +138,51 @@ export function PlansPane({
       + New
     </button>
   );
+}
+
+function PlansIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="workflow-icon"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 16 16"
+    >
+      <path d={PLAN_ICON_PATH} />
+    </svg>
+  );
+}
+
+export function PlansPane({
+  list,
+  onCreate,
+  onOpen,
+  onOpenPlan,
+}: {
+  list?: PlanListDto;
+  /** Asks for a title and makes the plan, as File › New Plan… does. */
+  onCreate: () => void;
+  /** Shows every plan in the Plans tab. */
+  onOpen: () => void;
+  /** Opens a plan's file; the path is the file panel's. */
+  onOpenPlan: (path: string) => void;
+}) {
+  const groups = list?.groups ?? [];
   return (
     <section aria-label="Plans" className="workflow-pane plans-pane">
       <div className="workflow-pane-header">
         <span className="workflow-pane-heading">
           <span className="workflow-pane-title">
-            <svg
-              aria-hidden="true"
-              className="workflow-icon"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 16 16"
-            >
-              <path d={PLAN_ICON_PATH} />
-            </svg>
+            <PlansIcon />
             Plans
           </span>
         </span>
-        {groups.length > 0 && newLink}
+        {groups.length > 0 && <NewPlanLink onCreate={onCreate} />}
         <button
           className="quiet workflow-pane-open"
           onClick={onOpen}
-          title={
-            list?.home
-              ? "Search every plan under the Daedalus home"
-              : "Search every plan in this workspace"
-          }
+          title="Open the plans in a tab"
           type="button"
         >
           Open <span aria-hidden="true">↗</span>
@@ -139,43 +190,49 @@ export function PlansPane({
       </div>
       {list &&
         (groups.length === 0 ? (
-          <p className="workflow-pane-empty">No plans yet · {newLink}</p>
+          <p className="workflow-pane-empty">
+            No plans yet · <NewPlanLink onCreate={onCreate} />
+          </p>
         ) : (
-          <div className="plans-pane-body">
-            {groups.map((group) => (
-              <div className="plans-pane-group" key={group.workspaceId ?? ""}>
-                {list.home && (
-                  <div className="plans-pane-group-name">{group.name}</div>
-                )}
-                <ul className="plans-pane-list">
-                  {group.plans.map((plan) => (
-                    <li key={plan.path}>
-                      <button
-                        className="plans-pane-row"
-                        onClick={() => onOpenPlan(plan.path)}
-                        title={plan.path}
-                        type="button"
-                      >
-                        <span className="plans-pane-title">{plan.title}</span>
-                        {plan.questions > 0 && (
-                          <span className="plans-pane-asks">
-                            {plan.questions} for you
-                          </span>
-                        )}
-                        <span
-                          className={`plans-pane-progress${plan.total > 0 && plan.done === plan.total ? " done" : ""}`}
-                          title="Tasks done, of all tasks"
-                        >
-                          {plan.done}/{plan.total}
-                        </span>
-                        {plan.owner && <OwnerDot owner={plan.owner} />}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
+          <PlanGroups list={list} onOpenPlan={onOpenPlan} />
+        ))}
+    </section>
+  );
+}
+
+/**
+ * The Plans tab: the dock's list at full size, read on its own so it stays
+ * current while the dock is hidden.
+ */
+export function PlansPage({
+  client,
+  workspaceId,
+  onCreate,
+  onOpenPlan,
+}: {
+  client: DesktopClient;
+  workspaceId: string | undefined;
+  onCreate: () => void;
+  onOpenPlan: (path: string) => void;
+}) {
+  const list = usePlanList(client, workspaceId);
+  const groups = list?.groups ?? [];
+  return (
+    <section aria-label="Plans" className="plans-pane plans-page">
+      <header className="plans-page-header">
+        <h2 className="plans-page-title">
+          <PlansIcon />
+          Plans
+        </h2>
+        {groups.length > 0 && <NewPlanLink onCreate={onCreate} />}
+      </header>
+      {list &&
+        (groups.length === 0 ? (
+          <p className="plans-page-empty">
+            No plans yet · <NewPlanLink onCreate={onCreate} />
+          </p>
+        ) : (
+          <PlanGroups list={list} onOpenPlan={onOpenPlan} />
         ))}
     </section>
   );

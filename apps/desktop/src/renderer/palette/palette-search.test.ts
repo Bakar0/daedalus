@@ -3,6 +3,7 @@ import {
   ALL_GROUP_SHOWN,
   cycleScope,
   fileScore,
+  fuzzyScore,
   highlightRanges,
   PALETTE_SCOPES,
   type PaletteEntry,
@@ -211,6 +212,45 @@ describe("rankScoped", () => {
       { recent: ["session:2"], suggestions: ["command:x"] },
     );
     expect(groups.map((group) => group.id)).toEqual(["recent", "suggestions"]);
+  });
+});
+
+describe("a command's words beat scattered file letters", () => {
+  test("go home puts Go to Home above files that only hold its letters", () => {
+    const paths = [
+      "workspaces/w/repos/infra/integration_digest_hook_model.py",
+      "workspaces/w/repos/infra/go_build/homepage_config.yml",
+    ];
+    const ranked = rankFiles(paths, "go home");
+    const rows = ranked.paths.map((path): PaletteEntry => ({
+      key: `search-file:${path}`,
+      kind: "file",
+      title: path,
+    }));
+    const commands: PaletteEntry[] = [
+      { key: "command:view.home", kind: "view", title: "Go to Home" },
+    ];
+    const { groups } = rankScoped(
+      commands,
+      {
+        files: { rows, total: rows.length, best: ranked.best },
+        content: { rows: [], total: 0 },
+      },
+      "go home",
+      "all",
+    );
+    expect(groups.map((group) => group.id)).toEqual(["commands", "files"]);
+  });
+
+  test("a file named by the query's words still ranks first", () => {
+    const ranked = rankFiles(
+      ["src/integration_digest_hook_model.py", "docs/go-home.md"],
+      "go home",
+    );
+    expect(ranked.paths[0]).toBe("docs/go-home.md");
+    expect(fuzzyScore("go home", "Go to Home")).toBeGreaterThan(
+      fuzzyScore("go home", "integration_digest_hook_model.py") ?? 0,
+    );
   });
 });
 

@@ -10189,6 +10189,62 @@ button.routine-tick:hover {
   flex: none;
 }
 
+/* The Plans tab: the dock's list at full size. */
+.plans-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  margin: 0 auto;
+  max-width: 760px;
+  min-height: 0;
+  padding: 20px 24px;
+  width: 100%;
+}
+.plans-page-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  padding: 0 6px 12px;
+}
+.plans-page-title {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  gap: 8px;
+  margin: 0;
+}
+.plans-page-title .workflow-icon {
+  height: 16px;
+  width: 16px;
+}
+.plans-page .plans-pane-new {
+  font-size: 12px;
+}
+.plans-page-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 0 6px;
+}
+.plans-page .plans-pane-body {
+  flex: 1;
+  max-height: none;
+  padding: 0 0 12px;
+}
+.plans-page .plans-pane-group-name {
+  font-size: 11px;
+  padding: 14px 6px 4px;
+}
+.plans-page .plans-pane-row {
+  font-size: 13px;
+  padding: 7px 8px;
+}
+.plans-page .plans-pane-progress,
+.plans-page .plans-pane-asks {
+  font-size: 12px;
+}
+
 /* The workflows editor, a center tab: files on the left, one file's text on the right. */
 .workflows-panel {
   overflow: hidden;

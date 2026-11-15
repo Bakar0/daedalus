@@ -51,15 +51,22 @@ const KIND_ORDER: readonly PaletteKind[] = [
   "setting",
 ];
 
+/** The base score of a match on every word of the query. */
+const WORDS_SCORE = 700;
+/** The most a match on scattered characters scores, below any word match. */
+const SCATTERED_MAX = 650;
+
 const isBoundary = (text: string, index: number) =>
   index === 0 || /[\s\-_./:#@(›·]/.test(text[index - 1] ?? "");
 
 /**
  * How well `query` matches `text`, higher is better, or undefined for no
- * match. A run of the query inside the text scores most (more at a word's
- * start, and the earlier the better); otherwise every query character must
- * appear in order, with points for characters that follow each other or
- * start a word. Case and spaces in the query are ignored for the latter.
+ * match, in three tiers. A run of the query inside the text scores most
+ * (more at a word's start, and the earlier the better). Next, each word of a
+ * query of several words found in the text, so `go home` finds "Go to Home".
+ * Last, every query character in order, with points for characters that
+ * follow each other or start a word; this tier never reaches the one above,
+ * so letters scattered over a long name rank below whole words.
  */
 export function fuzzyScore(query: string, text: string): number | undefined {
   const q = query.trim().toLowerCase();
@@ -68,6 +75,21 @@ export function fuzzyScore(query: string, text: string): number | undefined {
   const at = t.indexOf(q);
   if (at >= 0)
     return 1_000 + (isBoundary(t, at) ? 500 : 0) - at - t.length / 100;
+  const words = q.split(/\s+/);
+  if (words.length > 1) {
+    let starts = 0;
+    let found = true;
+    for (const word of words) {
+      const index = t.indexOf(word);
+      if (index < 0) {
+        found = false;
+        break;
+      }
+      if (isBoundary(t, index)) starts += 1;
+    }
+    if (found)
+      return WORDS_SCORE + (200 * starts) / words.length - t.length / 100;
+  }
   const chars = q.replace(/\s+/g, "");
   let score = 0;
   let from = 0;
@@ -81,7 +103,7 @@ export function fuzzyScore(query: string, text: string): number | undefined {
     previous = index;
     from = index + 1;
   }
-  return score - t.length / 100;
+  return Math.min(score, SCATTERED_MAX) - t.length / 100;
 }
 
 /** One row of the palette. */
@@ -336,17 +358,26 @@ export function bucketOf(kind: PaletteKind): PaletteBucket {
 
 /** Points a file gets when the query is in its name rather than its path. */
 const NAME_BONUS = 300;
+/** Taken off a path match that is not one run of the query. */
+const LOOSE_PATH_PENALTY = 300;
 
 /**
  * How well `query` matches a file's path, higher is better: its name counts
  * over the folders it is in, so `cart` finds `cart.ts` before
- * `cart/rate-limit.ts`.
+ * `cart/rate-limit.ts`. Only a run or the words of the query in the name
+ * earn the name's points; letters scattered over the name or the path score
+ * as low as they do anywhere else, so they do not beat a command whose
+ * words match.
  */
 export function fileScore(query: string, path: string): number | undefined {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const onName = fuzzyScore(query, name);
-  if (onName !== undefined) return onName + NAME_BONUS - path.length / 100;
-  return fuzzyScore(query, path);
+  if (onName !== undefined && onName >= WORDS_SCORE)
+    return onName + NAME_BONUS - path.length / 100;
+  const onPath = fuzzyScore(query, path);
+  const best = Math.max(onName ?? -Infinity, onPath ?? -Infinity);
+  if (best === -Infinity) return undefined;
+  return best >= 1_000 ? best : best - LOOSE_PATH_PENALTY;
 }
 
 /** The best `limit` paths for a query, and how many matched in all. */

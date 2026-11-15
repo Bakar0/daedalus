@@ -203,6 +203,7 @@ export interface FilesEditorProps {
   sessionIcon?: React.ReactNode;
   renderTerminal?(terminalId: string): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
+  renderPlans?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
