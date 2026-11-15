@@ -1,4 +1,5 @@
 import type {
+  AskDto,
   PlanMarkdownPartDto,
   PlanOwnerDto,
   PlanTaskDto,
@@ -21,6 +22,7 @@ import Markdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { DesktopClient } from "../client-types";
 import { OWNER_STATE_TEXT } from "./plan-owner";
+import { markPlanTasks } from "../NeedsYouPage";
 
 /**
  * A `.plan.md` file drawn as the document it describes: its markdown as
@@ -217,6 +219,8 @@ interface TaskActions {
   starting: string | undefined;
   start(task: PlanTaskDto): void;
   open(sessionId: string): void;
+  /** Tasks an open ask is pinned to, and those held behind them, by id. */
+  waits: Map<string, { mark: "wait" | "held"; ask: number }>;
 }
 
 function TaskItem({
@@ -233,13 +237,14 @@ function TaskItem({
   const hasBody = task.body.length > 0;
   const folded = actions.folded.has(task.key);
   const finished = task.state === "done" || task.state === "dropped";
+  const waiting = task.id ? actions.waits.get(task.id) : undefined;
   const canStart =
     !finished &&
     (!own || own.state === "none" || own.state === "stopped") &&
     actions.starting !== task.key;
   return (
     <li
-      className={`plan-task plan-task-${task.state} ${task.depth ? "plan-subtask" : ""}`}
+      className={`plan-task plan-task-${task.state} ${task.depth ? "plan-subtask" : ""} ${waiting ? `plan-task-${waiting.mark}` : ""}`}
       data-owner={owner ?? ""}
       data-task={task.key}
     >
@@ -261,6 +266,20 @@ function TaskItem({
         <span className="plan-task-title">
           <InlineMarkdown text={task.title} />
         </span>
+        {waiting && (
+          <span
+            className={`plan-wait-tag ${waiting.mark}`}
+            title={
+              waiting.mark === "wait"
+                ? "A question waits on you under Needs you"
+                : "Waits for the answer above it"
+            }
+          >
+            {waiting.mark === "wait"
+              ? `#${waiting.ask} waits on you`
+              : `held by #${waiting.ask}`}
+          </span>
+        )}
         {own && <OwnerChip owner={own} />}
         {task.id && <span className="plan-task-id">^{task.id}</span>}
         <span className="plan-task-actions">
@@ -387,6 +406,48 @@ export function PlanView({
     [view],
   );
 
+  // Open asks pinned to this plan's tasks, from Needs you.
+  const [asks, setAsks] = useState<AskDto[]>([]);
+  useEffect(() => {
+    let live = true;
+    const read = () =>
+      void client.request.askList({}).then(
+        (response) => {
+          if (!live || !response.ok) return;
+          setAsks(
+            response.data.filter(
+              (ask) =>
+                ask.state === "open" &&
+                ask.workspaceId === workspaceId &&
+                ask.planPath?.endsWith(`/${path}`),
+            ),
+          );
+        },
+        () => undefined,
+      );
+    read();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") read();
+    }, 10_000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [client, workspaceId, path]);
+  const waits = useMemo(() => {
+    const out = new Map<string, { mark: "wait" | "held"; ask: number }>();
+    if (!view || !asks.length) return out;
+    const flat: PlanTaskDto[] = [];
+    walkTasks(view.blocks, view.owner, (task) => flat.push(task));
+    const marks = markPlanTasks(flat, asks);
+    flat.forEach((task, index) => {
+      const mark = marks[index]!;
+      if (task.id && mark.mark && mark.ask !== undefined)
+        out.set(task.id, { mark: mark.mark, ask: mark.ask });
+    });
+    return out;
+  }, [view, asks]);
+
   const { questions, done, total } = useMemo(() => {
     const questions: Question[] = [];
     let done = 0;
@@ -443,6 +504,7 @@ export function PlanView({
   };
 
   const actions: TaskActions = {
+    waits,
     owners,
     folded: folded ?? new Set(),
     toggle,
@@ -638,9 +700,28 @@ export function PlanView({
             {path}
           </span>
         </header>
-        {questions.length > 0 && (
+        {questions.length + asks.length > 0 && (
           <section className="plan-needs" aria-label="Needs you">
-            <b>Needs you · {questions.length}</b>
+            <b>Needs you · {questions.length + asks.length}</b>
+            {asks.map((item) => (
+              <div key={`ask${item.id}`}>
+                {item.sessionName ? `${item.sessionName}: ` : ""}
+                <a
+                  href={`#${item.taskKey ?? ""}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    let found: PlanTaskDto | undefined;
+                    walkTasks(view.blocks, view.owner, (task) => {
+                      if (task.id === item.taskKey) found = task;
+                    });
+                    if (found) jump(found);
+                  }}
+                >
+                  #{item.id} {item.title}
+                </a>{" "}
+                <span className="plan-needs-where">answer under Needs you</span>
+              </div>
+            ))}
             {questions.map((item) => (
               <div key={item.line}>
                 {item.owner ? `@${item.owner}: ` : ""}

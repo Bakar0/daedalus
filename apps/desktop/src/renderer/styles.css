@@ -10200,6 +10200,33 @@ button.routine-tick:hover {
   flex: none;
 }
 
+/* A plan's tasks that an open ask waits on, and those held behind it. */
+.plan-task-wait > .plan-task-line {
+  background: rgb(240 160 64 / 0.12);
+  border-radius: 5px;
+}
+.plan-task-held > .plan-task-line .plan-task-title {
+  color: var(--muted);
+}
+.plan-wait-tag {
+  background: #f0a040;
+  border-radius: 999px;
+  color: #1a1206;
+  flex: none;
+  font-size: 10.5px;
+  padding: 0 7px;
+  white-space: nowrap;
+}
+.plan-wait-tag.held {
+  background: transparent;
+  border: 1px dashed var(--muted);
+  color: var(--muted);
+}
+.plan-needs-where {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* Needs you: question cards on the left, the selected card's plan on the
    right. Text links and plain controls, no filled buttons. */
 .needs-page {
