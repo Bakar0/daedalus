@@ -31,7 +31,8 @@ a build only to report on it; say what was last verified and when.
 ## 2. Write the note
 
 Write `REBIRTH.md` in your working directory (the directory you started in,
-`$PWD` unless you changed it). Be concise: every line should be something the
+`$PWD` unless you changed it). The main agent at Home writes it where its
+launch prompt says instead, and passes that path to `--note-file`. Be concise: every line should be something the
 next agent needs to act on, and nothing it can read from the brief, the code or
 git. Name files, commands, branches and commits exactly; the next agent has
 none of your context and will act on what you write.

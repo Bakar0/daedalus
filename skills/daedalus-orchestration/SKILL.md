@@ -15,6 +15,12 @@ and Resolved. How you hold your threads depends on where you are:
   and the user may have started it. Tracking only means its turns are
   reported to you. Use the `daedal thread` commands below, never
   `daedal agent spawn --team`; Daedalus refuses a team led from Home.
+  You run at the Daedalus home, so you can read every workspace's brief,
+  journal, plans and artifacts, and `repos/`. Read to answer; do not edit a
+  workspace's files yourself, start a thread there. Leave `accounts/`,
+  `remote/`, `claude-settings/`, `inbox/` and the `.db` files alone unless
+  the user asks, and never create `CLAUDE.md` or `AGENTS.md` at the home:
+  every session below it would read them.
 - **Any other session** coordinates by leading a team, once it adds its
   first member; see "Leading a team" below.
 
@@ -81,7 +87,7 @@ daedal thread done <session>
 
 When the user tells you how they like things done ("at most 3 running",
 "docs threads on codex"), save it in one line in your memory file
-(`MEMORY.md` in your workspace folder at Home, `TEAM.md` elsewhere), say
+(at Home the `MEMORY.md` your launch prompt names, `TEAM.md` elsewhere), say
 "Saved to memory: ...", and follow it from then on.
 
 The rest of this skill is how a team works, for a lead. The main agent at
