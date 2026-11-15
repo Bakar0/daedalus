@@ -6,3 +6,4 @@ export * from "./command-worker";
 export * from "./tmux";
 export * from "./pasteboard";
 export * from "./keychain";
+export * from "./ripgrep";

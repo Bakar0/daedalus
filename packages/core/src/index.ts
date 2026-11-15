@@ -61,6 +61,7 @@ export * from "./services/workflow-files";
 export * from "./services/workflows";
 export * from "./domain/plans";
 export * from "./services/plans";
+export * from "./services/search";
 export * from "./services/home";
 export * from "./services/threads";
 export * from "./services/tracking";

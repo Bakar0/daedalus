@@ -64,6 +64,7 @@ import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkflowService } from "./workflows";
 import { PlanService } from "./plans";
+import { SearchService } from "./search";
 import { HomeService } from "./home";
 import { ThreadService } from "./threads";
 import { TrackingService } from "./tracking";
@@ -111,6 +112,8 @@ export interface ApplicationContext {
   workflows: WorkflowService;
   /** Plans: `plans/*.plan.md` in a workspace or at Home, and their owners. */
   plans: PlanService;
+  /** The ⌘K palette's file list and content search. */
+  search: SearchService;
   /** Home's main agent, in the hidden Home workspace. */
   home: HomeService;
   /** A lead's threads: suggested ones, and marking one resolved. */
@@ -509,6 +512,7 @@ export async function createApplicationContext(
       send: (sessionId, text, from) =>
         agents.send(sessionId, text, from ? { from } : {}),
     }),
+    search: new SearchService(),
     home,
     threads: new ThreadService(
       repositories,

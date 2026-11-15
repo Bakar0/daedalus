@@ -22,6 +22,7 @@ import {
   type WorkspaceFilesChanged,
 } from "@daedalus/core";
 import {
+  BUNDLED_RIPGREP_VARIABLE,
   BUNDLED_TMUX_VARIABLE,
   isInheritedSessionVariable,
   pathExists,
@@ -82,6 +83,11 @@ process.env.DAEDALUS_HOME = channelHome(
 const bundledTmux = resolve(PATHS.RESOURCES_FOLDER, "../MacOS/tmux");
 if (await pathExists(bundledTmux))
   process.env[BUNDLED_TMUX_VARIABLE] = bundledTmux;
+// The ripgrep beside it (scripts/fetch-ripgrep.ts) backs the palette's
+// content search; without one the search falls back to PATH.
+const bundledRipgrep = resolve(PATHS.RESOURCES_FOLDER, "../MacOS/rg");
+if (await pathExists(bundledRipgrep))
+  process.env[BUNDLED_RIPGREP_VARIABLE] = bundledRipgrep;
 
 // Opened from an agent's shell, the app inherits that agent's terminal state
 // and session identity. The tmux client already keeps them out of every

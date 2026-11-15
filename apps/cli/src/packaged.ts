@@ -1,7 +1,10 @@
 #!/usr/bin/env bun
 import { resolve } from "node:path";
 import { normalizeError } from "@daedalus/core";
-import { BUNDLED_TMUX_VARIABLE } from "@daedalus/platform";
+import {
+  BUNDLED_RIPGREP_VARIABLE,
+  BUNDLED_TMUX_VARIABLE,
+} from "@daedalus/platform";
 import { runCli } from "./index";
 
 // This file is the CLI inside Daedalus.app, at
@@ -14,6 +17,12 @@ if (
   (await Bun.file(bundledTmux).exists())
 )
   process.env[BUNDLED_TMUX_VARIABLE] = bundledTmux;
+const bundledRipgrep = resolve(import.meta.dir, "../../../MacOS/rg");
+if (
+  !process.env[BUNDLED_RIPGREP_VARIABLE] &&
+  (await Bun.file(bundledRipgrep).exists())
+)
+  process.env[BUNDLED_RIPGREP_VARIABLE] = bundledRipgrep;
 
 const json = Bun.argv.slice(2).includes("--json");
 try {

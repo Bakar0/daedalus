@@ -98,6 +98,20 @@ export interface PlanSummary extends PlanFile {
   questions: number;
 }
 
+export interface PlanOutline {
+  title: string;
+  owner: string | null;
+  done: number;
+  total: number;
+  tasks: {
+    key: string;
+    title: string;
+    state: PlanTaskState;
+    owner: string | null;
+    line: number;
+  }[];
+}
+
 const slash = (path: string) => path.split(sep).join("/");
 
 export class PlanService {
@@ -168,6 +182,26 @@ export class PlanService {
       });
     }
     return out;
+  }
+
+  /**
+   * A plan file's title, progress and tasks, for search: whatever folder it
+   * is in, not only `plans/`.
+   */
+  async outline(absolutePath: string): Promise<PlanOutline> {
+    const plan = parsePlan(await readFile(absolutePath, "utf8"));
+    return {
+      title: plan.title ?? basename(absolutePath).slice(0, -PLAN_SUFFIX.length),
+      owner: plan.owner,
+      ...planProgress(plan),
+      tasks: planTasks(plan).map((task) => ({
+        key: task.key,
+        title: task.title,
+        state: task.state,
+        owner: task.owner,
+        line: task.line,
+      })),
+    };
   }
 
   /**

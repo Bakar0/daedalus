@@ -79,10 +79,13 @@ Before uploading, the build job checks that the bundle's tmux links only system 
 | --------------------------------- | ---------------------------------------------------------------- |
 | `MacOS/bun` (1.4.0, Electrobun's) | the app's runtime, and the one the `daedal` shim runs the CLI on |
 | `MacOS/tmux` (3.7c)               | every session; built by `scripts/build-tmux.ts`                  |
+| `MacOS/rg` (ripgrep 15.1.0)       | the palette's content search; `scripts/fetch-ripgrep.ts`         |
 | `Resources/app/cli/daedal.js`     | the CLI; the app writes a shim to `~/.daedalus/bin/daedal`       |
 | `Resources/bin/daedal`            | the launcher the cask links onto PATH; runs the CLI above        |
 
 `scripts/build-tmux.ts` builds tmux from pinned, checksummed sources with libevent and utf8proc linked in, so the binary needs only `/usr/lib`. `scripts/electrobun-post-build.ts` copies it into `Contents/MacOS`, where Electrobun signs it with everything else. The app exports its path as `DAEDALUS_TMUX` and the bundled CLI sets the same variable, so the app, the CLI and every session use the same tmux. A Mac that also has Homebrew's tmux keeps it; the two talk to each other's servers.
+
+`scripts/fetch-ripgrep.ts` downloads ripgrep's own macOS release, pinned by version and SHA-256, and refuses a binary that links anything outside `/usr/lib`. The post-build hook copies it to `Contents/MacOS/rg` and the app exports it as `DAEDALUS_RG`; `findRipgrepExecutable()` prefers it, then PATH. Without either, the palette's content search says so and file search walks the tree itself.
 
 ## Signing and notarization
 
