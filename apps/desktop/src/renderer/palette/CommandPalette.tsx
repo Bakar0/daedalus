@@ -570,6 +570,7 @@ export function CommandPalette({
                     scope,
                     search,
                     searched.fileCount,
+                    searched.filesTruncated,
                   )}
                 </p>
               )}
@@ -618,6 +619,7 @@ function emptyText(
   scope: PaletteScope,
   search: PaletteSearchSource | undefined,
   fileCount: number | undefined,
+  filesTruncated = false,
 ): string {
   if (inPanel) return "No action matches.";
   if (query.trim()) return "Nothing matches.";
@@ -625,7 +627,7 @@ function emptyText(
     case "files":
       return fileCount === undefined
         ? `Type to search the files in ${search?.where ?? "this workspace"}.`
-        : `Type to search ${fileCount.toLocaleString()} files in ${search?.where ?? "this workspace"}.`;
+        : `Type to search ${fileCount.toLocaleString()} files in ${search?.where ?? "this workspace"}${filesTruncated ? " (the list stops there; there are more)" : ""}.`;
     case "content":
       return "Type 3 characters to search inside files.";
     case "sessions":

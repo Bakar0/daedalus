@@ -27,6 +27,7 @@ import {
   type IntegratedTerminal,
   type PendingNotification,
   type PresenceState,
+  LiveContentSearch,
   type RepositoryLibraryEntry,
   type SearchRoot,
   type SessionAbility,
@@ -629,8 +630,8 @@ export function createDesktopRequestHandlers(
   };
 
   // The ⌘K palette searches the workspace on screen, or at Home the whole
-  // Daedalus home. One content search runs at a time: a new query stops the
-  // one before it.
+  // Daedalus home. One content search runs at a time, read in slices while
+  // it runs; a new query stops the one before it.
   const searchRoot = async (workspace: string | null): Promise<SearchRoot> => {
     const home = context.repositories.findHomeWorkspace();
     if (workspace === null || workspace === home?.id)
@@ -640,7 +641,7 @@ export function createDesktopRequestHandlers(
       home: false,
     };
   };
-  let contentSearch: AbortController | undefined;
+  const liveContent = new LiveContentSearch(context.search);
   /** The most plan files the palette reads. */
   const SEARCH_PLAN_LIMIT = 200;
 
@@ -1379,26 +1380,11 @@ export function createDesktopRequestHandlers(
           truncated: list.truncated,
         };
       }),
-    searchContent: ({ workspace, query }) =>
+    searchContent: ({ workspace, query, from }) =>
       result(async () => {
-        contentSearch?.abort();
-        const controller = new AbortController();
-        contentSearch = controller;
-        try {
-          const root = await searchRoot(workspace);
-          const found = await context.search.searchContent(root, query, {
-            signal: controller.signal,
-          });
-          return {
-            root: root.path,
-            query,
-            matches: found.matches,
-            truncated: found.truncated,
-            ...(found.unavailable ? { unavailable: found.unavailable } : {}),
-          };
-        } finally {
-          if (contentSearch === controller) contentSearch = undefined;
-        }
+        const root = await searchRoot(workspace);
+        const slice = await liveContent.read(root, query, from ?? 0);
+        return { root: root.path, query, ...slice };
       }),
     searchPlans: ({ workspace }) =>
       result(async () => {

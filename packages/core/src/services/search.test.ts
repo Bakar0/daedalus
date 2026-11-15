@@ -5,10 +5,14 @@ import { dirname, join } from "node:path";
 import { findRipgrepExecutable } from "@daedalus/platform";
 import {
   CONTENT_LINE_LIMIT,
+  type ContentMatch,
+  type ContentResult,
   isSkippedPath,
+  LiveContentSearch,
   parseRipgrepLine,
   RIPGREP_MISSING_MESSAGE,
   ripgrepSkipArgs,
+  type SearchRoot,
   SearchService,
 } from "./search";
 
@@ -88,6 +92,13 @@ describe("skip rules", () => {
     expect(isSkippedPath("app/node_modules/x/index.js", false)).toBe(true);
     expect(isSkippedPath("ws/.daedalus/workspace.json", false)).toBe(true);
     expect(isSkippedPath("src/index.ts", false)).toBe(false);
+    expect(isSkippedPath("repos/abc.git/objects/pack/x", false)).toBe(true);
+  });
+
+  test("Home skips session worktrees, which copy the workspace's repos", () => {
+    expect(isSkippedPath("workspaces/w/worktrees/s/r/a.ts", true)).toBe(true);
+    expect(isSkippedPath("workspaces/w/repos/r/a.ts", true)).toBe(false);
+    expect(isSkippedPath("worktrees/s/r/a.ts", false)).toBe(false);
   });
 
   test("only Home skips its machinery folders, and only at the top", () => {
@@ -133,6 +144,8 @@ describe("SearchService on a real tree", () => {
     await write("workspaces/w/node_modules/x/i.js", "needle\n");
     await write("workspaces/w/.daedalus/workspace.json", "{}\n");
     await write("workspaces/w/accounts/plan.md", "needle kept\n");
+    await write("workspaces/w/worktrees/s/notes.md", "needle in worktree\n");
+    await write("repos/lib.git/HEAD", "needle in bare repo\n");
   });
 
   afterAll(async () => {
@@ -256,5 +269,76 @@ describe("SearchService on a real tree", () => {
     });
     await expect(service.preview(root, "../etc/passwd")).rejects.toThrow();
     await expect(service.preview(root, "/etc/passwd")).rejects.toThrow();
+  });
+});
+
+describe("LiveContentSearch", () => {
+  const match = (line: number): ContentMatch => ({
+    path: "a.ts",
+    line,
+    text: "hit",
+    ranges: [[0, 3]],
+  });
+
+  /** A search that finds what `feed` hands it, ending when told to. */
+  const fakeService = () => {
+    const runs: {
+      query: string;
+      signal?: AbortSignal;
+      onMatch?: (match: ContentMatch) => void;
+      finish: () => void;
+    }[] = [];
+    return {
+      runs,
+      service: {
+        searchContent: (
+          _root: SearchRoot,
+          query: string,
+          options: {
+            signal?: AbortSignal;
+            onMatch?: (match: ContentMatch) => void;
+          } = {},
+        ) =>
+          new Promise<ContentResult>((resolve) => {
+            runs.push({
+              query,
+              ...options,
+              finish: () => resolve({ matches: [], truncated: false }),
+            });
+          }),
+      },
+    };
+  };
+  const root = { path: "/w", home: false };
+
+  test("hands out lines as they are found, then says it is done", async () => {
+    const { runs, service } = fakeService();
+    const live = new LiveContentSearch(service, 20);
+    const first = live.read(root, "hit");
+    runs[0]!.onMatch!(match(1));
+    expect(await first).toMatchObject({ from: 0, done: false });
+    expect((await first).matches).toHaveLength(1);
+    // Nothing new yet: the read gives up after the wait, empty.
+    expect(await live.read(root, "hit", 1)).toMatchObject({
+      matches: [],
+      done: false,
+    });
+    const rest = live.read(root, "hit", 1);
+    runs[0]!.onMatch!(match(2));
+    expect((await rest).matches.map((item) => item.line)).toEqual([2]);
+    runs[0]!.finish();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await live.read(root, "hit", 2)).toMatchObject({ done: true });
+    expect(runs).toHaveLength(1);
+  });
+
+  test("a new query stops the search before it", async () => {
+    const { runs, service } = fakeService();
+    const live = new LiveContentSearch(service, 5);
+    await live.read(root, "one");
+    await live.read(root, "two");
+    expect(runs.map((run) => run.query)).toEqual(["one", "two"]);
+    expect(runs[0]!.signal?.aborted).toBe(true);
+    expect(runs[1]!.signal?.aborted).toBe(false);
   });
 });

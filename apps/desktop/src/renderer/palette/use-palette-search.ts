@@ -27,8 +27,11 @@ export interface PaletteSearchSource {
   /** Where the search looks, as the field says it: a workspace, or Home. */
   where: string;
   listFiles(): Promise<SearchFilesDto>;
-  /** The host cancels the previous search when a new one comes. */
-  searchContent(query: string): Promise<SearchContentDto>;
+  /**
+   * The lines found for `query` from line `from` on. The host runs one
+   * search at a time and stops the previous one when a new query comes.
+   */
+  searchContent(query: string, from: number): Promise<SearchContentDto>;
   plans(): Promise<SearchPlansDto>;
   preview(path: string, line?: number): Promise<SearchPreviewDto>;
   /** Opens a file under `root` in the editor, at `line` when given. */
@@ -105,19 +108,23 @@ export function usePaletteSearch(
   useEffect(() => {
     if (!source || !wantsContent) return;
     let live = true;
-    const timer = setTimeout(() => {
-      source.searchContent(text).then(
-        (result) => {
+    // Lines are asked for again and again while the search runs, each
+    // answer adding what ripgrep found since the last.
+    const pull = (found: SearchContentDto["matches"]) =>
+      source.searchContent(text, found.length).then(
+        (slice) => {
           if (!live) return;
-          setContent(result);
+          const matches = [...found, ...slice.matches];
+          setContent({ ...slice, query: text, matches, from: 0 });
           setContentError(undefined);
+          if (!slice.done) void pull(matches);
         },
         (error: unknown) => {
           if (live)
             setContentError(`Content search failed: ${messageOf(error)}`);
         },
       );
-    }, CONTENT_DELAY_MS);
+    const timer = setTimeout(() => void pull([]), CONTENT_DELAY_MS);
     return () => {
       live = false;
       clearTimeout(timer);

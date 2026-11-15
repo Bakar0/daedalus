@@ -25,7 +25,10 @@ export interface SearchRoot {
   home: boolean;
 }
 
-/** Skipped under every root, at any depth. */
+/**
+ * Skipped under every root, at any depth; also any folder ending in `.git`,
+ * a bare repository like the library's mirrors in `repos/`.
+ */
 export const SKIPPED_EVERYWHERE = [".git", "node_modules", ".daedalus"];
 
 /** Skipped at the top of the Daedalus home. */
@@ -38,6 +41,13 @@ export const HOME_SKIPPED_FOLDERS = [
   "telemetry",
   "trash",
 ];
+
+/**
+ * Session worktrees at Home: each is another checkout of a repository the
+ * workspace has under `repos/`, so at Home they would list every file once
+ * per session. A workspace's own search still covers its worktrees.
+ */
+export const HOME_SKIPPED_WORKTREES = "workspaces/*/worktrees";
 
 /** File names skipped at Home: SQLite and its sidecars. */
 export const HOME_SKIPPED_FILES = ["*.db", "*.db-wal", "*.db-shm"];
@@ -62,9 +72,11 @@ export const RIPGREP_MISSING_MESSAGE =
 export function ripgrepSkipArgs(root: SearchRoot): string[] {
   const globs = [
     ...SKIPPED_EVERYWHERE.map((name) => `!${name}`),
+    "!*.git/",
     ...(root.home
       ? [
           ...HOME_SKIPPED_FOLDERS.map((name) => `!/${name}/`),
+          `!/${HOME_SKIPPED_WORKTREES}/`,
           ...HOME_SKIPPED_FILES.map((name) => `!${name}`),
         ]
       : []),
@@ -75,9 +87,15 @@ export function ripgrepSkipArgs(root: SearchRoot): string[] {
 /** The same rules as `ripgrepSkipArgs`, for the walk without ripgrep. */
 export function isSkippedPath(relativePath: string, home: boolean): boolean {
   const parts = relativePath.split("/");
-  if (parts.some((part) => SKIPPED_EVERYWHERE.includes(part))) return true;
+  if (
+    parts.some(
+      (part) => SKIPPED_EVERYWHERE.includes(part) || part.endsWith(".git"),
+    )
+  )
+    return true;
   if (!home) return false;
-  if (parts.length > 1 && HOME_SKIPPED_FOLDERS.includes(parts[0]!)) return true;
+  if (HOME_SKIPPED_FOLDERS.includes(parts[0]!)) return true;
+  if (parts[0] === "workspaces" && parts[2] === "worktrees") return true;
   const name = parts[parts.length - 1] ?? "";
   return /\.db(-wal|-shm)?$/.test(name);
 }
@@ -272,7 +290,12 @@ export class SearchService {
   async searchContent(
     root: SearchRoot,
     query: string,
-    options: { signal?: AbortSignal; limit?: number } = {},
+    options: {
+      signal?: AbortSignal;
+      limit?: number;
+      /** Each line as ripgrep finds it, before the search ends. */
+      onMatch?: (match: ContentMatch) => void;
+    } = {},
   ): Promise<ContentResult> {
     const limit = options.limit ?? CONTENT_RESULT_LIMIT;
     if (query.trim().length < CONTENT_MIN_QUERY)
@@ -313,6 +336,7 @@ export class SearchService {
             return false;
           }
           matches.push(match);
+          options.onMatch?.(match);
           return true;
         },
       },
@@ -371,4 +395,111 @@ function failUnlessFinished(result: LineStreamResult): void {
     "INTERNAL",
     `ripgrep failed: ${result.stderr.trim().split("\n")[0] || `exit ${result.exitCode}`}`,
   );
+}
+
+/** A slice of a running content search, from the line asked for on. */
+export interface ContentSlice {
+  matches: ContentMatch[];
+  /** The index of the first line in `matches`. */
+  from: number;
+  /** The search has ended; nothing more will come. */
+  done: boolean;
+  truncated: boolean;
+  unavailable?: string;
+}
+
+/**
+ * One content search at a time, read in slices while it runs, so the
+ * palette shows lines as ripgrep finds them. Asking for another query or
+ * root stops the one before. A read waits until there is a line past
+ * `from`, the search ends, or `waitMs` passes, whichever is first.
+ */
+export class LiveContentSearch {
+  private current:
+    | {
+        key: string;
+        matches: ContentMatch[];
+        done: boolean;
+        truncated: boolean;
+        unavailable?: string;
+        error?: unknown;
+        controller: AbortController;
+        changed: Set<() => void>;
+      }
+    | undefined;
+
+  constructor(
+    private readonly service: Pick<SearchService, "searchContent">,
+    private readonly waitMs = 300,
+  ) {}
+
+  async read(root: SearchRoot, query: string, from = 0): Promise<ContentSlice> {
+    const key = `${root.home ? "home" : "folder"}:${root.path}\0${query}`;
+    if (this.current?.key !== key) this.start(key, root, query);
+    const search = this.current!;
+    if (search.matches.length <= from && !search.done)
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(finish, this.waitMs);
+        function finish() {
+          clearTimeout(timer);
+          search.changed.delete(check);
+          resolve();
+        }
+        function check() {
+          if (search.matches.length > from || search.done) finish();
+        }
+        search.changed.add(check);
+      });
+    if (search.error) throw search.error;
+    return {
+      matches: search.matches.slice(from),
+      from,
+      done: search.done,
+      truncated: search.truncated,
+      ...(search.unavailable ? { unavailable: search.unavailable } : {}),
+    };
+  }
+
+  /** Stops the running search, if any. */
+  stop(): void {
+    this.current?.controller.abort();
+    this.current = undefined;
+  }
+
+  private start(key: string, root: SearchRoot, query: string): void {
+    this.current?.controller.abort();
+    const search: NonNullable<LiveContentSearch["current"]> = {
+      key,
+      matches: [],
+      done: false,
+      truncated: false,
+      controller: new AbortController(),
+      changed: new Set(),
+    };
+    this.current = search;
+    const notify = () => {
+      for (const check of [...search.changed]) check();
+    };
+    this.service
+      .searchContent(root, query, {
+        signal: search.controller.signal,
+        onMatch: (match) => {
+          search.matches.push(match);
+          notify();
+        },
+      })
+      .then(
+        (result) => {
+          search.truncated = result.truncated;
+          if (result.unavailable) search.unavailable = result.unavailable;
+        },
+        (error: unknown) => {
+          search.error = error;
+        },
+      )
+      .finally(() => {
+        search.done = true;
+        notify();
+      });
+  }
 }

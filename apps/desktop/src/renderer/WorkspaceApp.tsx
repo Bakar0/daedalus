@@ -7396,8 +7396,8 @@ export function WorkspaceApp({
     return {
       where: target === null ? "Home" : workspace!.name,
       listFiles: () => data(client.request.searchFiles({ workspace: target })),
-      searchContent: (query) =>
-        data(client.request.searchContent({ workspace: target, query })),
+      searchContent: (query, from) =>
+        data(client.request.searchContent({ workspace: target, query, from })),
       plans: () => data(client.request.searchPlans({ workspace: target })),
       preview: (path, line) =>
         data(

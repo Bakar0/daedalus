@@ -507,7 +507,11 @@ export interface SearchContentDto {
   root: string;
   /** The query this answers, so a late answer can be told apart. */
   query: string;
+  /** The lines found from line `from` on, while the search runs. */
   matches: SearchContentMatchDto[];
+  from: number;
+  /** Ended: ask again with `from` past the last line until it is. */
+  done: boolean;
   /** More lines matched than were returned. */
   truncated: boolean;
   /** Why nothing was searched: there is no ripgrep. */
@@ -2283,9 +2287,13 @@ export interface DesktopRpcSchema {
         { workspace: string | null; refresh?: boolean },
         SearchFilesDto
       >;
-      /** Cancels the window's previous content search, if still running. */
+      /**
+       * The lines of a content search from `from` on, waiting briefly for
+       * more while it runs. A new query or root stops the window's previous
+       * search.
+       */
       searchContent: Request<
-        { workspace: string | null; query: string },
+        { workspace: string | null; query: string; from?: number },
         SearchContentDto
       >;
       /** The plan files under the search root, with their tasks. */
