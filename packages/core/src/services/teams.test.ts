@@ -1041,6 +1041,59 @@ describe("teams", () => {
     });
   });
 
+  test("a finish the member already told its lead about wakes the lead once", async () => {
+    await withTeams(async ({ context, transport }) => {
+      const { session: leader, team } = await lead(context);
+      const server = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "server",
+        instructions: "Server.",
+      });
+      await context.teams.say({
+        team: team.id,
+        author: "server",
+        body: "@lead /orders is on branch orders-v2; tests pass.",
+      });
+      expect(transport.to(leader)).toHaveLength(1);
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "working",
+        source: "hook",
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "done",
+        message: "/orders is on branch orders-v2; tests pass.",
+        source: "hook",
+      });
+      // The hand-back is kept, and rides along with the next delivery.
+      expect(transport.to(leader)).toHaveLength(1);
+      expect(context.repositories.teams.messages(team.id).at(-1)).toMatchObject(
+        { author: "daedalus", kind: "waiting" },
+      );
+      // The next turn it did not report is handed back as usual.
+      const cursor = context.repositories.teams.cursor(team.id, "lead");
+      context.repositories.teams.saveCursor({
+        ...cursor,
+        deliveredAt: new Date(Date.now() - 61_000).toISOString(),
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "working",
+        source: "hook",
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "done",
+        message: "Refunds are next.",
+        source: "hook",
+      });
+      expect(transport.to(leader)).toHaveLength(2);
+      expect(transport.to(leader).at(-1)!.text).toContain("Refunds are next.");
+    });
+  });
+
   test("a member waiting on the user is noted for the lead, as the user's to answer", async () => {
     await withTeams(async ({ context, transport }) => {
       const { session: leader, team } = await lead(context);

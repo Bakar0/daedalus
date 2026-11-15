@@ -751,6 +751,29 @@ export class TeamService {
   }
 
   /**
+   * Whether a member tagged its lead since Daedalus last handed its turn
+   * back: the lead was woken by that message already.
+   */
+  private toldLeadSinceHandBack(teamId: string, handle: string): boolean {
+    const recent = this.repositories.teams.recentMessages(teamId, 50);
+    for (let index = recent.length - 1; index >= 0; index -= 1) {
+      const message = recent[index]!;
+      if (
+        message.author === DAEDALUS_HANDLE &&
+        message.body.startsWith(`@${handle} `)
+      )
+        return false;
+      if (
+        message.author === handle &&
+        message.kind === "message" &&
+        message.tags.includes(LEAD_HANDLE)
+      )
+        return true;
+    }
+    return false;
+  }
+
+  /**
    * Hands a member's turn back to its lead: "@api finished: <its last
    * message>". A mid-level lead's turn goes to its own lead the same way. A
    * member waiting on the user is noted too, as the user's to answer, so the
@@ -788,8 +811,15 @@ export class TeamService {
         tags: [LEAD_HANDLE],
         body,
         // The user answers a member waiting on them, so the note rides along
-        // with the lead's next delivery instead of waking it for nothing.
-        kind: end === "waiting" ? "waiting" : "handback",
+        // with the lead's next delivery instead of waking it for nothing. So
+        // does a finish the member already told the lead about this turn:
+        // its message woke the lead, and a second wake made the lead recap.
+        kind:
+          end === "waiting" ||
+          (end === "finished" &&
+            this.toldLeadSinceHandBack(membership.team.id, handle))
+            ? "waiting"
+            : "handback",
       });
       return "handed-back";
     } catch {
