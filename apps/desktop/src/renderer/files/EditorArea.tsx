@@ -1405,7 +1405,10 @@ function AppTabIcon({ kind }: { kind: AppPanelKind }) {
         <path d={WORKFLOW_ICON_PATH} />
       ) : kind === "instructions" ? (
         <path d={INSTRUCTIONS_ICON_PATH} />
-      ) : kind === "team" || kind === "threads" ? (
+      ) : kind === "threads" ? (
+        // Speech bubbles, as on the side panel's Threads tab.
+        <path d="M2 3.5h8v5.5H5.5L3 11V9H2zM12 5.5h2v5.5h-1v2l-2.5-2H7" />
+      ) : kind === "team" ? (
         <path d="M5.5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM1.5 13c0-2.2 1.8-4 4-4s4 1.8 4 4M11 7.5a1.75 1.75 0 1 0 0-3.5M11.5 9.2c1.7.3 3 1.8 3 3.8" />
       ) : kind === "routinesPage" ? (
         <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM8 4.5V8l2.5 1.5" />
