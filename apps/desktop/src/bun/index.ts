@@ -996,6 +996,8 @@ setInterval(async () => {
         delivered: delivery.delivered,
         error: delivery.error,
       });
+    // Answers and dismissals a session could not take yet go again.
+    await context.asks.flushDue().catch(() => []);
     // Each new ask notifies the user once, whichever process asked it.
     for (const ask of context.asks.claimNew())
       await context.notifications

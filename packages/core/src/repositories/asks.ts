@@ -224,13 +224,17 @@ export class AskRepository {
     return row ? askFromRow(row) : undefined;
   }
 
-  /** Opens an ended ask again (Undo); a notice not yet sent is dropped. */
+  /**
+   * Opens an answered or dismissed ask again (Undo), only while its notice
+   * has not been sent: once the session has the answer, it stands.
+   */
   reopen(id: number, at: string): Ask | undefined {
     const row = this.database
       .query<AskRow, [string, number]>(
         `UPDATE asks SET state = 'open', answer = NULL, note = NULL,
          closed_reason = NULL, closed_at = NULL, notice_delivered_at = NULL,
-         updated_at = ? WHERE id = ? AND state != 'open' RETURNING *`,
+         updated_at = ? WHERE id = ? AND state IN ('answered', 'dismissed')
+         AND notice_delivered_at IS NULL RETURNING *`,
       )
       .get(at, id);
     return row ? askFromRow(row) : undefined;
@@ -251,25 +255,52 @@ export class AskRepository {
       .sort((a, b) => a.id - b.id);
   }
 
-  /** A session's ended asks whose notice was not delivered yet, oldest first. */
-  pendingNotices(sessionId: string): Ask[] {
-    return this.database
-      .query<AskRow, [string]>(
-        `SELECT * FROM asks WHERE session_id = ? AND state != 'open'
-         AND notice_delivered_at IS NULL ORDER BY closed_at, id`,
+  /** A rebirth: the successor owns the open asks and the notices not sent. */
+  moveToSession(fromSessionId: string, toSessionId: string): void {
+    this.database
+      .query(
+        `UPDATE asks SET session_id = ? WHERE session_id = ?
+         AND (state = 'open' OR notice_delivered_at IS NULL)`,
       )
-      .all(sessionId)
-      .map(askFromRow);
+      .run(toSessionId, fromSessionId);
   }
 
-  /** Marks notices delivered, unless an Undo reopened them since. */
-  markNoticesDelivered(ids: readonly number[], at: string): void {
+  /**
+   * Claims a session's notices not delivered yet, oldest first, so two
+   * processes never send the same one; `release` puts them back when the
+   * delivery fails.
+   */
+  claimNotices(sessionId: string, at: string): Ask[] {
+    return this.database
+      .query<AskRow, [string, string]>(
+        `UPDATE asks SET notice_delivered_at = ? WHERE session_id = ?
+         AND state != 'open' AND notice_delivered_at IS NULL RETURNING *`,
+      )
+      .all(at, sessionId)
+      .map(askFromRow)
+      .sort((a, b) => a.id - b.id);
+  }
+
+  /** Puts claimed notices back for the next attempt. */
+  releaseNotices(ids: readonly number[], at: string): void {
     if (!ids.length) return;
     this.database
       .query(
-        `UPDATE asks SET notice_delivered_at = ?
-         WHERE id IN (${ids.map(() => "?").join(", ")}) AND state != 'open'`,
+        `UPDATE asks SET notice_delivered_at = NULL
+         WHERE id IN (${ids.map(() => "?").join(", ")})
+         AND notice_delivered_at = ?`,
       )
-      .run(at, ...ids);
+      .run(...ids, at);
+  }
+
+  /** Sessions with notices still to deliver. */
+  sessionsWithNotices(): string[] {
+    return this.database
+      .query<{ session_id: string }, []>(
+        `SELECT DISTINCT session_id FROM asks
+         WHERE state != 'open' AND notice_delivered_at IS NULL`,
+      )
+      .all()
+      .map((row) => row.session_id);
   }
 }

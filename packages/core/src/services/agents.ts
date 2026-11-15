@@ -1883,6 +1883,8 @@ export class AgentService {
       this.repositories.routines.moveAgent(predecessor.id, session.id);
       this.repositories.threads.moveToSession(predecessor.id, session.id);
       this.repositories.tracks.moveToSession(predecessor.id, session.id);
+      // Its open asks, and notices not yet delivered, are the successor's.
+      this.repositories.asks.moveToSession(predecessor.id, session.id);
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });

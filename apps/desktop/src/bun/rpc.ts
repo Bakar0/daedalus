@@ -191,6 +191,9 @@ const askDto = (ask: AskView): AskDto => ({
   closedReason: ask.closedReason,
   createdAt: ask.createdAt,
   closedAt: ask.closedAt,
+  undoable:
+    (ask.state === "answered" || ask.state === "dismissed") &&
+    !ask.noticeDeliveredAt,
 });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
@@ -788,10 +791,18 @@ export function createDesktopRequestHandlers(
           session: agentDto(home.session),
         };
       }),
-    askList: () =>
-      mutate(async () => {
-        await context.asks.sweepPlans();
-        return context.asks.list().map(askDto);
+    askList: ({ plan }) =>
+      result(async () => {
+        // Reading is not a change; only asks it closed are announced.
+        if ((await context.asks.sweepPlans()).length) onMutation();
+        const asks = context.asks.list();
+        if (!plan) return asks.map(askDto);
+        const file = await context.plans
+          .find({ workspace: plan.workspaceId }, plan.path)
+          .catch(() => undefined);
+        return file
+          ? asks.filter((ask) => ask.planPath === file.absolutePath).map(askDto)
+          : [];
       }),
     askAnswer: ({ id, option, note }) =>
       mutate(async () =>

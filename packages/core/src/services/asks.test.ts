@@ -206,7 +206,18 @@ describe("Needs you asks", () => {
       });
       await context.asks.dismiss(ask.id);
       expect(transport.to(lead).at(-1)!.text).toContain("Do not ask it again");
-      expect(context.asks.reopen(ask.id).state).toBe("open");
+      // The session has the answer already, so it stands.
+      expect(() => context.asks.reopen(ask.id)).toThrow(
+        "lead already has the answer",
+      );
+      // Undo works while the notice waits: here the session is stopped.
+      const { ask: later } = await context.asks.create({
+        session: lead.id,
+        title: "Merge it?",
+      });
+      await context.agents.stop(lead.id);
+      await context.asks.dismiss(later.id);
+      expect(context.asks.reopen(later.id).state).toBe("open");
       expect(context.asks.list({ openOnly: true })).toHaveLength(1);
     });
   });
@@ -316,6 +327,31 @@ describe("Needs you asks", () => {
       const last = transport.to(keep).at(-1)!.text;
       expect(last).toContain("answered by the user");
       expect(last).toContain(`Open asks: #${second.id} Second?`);
+    });
+  });
+
+  test("a rebirth hands the open asks to the successor", async () => {
+    await withHome(async ({ context }) => {
+      const old = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "old",
+      });
+      const next = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "next",
+      });
+      const { ask } = await context.asks.create({
+        session: old.id,
+        title: "Still open?",
+      });
+      context.repositories.asks.moveToSession(old.id, next.id);
+      await context.agents.archive(old.id, true);
+      expect(context.asks.get(ask.id)).toMatchObject({
+        sessionId: next.id,
+        state: "open",
+      });
     });
   });
 });

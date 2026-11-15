@@ -1072,6 +1072,31 @@ describe("teams", () => {
       expect(context.repositories.teams.messages(team.id).at(-1)).toMatchObject(
         { author: "daedalus", kind: "waiting" },
       );
+      // A question it asked the lead mid-turn does not quiet its finish.
+      await context.teams.say({
+        team: team.id,
+        author: "server",
+        body: "@lead cents or decimals?",
+      });
+      await context.teams.say({
+        team: team.id,
+        author: "lead",
+        body: "@server cents",
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "working",
+        source: "hook",
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "done",
+        message: "Amounts are in cents now.",
+        source: "hook",
+      });
+      expect(context.repositories.teams.messages(team.id).at(-1)).toMatchObject(
+        { author: "daedalus", kind: "handback" },
+      );
       // The next turn it did not report is handed back as usual.
       const cursor = context.repositories.teams.cursor(team.id, "lead");
       context.repositories.teams.saveCursor({
@@ -1089,8 +1114,12 @@ describe("teams", () => {
         message: "Refunds are next.",
         source: "hook",
       });
-      expect(transport.to(leader)).toHaveLength(2);
-      expect(transport.to(leader).at(-1)!.text).toContain("Refunds are next.");
+      expect(context.repositories.teams.messages(team.id).at(-1)).toMatchObject(
+        { author: "daedalus", kind: "handback" },
+      );
+      expect(
+        context.repositories.teams.messages(team.id).at(-1)!.body,
+      ).toContain("Refunds are next.");
     });
   });
 

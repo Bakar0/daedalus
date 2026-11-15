@@ -751,15 +751,31 @@ export class TeamService {
   }
 
   /**
-   * Whether a member tagged its lead since Daedalus last handed its turn
-   * back: the lead was woken by that message already.
+   * Whether the member already told its lead what its turn ended with: its
+   * last message tagging the lead says what the turn's last reply says, and
+   * nothing came between them from the lead or a hand-back. A question it
+   * asked the lead mid-turn does not count.
    */
-  private toldLeadSinceHandBack(teamId: string, handle: string): boolean {
+  private toldLeadSinceHandBack(
+    teamId: string,
+    handle: string,
+    said: string,
+  ): boolean {
+    const gist = (text: string) =>
+      text
+        .replace(/@[\w-]+/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+    const final = gist(said);
+    if (final.length < 12) return false;
     const recent = this.repositories.teams.recentMessages(teamId, 50);
     for (let index = recent.length - 1; index >= 0; index -= 1) {
       const message = recent[index]!;
+      if (message.author === LEAD_HANDLE) return false;
       if (
         message.author === DAEDALUS_HANDLE &&
+        (message.kind === "handback" || message.kind === "waiting") &&
         message.body.startsWith(`@${handle} `)
       )
         return false;
@@ -767,8 +783,11 @@ export class TeamService {
         message.author === handle &&
         message.kind === "message" &&
         message.tags.includes(LEAD_HANDLE)
-      )
-        return true;
+      ) {
+        const told = gist(message.body);
+        const head = (text: string) => text.slice(0, 80);
+        return told.includes(head(final)) || final.includes(head(told));
+      }
     }
     return false;
   }
@@ -817,7 +836,7 @@ export class TeamService {
         kind:
           end === "waiting" ||
           (end === "finished" &&
-            this.toldLeadSinceHandBack(membership.team.id, handle))
+            this.toldLeadSinceHandBack(membership.team.id, handle, said))
             ? "waiting"
             : "handback",
       });

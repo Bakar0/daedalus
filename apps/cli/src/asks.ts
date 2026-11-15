@@ -141,7 +141,17 @@ export async function askCommand(
     parsed.values.recommend === undefined
       ? undefined
       : Number(parsed.values.recommend);
-  const task = parsed.positionals.find((item) => item.startsWith("^"));
+  // The task follows --plan: `^id`, or `L<line>` when a plan is named.
+  const task = parsed.positionals.find(
+    (item) =>
+      item.startsWith("^") ||
+      (Boolean(parsed.values.plan) && /^L\d+$/.test(item)),
+  );
+  if (task && !parsed.values.plan)
+    throw new DaedalusError(
+      "VALIDATION",
+      `Name the plan ${task} is in: --plan <plan> ${task}`,
+    );
   const rest = parsed.positionals.filter((item) => item !== task);
 
   if (action === "create") {

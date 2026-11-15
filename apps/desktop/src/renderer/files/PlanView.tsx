@@ -411,17 +411,10 @@ export function PlanView({
   useEffect(() => {
     let live = true;
     const read = () =>
-      void client.request.askList({}).then(
+      void client.request.askList({ plan: { workspaceId, path } }).then(
         (response) => {
           if (!live || !response.ok) return;
-          setAsks(
-            response.data.filter(
-              (ask) =>
-                ask.state === "open" &&
-                ask.workspaceId === workspaceId &&
-                ask.planPath?.endsWith(`/${path}`),
-            ),
-          );
+          setAsks(response.data.filter((ask) => ask.state === "open"));
         },
         () => undefined,
       );

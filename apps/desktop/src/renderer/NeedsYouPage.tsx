@@ -122,7 +122,9 @@ function PlanMap({
     return () => {
       live = false;
     };
-  }, [client, path, asks]);
+    // Read again when the asks pinned to it change, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, path, asks.map((ask) => `${ask.id}:${ask.taskKey}`).join()]);
   if (plan === undefined) return null;
   if (plan === null)
     return <p className="needs-empty">This plan can no longer be read.</p>;
@@ -332,9 +334,11 @@ function AskCard({
               : ask.closedReason
                 ? `${ask.closedReason}${answer ? `: ${answer}` : ""}.`
                 : `Answered: ${answer}. Sent to ${ask.sessionName ?? "its session"}.`}{" "}
-          <button className="needs-link" onClick={onUndo} type="button">
-            Undo
-          </button>
+          {ask.undoable && (
+            <button className="needs-link" onClick={onUndo} type="button">
+              Undo
+            </button>
+          )}
         </div>
       )}
     </article>
@@ -409,6 +413,7 @@ export function NeedsYouPage({
     const response = await request;
     if (!response.ok) onError(response.error.message);
     await load();
+    return response.ok;
   };
   const draftOf = (id: number): Draft =>
     drafts[id] ?? { option: null, note: "" };
@@ -469,7 +474,9 @@ export function NeedsYouPage({
                     option: draft.option,
                     note: draft.note.trim() || null,
                   }),
-                ).then(() => setDrafts(({ [ask.id]: _, ...rest }) => rest));
+                ).then((sent) => {
+                  if (sent) setDrafts(({ [ask.id]: _, ...rest }) => rest);
+                });
               }}
               onUndo={() => undefined}
               selected={current?.id === ask.id}

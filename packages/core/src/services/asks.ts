@@ -393,8 +393,16 @@ export class AskService {
   /** Undo: an ended ask is open again. */
   reopen(id: number): Ask {
     const ask = this.repositories.asks.reopen(id, this.now().toISOString());
-    if (!ask) throw new DaedalusError("CONFLICT", `Ask #${id} is open already`);
-    return this.changed(ask);
+    if (ask) return this.changed(ask);
+    const current = this.ask(id);
+    throw new DaedalusError(
+      "CONFLICT",
+      current.state === "open"
+        ? `Ask #${id} is open already`
+        : current.state === "closed"
+          ? `Ask #${id} closed on its own and cannot be opened again`
+          : `${this.repositories.findAgent(current.sessionId)?.name ?? "The session"} already has the answer to #${id}; send it a message to change it`,
+    );
   }
 
   private async end(
@@ -550,28 +558,39 @@ export class AskService {
    * running is told when it runs again. Never throws.
    */
   async flushSession(sessionId: string): Promise<boolean> {
-    const pending = this.repositories.asks.pendingNotices(sessionId);
     const session = this.repositories.findAgent(sessionId);
-    if (!pending.length || !session || session.archivedAt) return false;
+    if (!session || session.archivedAt) return false;
     if (session.status !== "running" && session.status !== "starting")
       return false;
-    const delivery: TeamDelivery = {
-      session: await this.agents
-        .recoverCodexThread(session)
-        .catch(() => session),
-      text: pending.map((ask) => this.noticeText(ask)).join("\n\n"),
-      from: "[Needs you] the user",
-    };
+    const at = this.now().toISOString();
+    const claimed = this.repositories.asks.claimNotices(sessionId, at);
+    if (!claimed.length) return false;
     try {
-      await this.transport().deliver(delivery);
+      await this.transport().deliver({
+        session: await this.agents
+          .recoverCodexThread(session)
+          .catch(() => session),
+        text: claimed.map((ask) => this.noticeText(ask)).join("\n\n"),
+        from: "[Needs you] the user",
+      });
+      return true;
     } catch {
+      // A held or failed delivery goes again on the app's next tick.
+      this.repositories.asks.releaseNotices(
+        claimed.map((ask) => ask.id),
+        at,
+      );
       return false;
     }
-    this.repositories.asks.markNoticesDelivered(
-      pending.map((ask) => ask.id),
-      this.now().toISOString(),
-    );
-    return true;
+  }
+
+  /** Delivers every notice still waiting; the app's tick calls it. */
+  async flushDue(): Promise<string[]> {
+    const delivered: string[] = [];
+    for (const sessionId of this.repositories.asks.sessionsWithNotices())
+      if (await this.flushSession(sessionId).catch(() => false))
+        delivered.push(sessionId);
+    return delivered;
   }
 
   /** The plan file of an ask, for callers that want to open it. */

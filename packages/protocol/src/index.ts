@@ -180,6 +180,8 @@ export interface AskDto {
   closedReason: string | null;
   createdAt: string;
   closedAt: string | null;
+  /** Undo can open it again: its answer has not reached the session yet. */
+  undoable: boolean;
 }
 
 /** A plan's tasks, for the map beside Needs you. */
@@ -1771,7 +1773,10 @@ export interface DesktopRpcSchema {
        * Needs you: open asks and those ended in the last day, newest first,
        * in every workspace. Asks whose plan task is done close first.
        */
-      askList: Request<Record<string, never>, AskDto[]>;
+      askList: Request<
+        { plan?: { workspaceId: string; path: string } },
+        AskDto[]
+      >;
       /** The user answers an ask: an option's index, words, or both. */
       askAnswer: Request<
         { id: number; option: number | null; note: string | null },
