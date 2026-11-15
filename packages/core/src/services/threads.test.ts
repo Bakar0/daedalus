@@ -12,6 +12,7 @@ import {
   type TeamDelivery,
   type TeamTransport,
 } from "../index";
+import { HOME_VISIBLE_FOLDERS } from "./workspace-files";
 
 class FakeTmux implements TmuxClient {
   openPty() {
@@ -208,6 +209,16 @@ describe("Home", () => {
       const workspacesEntry = top.find((entry) => entry.name === "workspaces");
       expect(workspacesEntry).toMatchObject({ kind: "directory" });
       expect(workspacesEntry!.mutable).toBe(false);
+      // Its database, logs and credentials stay out of the panel.
+      await Bun.write(join(context.config.home, "logs", "app.log"), "x");
+      const shown = (
+        await context.workspaceContent.listDirectory(HOME_WORKSPACE_ID)
+      ).map((entry) => entry.name);
+      expect(shown.every((name) => HOME_VISIBLE_FOLDERS.includes(name))).toBe(
+        true,
+      );
+      expect(shown).not.toContain("logs");
+      expect(shown).not.toContain("state.db");
       const checkout = await context.workspaceContent.readFile(
         HOME_WORKSPACE_ID,
         "workspaces/checkout/BRIEF.md",

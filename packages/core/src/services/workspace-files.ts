@@ -35,6 +35,15 @@ import type { WorkspaceService } from "./workspaces";
 export const MAX_VIEWABLE_FILE_BYTES = 1024 * 1024;
 export const MAX_VIEWABLE_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_IMPORTED_FILE_BYTES = 50 * 1024 * 1024;
+
+/** What Home's file panel shows at the top of the Daedalus home. */
+export const HOME_VISIBLE_FOLDERS: readonly string[] = [
+  "workspaces",
+  "repos",
+  "instructions",
+  "workflows",
+];
+
 /** The image types the viewer shows, by extension. */
 export const IMAGE_MIME_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -288,7 +297,12 @@ export class WorkspaceFiles {
         (entry) =>
           entry.name !== ".git" &&
           ((relativePath && workspace.kind !== "home") ||
-            entry.name !== ".daedalus"),
+            entry.name !== ".daedalus") &&
+          // The top of the Daedalus home holds its database, logs and
+          // credentials too; Home shows only the folders people work with.
+          (workspace.kind !== "home" ||
+            relativePath !== "" ||
+            HOME_VISIBLE_FOLDERS.includes(entry.name)),
       )
       .map((entry) => {
         const path = join(relativePath, entry.name);
