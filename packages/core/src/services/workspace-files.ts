@@ -28,6 +28,11 @@ import type { DaedalusConfig } from "../config";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import { IN_CLOUD_MESSAGE } from "./cloud-launch";
+import {
+  LIBRARY_FOLDER,
+  LIBRARY_READ_ONLY,
+  LibraryFiles,
+} from "./library-files";
 import type { PodMoveSide } from "./move-side";
 import { PodFiles } from "./pod-files";
 import type { WorkspaceService } from "./workspaces";
@@ -67,6 +72,23 @@ async function isViewableFile(path: string): Promise<boolean> {
     await Bun.file(path).slice(0, 8192).arrayBuffer(),
   );
   return !head.includes(0);
+}
+
+/** A text file for the viewer, refusing one that looks binary. */
+function textFile(path: string, bytes: Uint8Array): WorkspaceFile {
+  if (bytes.subarray(0, Math.min(bytes.length, 8192)).includes(0))
+    throw new DaedalusError(
+      "VALIDATION",
+      "Binary files cannot be opened in the workspace viewer",
+    );
+  return {
+    name: basename(path),
+    path,
+    content: new TextDecoder().decode(bytes),
+    format: [".md", ".mdx", ".markdown"].includes(extname(path).toLowerCase())
+      ? "markdown"
+      : "text",
+  };
 }
 
 /**
@@ -219,9 +241,29 @@ export class WorkspaceFiles {
     private readonly config: DaedalusConfig,
   ) {
     this.podFiles = new PodFiles(repositories);
+    this.libraryFiles = new LibraryFiles(repositories);
   }
 
   private readonly podFiles: PodFiles;
+  private readonly libraryFiles: LibraryFiles;
+
+  /**
+   * The path under Home's `repos/` a request names, relative to it, or
+   * undefined when it names something else. There `repos/` is the library,
+   * read from its bare mirrors with git rather than from disk.
+   */
+  private libraryPath(
+    workspace: Workspace,
+    requestedPath: string,
+  ): string | undefined {
+    if (workspace.kind !== "home" || isAbsolute(requestedPath))
+      return undefined;
+    const segments = requestedPath
+      .split(/[\\/]/)
+      .filter((segment) => segment !== "" && segment !== ".");
+    if (segments[0] !== LIBRARY_FOLDER) return undefined;
+    return segments.slice(1).join("/");
+  }
   private podFor: ((workspace: Workspace) => Promise<PodMoveSide>) | undefined;
 
   /**
@@ -281,6 +323,8 @@ export class WorkspaceFiles {
     const workspace = await this.workspaces.get(workspaceReference);
     const pod = await this.pod(workspace);
     if (pod) return this.podFiles.listDirectory(workspace, pod, requestedPath);
+    const library = this.libraryPath(workspace, requestedPath);
+    if (library !== undefined) return this.libraryFiles.listDirectory(library);
     const { target, relativePath } = await this.resolveVisiblePath(
       workspace,
       requestedPath,
@@ -351,6 +395,15 @@ export class WorkspaceFiles {
       ? undefined
       : await this.pod(workspace);
     if (pod) return this.podFiles.readFile(pod, requestedPath);
+    const library = this.libraryPath(workspace, requestedPath);
+    if (library) {
+      const file = await this.libraryFiles.readFile(
+        library,
+        MAX_VIEWABLE_FILE_BYTES,
+        "Files larger than 1 MB cannot be opened in the workspace viewer",
+      );
+      return textFile(file.path, file.bytes);
+    }
     const { target, relativePath } = await this.resolveOpenablePath(
       workspace,
       requestedPath,
@@ -368,22 +421,10 @@ export class WorkspaceFiles {
         "VALIDATION",
         "Files larger than 1 MB cannot be opened in the workspace viewer",
       );
-    const bytes = new Uint8Array(await Bun.file(target).arrayBuffer());
-    if (bytes.subarray(0, Math.min(bytes.length, 8192)).includes(0))
-      throw new DaedalusError(
-        "VALIDATION",
-        "Binary files cannot be opened in the workspace viewer",
-      );
-    return {
-      name: basename(relativePath),
-      path: relativePath,
-      content: new TextDecoder().decode(bytes),
-      format: [".md", ".mdx", ".markdown"].includes(
-        extname(relativePath).toLowerCase(),
-      )
-        ? "markdown"
-        : "text",
-    };
+    return textFile(
+      relativePath,
+      new Uint8Array(await Bun.file(target).arrayBuffer()),
+    );
   }
 
   /** An image's bytes for the viewer, under the same path rules as a file. */
@@ -396,16 +437,30 @@ export class WorkspaceFiles {
       ? undefined
       : await this.pod(workspace);
     if (pod) return this.podFiles.readImage(pod, requestedPath);
-    const { target, relativePath } = await this.resolveOpenablePath(
-      workspace,
-      requestedPath,
-    );
-    const mimeType = IMAGE_MIME_TYPES[extname(relativePath).toLowerCase()];
+    const library = this.libraryPath(workspace, requestedPath);
+    const mimeType = IMAGE_MIME_TYPES[extname(requestedPath).toLowerCase()];
     if (!mimeType)
       throw new DaedalusError(
         "VALIDATION",
         `'${requestedPath}' is not an image the viewer shows`,
       );
+    if (library) {
+      const image = await this.libraryFiles.readFile(
+        library,
+        MAX_VIEWABLE_IMAGE_BYTES,
+        "Images larger than 20 MB cannot be opened in the workspace viewer",
+      );
+      return {
+        name: image.name,
+        path: image.path,
+        mimeType,
+        base64: Buffer.from(image.bytes).toString("base64"),
+      };
+    }
+    const { target, relativePath } = await this.resolveOpenablePath(
+      workspace,
+      requestedPath,
+    );
     const targetStat = await lstat(target);
     if (targetStat.isSymbolicLink())
       throw new DaedalusError(
@@ -945,11 +1000,8 @@ export class WorkspaceFiles {
         code: "CONFLICT",
         message: "Daedalus manages the top of its home folder",
       };
-    if (segments[0] === "repos")
-      return {
-        code: "CONFLICT",
-        message: "Reference checkouts are read-only",
-      };
+    if (segments[0] === LIBRARY_FOLDER)
+      return { code: "CONFLICT", message: LIBRARY_READ_ONLY };
     const inside = this.workspaceAt(input.target);
     if (!inside) return undefined;
     if (inside.relativePath === "")
@@ -1130,15 +1182,23 @@ export class WorkspaceFiles {
         "Workspace path escapes the workspace root",
       );
     const relativePath = relative(root, target);
+    const segments = relativePath.split(/[\\/]/);
     if (
-      relativePath
-        .split(/[\\/]/)
-        .some((segment) => segment === ".daedalus" || segment === ".git")
+      segments.some((segment) => segment === ".daedalus" || segment === ".git")
     )
       throw new DaedalusError(
         "VALIDATION",
         "Internal workspace and Git metadata are not visible",
       );
+    // Under Home's `repos/` are the library's bare mirrors, which nothing
+    // reaches as files: the panel reads them through `libraryFiles`, and
+    // nothing is created, renamed, moved, removed or saved there.
+    if (
+      workspace.kind === "home" &&
+      segments[0] === LIBRARY_FOLDER &&
+      segments.length > 1
+    )
+      throw new DaedalusError("CONFLICT", LIBRARY_READ_ONLY);
     if (!(await pathExists(target)))
       throw new DaedalusError(
         "NOT_FOUND",

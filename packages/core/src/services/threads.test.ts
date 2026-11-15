@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
@@ -254,6 +254,189 @@ describe("Home", () => {
           (entry) => entry.name,
         ),
       ).toContain("BRIEF.md");
+    });
+  });
+
+  test("Home's repos/ lists the library by name and reads its default branch", async () => {
+    await withHome(async ({ context }) => {
+      await context.home.agent();
+      const git = (args: string[], cwd?: string) => {
+        const result = Bun.spawnSync(
+          [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "init.defaultBranch=main",
+            ...args,
+          ],
+          { cwd },
+        );
+        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+      };
+      const source = join(context.config.home, "source");
+      await mkdir(join(source, "src"), { recursive: true });
+      await Bun.write(join(source, "README.md"), "# Policy\n");
+      await Bun.write(join(source, "src", "app.ts"), "export const a = 1;\n");
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 255]);
+      await Bun.write(join(source, "logo.png"), png);
+      await Bun.write(join(source, "blob.bin"), new Uint8Array([1, 0, 2]));
+      await symlink("README.md", join(source, "link.md"));
+      git(["init", "--quiet"], source);
+      git(["add", "."], source);
+      git(["commit", "--quiet", "-m", "first"], source);
+      const id = crypto.randomUUID();
+      const mirror = join(context.config.repositoryRoot, `${id}.git`);
+      git(["clone", "--quiet", "--bare", source, mirror]);
+      const now = new Date().toISOString();
+      const library = (fields: { id: string; name: string; branch: string }) =>
+        context.repositories.createRepositoryLibraryEntry({
+          id: fields.id,
+          name: fields.name,
+          remoteUrl: `https://example.com/${fields.name}.git`,
+          gitDirectory: join(context.config.repositoryRoot, `${fields.id}.git`),
+          defaultBranch: fields.branch,
+          lastFetchedAt: now,
+          createdAt: now,
+        });
+      library({ id, name: "policy", branch: "main" });
+      // Its mirror was never cloned, and this one names a branch it lacks.
+      library({ id: crypto.randomUUID(), name: "missing", branch: "main" });
+      const otherId = crypto.randomUUID();
+      git([
+        "clone",
+        "--quiet",
+        "--bare",
+        source,
+        join(context.config.repositoryRoot, `${otherId}.git`),
+      ]);
+      library({ id: otherId, name: "nobranch", branch: "trunk" });
+
+      const list = (path: string) =>
+        context.workspaceContent.listDirectory(HOME_WORKSPACE_ID, path);
+      const repos = await list("repos");
+      expect(repos.map((entry) => entry.name)).toEqual([
+        "missing",
+        "nobranch",
+        "policy",
+      ]);
+      expect(repos[0]).toMatchObject({
+        path: "repos/missing",
+        kind: "directory",
+        mutable: false,
+        immutableReason: "Library repositories are read-only",
+      });
+      expect(await list("repos/missing")).toEqual([]);
+      expect(await list("repos/nobranch")).toEqual([]);
+      const policy = await list("repos/policy");
+      expect(
+        policy.map((entry) => [entry.name, entry.kind, entry.mutable]),
+      ).toEqual([
+        ["src", "directory", false],
+        ["blob.bin", "file", false],
+        ["logo.png", "file", false],
+        ["README.md", "file", false],
+        ["link.md", "symlink", false],
+      ]);
+      expect(policy.find((entry) => entry.name === "src")!.path).toBe(
+        "repos/policy/src",
+      );
+      expect((await list("repos/policy/src")).map((e) => e.path)).toEqual([
+        "repos/policy/src/app.ts",
+      ]);
+      await expect(list("repos/policy/README.md")).rejects.toThrow(
+        "not a directory",
+      );
+      await expect(list("repos/policy/nowhere")).rejects.toThrow(
+        "was not found",
+      );
+      await expect(list("repos/policy/../policy")).rejects.toThrow(
+        "not visible",
+      );
+      await expect(list("repos/policy/.git")).rejects.toThrow("not visible");
+
+      const readme = await context.workspaceContent.readFile(
+        HOME_WORKSPACE_ID,
+        "repos/policy/README.md",
+      );
+      expect(readme).toEqual({
+        name: "README.md",
+        path: "repos/policy/README.md",
+        content: "# Policy\n",
+        format: "markdown",
+      });
+      expect(
+        (
+          await context.workspaceContent.readFile(
+            HOME_WORKSPACE_ID,
+            "repos/policy/src/app.ts",
+          )
+        ).content,
+      ).toBe("export const a = 1;\n");
+      await expect(
+        context.workspaceContent.readFile(
+          HOME_WORKSPACE_ID,
+          "repos/policy/blob.bin",
+        ),
+      ).rejects.toThrow("Binary files");
+      await expect(
+        context.workspaceContent.readFile(
+          HOME_WORKSPACE_ID,
+          "repos/policy/src",
+        ),
+      ).rejects.toThrow("not a file");
+      await expect(
+        context.workspaceContent.readFile(
+          HOME_WORKSPACE_ID,
+          "repos/policy/link.md",
+        ),
+      ).rejects.toThrow("Symbolic links");
+      const image = await context.workspaceContent.readImage(
+        HOME_WORKSPACE_ID,
+        "repos/policy/logo.png",
+      );
+      expect(image.mimeType).toBe("image/png");
+      expect(new Uint8Array(Buffer.from(image.base64, "base64"))).toEqual(png);
+
+      // Nothing under it changes, and the mirrors' git internals stay out.
+      const readOnly = "Library repositories are read-only";
+      await expect(
+        context.workspaceContent.writeFile({
+          workspace: HOME_WORKSPACE_ID,
+          path: "repos/policy/README.md",
+          content: "x",
+          expectedContent: "# Policy\n",
+        }),
+      ).rejects.toThrow(readOnly);
+      await expect(
+        context.workspaceContent.createEntry({
+          workspace: HOME_WORKSPACE_ID,
+          parentPath: "repos/policy",
+          name: "new.md",
+          kind: "file",
+        }),
+      ).rejects.toThrow(readOnly);
+      await expect(
+        context.workspaceContent.removeEntry({
+          workspace: HOME_WORKSPACE_ID,
+          path: `repos/${id}.git`,
+        }),
+      ).rejects.toThrow(readOnly);
+      await expect(
+        context.workspaceContent.renameEntry({
+          workspace: HOME_WORKSPACE_ID,
+          path: "repos/policy",
+          name: "other",
+        }),
+      ).rejects.toThrow(readOnly);
+      await expect(
+        context.workspaceContent.readFile(
+          HOME_WORKSPACE_ID,
+          `repos/${id}.git/HEAD`,
+        ),
+      ).rejects.toThrow("was not found");
     });
   });
 
