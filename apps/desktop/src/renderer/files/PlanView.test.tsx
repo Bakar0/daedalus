@@ -103,10 +103,16 @@ test("plan buttons are left out of the global blue button rule", () => {
     rule.includes(".workspace-item"),
   );
   expect(rules.length).toBeGreaterThanOrEqual(2);
-  for (const rule of rules) {
-    expect(rule).toMatch(/:where\([^)]*\.plan-scroll[^)]*\) button/);
-    // A `.x button` outside :where() raises the rule over every
-    // `.x button` rule, and Settings' sections turn blue.
-    expect(rule.replace(/:where\([^)]*\)/g, "")).not.toMatch(/\.[\w-]+ button/);
+  for (const written of rules) {
+    const rule = written
+      .replace(/\s+/g, " ")
+      .replace(/\( /g, "(")
+      .replace(/ \)/g, ")");
+    expect(rule).toContain(":where(.plan-scroll button");
+    // Anything after :where() inside :not() adds weight, so the rule beats
+    // every `.x button` rule, and Settings' sections turn blue.
+    expect(rule.replace(/:where\([^)]*\)/g, "")).not.toMatch(
+      /\.[\w-]+ button|\) button/,
+    );
   }
 });
