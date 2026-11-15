@@ -9835,9 +9835,20 @@ button.routine-tick:hover {
     no-repeat;
   outline: none;
 }
-/* The workflow takes the room the dock has; its steps scroll inside. */
+/* The workflow takes the room the dock has; its steps scroll inside. No
+   pane shrinks past its own heading, so a short dock never hides one pane's
+   heading under the next; the Plans list gives up room too. */
 .side-panel-dock > .workflow-pane:first-of-type {
   flex: 1 1 auto;
+}
+.side-panel-dock > .workflow-pane {
+  min-height: 31px;
+}
+.side-panel-dock > .plans-pane {
+  flex: 0 1 auto;
+}
+.side-panel-dock > .plans-pane .plans-pane-body {
+  min-height: 0;
 }
 .workflow-pane-heading {
   align-items: center;
@@ -10396,18 +10407,18 @@ button.routine-tick:hover {
   flex-wrap: wrap;
   gap: 10px;
 }
-.needs-card-act textarea {
+.needs-card-answer {
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 6px;
+  box-sizing: border-box;
   color: var(--text);
-  flex: 1;
   font: inherit;
   font-size: 12.5px;
-  min-height: 30px;
-  min-width: 160px;
+  min-height: 34px;
   padding: 5px 8px;
   resize: vertical;
+  width: 100%;
 }
 .needs-send {
   background: transparent;

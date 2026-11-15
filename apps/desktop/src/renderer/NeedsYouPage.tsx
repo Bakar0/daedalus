@@ -287,44 +287,58 @@ function AskCard({
         </div>
       )}
       {open ? (
-        <div className="needs-card-act">
+        <>
           <textarea
             aria-label={`Answer #${ask.id}`}
+            className="needs-card-answer"
             onChange={(event) =>
               onDraft({ ...draft, note: event.target.value })
             }
             onKeyDown={(event) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey))
+              // Enter sends; Shift+Enter starts a new line.
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                !event.nativeEvent.isComposing
+              ) {
+                event.preventDefault();
                 onSend();
+              }
             }}
             placeholder={
               ask.options.length
-                ? "Pick one, write your own answer, or both"
-                : "Write your answer"
+                ? "Pick one, write your own answer, or both · Enter sends"
+                : "Write your answer · Enter sends"
             }
-            rows={1}
+            rows={2}
             value={draft.note}
           />
-          <button
-            className="needs-send"
-            disabled={draft.option === null && !draft.note.trim()}
-            onClick={onSend}
-            type="button"
-          >
-            Send
-          </button>
-          <button className="needs-link" onClick={onOpenSession} type="button">
-            Open session
-          </button>
-          <button
-            className="needs-link muted"
-            onClick={onDismiss}
-            title="No longer needed: the session is told not to ask again"
-            type="button"
-          >
-            Dismiss
-          </button>
-        </div>
+          <div className="needs-card-act">
+            <button
+              className="needs-send"
+              disabled={draft.option === null && !draft.note.trim()}
+              onClick={onSend}
+              type="button"
+            >
+              Send
+            </button>
+            <button
+              className="needs-link"
+              onClick={onOpenSession}
+              type="button"
+            >
+              Open session
+            </button>
+            <button
+              className="needs-link muted"
+              onClick={onDismiss}
+              title="No longer needed: the session is told not to ask again"
+              type="button"
+            >
+              Dismiss
+            </button>
+          </div>
+        </>
       ) : (
         <div className="needs-card-ended">
           {ask.state === "dismissed"
