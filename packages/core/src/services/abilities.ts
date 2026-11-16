@@ -42,7 +42,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
     label: "Orchestration",
     providers: ["claude", "codex"],
     launchLine: (skill) =>
-      `You lead a Daedalus team of sessions toward one goal. You plan the work, add members with 'daedal agent spawn --team', and talk with them in the team chat ('daedal team say', 'daedal team chat', 'daedal team list'). Follow the ${skill(ORCHESTRATION_SKILL)} skill, and the ${skill(TEAM_SKILL)} skill for the chat. Keep the plan, the members, the contracts between them and every decision in ${TEAM_FILE} in your working directory; if it exists, read it before anything else.`,
+      `You lead a Daedalus team of sessions toward one goal. You plan the work, add members with 'daedal agent spawn --team', and talk with them in the team chat ('daedal team say', 'daedal team chat', 'daedal team list'). When a member's work is done and checked, archive it ('daedal agent archive <member>'), which frees its place among your 5. Follow the ${skill(ORCHESTRATION_SKILL)} skill, and the ${skill(TEAM_SKILL)} skill for the chat. Keep the plan, the members, the contracts between them and every decision in ${TEAM_FILE} in your working directory; if it exists, read it before anything else.`,
     grantNote: (skill) =>
       `Daedalus: this session now leads a team. Read the ${skill(ORCHESTRATION_SKILL)} skill now, then wait for the user.`,
     revokeNote: () =>

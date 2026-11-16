@@ -193,11 +193,6 @@ export interface AgentSession {
    * workspace root there.
    */
   hostId: string | null;
-  /**
-   * When the user or its lead marked this thread done. A resolved member
-   * shows under Resolved and no longer counts against its lead's cap.
-   */
-  resolvedAt?: string | null;
 }
 
 /** Where an ask is: waiting on the user, or finished one of three ways. */
@@ -625,8 +620,6 @@ export interface PresenceState {
   appForeground: boolean;
   workspaceId: string | null;
   sessionId: string | null;
-  /** A thread open in the Threads pane beside `sessionId`; on screen too. */
-  paneSessionId?: string | null;
   userIdleSeconds: number;
   observedAt: string;
 }

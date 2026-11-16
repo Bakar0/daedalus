@@ -530,9 +530,9 @@ export class TeamService {
         `'${leadName}' is ${above.length} levels below its top lead '${sessionBaseName(above.at(-1)!.name)}', and teams nest at most ${TEAM_MAX_DEPTH} levels, so it cannot add members; add this one to '${sessionBaseName(above[0]!.name)}' instead ('daedal agent spawn --team ${above[0]!.id}')`,
       );
     if (existing) {
-      // A resolved thread is done with; it does not hold a place.
+      // An archived member is done with; it does not hold a place.
       const active = this.members(existing.id).filter(
-        (member) => !member.archivedAt && !member.resolvedAt,
+        (member) => !member.archivedAt,
       );
       if (active.length >= TEAM_MAX_MEMBERS)
         throw new DaedalusError(

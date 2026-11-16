@@ -43,7 +43,7 @@ export function TeamBar({
   /** The team is paused until its lead is restored. */
   leadArchived?: boolean;
   onOpenPanel: () => void;
-  /** More buttons before Team, such as a lead's Threads toggle. */
+  /** More buttons before Team. */
   actions?: ReactNode;
 }) {
   return (

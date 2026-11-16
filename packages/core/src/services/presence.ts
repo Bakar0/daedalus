@@ -54,8 +54,6 @@ export interface PresenceReport {
   appForeground: boolean;
   workspaceId: string | null;
   sessionId: string | null;
-  /** A thread open in the Threads pane, which the user sees as well. */
-  paneSessionId?: string | null;
 }
 
 const OFFLINE: PresenceState = {
@@ -168,9 +166,6 @@ export class PresenceService {
         appForeground: stored.appForeground === true,
         workspaceId: stored.workspaceId ?? null,
         sessionId: stored.sessionId ?? null,
-        ...(stored.paneSessionId
-          ? { paneSessionId: stored.paneSessionId }
-          : {}),
         userIdleSeconds: Number.isFinite(stored.userIdleSeconds)
           ? stored.userIdleSeconds
           : 0,

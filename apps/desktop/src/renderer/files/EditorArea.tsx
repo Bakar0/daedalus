@@ -111,17 +111,11 @@ export interface EditorAreaHandle {
   showSessionBesideRoutines(): void;
   /** Shows a team's tab, adding it first if it is not open. */
   openTeam(teamId: string, name: string): void;
-  /** Shows a lead's Threads tab, adding it first if it is not open. */
-  openThreads(leadId: string, name: string): void;
   /**
-   * Closes every Team tab whose team is not in `teams`, and every Threads
-   * tab whose lead is not in `leads`, including tabs the saved layout
-   * brought back for a team or lead that has since gone.
+   * Closes every Team tab whose team is not in `teams`, including tabs the
+   * saved layout brought back for a team that has since gone.
    */
-  closeAbilityTabsExcept(keep: {
-    teams: ReadonlySet<string>;
-    leads: ReadonlySet<string>;
-  }): void;
+  closeAbilityTabsExcept(keep: { teams: ReadonlySet<string> }): void;
 }
 
 /** The tabs the app draws rather than the editor. */
@@ -135,8 +129,7 @@ type AppPanelKind =
   | "needs"
   | "instructions"
   | "routinesPage"
-  | "team"
-  | "threads";
+  | "team";
 
 /** What a center tab holds, for the app to follow which one is in front. */
 export type CenterPanelKind =
@@ -150,8 +143,7 @@ export type CenterPanelKind =
   | "needs"
   | "instructions"
   | "routinesPage"
-  | "team"
-  | "threads";
+  | "team";
 
 export interface EditorAreaProps {
   client: DesktopClient;
@@ -185,10 +177,8 @@ export interface EditorAreaProps {
   renderRoutinesPage?(): React.ReactNode;
   /** A team tab's content, drawn by the app; `visible` while in front. */
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
-  /** A lead's Threads tab's content, drawn by the app. */
-  renderThreads?(leadId: string, visible: boolean): React.ReactNode;
-  /** The current name for a Team or Threads tab, so renames show. */
-  abilityTabName?(kind: "team" | "threads", id: string): string | undefined;
+  /** The current name for a Team tab, so renames show. */
+  abilityTabName?(kind: "team", id: string): string | undefined;
   /** The + in the tab strip: a new terminal in a tab. */
   onNewTerminal?(): void;
   /** What a plan's preview needs from the app: live sessions, and Open. */
@@ -216,8 +206,6 @@ interface FilePanelParams {
   terminalId?: string;
   /** The team a team tab shows. */
   teamId?: string;
-  /** The lead whose threads a Threads tab shows. */
-  leadId?: string;
   title?: string;
   preview?: boolean;
   mode?: "edit" | "preview";
@@ -264,8 +252,7 @@ interface EditorContextValue {
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
-  renderThreads?(leadId: string, visible: boolean): React.ReactNode;
-  abilityTabName?(kind: "team" | "threads", id: string): string | undefined;
+  abilityTabName?(kind: "team", id: string): string | undefined;
   onNewTerminal?(): void;
   onOpenExternal?(url: string): void;
   planLive?: PlanLive;
@@ -363,7 +350,6 @@ export default function EditorArea({
   renderInstructions,
   renderRoutinesPage,
   renderTeam,
-  renderThreads,
   abilityTabName,
   onNewTerminal,
   onTerminalTabClosed,
@@ -636,7 +622,7 @@ export default function EditorArea({
     (id: string, params: FilePanelParams, title: string) => {
       const api = apiRef.current;
       if (!api) return;
-      const takesFocus = params.kind === "team" || params.kind === "threads";
+      const takesFocus = params.kind === "team";
       const existing = api.getPanel(id);
       if (existing) {
         existing.api.updateParameters({ ...existing.params, ...params });
@@ -802,24 +788,11 @@ export default function EditorArea({
             name,
           ),
         ),
-      openThreads: (leadId, name) =>
-        whenReady(() =>
-          placeApp(
-            `threads:${leadId}`,
-            { path: "", kind: "threads", leadId, title: name },
-            name,
-          ),
-        ),
       closeAbilityTabsExcept: (keep) =>
         whenReady(() => {
           for (const panel of [...(apiRef.current?.panels ?? [])]) {
             const params = panel.params as FilePanelParams | undefined;
-            if (
-              (params?.kind === "team" &&
-                !keep.teams.has(params.teamId ?? "")) ||
-              (params?.kind === "threads" &&
-                !keep.leads.has(params.leadId ?? ""))
-            )
+            if (params?.kind === "team" && !keep.teams.has(params.teamId ?? ""))
               panel.api.close();
           }
         }),
@@ -1022,13 +995,12 @@ export default function EditorArea({
         const raw = window.localStorage.getItem(layoutKey(workspaceId));
         if (raw) {
           api.fromJSON(JSON.parse(raw));
-          // A session's Routines tab is gone; a saved layout may still hold one.
-          for (const panel of [...api.panels])
-            if (
-              (panel.params as { kind?: string } | undefined)?.kind ===
-              "routines"
-            )
-              panel.api.close();
+          // A session's Routines tab and a lead's Threads tab are gone; a
+          // saved layout may still hold one.
+          for (const panel of [...api.panels]) {
+            const kind = (panel.params as { kind?: string } | undefined)?.kind;
+            if (kind === "routines" || kind === "threads") panel.api.close();
+          }
           restored = api.totalPanels > 0;
         }
       } catch {
@@ -1065,7 +1037,7 @@ export default function EditorArea({
           });
           return;
         }
-        if (params.kind === "team" || params.kind === "threads") {
+        if (params.kind === "team") {
           queueMicrotask(() => {
             if (api.getPanel(panel.id)) return;
             const opener = openers.current.get(panel.id);
@@ -1121,7 +1093,6 @@ export default function EditorArea({
     renderInstructions,
     renderRoutinesPage,
     renderTeam,
-    renderThreads,
     abilityTabName,
     onNewTerminal,
     onOpenExternal,
@@ -1159,10 +1130,11 @@ export default function EditorArea({
             instructions: InstructionsPanel,
             routinesPage: RoutinesPagePanel,
             team: TeamPanel,
-            threads: ThreadsPanel,
-            // A session's Routines tab is gone; a saved layout may still
-            // name it, and is restored with it closed.
+            // A session's Routines tab and a lead's Threads tab are gone; a
+            // saved layout may still name them, and is restored with them
+            // closed.
             routines: RetiredPanel,
+            threads: RetiredPanel,
           }}
           dndStrategy="pointer"
           getTabContextMenuItems={({ panel, group, api }) =>
@@ -1385,9 +1357,7 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
                     ? "Routines"
                     : params.kind === "team"
                       ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
-                      : params.kind === "threads"
-                        ? `Threads · ${context.abilityTabName?.("threads", params.leadId ?? "") ?? params.title ?? ""}`
-                        : (params.url ?? "Web");
+                      : (params.url ?? "Web");
   return (
     <div
       className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
@@ -1443,9 +1413,6 @@ function AppTabIcon({ kind }: { kind: AppPanelKind }) {
         <path d={ACTIVITY_ICON_PATH} />
       ) : kind === "instructions" ? (
         <path d={INSTRUCTIONS_ICON_PATH} />
-      ) : kind === "threads" ? (
-        // Speech bubbles, as on the side panel's Threads tab.
-        <path d="M2 3.5h8v5.5H5.5L3 11V9H2zM12 5.5h2v5.5h-1v2l-2.5-2H7" />
       ) : kind === "team" ? (
         <path d="M5.5 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM1.5 13c0-2.2 1.8-4 4-4s4 1.8 4 4M11 7.5a1.75 1.75 0 1 0 0-3.5M11.5 9.2c1.7.3 3 1.8 3 3.8" />
       ) : kind === "routinesPage" ? (
@@ -1507,21 +1474,6 @@ function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
       tabIndex={-1}
     >
       {params.teamId && context.renderTeam?.(params.teamId, visible)}
-    </div>
-  );
-}
-
-function ThreadsPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
-  const context = useEditorContext();
-  // Suggestions are polled, so the list stops asking while out of sight.
-  const visible = usePanelVisible(api);
-  return (
-    <div
-      className="app-panel ability-panel threads-panel"
-      data-panel-id={api.id}
-      tabIndex={-1}
-    >
-      {params.leadId && context.renderThreads?.(params.leadId, visible)}
     </div>
   );
 }

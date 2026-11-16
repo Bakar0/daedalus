@@ -148,8 +148,6 @@ export interface AgentSessionDto {
   spawnedBy: string | null;
   /** The cloud host it runs on (`ws:<cloud workspace id>`); null or absent for this Mac. */
   hostId?: string | null;
-  /** When the user or its lead marked this member done; it shows as Resolved. */
-  resolvedAt?: string | null;
 }
 
 /** A question a session asked the user, as Activity shows it. */
@@ -1761,11 +1759,6 @@ export interface DesktopRpcSchema {
       askReopen: Request<{ id: number }, AskDto>;
       /** The tasks of the plan an ask is pinned to; null when unreadable. */
       askPlan: Request<{ path: string }, AskPlanDto | null>;
-      /** Marks a team member done, or open again. */
-      threadResolve: Request<
-        { sessionId: string; resolved: boolean },
-        AgentSessionDto
-      >;
       /** Sends what is waiting, then reads the team as the user. */
       teamDetail: Request<{ teamId: string }, TeamDetailDto>;
       /** Posts to the team chat as the user. */
@@ -2207,8 +2200,6 @@ export interface DesktopRpcSchema {
           appForeground: boolean;
           workspaceId: string | null;
           sessionId: string | null;
-          /** A thread open in the Threads pane beside `sessionId`. */
-          paneSessionId?: string | null;
         },
         PresenceStateDto
       >;

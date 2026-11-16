@@ -126,7 +126,6 @@ interface AgentRow {
   team_handle: string | null;
   spawned_by: string | null;
   host_id: string | null;
-  resolved_at?: string | null;
 }
 
 interface IntegratedTerminalRow {
@@ -271,7 +270,6 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   teamHandle: row.team_handle,
   spawnedBy: row.spawned_by,
   hostId: row.host_id,
-  resolvedAt: row.resolved_at ?? null,
 });
 
 const integratedTerminalFromRow = (
@@ -981,13 +979,6 @@ export class SqliteRepositories {
     this.database
       .query("UPDATE agent_sessions SET auto_rebirth_percent = ? WHERE id = ?")
       .run(autoRebirthColumn(value), id);
-  }
-
-  /** Marks a team member done, or (null) open again. */
-  setAgentResolved(id: string, resolvedAt: string | null): void {
-    this.database
-      .query("UPDATE agent_sessions SET resolved_at = ? WHERE id = ?")
-      .run(resolvedAt, id);
   }
 
   /** The hidden row that owns Home, if it was made. */

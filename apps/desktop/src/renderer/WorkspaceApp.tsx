@@ -223,12 +223,6 @@ const PALETTE_HIDDEN_COMMANDS = new Set<string>([
 ]);
 import { useCloudState } from "./CloudPanel";
 import { TeamBar, TeamPage } from "./teams/TeamPanel";
-import { ThreadsPane } from "./threads/ThreadsPane";
-import {
-  threadMenuItems,
-  threadRows,
-  type ThreadInputs,
-} from "./threads/thread-groups";
 import { RoutinesHome } from "./routines/RoutinesHome";
 import { ProBadge } from "./ProPlan";
 import { useMutation, useRpcQuery } from "./use-rpc";
@@ -716,8 +710,8 @@ export const isLocalWebUrl = (url: string) => {
 };
 
 /**
- * What the side panel can show, each a tab in its strip. Threads is there
- * only where it applies: at Home, and beside a session that leads a team.
+ * What the side panel can show, each a tab in its strip. At Home only the
+ * file tree; elsewhere Activity shows that workspace's alone.
  */
 export type SidePanelTab = "files" | "git" | "tasks" | "activity";
 const SIDE_PANEL_TAB_KEY = "daedalus.panel.tab";
@@ -3757,27 +3751,22 @@ export function WorkspaceApp({
       : view;
   };
 
-  /** A session's thread actions (`threadMenuItems`), for its menu. */
-  const threadMenuActions = (session: AgentSessionDto): MenuAction[] =>
-    threadMenuItems(session, {
-      member: teamOf(session)?.role === "member",
-    }).map((item) => ({
-      id: item.id,
-      label: item.label,
-      run: () => {
-        if (item.id === "thread-done")
-          void perform(
-            client.request.threadResolve({
-              sessionId: session.id,
-              resolved: item.resolved,
-            }),
-          );
-        else
-          void perform(
-            client.request.agentStop({ id: session.id, force: false }),
-          );
-      },
-    }));
+  /** Stop, on a running team member's menu. */
+  const memberMenuActions = (session: AgentSessionDto): MenuAction[] =>
+    teamOf(session)?.role === "member" &&
+    !session.archivedAt &&
+    (session.status === "running" || session.status === "starting")
+      ? [
+          {
+            id: "stop",
+            label: "Stop",
+            run: () =>
+              void perform(
+                client.request.agentStop({ id: session.id, force: false }),
+              ),
+          },
+        ]
+      : [];
 
   /** A session's card actions, for its menu with their pins. */
   const sessionMenuActions = (session: AgentSessionDto): MenuAction[] => {
@@ -3813,7 +3802,7 @@ export function WorkspaceApp({
             },
           ]
         : []),
-      ...threadMenuActions(session),
+      ...memberMenuActions(session),
       ...(team?.role === "lead" && session.status === "running"
         ? [
             {
@@ -4124,20 +4113,15 @@ export function WorkspaceApp({
   const activeSessionTeam = activeSession ? teamOf(activeSession) : undefined;
   // A Team tab goes once its team does, however that happened: revoked
   // here or from the CLI, or its lead archived.
-  // A Threads tab goes once its lead stops leading.
   const teamIds = (snapshot?.teams ?? []).map((team) => team.id).join(" ");
-  const leadIds = (snapshot?.teams ?? []).map((team) => team.leadId).join(" ");
   const snapshotLoaded = Boolean(snapshot);
   useEffect(() => {
     if (!snapshotLoaded) return;
     const ids = (text: string) => new Set(text ? text.split(" ") : []);
     files.withEditor((handle) =>
-      handle.closeAbilityTabsExcept({
-        teams: ids(teamIds),
-        leads: ids(leadIds),
-      }),
+      handle.closeAbilityTabsExcept({ teams: ids(teamIds) }),
     );
-  }, [files, leadIds, snapshotLoaded, teamIds]);
+  }, [files, snapshotLoaded, teamIds]);
   const activeSessionWorkspace = activeSession
     ? workspaceById.get(activeSession.workspaceId)
     : undefined;
@@ -7831,18 +7815,6 @@ export function WorkspaceApp({
     knownTerminalIds.current = current;
   }, [files, terminalIds]);
 
-  // A team lead's members, in a Threads tab of their own.
-  const threadInputs: ThreadInputs = {
-    agents,
-    teams: snapshot?.teams ?? [],
-    workspaces: snapshot?.workspaces ?? [],
-    activity: activityById,
-    attention: attentionById,
-    worktrees: snapshot?.worktrees ?? [],
-    now,
-  };
-  const threadRowsOf = (lead: AgentSessionDto) =>
-    threadRows(lead.id, threadInputs);
   // Home's side panel is its file tree alone: the Daedalus home folder.
   const shownPanelTab: SidePanelTab = atHome ? "files" : panelTab;
   const sidePanelTabs = SIDE_PANEL_TABS.filter(
@@ -7904,18 +7876,6 @@ export function WorkspaceApp({
       }}
     />
   );
-  /** A team lead's Threads list, in its own tab. */
-  const renderThreadsList = (lead: AgentSessionDto) => (
-    <ThreadsPane
-      key={lead.id}
-      lead={lead}
-      leadLabel={`${sessionName(lead)}'s team`}
-      now={now}
-      onOpenThread={(target) => showSession(target.id, target.workspaceId)}
-      rows={threadRowsOf(lead)}
-    />
-  );
-
   // The session tab shows whichever session the left column has open.
   const sessionPane = workspace ? (
     <section className="terminal-column">
@@ -8846,22 +8806,9 @@ export function WorkspaceApp({
                   <InstructionsEditor client={client} onError={setError} />
                 )}
                 renderRoutinesPage={() => renderRoutinesHome()}
-                abilityTabName={(kind, id) => {
-                  if (kind === "team")
-                    return snapshot?.teams.find((team) => team.id === id)?.name;
-                  const lead = sessionsById.get(id);
-                  return lead ? sessionName(lead) : undefined;
-                }}
-                renderThreads={(leadId) => {
-                  const lead = sessionsById.get(leadId);
-                  return lead ? (
-                    renderThreadsList(lead)
-                  ) : (
-                    <div className="terminal-empty">
-                      <strong>This session no longer leads threads</strong>
-                    </div>
-                  );
-                }}
+                abilityTabName={(_kind, id) =>
+                  snapshot?.teams.find((team) => team.id === id)?.name
+                }
                 renderTeam={(teamId, visible) => (
                   <TeamPage
                     busy={busy}
@@ -9047,7 +8994,7 @@ export function WorkspaceApp({
                     {tab === "activity" && workspaceAsks > 0 && (
                       <i
                         aria-hidden="true"
-                        className="side-panel-tab-badge threads-tab-badge"
+                        className="side-panel-tab-badge activity-tab-badge"
                       />
                     )}
                   </button>

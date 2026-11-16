@@ -58,7 +58,7 @@ library ID.
 ```text
 daedal agent models <codex|claude> [--account <account>]
 daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--color <color>] [--pin]
-daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>]
+daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex] [--model <model>]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
@@ -76,24 +76,22 @@ daedal session rebirth-at <session> <percent>|off|default
 daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
 daedal team say "<text>" [--team <lead>] [--user]
-daedal team chat [--tagged | --all] [--team <lead>]
+daedal team chat [--tagged | --all] [--limit <n>] [--team <lead>] [--user]
 daedal team list [--team <lead>]
 daedal team tree [--team <lead>]
 daedal team goal [<text>] [--team <lead>]
 daedal team pause|resume [--team <lead>]
-daedal thread done|reopen <session>
 ```
 
 `<session>` is a session id, or its name when only one live session has it.
 Any session can lead a team: the first `agent spawn --team` run inside it
 adds a member and makes it the lead, and it talks to members with
 `daedal team`. A member can lead a team of its own, up to 3 levels below the
-top lead and 5 members a lead. Stopping or archiving a lead does the same to
-the members below it. The `daedalus-orchestration` and `daedalus-team` skills
+top lead and 5 members a lead that are not archived; a lead frees a place by
+archiving a member whose work is checked (`agent archive <member>`). Stopping
+or archiving a lead does the same to the members below it. The `daedalus-orchestration` and `daedalus-team` skills
 and `daedal team --help` describe it. A rebirth moves a session's team, pin
 and color to the successor, which gets ` · 2`.
-`thread done` marks a member resolved, so it no longer counts against its
-lead's 5; `thread reopen` takes the mark off.
 Routines are not an ability: they run on a schedule in a workspace, from the
 Routines page; `daedal routine --help` describes them.
 

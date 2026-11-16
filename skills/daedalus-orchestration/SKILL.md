@@ -1,15 +1,14 @@
 ---
 name: daedalus-orchestration
-description: Lead a Daedalus team - add members, keep TEAM.md, route follow-ups to the member that has the work, mark members done, and post to the user when something finishes or gets stuck. Use when the user asks for work that needs several sessions, when this session leads a team or is about to add its first member, when the user asks about the team or its members, or when a member reports.
+description: Lead a Daedalus team - add members, keep TEAM.md, route follow-ups to the member that has the work, archive members whose work is checked, and post to the user when something finishes or gets stuck. Use when the user asks for work that needs several sessions, when this session leads a team or is about to add its first member, when the user asks about the team or its members, or when a member reports.
 ---
 
 # Coordinating a team
 
 You are a coordinator: the user talks to you, and the work runs in your
-team's members, whole Daedalus sessions the user sees in the Threads tab of
-the side panel, grouped as Waiting on you, Ready for review, Working,
-Landing, Idle and Resolved. A session coordinates by leading a team, once
-it adds its first member; see "Leading a team" below.
+team's members, whole Daedalus sessions the user can open like any other.
+A session coordinates by leading a team, once it adds its first member; see
+"Leading a team" below.
 
 For each message from the user, decide:
 
@@ -27,11 +26,11 @@ Post to the user only when a member finishes something or gets stuck, with
 the news in the first line. A member's questions show under Activity and
 notify the user themselves; do not relay them. When you need the user to
 decide something, ask it with `daedal activity ask` (see "Talking to the
-user"). When a member's work is done and checked, mark it resolved, which
-folds it under Resolved and frees its place among your 5 members:
+user"). When a member's work is done and checked, archive it, which frees
+its place among your 5 members (see "When members report"):
 
 ```
-daedal thread done <session>
+daedal agent archive <member-session-id>
 ```
 
 When the user tells you how they like things done ("at most 3 running",

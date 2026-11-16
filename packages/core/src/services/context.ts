@@ -67,7 +67,6 @@ import { PlanService } from "./plans";
 import { SearchService } from "./search";
 import { HomeService } from "./home";
 import { AskService, OpenAsksTransport } from "./asks";
-import { ThreadService } from "./threads";
 import {
   instructionFileOptions,
   WorkspaceContentService,
@@ -117,7 +116,6 @@ export interface ApplicationContext {
   /** Home: the hidden Home workspace row. */
   home: HomeService;
   /** A lead marking a team member done. */
-  threads: ThreadService;
   /** Activity: questions for the user that sessions ask once. */
   asks: AskService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
@@ -520,7 +518,6 @@ export async function createApplicationContext(
     })),
     search: new SearchService(),
     home,
-    threads: new ThreadService(repositories, teams!, options.now),
     asks,
     abilityNotes,
     routines: new RoutineService(

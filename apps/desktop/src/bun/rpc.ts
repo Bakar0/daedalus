@@ -832,8 +832,6 @@ export function createDesktopRequestHandlers(
           return null;
         }
       }),
-    threadResolve: ({ sessionId, resolved }) =>
-      mutate(() => agentDto(context.threads.resolve(sessionId, resolved))),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
     teamSay: ({ teamId, body }) =>
       mutate(async () => {

@@ -30,7 +30,6 @@ import { routineCommand, routineHelp } from "./routines";
 import { sessionCommand, sessionHelp } from "./sessions";
 import { workflowCommand, workflowHelp } from "./workflows";
 import { planCommand, planHelp } from "./plans";
-import { threadCommand, threadHelp } from "./threads";
 import { activityAlias, activityCommand, activityHelp } from "./asks";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
@@ -97,15 +96,14 @@ Usage:
   daedal workspace <create|list|get|update|archive|restore|delete|remove> ... [--json]
   daedal task <create|list|get|current|update|status|timeline|remove> ... [--json]
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
-  daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|delete|remove> ... [--json]
+  daedal agent <models|spawn|list|reorder|get|wait|attach|send|archive|rebirth|continue|restore|revive|stop|delete|remove> ... [--json]
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
   daedal account <list|status|add|rename|remove|login|logout> ... [--json]
-  daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
+  daedal session <rename|pin|unpin|color|rebirth-at|abilities|grant|revoke> ... [--json]
   daedal routine <add|list|get|edit|pause|resume|run|remove|runs|log|when> ... [--json]
-  daedal team <say|chat|list|goal> ... [--json]
+  daedal team <say|chat|list|tree|goal|pause|resume> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
-  daedal thread <done|reopen> <session> [--json]
   daedal activity <ask|list|show|update|resolve|withdraw> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
@@ -125,7 +123,6 @@ const commandHelp: Record<string, string> = {
   team: teamHelp,
   workflow: workflowHelp,
   plan: planHelp,
-  thread: threadHelp,
   activity: activityHelp,
   account: accountHelp,
   secret: secretHelp,
@@ -2575,7 +2572,6 @@ export async function runCli(
       "cloud",
       "workflow",
       "plan",
-      "thread",
       "activity",
     ].includes(args[0]!)
   )
@@ -2625,8 +2621,6 @@ export async function runCli(
       return await planCommand(context, args.slice(1), json, () =>
         callerSession(context).catch(() => undefined),
       );
-    if (args[0] === "thread")
-      return await threadCommand(context, args.slice(1), json);
     if (args[0] === "activity")
       return await activityCommand(context, args.slice(1), json, () =>
         callerSession(context).catch(() => undefined),
