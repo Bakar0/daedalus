@@ -134,7 +134,7 @@ const SYNC_FEATURE_INDEX = 98;
 const HOOK_INDEX = 99;
 
 /** The desktop terminal's selection colour, for tmux's copy mode. */
-const COPY_MODE_BACKGROUND = "#38546b";
+const COPY_MODE_BACKGROUND = "#5f8787";
 
 /** The desktop terminal's background (`background` in its theme). */
 const TERMINAL_BACKGROUND = "#111112";

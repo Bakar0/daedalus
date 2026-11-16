@@ -23,7 +23,10 @@ export const appearanceOf = (theme: AppTheme): "dark" | "light" =>
  * xterm's colours, matched to the center so the terminal has no frame. tmux's
  * copy mode uses the same selection background and hides its cursor in the
  * dark background: `COPY_MODE_BACKGROUND` and `TERMINAL_BACKGROUND` in
- * packages/platform/src/tmux.ts.
+ * packages/platform/src/tmux.ts. The selection is #5f8787, colour 66, the
+ * highlight Claude Code draws while you drag in it: a drag that ends
+ * leaves this selection behind, and in another colour it changed shade the
+ * moment the button came up.
  */
 export const terminalThemeFor = (theme: AppTheme) =>
   theme === "midnight"
@@ -31,13 +34,13 @@ export const terminalThemeFor = (theme: AppTheme) =>
         background: "#11151d",
         foreground: "#dce5f2",
         cursor: "#8ed6c3",
-        selectionBackground: "#38546b",
+        selectionBackground: "#5f8787",
       }
     : {
         background: "#111112",
         foreground: "#e4e4e7",
         cursor: "#8ed6c3",
-        selectionBackground: "#38546b",
+        selectionBackground: "#5f8787",
       };
 
 /** The theme, for components deep in the tree such as the terminal. */

@@ -144,7 +144,7 @@ test("tmux PTYs use native mouse scrolling, sync repaints, pass OSC 8 links and 
     "-t",
     "daedalus_123",
     "mode-style",
-    "bg=#38546b",
+    "bg=#5f8787",
     ";",
     "set-hook",
     "-g",
