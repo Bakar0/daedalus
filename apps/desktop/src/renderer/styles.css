@@ -10304,12 +10304,17 @@ button.routine-tick:hover {
   container-type: inline-size;
 }
 @container (max-width: 760px) {
+  /* Rows as tall as their content: the plan starts below the last card
+     instead of being squeezed into half the height and drawn over it. */
   .needs-columns {
+    align-content: start;
+    grid-auto-rows: max-content;
     grid-template-columns: 1fr;
     overflow: auto;
   }
   .needs-columns > .needs-cards,
   .needs-columns > .needs-side {
+    min-height: auto;
     overflow: visible;
   }
 }
