@@ -5,6 +5,8 @@ import {
   NO_LOGIN_SHELL,
   withTemporaryDaedalusHome,
 } from "@daedalus/test-utils";
+import { parsePlan } from "@daedalus/core";
+import { printPlan } from "./plans";
 
 async function cli(home: string, args: string[], stdin?: string) {
   const env: Record<string, string | undefined> = {
@@ -126,3 +128,30 @@ test("plan new, start, ask, done and show through the CLI", async () => {
     expect(missing.stderr).toContain("plan show");
   });
 }, 30_000);
+
+test("plan show marks a task that waits on the user's answer", () => {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (line: string) => lines.push(line);
+  try {
+    printPlan(
+      {
+        scope: { workspace: "w" },
+        workspaceId: "w",
+        root: "/w",
+        path: "plans/release.plan.md",
+        absolutePath: "/w/plans/release.plan.md",
+      },
+      parsePlan(
+        "# Release\n\n## Tasks\n\n- [ ] Build ^build\n- [ ] Store ^store\n",
+      ),
+      [],
+      [{ id: 5, taskKey: "store" }],
+    );
+  } finally {
+    console.log = log;
+  }
+  const output = lines.join("\n");
+  expect(output).toContain("[ ] Store ^store  <- #5 waits on the user");
+  expect(output).not.toContain("Build ^build  <-");
+});

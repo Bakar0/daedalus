@@ -64,11 +64,16 @@ const STATE_OF_ACTION: Record<string, PlanTaskState> = {
   drop: "dropped",
 };
 
-function printPlan(
+export function printPlan(
   file: PlanFile,
   plan: PlanDocument,
   owners: PlanOwnerView[],
+  asks: ReadonlyArray<{ id: number; taskKey: string | null }> = [],
 ): void {
+  // Open asks pinned to a task: the task waits on the user.
+  const waiting = new Map(
+    asks.flatMap((ask) => (ask.taskKey ? [[ask.taskKey, ask.id]] : [])),
+  );
   const state = new Map(owners.map((owner) => [owner.handle, owner]));
   const chip = (handle: string | null) => {
     if (!handle) return "";
@@ -98,7 +103,7 @@ function printPlan(
       if (part.kind !== "task") continue;
       const { task } = part;
       console.log(
-        `${"  ".repeat(task.depth)}${MARK[task.state]} ${task.title}${chip(task.owner)}${task.id ? ` ^${task.id}` : ` (line ${task.line})`}`,
+        `${"  ".repeat(task.depth)}${MARK[task.state]} ${task.title}${chip(task.owner)}${task.id ? ` ^${task.id}` : ` (line ${task.line})`}${task.id && waiting.has(task.id) ? `  <- #${waiting.get(task.id)} waits on the user` : ""}`,
       );
       walk(task.body);
     }
@@ -189,8 +194,9 @@ export async function planCommand(
     const found = await file(parsed.positionals[0]!);
     const { plan } = await context.plans.read(found);
     const owners = await context.plans.owners(found, plan);
-    printResult({ file: found, plan, owners }, json, () =>
-      printPlan(found, plan, owners),
+    const asks = context.asks.onPlan(found.absolutePath);
+    printResult({ file: found, plan, owners, asks }, json, () =>
+      printPlan(found, plan, owners, asks),
     );
     return 0;
   }
