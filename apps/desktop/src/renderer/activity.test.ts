@@ -57,3 +57,20 @@ test("the plan is grouped by what each task needs, leaves only, waits on you fir
   expect(ids("todo")).toEqual(["run#7"]);
   expect(ids("done")).toEqual(["batch1", "old"]);
 });
+
+test("every class the Activity page uses has a style rule", async () => {
+  const dir = new URL(".", import.meta.url).pathname;
+  const page = await Bun.file(`${dir}ActivityPage.tsx`).text();
+  const css = await Bun.file(`${dir}styles.css`).text();
+  // Literal class names, and the fixed part of templated ones.
+  const used = new Set(
+    [...page.matchAll(/needs-[a-z-]+[a-z]/g)].map((match) => match[0]),
+  );
+  // Parts of templated names, styled through their full forms.
+  for (const prefix of ["needs-task", "needs-group", "needs-progress"])
+    used.delete(prefix);
+  const missing = [...used].filter(
+    (name) => !new RegExp(`\\.${name}(?![a-z-])`).test(css),
+  );
+  expect(missing).toEqual([]);
+});
