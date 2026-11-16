@@ -2508,7 +2508,7 @@ export class AgentService {
   }
 
   /**
-   * Brings back what "Quit and stop sessions" put away, which is what makes
+   * Brings back what "Quit and stop sessions" stopped, which is what makes
    * that a pause rather than a farewell.
    *
    * Separate from `reviveLostSessions` because the two recover different
@@ -2528,14 +2528,25 @@ export class AgentService {
       resumed: AgentSession[];
       skipped: { sessionId: string; name: string; reason: string }[];
     } = { resumed: [], skipped: [] };
+    // Stopped by "Quit and stop sessions", or archived by a build before it
+    // stopped them instead.
     const marked = this.repositories
       .listAgents()
-      .filter((agent) => agent.resumeOnStart && agent.archivedAt);
+      .filter(
+        (agent) =>
+          agent.resumeOnStart &&
+          (agent.archivedAt ||
+            (agent.status !== "running" && agent.status !== "starting")),
+      );
     if (!marked.length) return result;
     if ((await this.hosts.local.probe()) !== undefined) return result;
     for (const agent of marked) {
       try {
-        result.resumed.push(await this.restore(agent.id));
+        result.resumed.push(
+          agent.archivedAt
+            ? await this.restore(agent.id)
+            : await this.relaunch({ ...agent, resumeOnStart: false }),
+        );
       } catch (error) {
         this.repositories.updateAgent({ ...agent, resumeOnStart: false });
         result.skipped.push({

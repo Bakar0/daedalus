@@ -290,8 +290,11 @@ describe("ShutdownService", () => {
       });
 
       await context.shutdown.run({ stopServer: true, resumeOnNextStart: true });
+      // Stopped where it is, not archived: archiving removes a clean, pushed
+      // worktree, and a pause must leave the session's files alone.
       const closed = await context.agents.get(session.id);
-      expect(closed.archivedAt).not.toBeNull();
+      expect(closed.archivedAt).toBeNull();
+      expect(closed.status).toBe("exited");
       expect(closed.resumeOnStart).toBe(true);
 
       const resumed = await context.agents.resumeMarkedSessions();

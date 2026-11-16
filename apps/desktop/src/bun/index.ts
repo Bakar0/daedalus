@@ -166,26 +166,6 @@ const revivedSessions = await context.agents
 const revivedTerminals = await context.terminals
   .reviveLost({ automatic: true })
   .catch(() => []);
-// What "Quit and stop sessions" put away, brought back. Deliberately not the
-// same sweep as the one above: that one recovers sessions the OS killed and
-// left `lost`, this one reopens ones Daedalus archived on purpose and promised
-// to return to. A session archived by hand carries no flag and is left alone.
-const resumedSessions = await context.agents
-  .resumeMarkedSessions()
-  .catch((error: unknown) => {
-    void context.logger.write("error", "session_resume_sweep_failed", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return undefined;
-  });
-if (
-  resumedSessions &&
-  (resumedSessions.resumed.length || resumedSessions.skipped.length)
-)
-  await context.logger.write("info", "session_resume_sweep", {
-    resumed: resumedSessions.resumed.length,
-    skipped: resumedSessions.skipped,
-  });
 if (revivedSessions)
   await context.logger.write("info", "session_revive_sweep", {
     revived: revivedSessions.revived.length,
@@ -845,6 +825,30 @@ Electrobun.events.on("reopen", () => {
 });
 
 openMainWindow();
+
+// What "Quit and stop sessions" stopped, brought back. Deliberately not the
+// same sweep as the revive one: that recovers sessions the OS killed and left
+// `lost`, this one restarts ones Daedalus stopped on purpose and promised to
+// return to. It runs after the window opens, so a long list does not hold up
+// the start; each session's card shows it coming back.
+void (async () => {
+  const resumedSessions = await context.agents
+    .resumeMarkedSessions()
+    .catch((error: unknown) => {
+      void context.logger.write("error", "session_resume_sweep_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    });
+  if (
+    resumedSessions &&
+    (resumedSessions.resumed.length || resumedSessions.skipped.length)
+  )
+    await context.logger.write("info", "session_resume_sweep", {
+      resumed: resumedSessions.resumed.length,
+      skipped: resumedSessions.skipped,
+    });
+})();
 
 if (nativeStatusProbePath) {
   let probeStarted = false;

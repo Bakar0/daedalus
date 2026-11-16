@@ -3569,7 +3569,7 @@ export function WorkspaceApp({
   }, [sessionType, snapshot]);
 
   /**
-   * Answers the quit dialog. Not routed through `perform`: archiving a board
+   * Answers the quit dialog. Not routed through `perform`: stopping a board
    * of sessions is slower than one RPC deadline, and the reply to a successful
    * quit never arrives at all because the process is gone by then.
    */

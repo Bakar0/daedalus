@@ -61,6 +61,7 @@ const planDto = (plan: ShutdownPlan): ShutdownPlanDto => ({
 export class QuitController {
   #state: "idle" | "deciding" | "quitting" = "idle";
   #acknowledged = false;
+  #finished = false;
   #ackTimer: unknown;
 
   constructor(private readonly options: QuitControllerOptions) {}
@@ -71,6 +72,14 @@ export class QuitController {
 
   /** Cmd+Q, or the Quit menu item. */
   async requestQuit(): Promise<void> {
+    // Quit again while sessions are being stopped: the user has waited long
+    // enough, so the app goes now. What was not stopped keeps running in
+    // tmux and is revived or left as it is on the next start.
+    if (this.#state === "quitting" && !this.#finished) {
+      this.#log("quit_forced", {});
+      this.#finish("quit-again");
+      return;
+    }
     if (this.#state !== "idle") return;
     const plan = await this.options.plan().catch((error: unknown) => {
       this.#log("quit_plan_failed", { message: describe(error) });
@@ -152,6 +161,8 @@ export class QuitController {
   }
 
   #finish(reason: string): void {
+    if (this.#finished) return;
+    this.#finished = true;
     this.#log("quit", { reason });
     this.options.quit();
   }

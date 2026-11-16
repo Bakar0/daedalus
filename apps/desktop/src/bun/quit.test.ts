@@ -148,6 +148,33 @@ describe("QuitController", () => {
     expect(it.quits).toBe(1);
   });
 
+  test("quitting again while sessions are being stopped quits at once, and only once", async () => {
+    let release = () => {};
+    let quits = 0;
+    const controller = new QuitController({
+      plan: async () => livePlan,
+      runShutdown: () =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({ sessions: [], terminals: [], serverStopped: true });
+        }),
+      askWindow: () => {},
+      quit: () => {
+        quits += 1;
+      },
+      setTimer: () => 0,
+      clearTimer: () => {},
+    });
+    await controller.requestQuit();
+    controller.dialogShown();
+    const sweeping = controller.decide("shutdown");
+    await controller.requestQuit();
+    expect(quits).toBe(1);
+    release();
+    await sweeping;
+    expect(quits).toBe(1);
+  });
+
   test("the dialog is always offered, so quitting is never a silent stop", async () => {
     const it = harness();
     await it.controller.requestQuit();
