@@ -81,6 +81,7 @@ daedal team list [--team <lead>]
 daedal team tree [--team <lead>]
 daedal team goal [<text>] [--team <lead>]
 daedal team pause|resume [--team <lead>]
+daedal team move <session> --to <lead> | --out [--user]
 ```
 
 `<session>` is a session id, or its name when only one live session has it.
@@ -89,7 +90,9 @@ adds a member and makes it the lead, and it talks to members with
 `daedal team`. A member can lead a team of its own, up to 3 levels below the
 top lead and 5 members a lead that are not archived; a lead frees a place by
 archiving a member whose work is checked (`agent archive <member>`). Stopping
-or archiving a lead does the same to the members below it. The `daedalus-orchestration` and `daedalus-team` skills
+or archiving a lead does the same to the members below it. `team move
+<session> --to <lead>` moves a running session, with the team it leads, into
+another team without restarting it; a lead moves only sessions below it. The `daedalus-orchestration` and `daedalus-team` skills
 and `daedal team --help` describe it. A rebirth moves a session's team, pin
 and color to the successor, which gets ` · 2`.
 Routines are not an ability: they run on a schedule in a workspace, from the

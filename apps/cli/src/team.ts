@@ -24,6 +24,7 @@ export const teamHelp = `Team commands:
   daedal team tree [--team <lead>]
   daedal team goal [<text>] [--team <lead>]
   daedal team pause|resume [--team <lead>]
+  daedal team move <session> --to <lead> | --out [--user]
   daedal agent spawn --team [<lead>] [--message <instructions>] [--name <name>]
       [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex]
       [--model <model>] [--account <account>]
@@ -79,7 +80,18 @@ goal that members are told at launch.
 'team pause' holds every message to the team's members and refuses new
 members, for the teams its members lead too; 'team resume' sends what waited.
 Archiving a lead pauses its team the same way, and archives the members below
-it; stopping a lead stops them. Restoring the lead resumes its team.`;
+it; stopping a lead stops them. Restoring the lead resumes its team.
+
+'team move <session> --to <lead>' moves a running session, with the team it
+leads, into <lead>'s team, without restarting it: it keeps its conversation
+and keeps its handle unless the new team has one like it. <lead> becomes a
+lead if it leads no team yet. The session, its old lead and its new lead are
+told in the chat. The depth and member caps apply to the moved subtree, and
+a session cannot move under itself or a session below it. '--out' takes it
+out of its team and leaves it a plain session, or the top lead of the team
+it leads. The user can move any session. Inside a session, a lead can move a
+session below it into its own team or a team below it; only the user (no
+session, or --user) uses --out or brings in a session that is in no team.`;
 
 /**
  * The team a command is about: --team, else the caller's own. A caller in
@@ -242,6 +254,38 @@ export function printSay(
   });
 }
 
+async function moveSession(
+  context: ApplicationContext,
+  parsed: ReturnType<typeof parseArguments>,
+  caller: AgentSession | undefined,
+  json: boolean,
+): Promise<number> {
+  const usage =
+    "Usage: daedal team move <session> --to <lead> | --out [--user]";
+  const out = parsed.flags.has("out");
+  const to = parsed.values.to;
+  if (parsed.positionals.length !== 1 || out === (to !== undefined))
+    throw new DaedalusError("VALIDATION", usage);
+  const session = context.agents.resolve(parsed.positionals[0]!);
+  const target = to === undefined ? undefined : context.agents.resolve(to);
+  const result = await context.teams.move({
+    session: session.id,
+    ...(target ? { to: target.id } : {}),
+    ...(caller ? { caller } : {}),
+  });
+  printResult(result, json, () => {
+    if (result.to)
+      console.log(
+        `Moved '${session.name}' to the team '${result.to.name}' as @${result.handle}${result.from ? `, from '${result.from.name}'` : ""}`,
+      );
+    else
+      console.log(
+        `Took '${session.name}' out of the team '${result.from?.name ?? ""}'`,
+      );
+  });
+  return 0;
+}
+
 export async function teamCommand(
   context: ApplicationContext,
   args: string[],
@@ -253,17 +297,28 @@ export async function teamCommand(
     return 0;
   }
   if (
-    !["say", "chat", "list", "tree", "goal", "pause", "resume"].includes(action)
+    ![
+      "say",
+      "chat",
+      "list",
+      "tree",
+      "goal",
+      "pause",
+      "resume",
+      "move",
+    ].includes(action)
   )
     throw new DaedalusError("VALIDATION", `Unknown team command '${action}'`);
   const parsed = parseArguments(
     args,
-    ["team", "limit"],
-    ["user", "all", "tagged"],
+    ["team", "limit", "to"],
+    ["user", "all", "tagged", "out"],
   );
   const asUser = parsed.flags.has("user");
   const caller = await callerSession(context);
   if (action === "tree") return printTree(context, parsed, caller, json);
+  if (action === "move")
+    return moveSession(context, parsed, asUser ? undefined : caller, json);
   const body = parsed.positionals.join(" ");
   const team = await teamFor(
     context,

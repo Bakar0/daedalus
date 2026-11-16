@@ -595,6 +595,201 @@ export class TeamService {
     return { session, handle, note, created };
   }
 
+  /**
+   * Moves a running session, with the team it leads, into another lead's
+   * team (`to`), or out of its team (`to` left out). Nothing restarts: the
+   * session keeps its conversation and is told its new place in the chat.
+   * The user may move any session. A session may move one below it, into
+   * itself or a lead below it; only the user takes a session out of its
+   * team or brings one in that is in no team.
+   */
+  async move(input: {
+    session: string;
+    to?: string;
+    /** The session running the command; none is the user. */
+    caller?: AgentSession;
+  }): Promise<{
+    session: AgentSession;
+    from?: Team;
+    to?: Team;
+    handle?: string;
+    created?: boolean;
+  }> {
+    const session = this.repositories.findAgent(input.session);
+    if (!session)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Session ${input.session} not found`,
+      );
+    const name = sessionBaseName(session.name);
+    if (session.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${name}' is archived; restore it before you move it`,
+      );
+    if (
+      session.kind !== "agent" ||
+      (session.provider !== "claude" && session.provider !== "codex")
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${name}' cannot be in a team: a team member is a Claude or Codex session`,
+      );
+    const from = this.memberOf(session.id);
+    const caller = input.caller;
+    const above = (id: string) =>
+      this.ancestors(id).some((lead) => lead.id === caller?.id);
+    if (caller && !above(session.id))
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${sessionBaseName(caller.name)}' can move only sessions in the teams below it, and '${name}' is not one; the user can move it with --user`,
+      );
+
+    if (input.to === undefined) {
+      if (caller)
+        throw new DaedalusError(
+          "CONFLICT",
+          `Only the user takes a session out of its team; archive '${name}' if the team no longer needs it`,
+        );
+      if (!from) throw new DaedalusError("CONFLICT", `'${name}' is in no team`);
+      this.repositories.setAgentTeam(session.id, null, null);
+      await this.say({
+        team: from.team.id,
+        author: DAEDALUS_HANDLE,
+        tags: [LEAD_HANDLE],
+        body: `@${LEAD_HANDLE} the user took @${from.reader.handle} ('${name}') out of this team. It keeps running as a session of its own${this.led(session.id) ? ", with the team it leads" : ""}.`,
+      });
+      return {
+        session: this.repositories.findAgent(session.id)!,
+        from: from.team,
+      };
+    }
+
+    const target = this.repositories.findAgent(input.to);
+    if (!target)
+      throw new DaedalusError("NOT_FOUND", `Session ${input.to} not found`);
+    const targetName = sessionBaseName(target.name);
+    if (caller && caller.id !== target.id && !above(target.id))
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${sessionBaseName(caller.name)}' can move a session only into its own team or a team below it, and '${targetName}' leads neither`,
+      );
+    if (caller && !from)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${name}' is in no team; only the user brings it into one`,
+      );
+    const below = teamDescendants(this.repositories, session.id);
+    if (target.id === session.id || below.some((each) => each.id === target.id))
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${targetName}' is ${target.id === session.id ? "the session itself" : `in the team '${name}' leads`}, so '${name}' cannot move under it`,
+      );
+    if (from?.team.lead.id === target.id)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${name}' is already in the team '${from.team.name}'`,
+      );
+    if (target.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The lead '${targetName}' is archived, so its team is paused; restore it first`,
+      );
+    const existing = this.led(target.id);
+    if (existing?.paused)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The team '${existing.name}' is paused and takes no new members; resume it with 'daedal team resume --team ${existing.lead.id}'`,
+      );
+    // The levels the moved session brings with it: its own, and the
+    // deepest live member below it.
+    const depth = (id: string): number => {
+      const team = this.led(id);
+      if (!team) return 0;
+      return Math.max(
+        0,
+        ...this.members(team.id)
+          .filter((member) => !member.archivedAt)
+          .map((member) => 1 + depth(member.id)),
+      );
+    };
+    const level = this.ancestors(target.id).length + 1;
+    const height = depth(session.id);
+    if (level + height > TEAM_MAX_DEPTH)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Under '${targetName}', '${name}' would sit ${level} levels below its top lead${height ? ` with ${height} more below it` : ""}, and teams nest at most ${TEAM_MAX_DEPTH} levels; move it to a lead higher up`,
+      );
+    if (existing) {
+      const active = this.members(existing.id).filter(
+        (member) => !member.archivedAt,
+      );
+      if (active.length >= TEAM_MAX_MEMBERS)
+        throw new DaedalusError(
+          "CONFLICT",
+          `'${existing.name}' already has ${active.length} members, the most one lead can have; archive one it no longer needs first`,
+        );
+    }
+
+    const { team, created } = this.lead(target.id);
+    const handle = this.allocateHandle(
+      team.id,
+      from?.reader.handle ?? session.name,
+    );
+    const joinedAfter = this.repositories.teams.lastMessageId(team.id);
+    this.repositories.setAgentTeam(session.id, team.id, handle);
+    this.repositories.teams.saveCursor({
+      teamId: team.id,
+      handle,
+      readThrough: 0,
+      taggedReadThrough: joinedAfter,
+      deliveredThrough: joinedAfter,
+      lastError: null,
+      lastAttemptAt: null,
+      deliveredAt: null,
+    });
+    const mover = caller ? `'${sessionBaseName(caller.name)}'` : "the user";
+    if (from && from.team.lead.id !== caller?.id)
+      await this.say({
+        team: from.team.id,
+        author: DAEDALUS_HANDLE,
+        tags: [LEAD_HANDLE],
+        body: `@${LEAD_HANDLE} ${mover} moved @${from.reader.handle} ('${name}') to the team '${team.name}'. It is no longer in this team.`,
+      });
+    if (target.id !== caller?.id) {
+      const skill = this.abilities.skillName(ORCHESTRATION_SKILL);
+      await this.say({
+        team: team.id,
+        author: DAEDALUS_HANDLE,
+        tags: [LEAD_HANDLE],
+        body: [
+          `@${LEAD_HANDLE} ${mover} moved '${name}' into this team as @${handle}${from ? `, from the team '${from.team.name}'` : ""}${this.led(session.id) ? ", with the team it leads" : ""}. It keeps its work and its conversation; ask it what it is doing before you plan around it.`,
+          created
+            ? `You lead this team now. Follow the ${skill} skill, and keep the plan in ${TEAM_FILE} in your folder.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+      });
+    }
+    await this.say({
+      team: team.id,
+      author: DAEDALUS_HANDLE,
+      tags: [handle],
+      body: [
+        `@${handle} ${mover} moved you to another team${from ? `; you are no longer in '${from.team.name}', so stop reporting there` : ""}. Carry on with your work.`,
+        ...this.memberLaunchLines({ teamId: team.id, handle }),
+      ].join("\n\n"),
+    });
+    return {
+      session: this.repositories.findAgent(session.id)!,
+      ...(from ? { from: from.team } : {}),
+      to: this.get(team.id),
+      handle,
+      created,
+    };
+  }
+
   /** Starts the member's session, told its place in the team. */
   private spawnSession(
     team: Team,

@@ -1403,6 +1403,135 @@ describe("teams", () => {
     });
   });
 
+  test("a running session moves between teams with the team it leads, and is told", async () => {
+    await withTeams(async ({ context, transport, tmux }) => {
+      const { session: top, team } = await lead(context);
+      const add = (lead: string, name: string) =>
+        context.teams.spawnMember({
+          team: lead,
+          addedBy: "lead",
+          name,
+          instructions: `Do ${name}.`,
+        });
+      const one = (await add(top.id, "one")).session;
+      const two = (await add(top.id, "two")).session;
+      const b = (await add(top.id, "b")).session;
+      const sub = (await add(one.id, "sub")).session;
+      const launches = tmux.launches.length;
+
+      // Not under itself or a session below it, nor where it already is.
+      await expect(
+        context.teams.move({ session: one.id, to: sub.id }),
+      ).rejects.toThrow("in the team 'one' leads");
+      await expect(
+        context.teams.move({ session: one.id, to: one.id }),
+      ).rejects.toThrow("the session itself");
+      await expect(
+        context.teams.move({ session: two.id, to: top.id }),
+      ).rejects.toThrow("already in the team 'Checkout API'");
+
+      // The user moves one, with sub below it, into two's team.
+      const moved = await context.teams.move({ session: one.id, to: two.id });
+      expect(moved).toMatchObject({ handle: "one", created: true });
+      expect(moved.from?.id).toBe(team.id);
+      expect(context.teams.ancestors(sub.id).map((s) => s.id)).toEqual([
+        one.id,
+        two.id,
+        top.id,
+      ]);
+      // Nothing restarted.
+      expect(tmux.launches).toHaveLength(launches);
+      expect(transport.to(top).at(-1)!.text).toContain(
+        "@lead the user moved @one ('one') to the team 'two'. It is no longer in this team.",
+      );
+      const told = transport.to(two).at(-1)!.text;
+      expect(told).toContain(
+        "@lead the user moved 'one' into this team as @one, from the team 'Checkout API', with the team it leads.",
+      );
+      expect(told).toContain("You lead this team now.");
+      const delivered = transport.to(one).at(-1)!.text;
+      expect(delivered).toContain(
+        "you are no longer in 'Checkout API', so stop reporting there",
+      );
+      expect(delivered).toContain(
+        'You are @one, a member of the Daedalus team "two"',
+      );
+      // It does not get the old team's chat from before it joined.
+      expect(delivered).not.toContain("Do one.");
+
+      // Two now carries two levels below it, so it cannot go under b.
+      await expect(
+        context.teams.move({ session: two.id, to: b.id }),
+      ).rejects.toThrow("teams nest at most 3 levels");
+
+      // A lead moves only within what is below it.
+      await expect(
+        context.teams.move({ session: one.id, to: top.id, caller: two }),
+      ).rejects.toThrow("only into its own team or a team below it");
+      await expect(
+        context.teams.move({ session: b.id, to: two.id, caller: two }),
+      ).rejects.toThrow("can move only sessions in the teams below it");
+      await expect(
+        context.teams.move({ session: one.id, caller: two }),
+      ).rejects.toThrow("Only the user takes a session out of its team");
+      const toTwo = transport.to(two).length;
+      // Two pulls sub up into its own team; it is not told about its own move.
+      const pulled = await context.teams.move({
+        session: sub.id,
+        to: two.id,
+        caller: two,
+      });
+      expect(pulled.handle).toBe("sub");
+      expect(transport.to(two)).toHaveLength(toTwo);
+      expect(transport.to(one).at(-1)!.text).toContain(
+        "'two' moved @sub ('sub') to the team 'two'",
+      );
+
+      // A handle the new team has already is made unique.
+      await add(top.id, "sub");
+      const clash = await context.teams.move({ session: sub.id, to: top.id });
+      expect(clash.handle).toBe("sub-2");
+
+      // The member cap counts the moved session.
+      await add(top.id, "c");
+      await expect(
+        context.teams.move({ session: one.id, to: top.id }),
+      ).rejects.toThrow("already has 5 members");
+
+      // Out: a plain session, or the top of the team it leads.
+      const out = await context.teams.move({ session: one.id });
+      expect(out.session.teamId).toBeNull();
+      expect(out.to).toBeUndefined();
+      expect(transport.to(two).at(-1)!.text).toContain(
+        "the user took @one ('one') out of this team",
+      );
+      expect(
+        context.teams
+          .tree()
+          .map((node) => node.session.id)
+          .sort(),
+      ).toEqual([top.id, one.id].sort());
+      await expect(context.teams.move({ session: one.id })).rejects.toThrow(
+        "'one' is in no team",
+      );
+      // Only the user brings in a session that is in no team.
+      const loose = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+        name: "loose",
+      });
+      await expect(
+        context.teams.move({ session: loose.id, to: two.id, caller: two }),
+      ).rejects.toThrow("can move only sessions in the teams below it");
+      const joined = await context.teams.move({
+        session: loose.id,
+        to: two.id,
+      });
+      expect(joined.from).toBeUndefined();
+      expect(joined.handle).toBe("loose");
+    });
+  });
+
   test("a paused team holds its members' messages and takes no one new, down the tree", async () => {
     await withTeams(async ({ context, transport }) => {
       const { session: top, team } = await lead(context);

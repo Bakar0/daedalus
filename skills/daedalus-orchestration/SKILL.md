@@ -115,6 +115,21 @@ to you. You may tell a member to do that. Limits:
   goes to your own lead, and any other tag to your team. `daedal team chat`
   reads both. `daedal team tree` prints the whole tree.
 
+To reorganize the teams below you, move running members instead of
+starting new ones. A moved session keeps its conversation and its work, and
+the team it leads goes with it:
+
+```
+daedal team move <member-session-id> --to <lead-session-id>
+```
+
+You can move a session below you into your own team or into a team below
+you. A member that gets its first member this way becomes a lead. The member, its old lead
+and its new lead are told in the chat; you are not told about moves you make
+yourself. The depth and member limits apply to the whole moved branch.
+Only the user takes a session out of its team (`--out`) or brings in one
+that is in no team. Update TEAM.md after a move.
+
 ## Choosing a member's model
 
 A member's model sets what each of its calls costs. Decide per member:
