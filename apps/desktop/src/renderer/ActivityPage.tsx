@@ -583,26 +583,32 @@ export function ActivityPage({
             </AskCard>
           ))}
           {ended.length > 0 && (
-            <>
-              <div className="needs-section">Answered or closed today</div>
-              {ended.map((ask) => (
-                <AskCard
-                  ask={ask}
-                  draft={draftOf(ask.id)}
-                  key={ask.id}
-                  now={now}
-                  onDismiss={() => undefined}
-                  onDraft={() => undefined}
-                  onOpenSession={() => onOpenSession(ask.sessionId)}
-                  onSelect={() => undefined}
-                  onSend={() => undefined}
-                  onUndo={() =>
-                    void run(client.request.askReopen({ id: ask.id }))
-                  }
-                  selected={false}
-                />
-              ))}
-            </>
+            // Folded by default: what is done today should not pull the eye
+            // from what still waits.
+            <details className="needs-ended">
+              <summary className="needs-section">
+                Answered or closed today · {ended.length}
+              </summary>
+              <div className="needs-ended-cards">
+                {ended.map((ask) => (
+                  <AskCard
+                    ask={ask}
+                    draft={draftOf(ask.id)}
+                    key={ask.id}
+                    now={now}
+                    onDismiss={() => undefined}
+                    onDraft={() => undefined}
+                    onOpenSession={() => onOpenSession(ask.sessionId)}
+                    onSelect={() => undefined}
+                    onSend={() => undefined}
+                    onUndo={() =>
+                      void run(client.request.askReopen({ id: ask.id }))
+                    }
+                    selected={false}
+                  />
+                ))}
+              </div>
+            </details>
           )}
         </div>
         {!narrow && (

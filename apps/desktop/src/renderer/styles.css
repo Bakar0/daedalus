@@ -10401,6 +10401,25 @@ button.routine-tick:hover {
   padding-top: 6px;
   text-transform: uppercase;
 }
+.needs-ended-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.needs-ended > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.needs-ended > summary::-webkit-details-marker {
+  display: none;
+}
+.needs-ended > summary::before {
+  content: "▸ ";
+}
+.needs-ended[open] > summary::before {
+  content: "▾ ";
+}
 .needs-card {
   background: var(--raised);
   border: 1px solid var(--line);
