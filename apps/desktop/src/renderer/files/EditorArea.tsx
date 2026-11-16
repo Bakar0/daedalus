@@ -51,6 +51,7 @@ import {
   subscribeDocuments,
 } from "./documents";
 import { workspaceBaseName } from "./explorer-state";
+import { byUser } from "../user-input";
 import { FileTypeIcon } from "./file-icons";
 import { monaco } from "./monaco";
 import { quickDiff } from "./quick-diff";
@@ -150,8 +151,11 @@ export interface EditorAreaProps {
   workspaceId: string;
   theme: AppTheme;
   onActiveChange(path: string | undefined): void;
-  /** The kind of the tab in front changed, or the last tab closed. */
-  onActivePanel?(kind: CenterPanelKind | undefined): void;
+  /**
+   * The kind of the tab in front changed, or the last tab closed. `byUser`
+   * when the user picked it, with a click or a key.
+   */
+  onActivePanel?(kind: CenterPanelKind | undefined, byUser?: boolean): void;
   /** The session or task tab was closed by the user. */
   onAppPanelClosed?(kind: "session" | "task"): void;
   /** The session and task tabs are the app's; it draws their content. */
@@ -163,8 +167,8 @@ export interface EditorAreaProps {
   renderEmpty?(): React.ReactNode;
   /** The agent's icon, for the session tab. */
   sessionIcon?: React.ReactNode;
-  /** A terminal tab's content, drawn by the app. */
-  renderTerminal?(terminalId: string): React.ReactNode;
+  /** A terminal tab's content, drawn by the app; `active` while in front. */
+  renderTerminal?(terminalId: string, active: boolean): React.ReactNode;
   /** The Workflows tab's content, drawn by the app. */
   renderWorkflows?(): React.ReactNode;
   /** The Plans tab's content, drawn by the app. */
@@ -245,7 +249,7 @@ interface EditorContextValue {
   taskTitle?: string;
   renderEmpty?(): React.ReactNode;
   sessionIcon?: React.ReactNode;
-  renderTerminal?(terminalId: string): React.ReactNode;
+  renderTerminal?(terminalId: string, active: boolean): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
   renderPlans?(): React.ReactNode;
   renderActivity?(): React.ReactNode;
@@ -1024,7 +1028,7 @@ export default function EditorArea({
       api.onDidActivePanelChange((event) => {
         const params = event.panel?.params as FilePanelParams | undefined;
         callbacks.current.onActiveChange(params?.path || undefined);
-        callbacks.current.onActivePanel?.(panelKind(params));
+        callbacks.current.onActivePanel?.(panelKind(params), byUser());
       });
       api.onDidRemovePanel((panel) => {
         const params = panel.params as FilePanelParams | undefined;
@@ -1431,11 +1435,20 @@ function SessionPanel() {
   );
 }
 
-function TerminalPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+function TerminalPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   const context = useEditorContext();
+  // Coming to the front asks for the caret; a hidden tab keeps its React
+  // tree, so nothing else would re-render it.
+  const [active, setActive] = useState(api.isActive);
+  useEffect(() => {
+    const disposable = api.onDidActiveChange((event) =>
+      setActive(event.isActive),
+    );
+    return () => disposable.dispose();
+  }, [api]);
   return (
     <div className="app-panel terminal-panel">
-      {params.terminalId && context.renderTerminal?.(params.terminalId)}
+      {params.terminalId && context.renderTerminal?.(params.terminalId, active)}
     </div>
   );
 }

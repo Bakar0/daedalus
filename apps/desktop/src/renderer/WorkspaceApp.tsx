@@ -2326,11 +2326,14 @@ function useArrivalFocus(id: string, active: boolean, mountRevision: number) {
 /** A terminal in a center tab, which takes the caret when it opens. */
 function CenterTerminalSurface({
   mountRevision,
+  active,
   ...props
 }: Omit<Parameters<typeof TerminalSurface>[0], "focused" | "onFocused"> & {
   mountRevision: number;
+  /** In front: coming back to the front takes the caret again. */
+  active: boolean;
 }) {
-  const arrival = useArrivalFocus(props.id, true, mountRevision);
+  const arrival = useArrivalFocus(props.id, active, mountRevision);
   return (
     <div ref={arrival.holderRef} style={{ display: "contents" }}>
       <TerminalSurface
@@ -2761,19 +2764,26 @@ export function WorkspaceApp({
   // The tab in front of the center decides which view the rest of the app
   // sees: a session's, a task's, or the files'. No tab at all is the board's
   // empty center.
-  const followCenterTab = useCallback((kind?: CenterPanelKind) => {
-    setView((current) =>
-      current === "world"
-        ? current
-        : kind === "session"
-          ? "session"
-          : kind === "task"
-            ? "board"
-            : kind
-              ? "workspace"
-              : "board",
-    );
-  }, []);
+  const followCenterTab = useCallback(
+    (kind?: CenterPanelKind, picked?: boolean) => {
+      // A session tab the user picks takes the caret, as a sidebar pick does;
+      // one Daedalus brings forward on its own leaves focus alone.
+      if (kind === "session" && picked && activeSessionIdRef.current)
+        setFocusedSessionId(activeSessionIdRef.current);
+      setView((current) =>
+        current === "world"
+          ? current
+          : kind === "session"
+            ? "session"
+            : kind === "task"
+              ? "board"
+              : kind
+                ? "workspace"
+                : "board",
+      );
+    },
+    [],
+  );
   const [panelTab, setPanelTab] = useState<SidePanelTab>(
     () => initialPanelTab ?? storedSidePanelTab(),
   );
@@ -8865,12 +8875,13 @@ export function WorkspaceApp({
                     visible={visible}
                   />
                 )}
-                renderTerminal={(terminalId) => {
+                renderTerminal={(terminalId, active) => {
                   const terminal = integratedTerminals.find(
                     (item) => item.id === terminalId,
                   );
                   return terminal ? (
                     <CenterTerminalSurface
+                      active={active}
                       terminalEndpoint={terminalEndpoint}
                       fitRevision={terminalFitRevision}
                       id={terminal.id}
