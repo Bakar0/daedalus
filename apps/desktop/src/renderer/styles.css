@@ -6057,7 +6057,7 @@ dd {
   margin-right: 6px;
 }
 .session-card[data-team-member="true"] {
-  margin-left: 14px;
+  margin-left: calc(14px * var(--team-depth, 1));
 }
 
 /* The card menu: rename, pin, color and abilities. It opens beside the

@@ -243,7 +243,11 @@ import {
   waitingLabel,
   type SessionStatusView,
 } from "./session-view";
-import { sessionDisplayOrder, teamLookup } from "./session-order";
+import {
+  sessionDisplayOrder,
+  sessionDisplayRows,
+  teamLookup,
+} from "./session-order";
 
 // Pixi is about 290 kB (87 kB gzipped) that the app only needs once someone
 // opens the World, so the view and everything under it load on first open.
@@ -5935,6 +5939,8 @@ export function WorkspaceApp({
   const renderSessionCard = (
     session: AgentSessionDto,
     reorder: ReorderHandles,
+    /** How many leads above it are listed: its indent. */
+    depth = 0,
   ) => {
     const task = snapshot?.tasks.find((item) => item.id === session.taskId);
     const tool = sessionTool(session);
@@ -5963,9 +5969,7 @@ export function WorkspaceApp({
       Boolean(sessionsById.get(team.team.leadId)?.archivedAt);
     return (
       <div
-        data-team-member={
-          team?.role === "member" && !leadArchived ? "true" : undefined
-        }
+        data-team-member={depth > 0 ? "true" : undefined}
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
         data-cloud={session.hostId ? "true" : undefined}
         data-cloud-state={
@@ -5977,6 +5981,7 @@ export function WorkspaceApp({
         style={
           {
             ...sessionColorStyle(session.color),
+            "--team-depth": depth,
             // The title keeps clear of the actions on show: the menu, a
             // revive and a requested rebirth always, the rest on hover.
             "--card-actions-shown":
@@ -6426,7 +6431,7 @@ export function WorkspaceApp({
           const ordered = reorder.order.flatMap(
             (id) => liveSessions.find((session) => session.id === id) ?? [],
           );
-          const grouped = sessionDisplayOrder(ordered, snapshot?.teams ?? []);
+          const grouped = sessionDisplayRows(ordered, snapshot?.teams ?? []);
           return (
             <div
               aria-label={`Sessions in ${item.name}`}
@@ -6439,7 +6444,9 @@ export function WorkspaceApp({
                 data-reordering={reorder.draggingId ? "true" : undefined}
               >
                 {launches.map(renderLaunchCard)}
-                {grouped.map((session) => renderSessionCard(session, reorder))}
+                {grouped.map(({ session, depth }) =>
+                  renderSessionCard(session, reorder, depth),
+                )}
               </div>
               {archived.length > 0 && (
                 <details
