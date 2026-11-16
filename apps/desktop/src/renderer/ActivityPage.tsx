@@ -68,10 +68,17 @@ export function useOpenAskCounts(client: DesktopClient): OpenAskCounts {
       if (document.visibilityState === "visible") read();
     }, REFRESH_MS * 2);
     window.addEventListener("focus", read);
+    // An ask answered here, or asked or closed anywhere, announces a full
+    // change: the count follows it at once instead of on the next poll.
+    // Partial ones (activity, telemetry) never carry asks.
+    const unsubscribe = client.subscribe((change) => {
+      if (!change?.parts?.length) read();
+    });
     return () => {
       live = false;
       window.clearInterval(timer);
       window.removeEventListener("focus", read);
+      unsubscribe();
     };
   }, [client]);
   return count;
@@ -527,11 +534,15 @@ export function ActivityPage({
     }, REFRESH_MS);
     const read = () => void load();
     window.addEventListener("focus", read);
+    const unsubscribe = client.subscribe((change) => {
+      if (!change?.parts?.length) read();
+    });
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", read);
+      unsubscribe();
     };
-  }, [load]);
+  }, [client, load]);
 
   const workspaces = useMemo(() => {
     const seen = new Map<string, string>();

@@ -122,6 +122,15 @@ function sources(context: ApplicationContext) {
     // An agent reports a step a few times an hour at most, so a change
     // reloads the whole window rather than earning a partial part.
     // A run ends in this process's tick; opening one marks it read.
+    // Activity's count: an ask asked, answered or closed by any process
+    // reaches the window on the next tick, not on the page's own poll.
+    openAsks: rows(
+      () => repositories.asks.list({ openOnly: true }).length,
+      () =>
+        repositories.asks
+          .list({ openOnly: true })
+          .map((ask) => [ask.id, ask.workspaceId, ask.title]),
+    ),
     unseenRoutineRuns: rows(
       () => repositories.routines.unseenRunIds(),
       () => repositories.routines.unseenRunIds(),
