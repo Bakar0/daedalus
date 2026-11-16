@@ -105,29 +105,160 @@ export function markPlanTasks(
   return out;
 }
 
-const BOX: Record<string, string> = {
-  done: "[x]",
-  doing: "[/]",
-  todo: "[ ]",
-  blocked: "[!]",
-  dropped: "[-]",
-  wait: "[?]",
-};
+/** A plan task as Activity lists it: its group, and what marks it. */
+export interface GroupedTask {
+  task: AskPlanDto["tasks"][number];
+  /** The ask it waits on (in Waits on you), or waits after (Not started). */
+  ask?: number;
+}
+
+/** The groups the plan is shown in, in this order; Done comes folded. */
+export const PLAN_GROUPS = [
+  { key: "wait", label: "Waits on you" },
+  { key: "blocked", label: "Blocked" },
+  { key: "doing", label: "In progress" },
+  { key: "todo", label: "Not started" },
+  { key: "done", label: "Done" },
+] as const;
+
+export type PlanGroup = (typeof PLAN_GROUPS)[number]["key"];
+
+/**
+ * The plan's tasks by what they need: the ones that wait on the user first,
+ * then blocked, in progress, not started, and done (dropped ones with it).
+ * Only tasks with no subtasks are listed; a parent is the sum of its own.
+ */
+export function groupPlanTasks(
+  tasks: AskPlanDto["tasks"],
+  asks: readonly Pick<AskDto, "id" | "taskKey">[],
+): Record<PlanGroup, GroupedTask[]> {
+  const marks = markPlanTasks(tasks, asks);
+  const groups: Record<PlanGroup, GroupedTask[]> = {
+    wait: [],
+    blocked: [],
+    doing: [],
+    todo: [],
+    done: [],
+  };
+  tasks.forEach((task, index) => {
+    const next = tasks[index + 1];
+    if (next && next.depth > task.depth) return;
+    const { mark, ask } = marks[index]!;
+    const group: PlanGroup =
+      mark === "wait" ? "wait" : task.state === "dropped" ? "done" : task.state;
+    groups[group].push(ask === undefined ? { task } : { task, ask });
+  });
+  return groups;
+}
 
 function PlanMap({
   client,
   path,
   asks,
   selectedTask,
+  selectedAsk,
   onOpenPlan,
 }: {
   client: DesktopClient;
   path: string;
   asks: AskDto[];
   selectedTask: string | null;
+  /** The card the plan is shown for. */
+  selectedAsk?: number;
   onOpenPlan: (path: string) => void;
 }) {
+  const plan = usePlan(client, path, asks);
+  if (plan === undefined) return null;
+  if (plan === null)
+    return <p className="needs-empty">This plan can no longer be read.</p>;
+  const groups = groupPlanTasks(plan.tasks, asks);
+  const total =
+    PLAN_GROUPS.reduce((sum, { key }) => sum + groups[key].length, 0) || 1;
+  const summary = [
+    `${groups.done.length} of ${total} done`,
+    groups.doing.length ? `${groups.doing.length} in progress` : "",
+    groups.blocked.length ? `${groups.blocked.length} blocked` : "",
+    groups.wait.length
+      ? `${groups.wait.length} ${groups.wait.length === 1 ? "waits" : "wait"} on you`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const row = ({ task, ask }: GroupedTask, group: PlanGroup) => (
+    <li
+      className={`needs-task needs-task-${group}${task.id && task.id === selectedTask ? " selected" : ""}`}
+      key={task.key}
+    >
+      <span className="needs-task-title">{task.title}</span>
+      {ask !== undefined && group === "wait" && (
+        <span className="needs-task-tag">#{ask}</span>
+      )}
+      {ask !== undefined && group === "todo" && (
+        <span className="needs-task-tag">after #{ask}</span>
+      )}
+      {task.owner && <span className="needs-task-owner">@{task.owner}</span>}
+    </li>
+  );
+  return (
+    <div className="needs-plan">
+      <div className="needs-plan-head">
+        <span className="needs-plan-whose">
+          {plan.owner ? `Plan of @${plan.owner}` : "Plan"}
+          {selectedAsk !== undefined ? `, where #${selectedAsk} waits` : ""}
+        </span>
+        <button
+          className="needs-link"
+          onClick={() => onOpenPlan(plan.path)}
+          type="button"
+        >
+          Open plan ↗
+        </button>
+      </div>
+      <div className="needs-plan-title">{plan.title}</div>
+      <div className="needs-plan-summary">{summary}</div>
+      <div aria-hidden="true" className="needs-progress">
+        {(["done", "doing", "wait", "blocked"] as const).map((key) => (
+          <span
+            className={`needs-progress-${key}`}
+            key={key}
+            style={{ width: `${(groups[key].length / total) * 100}%` }}
+          />
+        ))}
+      </div>
+      {PLAN_GROUPS.map(({ key, label }) => {
+        const items = groups[key];
+        if (!items.length) return null;
+        const heading = `${label} · ${items.length}`;
+        const list = (
+          <ul className="needs-tasks">{items.map((item) => row(item, key))}</ul>
+        );
+        return key === "done" ? (
+          <details className={`needs-group needs-group-${key}`} key={key}>
+            <summary className="needs-group-head">{heading}</summary>
+            {list}
+          </details>
+        ) : (
+          <section className={`needs-group needs-group-${key}`} key={key}>
+            <div className="needs-group-head">{heading}</div>
+            {list}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * A plan, read again when the asks pinned to it change; `undefined` while
+ * it is read, `null` when it cannot be.
+ */
+function usePlan(
+  client: DesktopClient,
+  path: string,
+  asks: readonly Pick<AskDto, "id" | "taskKey">[],
+): AskPlanDto | null | undefined {
   const [plan, setPlan] = useState<AskPlanDto | null>();
+  const pins = asks.map((ask) => `${ask.id}:${ask.taskKey}`).join();
   useEffect(() => {
     let live = true;
     void client.request.askPlan({ path }).then(
@@ -139,93 +270,15 @@ function PlanMap({
     return () => {
       live = false;
     };
-    // Read again when the asks pinned to it change, not on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, path, asks.map((ask) => `${ask.id}:${ask.taskKey}`).join()]);
-  if (plan === undefined) return null;
-  if (plan === null)
-    return <p className="needs-empty">This plan can no longer be read.</p>;
-  const marks = markPlanTasks(plan.tasks, asks);
-  const leaves = plan.tasks.filter((task, index) =>
-    plan.tasks[index + 1]?.depth !== undefined
-      ? plan.tasks[index + 1]!.depth <= task.depth
-      : true,
-  );
-  const count = (wanted: string) =>
-    plan.tasks.filter((task, index) => {
-      if (!leaves.includes(task)) return false;
-      const mark = marks[index]!.mark;
-      if (wanted === "wait" || wanted === "held") return mark === wanted;
-      return !mark && task.state === wanted;
-    }).length;
-  const total = leaves.length || 1;
-  return (
-    <div className="needs-plan">
-      <div className="needs-plan-head">
-        <span className="needs-plan-title">{plan.title}</span>
-        {plan.owner && <span className="needs-pin">@{plan.owner}</span>}
-        <div aria-label="Plan progress" className="needs-progress">
-          {(["done", "doing", "wait", "held"] as const).map((key) => (
-            <span
-              className={`needs-progress-${key}`}
-              key={key}
-              style={{ width: `${(count(key) / total) * 100}%` }}
-            />
-          ))}
-        </div>
-        <button
-          className="needs-link"
-          onClick={() => onOpenPlan(plan.path)}
-          type="button"
-        >
-          Open plan ↗
-        </button>
-      </div>
-      <div className="needs-legend">
-        <span>
-          <i className="needs-progress-done" />
-          done
-        </span>
-        <span>
-          <i className="needs-progress-doing" />
-          doing
-        </span>
-        <span>
-          <i className="needs-progress-wait" />
-          waits on you
-        </span>
-        <span>
-          <i className="needs-progress-held" />
-          held by it
-        </span>
-      </div>
-      <ul className="needs-tasks">
-        {plan.tasks.map((task, index) => {
-          const { mark, ask } = marks[index]!;
-          const state = mark === "wait" ? "wait" : task.state;
-          return (
-            <li
-              className={`needs-task needs-task-${mark ?? task.state}${task.id && task.id === selectedTask ? " selected" : ""}`}
-              key={task.key}
-              style={{ paddingLeft: 6 + task.depth * 18 }}
-            >
-              <span className="needs-task-box">{BOX[state] ?? "[ ]"}</span>
-              <span className="needs-task-title">{task.title}</span>
-              {mark === "wait" && (
-                <span className="needs-task-tag">#{ask} waits on you</span>
-              )}
-              {mark === "held" && (
-                <span className="needs-task-tag held">held by #{ask}</span>
-              )}
-              {task.owner && (
-                <span className="needs-task-owner">@{task.owner}</span>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
+  }, [client, path, pins]);
+  return plan;
+}
+
+/** The title of the task an ask waits at, read from its plan. */
+function TaskTitle({ client, ask }: { client: DesktopClient; ask: AskDto }) {
+  const plan = usePlan(client, ask.planPath!, [ask]);
+  const task = plan?.tasks.find((each) => each.id === ask.taskKey);
+  return <>{task?.title ?? `^${ask.taskKey}`}</>;
 }
 
 /**
@@ -267,6 +320,7 @@ function CardPlan({
 }
 
 function AskCard({
+  client,
   ask,
   draft,
   selected,
@@ -279,6 +333,7 @@ function AskCard({
   onOpenSession,
   children,
 }: {
+  client: DesktopClient;
   ask: AskDto;
   draft: Draft;
   selected: boolean;
@@ -309,15 +364,19 @@ function AskCard({
       }}
     >
       <div className="needs-card-top">
-        <span className="needs-card-title">
-          <span className="needs-card-number">#{ask.id}</span> {ask.title}
-        </span>
+        <span className="needs-card-who">{ask.sessionName ?? "A session"}</span>
         <span className="needs-card-meta">
-          {ask.sessionName ?? "a session"} · {ago(ask.createdAt, now)}
+          asks · {ago(ask.createdAt, now)} ago
         </span>
+        <span className="needs-card-number">#{ask.id}</span>
       </div>
-      {ask.context && <div className="needs-card-context">{ask.context}</div>}
-      {ask.why && <div className="needs-card-why">{ask.why}</div>}
+      <div className="needs-card-title">{ask.title}</div>
+      {ask.why && (
+        <div className="needs-card-why">
+          <span className="needs-card-why-label">Why</span>
+          <span>{ask.why}</span>
+        </div>
+      )}
       {open && ask.options.length > 0 && (
         <div className="needs-card-options" role="radiogroup">
           {ask.options.map((option, index) => (
@@ -341,10 +400,11 @@ function AskCard({
           ))}
         </div>
       )}
-      {ask.planPath && ask.taskKey && (
-        <div className="needs-card-where">
-          Waits in its plan at <span className="needs-pin">^{ask.taskKey}</span>
-        </div>
+      {ask.context && (
+        <details className="needs-card-details">
+          <summary>Details</summary>
+          <div className="needs-card-context">{ask.context}</div>
+        </details>
       )}
       {open ? (
         <>
@@ -397,6 +457,14 @@ function AskCard({
             >
               Dismiss
             </button>
+            {ask.planPath && ask.taskKey && (
+              <span className="needs-card-where">
+                In the plan:{" "}
+                <span className="needs-card-task">
+                  <TaskTitle ask={ask} client={client} />
+                </span>
+              </span>
+            )}
           </div>
         </>
       ) : (
@@ -540,6 +608,7 @@ export function ActivityPage({
           )}
           {open.map((ask) => (
             <AskCard
+              client={client}
               ask={ask}
               draft={draftOf(ask.id)}
               key={ask.id}
@@ -592,6 +661,7 @@ export function ActivityPage({
               <div className="needs-ended-cards">
                 {ended.map((ask) => (
                   <AskCard
+                    client={client}
                     ask={ask}
                     draft={draftOf(ask.id)}
                     key={ask.id}
@@ -619,6 +689,7 @@ export function ActivityPage({
                 client={client}
                 onOpenPlan={(path) => onOpenPlan(path, current.workspaceId)}
                 path={current.planPath}
+                selectedAsk={current.id}
                 selectedTask={current.taskKey}
               />
             ) : (

@@ -207,8 +207,13 @@ team notices have woken you. Write for that:
         --option "Re-send account created" --option "Skip them" --recommend 1 \
         --plan cutover ^recon-stg
 
-  Write the context so the user can decide from the card alone, without
-  your session. Options are optional and may be any number; the user may
+  The card shows the question, then the why, then the options; the
+  context is folded under Details. Make the question one short plain line,
+  the why one sentence on what stays stuck without the answer, and put ids,
+  dates, accounts and links in the context. The user should be able to
+  decide from the card alone, without your session. Plan task titles are
+  listed beside the card, one line each: keep them a few plain words and
+  put the detail under the task. Options are optional and may be any number; the user may
   also answer in words. Pin it to the plan task it holds up when there is
   one. In your reply say "Asked #14: <the question>" in one line.
 

@@ -19,8 +19,13 @@ with its context, its options and the plan task it waits on, until the user
 answers or dismisses it there. Do not repeat it in your replies: say "Asked
 #<n>" and go on with other work. Every message Daedalus brings you ends with
 a line naming your open asks.
---context says what it is about and --why what waits on the answer; write
-them so the user can decide without scrolling back. --option may be given
+The card shows the question, then --why, then the options; --context is
+folded under "Details". So write the question as one short plain line the
+user can answer ("Who can add our redirect URL to the ServiceNow test
+instances?"), --why as one sentence on what stays stuck without the answer
+("ServiceNow can't be tested on stage until then"), and put ids, dates,
+accounts and links in --context. Together they let the user decide without
+opening your session. --option may be given
 any number of times, or not at all for a question answered in words;
 --recommend is the number of the option you recommend. The user may pick
 one, write their own answer, or both.

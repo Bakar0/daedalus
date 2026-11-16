@@ -63,7 +63,10 @@ message, and a very long one is cut.
 When you need the user, ask once with `daedal activity ask "<question>" --context
 "<what it is>" --why "<what waits on it>"`, with `--option` for each choice
 when there are choices, and `--plan <plan> ^<id>` for the plan task it
-holds up. The user sees it as a card under Activity and answers there;
+holds up. Make the question one short plain line and the why one sentence
+on what stays stuck without the answer; ids, dates and links go in the
+context, which the card folds under Details. The user sees it as a card
+under Activity and answers there;
 the answer comes to you with the question and its context. Your lead sees
 your asks with `daedal activity list --team`, so do not pass the question to
 the lead too. Work on what does not wait on the answer, or stop. Do not

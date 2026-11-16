@@ -35,8 +35,11 @@ A plan file is markdown. Frontmatter names it and its owner:
   ---
 Under '## Tasks' is a nested checklist. Each task is one line:
   - [ ] Title @owner ^id
-States: [ ] todo, [/] doing, [x] done, [!] blocked, [-] dropped. Any
-markdown indented under a task is its details; a '> ? ...' line there is a
+States: [ ] todo, [/] doing, [x] done, [!] blocked, [-] dropped. Keep a
+title short and plain, what the task is in a few words ("Entra scans
+stopped on 11-14"); the app lists titles on one line each. Any
+markdown indented under a task is its details, the place for ids, links
+and numbers; a '> ? ...' line there is a
 question for the user. Every other section is free markdown. Edit the file
 directly for anything these commands do not cover.
 
