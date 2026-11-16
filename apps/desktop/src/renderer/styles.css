@@ -10303,7 +10303,20 @@ button.routine-tick:hover {
 .needs-page {
   container-type: inline-size;
 }
+/* Two columns: the plan is beside the cards, so cards do not fold one in. */
+.needs-card-plan {
+  display: none;
+}
 @container (max-width: 760px) {
+  /* One column: each card folds its plan under it, in place of the "waits
+     in its plan" line and the plan after the list. */
+  .needs-card-plan {
+    display: block;
+  }
+  .needs-card-where,
+  .needs-columns > .needs-side {
+    display: none;
+  }
   /* Rows as tall as their content: the plan starts below the last card
      instead of being squeezed into half the height and drawn over it. */
   .needs-columns {
@@ -10339,6 +10352,12 @@ button.routine-tick:hover {
 }
 .needs-page.narrow .needs-columns {
   grid-template-columns: 1fr;
+}
+.needs-page.narrow .needs-card-plan {
+  display: block;
+}
+.needs-page.narrow .needs-card-where {
+  display: none;
 }
 .needs-page.narrow .needs-cards {
   overflow: visible;

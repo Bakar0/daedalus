@@ -228,6 +228,44 @@ function PlanMap({
   );
 }
 
+/**
+ * A card's plan, folded under it. Shown where the page is one column (the
+ * side panel, or a narrow pane), so the plan sits by its question instead of
+ * after the whole list. The plan is read only once it is opened.
+ */
+function CardPlan({
+  client,
+  path,
+  asks,
+  taskKey,
+  onOpenPlan,
+}: {
+  client: DesktopClient;
+  path: string;
+  asks: AskDto[];
+  taskKey: string | null;
+  onOpenPlan: (path: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className="needs-card-plan"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>Plan{taskKey ? ` · ^${taskKey}` : ""}</summary>
+      {open && (
+        <PlanMap
+          asks={asks}
+          client={client}
+          onOpenPlan={onOpenPlan}
+          path={path}
+          selectedTask={taskKey}
+        />
+      )}
+    </details>
+  );
+}
+
 function AskCard({
   ask,
   draft,
@@ -303,7 +341,7 @@ function AskCard({
           ))}
         </div>
       )}
-      {ask.planPath && ask.taskKey && !children && (
+      {ask.planPath && ask.taskKey && (
         <div className="needs-card-where">
           Waits in its plan at <span className="needs-pin">^{ask.taskKey}</span>
         </div>
@@ -530,21 +568,17 @@ export function ActivityPage({
               onUndo={() => undefined}
               selected={!narrow && current?.id === ask.id}
             >
-              {narrow && ask.planPath && (
-                <details className="needs-card-plan">
-                  <summary>Plan · ^{ask.taskKey}</summary>
-                  <PlanMap
-                    asks={(asks ?? []).filter(
-                      (other) =>
-                        other.state === "open" &&
-                        other.planPath === ask.planPath,
-                    )}
-                    client={client}
-                    onOpenPlan={(path) => onOpenPlan(path, ask.workspaceId)}
-                    path={ask.planPath}
-                    selectedTask={ask.taskKey}
-                  />
-                </details>
+              {ask.planPath && (
+                <CardPlan
+                  asks={(asks ?? []).filter(
+                    (other) =>
+                      other.state === "open" && other.planPath === ask.planPath,
+                  )}
+                  client={client}
+                  onOpenPlan={(path) => onOpenPlan(path, ask.workspaceId)}
+                  path={ask.planPath}
+                  taskKey={ask.taskKey}
+                />
               )}
             </AskCard>
           ))}
