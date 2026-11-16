@@ -24,7 +24,9 @@ class FakeTmux implements TmuxClient {
   async probe() {
     return "tmux 3.7c";
   }
+  created = 0;
   async createSession(launch: TmuxLaunch) {
+    this.created += 1;
     this.sessions.add(launch.session);
   }
   async hasSession(session: string) {
@@ -304,6 +306,34 @@ describe("ShutdownService", () => {
       expect(back.status).toBe("running");
       // Cleared, or every launch from now on would reopen it again.
       expect(back.resumeOnStart).toBe(false);
+      context.close();
+    });
+  });
+
+  test("opening a waiting session while the sweep runs starts it once", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const tmux = new FakeTmux();
+      const context = await createApplicationContext({
+        env: { DAEDALUS_HOME: home },
+        tmux,
+      });
+      const workspace = await context.workspaces.create({ name: "Twice" });
+      const session = addSession(context, tmux, {
+        workspaceId: workspace.id,
+        name: "Claude",
+        provider: "claude",
+        providerSessionId: crypto.randomUUID(),
+      });
+      await context.shutdown.run({ stopServer: true, resumeOnNextStart: true });
+      const before = tmux.created;
+      const [sweep, opened] = await Promise.all([
+        context.agents.resumeMarkedSessions(),
+        context.agents.resumeMarked(session.id),
+      ]);
+      expect(tmux.created - before).toBe(1);
+      expect(opened?.status).toBe("running");
+      expect(sweep.skipped).toEqual([]);
+      expect(await context.agents.resumeMarked(session.id)).toBeUndefined();
       context.close();
     });
   });

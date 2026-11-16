@@ -405,6 +405,16 @@ const lastViewStorageKey = (workspaceId: string) =>
  * from the session lists nested under each workspace in the left column; it
  * has no tab of its own (#55).
  */
+/**
+ * Stopped by "Quit and stop sessions" and not resumed yet: its card and its
+ * pane say so instead of showing an ended session or a blank terminal.
+ */
+const isResuming = (session: AgentSessionDto) =>
+  Boolean(session.resumeOnStart) &&
+  !session.archivedAt &&
+  session.status !== "running" &&
+  session.status !== "starting";
+
 export type WorkspaceView = "board" | "session" | "workspace" | "world";
 
 export function preferredWorkspaceView(
@@ -3733,6 +3743,15 @@ export function WorkspaceApp({
       activityById.get(session.id),
       attentionById.get(session.id),
     );
+    if (isResuming(session))
+      return {
+        ...view,
+        tone: "ended",
+        label: "resuming…",
+        detail: "Coming back after Quit and stop sessions",
+        attention: false,
+        reasons: [],
+      };
     const sleep = cloudSleep(session);
     // Quiet, unlike a lost session: opening the session wakes it. Anything
     // else about the cloud shows on the workspace, not on each card.
@@ -4065,6 +4084,14 @@ export function WorkspaceApp({
   const activeSession = openingLaunch
     ? undefined
     : sessions.find((item) => item.id === activeSessionId);
+  // Opening a session still waiting to resume moves it to the front of the
+  // startup sweep; the core shares one launch if the sweep reaches it too.
+  const resumeNowId =
+    activeSession && isResuming(activeSession) ? activeSession.id : undefined;
+  useEffect(() => {
+    if (!resumeNowId) return;
+    void client.request.sessionResumeNow({ id: resumeNowId }).catch(() => {});
+  }, [client, resumeNowId]);
   // The side panel's Plans, read only while the dock that shows them is.
   // A cloud workspace's files are in its pod.
   const askCounts = useOpenAskCounts(client);
@@ -7921,7 +7948,15 @@ export function WorkspaceApp({
             onDone={() => dismissCloudSignIn(activeSession.id)}
           />
         )}
-      {activeSession ? (
+      {activeSession && isResuming(activeSession) ? (
+        <div aria-busy="true" className="terminal-empty">
+          <strong>Resuming {sessionName(activeSession)}…</strong>
+          <span>
+            Quit and stop sessions stopped it; it comes back with its
+            conversation, and the terminal opens here as soon as it is ready.
+          </span>
+        </div>
+      ) : activeSession ? (
         // The drawer sits over the terminal, below the bars above it, so
         // their buttons stay in reach while it is open.
         <div className="terminal-stage">

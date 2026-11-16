@@ -449,6 +449,23 @@ export interface CloudLaunchExtras {
   secrets?: Record<string, string>;
 }
 
+/** How many marked sessions the startup sweep resumes at once. */
+const RESUMES_AT_ONCE = 4;
+
+/** Runs `work` over `items`, at most `size` at a time, keeping their order. */
+async function inBatches<T, R>(
+  items: readonly T[],
+  size: number,
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let start = 0; start < items.length; start += size)
+    results.push(
+      ...(await Promise.all(items.slice(start, start + size).map(work))),
+    );
+  return results;
+}
+
 export class AgentService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -2540,23 +2557,67 @@ export class AgentService {
       );
     if (!marked.length) return result;
     if ((await this.hosts.local.probe()) !== undefined) return result;
-    for (const agent of marked) {
-      try {
-        result.resumed.push(
-          agent.archivedAt
-            ? await this.restore(agent.id)
-            : await this.relaunch({ ...agent, resumeOnStart: false }),
-        );
-      } catch (error) {
-        this.repositories.updateAgent({ ...agent, resumeOnStart: false });
+    // A few at a time: each is a provider starting up, and one at a time made
+    // a full board take minutes. The one the user opens goes first through
+    // `resumeMarked`, which this shares so nothing starts twice.
+    const settled = await inBatches(marked, RESUMES_AT_ONCE, (agent) =>
+      this.resumeMarked(agent.id).then(
+        (session) => ({ agent, session }),
+        (error: unknown) => ({ agent, error }),
+      ),
+    );
+    for (const item of settled) {
+      if ("session" in item) {
+        if (item.session) result.resumed.push(item.session);
+      } else
         result.skipped.push({
-          sessionId: agent.id,
-          name: agent.name,
-          reason: reviveFailureReason(error),
+          sessionId: item.agent.id,
+          name: item.agent.name,
+          reason: reviveFailureReason(item.error),
         });
-      }
     }
     return result;
+  }
+
+  /** Resumes in flight, so the sweep and an opened card share one launch. */
+  private readonly resuming = new Map<
+    string,
+    Promise<AgentSession | undefined>
+  >();
+
+  /**
+   * Resumes one session "Quit and stop sessions" marked, now: the startup
+   * sweep calls it for each, and the app when the user opens one still
+   * waiting. Returns undefined when it is no longer marked. The flag is
+   * cleared either way, so a session that cannot come back is not retried
+   * on every launch.
+   */
+  resumeMarked(id: string): Promise<AgentSession | undefined> {
+    const running = this.resuming.get(id);
+    if (running) return running;
+    const work = (async () => {
+      const agent = this.repositories.findAgent(id);
+      if (!agent?.resumeOnStart) return undefined;
+      if (
+        !agent.archivedAt &&
+        (agent.status === "running" || agent.status === "starting")
+      ) {
+        this.repositories.updateAgent({ ...agent, resumeOnStart: false });
+        return agent;
+      }
+      try {
+        return agent.archivedAt
+          ? await this.restore(agent.id)
+          : await this.relaunch({ ...agent, resumeOnStart: false });
+      } catch (error) {
+        const after = this.repositories.findAgent(id);
+        if (after?.resumeOnStart)
+          this.repositories.updateAgent({ ...after, resumeOnStart: false });
+        throw error;
+      }
+    })().finally(() => this.resuming.delete(id));
+    this.resuming.set(id, work);
+    return work;
   }
 
   /**

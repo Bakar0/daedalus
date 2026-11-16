@@ -782,6 +782,11 @@ export function createDesktopRequestHandlers(
       ),
     routinesAgent: ({ workspaceId }) =>
       mutate(async () => agentDto(await context.routines.agent(workspaceId))),
+    sessionResumeNow: ({ id }) =>
+      mutate(async () => {
+        const session = await context.agents.resumeMarked(id);
+        return session ? agentDto(session) : null;
+      }),
     homeOpen: () => mutate(async () => workspaceDto(await context.home.open())),
     askList: ({ plan }) =>
       result(async () => {

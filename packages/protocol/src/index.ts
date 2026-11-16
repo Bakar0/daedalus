@@ -107,6 +107,11 @@ export interface TaskReferenceDto {
 
 export interface AgentSessionDto {
   id: string;
+  /**
+   * Stopped by "Quit and stop sessions" and waiting for the startup sweep to
+   * resume it.
+   */
+  resumeOnStart?: boolean;
   workspaceId: string;
   taskId: string | null;
   name: string;
@@ -1741,6 +1746,11 @@ export interface DesktopRpcSchema {
       routinesAgent: Request<{ workspaceId: string }, AgentSessionDto>;
       /** The hidden Home row, made on first use. Starts no agent. */
       homeOpen: Request<Record<string, never>, WorkspaceDto>;
+      /**
+       * Resumes a session "Quit and stop sessions" marked, now rather than in
+       * its turn: the user opened it. Null when it is no longer waiting.
+       */
+      sessionResumeNow: Request<{ id: string }, AgentSessionDto | null>;
       /**
        * Activity: open asks and those ended in the last day, newest first,
        * in every workspace. Asks whose plan task is done close first.
