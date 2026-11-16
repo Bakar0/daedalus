@@ -10313,6 +10313,16 @@ button.routine-tick:hover {
     overflow: visible;
   }
 }
+/* Activity or Routines filling the center at Home, with no tab strip. */
+.home-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
 /* The side panel's Activity tab: one workspace, one column, each card's
    plan folded under it. */
 .side-panel-activity .needs-page {
@@ -12107,7 +12117,7 @@ button.routine-tick:hover {
   vertical-align: -2px;
   width: 13px;
 }
-.sidebar-home-link[aria-current="page"] {
+.sidebar-routines-link[aria-current="page"] {
   background: var(--raised-hover) !important;
   color: var(--text) !important;
 }

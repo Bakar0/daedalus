@@ -121,6 +121,7 @@ describe("desktop application menu", () => {
     ).toEqual([
       "view.workspace",
       "view.home",
+      "view.routines",
       "view.board",
       "view.session",
       "view.world",

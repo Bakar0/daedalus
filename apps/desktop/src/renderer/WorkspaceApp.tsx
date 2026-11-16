@@ -3366,10 +3366,14 @@ export function WorkspaceApp({
     return client.subscribeKeybindings?.(take);
   }, [client]);
   useCommand("view.board", { run: () => setView("board") });
-  // Activity at Home from anywhere, ⌘⇧H or ⌘K, as the sidebar's does.
+  // Activity or Routines from anywhere, by key or ⌘K, as the sidebar's do.
   useCommand("view.home", {
     enabled: () => !homeOpening,
     run: () => void openAtHome("activity"),
+  });
+  useCommand("view.routines", {
+    enabled: () => !homeOpening,
+    run: () => void openAtHome("routines"),
   });
   useCommand("view.world", {
     enabled: () => Boolean(workspaceId),
@@ -5482,21 +5486,15 @@ export function WorkspaceApp({
     // its last session; the side panel holds its tasks, files and repositories.
   }
 
-  // Activity and Routines each have one place, Home: clicking either goes
-  // there instead of opening a tab in the workspace on screen. The tab is
-  // opened once Home's editor has mounted, by the effect below.
+  // Activity and Routines are the two pages of Home, the hidden row behind
+  // them; the word Home is not shown. Each page fills the center on its own,
+  // with no tab strip, and the sidebar marks the one shown. A file opened
+  // from Home's file tree shows in the editor instead, until a page is
+  // picked again.
   const [homeOpening, setHomeOpening] = useState(false);
-  const [homePage, setHomePage] = useState<"activity" | "routines">();
-  // Once Home's editor is on screen, show the page asked for there.
-  useEffect(() => {
-    if (!atHome || !homePage) return;
-    setHomePage(undefined);
-    files.withEditor((handle) =>
-      homePage === "activity"
-        ? handle.openActivity()
-        : handle.openRoutinesPage(),
-    );
-  }, [atHome, homePage, files]);
+  const [homePage, setHomePage] = useState<"activity" | "routines" | "files">(
+    "activity",
+  );
   async function openAtHome(page: "activity" | "routines") {
     setHomeOpening(true);
     try {
@@ -7492,7 +7490,7 @@ export function WorkspaceApp({
       return settled.data;
     };
     return {
-      where: target === null ? "Home" : workspace!.name,
+      where: target === null ? "Daedalus home" : workspace!.name,
       listFiles: () => data(client.request.searchFiles({ workspace: target })),
       searchContent: (query, from) =>
         data(client.request.searchContent({ workspace: target, query, from })),
@@ -7924,15 +7922,41 @@ export function WorkspaceApp({
       : threadRows(lead.id, threadInputs);
   const threadsLeadName = (lead: AgentSessionDto) =>
     isMainAgentSession(lead) ? "Main agent" : sessionName(lead);
-  // Home is Activity itself, so its side panel has no Activity tab.
-  const shownPanelTab: SidePanelTab =
-    panelTab === "activity" && atHome ? "tasks" : panelTab;
+  // Home's side panel is its file tree alone: the Daedalus home folder.
+  const shownPanelTab: SidePanelTab = atHome ? "files" : panelTab;
   const sidePanelTabs = SIDE_PANEL_TABS.filter(
-    ([tab]) => tab !== "activity" || !atHome,
+    ([tab]) => !atHome || tab === "files",
   );
   const workspaceAsks = workspace
     ? (askCounts.byWorkspace.get(workspace.id) ?? 0)
     : 0;
+  /** The Routines page, in its own tab or as Home's page. */
+  const renderRoutinesHome = () => (
+    <RoutinesHome
+      client={client}
+      onOpenSession={(sessionId) => {
+        const target = sessionsById.get(sessionId);
+        if (target) showSession(target.id, target.workspaceId);
+      }}
+      onOpenAgent={async () => {
+        const home =
+          (atHome ? undefined : workspace?.id) ?? activeWorkspaces[0]?.id;
+        if (!home) return;
+        const agent = await perform(
+          client.request.routinesAgent({ workspaceId: home }),
+        );
+        if (!agent) return;
+        showSession(agent.id, agent.workspaceId);
+        files.withEditor((handle) => handle.showSessionBesideRoutines());
+      }}
+      {...(workspace && !atHome ? { currentWorkspaceId: workspace.id } : {})}
+      run={perform}
+      workspaces={activeWorkspaces.map((item) => ({
+        id: item.id,
+        name: item.name,
+      }))}
+    />
+  );
   /** Activity: every workspace's at Home, one workspace's in its side panel. */
   const renderActivityPage = (scope?: string) => (
     <ActivityPage
@@ -8306,7 +8330,9 @@ export function WorkspaceApp({
               />
             </div>
             <button
-              aria-current={atHome ? "page" : undefined}
+              aria-current={
+                atHome && homePage === "activity" ? "page" : undefined
+              }
               className="sidebar-routines-link sidebar-home-link"
               disabled={homeOpening}
               onClick={() => void openAtHome("activity")}
@@ -8327,6 +8353,9 @@ export function WorkspaceApp({
               )}
             </button>
             <button
+              aria-current={
+                atHome && homePage === "routines" ? "page" : undefined
+              }
               className="sidebar-routines-link"
               disabled={homeOpening}
               onClick={() => void openAtHome("routines")}
@@ -8848,6 +8877,12 @@ export function WorkspaceApp({
                   onOpenSession={showSession}
                 />
               </Suspense>
+            ) : atHome && homePage !== "files" ? (
+              <div className="home-page">
+                {homePage === "activity"
+                  ? renderActivityPage()
+                  : renderRoutinesHome()}
+              </div>
             ) : (
               // Sessions, files, tasks and web pages share one tab strip, so
               // opening a file leaves the session one tab away (Orca's layout).
@@ -8926,37 +8961,7 @@ export function WorkspaceApp({
                 renderInstructions={() => (
                   <InstructionsEditor client={client} onError={setError} />
                 )}
-                renderRoutinesPage={() => (
-                  <RoutinesHome
-                    client={client}
-                    onOpenSession={(sessionId) => {
-                      const target = sessionsById.get(sessionId);
-                      if (target) showSession(target.id, target.workspaceId);
-                    }}
-                    onOpenAgent={async () => {
-                      const home =
-                        (atHome ? undefined : workspace?.id) ??
-                        activeWorkspaces[0]?.id;
-                      if (!home) return;
-                      const agent = await perform(
-                        client.request.routinesAgent({ workspaceId: home }),
-                      );
-                      if (!agent) return;
-                      showSession(agent.id, agent.workspaceId);
-                      files.withEditor((handle) =>
-                        handle.showSessionBesideRoutines(),
-                      );
-                    }}
-                    {...(workspace && !atHome
-                      ? { currentWorkspaceId: workspace.id }
-                      : {})}
-                    run={perform}
-                    workspaces={activeWorkspaces.map((item) => ({
-                      id: item.id,
-                      name: item.name,
-                    }))}
-                  />
-                )}
+                renderRoutinesPage={() => renderRoutinesHome()}
                 abilityTabName={(kind, id) => {
                   if (kind === "team")
                     return snapshot?.teams.find((team) => team.id === id)?.name;
@@ -9182,6 +9187,7 @@ export function WorkspaceApp({
                     onError={setError}
                     onOpenFile={() => {
                       if (view !== "workspace") setView("workspace");
+                      if (atHome) setHomePage("files");
                     }}
                     workspace={filesWorkspace!}
                   />

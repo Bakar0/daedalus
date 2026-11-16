@@ -148,9 +148,16 @@ export const COMMAND_SPECS = [
   },
   {
     id: "view.home",
-    title: "Go to Home",
+    title: "Go to Activity",
     group: "View",
     keys: ["mod+shift+h"],
+    menu: { bar: "View", section: 0 },
+  },
+  {
+    id: "view.routines",
+    title: "Go to Routines",
+    group: "View",
+    keys: [],
     menu: { bar: "View", section: 0 },
   },
   {
