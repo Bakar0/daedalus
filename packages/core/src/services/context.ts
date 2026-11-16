@@ -68,7 +68,6 @@ import { SearchService } from "./search";
 import { HomeService } from "./home";
 import { AskService, OpenAsksTransport } from "./asks";
 import { ThreadService } from "./threads";
-import { TrackingService } from "./tracking";
 import {
   instructionFileOptions,
   WorkspaceContentService,
@@ -115,14 +114,12 @@ export interface ApplicationContext {
   plans: PlanService;
   /** The ⌘K palette's file list and content search. */
   search: SearchService;
-  /** Home's main agent, in the hidden Home workspace. */
+  /** Home: the hidden Home workspace row. */
   home: HomeService;
-  /** A lead's threads: suggested ones, and marking one resolved. */
+  /** A lead marking a team member done. */
   threads: ThreadService;
   /** Activity: questions for the user that sessions ask once. */
   asks: AskService;
-  /** Sessions the main agent (or any session) tracks, and their reports. */
-  tracking: TrackingService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
   instructions: InstructionService;
   /** The person's own keys, `keybindings.json` in the home. */
@@ -414,21 +411,9 @@ export async function createApplicationContext(
     options.now,
     activity,
   );
-  const tracking = new TrackingService(
-    repositories,
-    agents,
-    workspaces,
-    teamTransport,
-    options.now,
-    activity,
-  );
-  const home = new HomeService(repositories, config, workspaces, {
-    spawn: (input) => agents.spawn(input),
-    restore: (id) => agents.restore(id),
+  const home = new HomeService(repositories, workspaces, {
     archive: (id) => agents.archive(id),
   });
-  // The main agent once led its threads as a team; they are tracked now.
-  home.adoptTeamMembers();
   const abilityNotes = new AbilityNoteDelivery(
     repositories,
     abilities,
@@ -444,7 +429,7 @@ export async function createApplicationContext(
     // on the restored rows rather than on stale ones.
     await activity.restore();
     await activity.decay();
-    // Home no longer has a main agent; one left from before is put away.
+    // Home has no agent; a session an older build left there is put away.
     await home.retireMainAgent();
   }
   workspaceContent.useCloudWorktrees(
@@ -535,14 +520,7 @@ export async function createApplicationContext(
     })),
     search: new SearchService(),
     home,
-    threads: new ThreadService(
-      repositories,
-      workspaces,
-      teams!,
-      tracking,
-      options.now,
-    ),
-    tracking,
+    threads: new ThreadService(repositories, teams!, options.now),
     asks,
     abilityNotes,
     routines: new RoutineService(

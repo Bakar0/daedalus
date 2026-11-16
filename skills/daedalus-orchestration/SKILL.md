@@ -1,96 +1,42 @@
 ---
 name: daedalus-orchestration
-description: Coordinate work as the main agent at Home (start and track sessions as threads) or as a Daedalus team lead (add members, keep TEAM.md) - answer quick questions, start a thread per piece of work, route follow-ups, suggest threads and post when something finishes or gets stuck. Use when the user asks for work that needs several sessions, when this session is the main agent or leads a team or is about to add its first member, when the user asks about the team or its threads, or when a thread reports.
+description: Lead a Daedalus team - add members, keep TEAM.md, route follow-ups to the member that has the work, mark members done, and post to the user when something finishes or gets stuck. Use when the user asks for work that needs several sessions, when this session leads a team or is about to add its first member, when the user asks about the team or its members, or when a member reports.
 ---
 
-# Coordinating threads
+# Coordinating a team
 
-You are a coordinator: the user talks to you, and the work runs in
-threads, whole Daedalus sessions the user sees in the Threads tab of the
-side panel, grouped as Waiting on you, Ready for review, Working, Landing, Idle
-and Resolved. How you hold your threads depends on where you are:
-
-- **The main agent at Home** tracks its threads. A tracked session is an
-  ordinary session in its own workspace: it is in no team, has no handle,
-  and the user may have started it. Tracking only means its turns are
-  reported to you. Use the `daedal thread` commands below, never
-  `daedal agent spawn --team`; Daedalus refuses a team led from Home.
-  You run at the Daedalus home, so you can read every workspace's brief,
-  journal, plans and artifacts, and `repos/`. Read to answer; do not edit a
-  workspace's files yourself, start a thread there. Leave `accounts/`,
-  `remote/`, `claude-settings/`, `inbox/` and the `.db` files alone unless
-  the user asks, and never create `CLAUDE.md` or `AGENTS.md` at the home:
-  every session below it would read them.
-- **Any other session** coordinates by leading a team, once it adds its
-  first member; see "Leading a team" below.
+You are a coordinator: the user talks to you, and the work runs in your
+team's members, whole Daedalus sessions the user sees in the Threads tab of
+the side panel, grouped as Waiting on you, Ready for review, Working,
+Landing, Idle and Resolved. A session coordinates by leading a team, once
+it adds its first member; see "Leading a team" below.
 
 For each message from the user, decide:
 
 - **A quick question** (what is running, what a file says, a status): answer
-  it yourself, here. Do not start a thread for it.
-- **New work**: start one thread per piece, in the workspace it belongs to
-  (`daedal workspace list`), and say which thread got what, one line each:
-  "Started _Cart endpoints_ in checkout: GET /cart and POST /cart/items."
-  At Home:
+  it yourself, here. Do not add a member for it.
+- **New work**: add one member per piece (`daedal agent spawn --team`), in
+  the workspace it belongs to (`daedal workspace list`), and say which
+  member got what, one line each: "Added @cart in checkout: GET /cart and
+  POST /cart/items."
+- **A follow-up on running work**: route it to the member that has it with
+  `daedal team say "@handle ..."` and say where it went. Do not add a second
+  member for the same work.
 
-  ```
-  daedal thread new --workspace checkout --name "Cart endpoints" --message "<instructions>"
-  ```
-
-  A lead adds a member instead (`daedal agent spawn --team`).
-
-- **"Keep an eye on that session"** (at Home): track it, and say so. Find
-  it with `daedal thread list --all`. When the user says to stop, untrack
-  it; it keeps running.
-
-  ```
-  daedal thread track <session>
-  daedal thread untrack <session>
-  ```
-
-- **A follow-up on running work**: route it to the thread that has it and
-  say where it went. Do not start a second thread for the same work. At
-  Home, `daedal thread say <session> "<text>"` delivers it in full, with a
-  line telling the session its reply comes back to you; a lead uses
-  `daedal team say "@handle ..."`.
-- **Work worth doing that nobody asked for**: suggest it rather than start
-  it. It shows under Suggested threads with Start and Start all; at Home,
-  Start makes it a session you track, so give it a workspace:
-
-  ```
-  daedal thread suggest "Load-test GET /cart" --workspace checkout --message "<instructions>"
-  ```
-
-`daedal thread list` shows what you track (`--all` shows every session).
-When a tracked session's turn ends, Daedalus hands you its last message,
-at most once a minute and several in one wake:
-
-    [tracked 'Cart endpoints' in Checkout] finished:
-
-      GET /cart and POST /cart/items are on branch cart-api; tests pass.
-
-"failed" carries its error, "was interrupted" means the user stopped it,
-and "is waiting on the user" is for the user to answer, not you.
-
-Post to the user only when a thread finishes something or gets stuck, with
-the news in the first line. A thread's questions show under Activity and
+Post to the user only when a member finishes something or gets stuck, with
+the news in the first line. A member's questions show under Activity and
 notify the user themselves; do not relay them. When you need the user to
-decide something, ask it with `daedal activity ask` (see "Talking to the user"). When a
-thread's work is done and checked, mark it resolved, which folds it under
-Resolved and stops its reports (for a lead, it also frees its place among
-your 5 members):
+decide something, ask it with `daedal activity ask` (see "Talking to the
+user"). When a member's work is done and checked, mark it resolved, which
+folds it under Resolved and frees its place among your 5 members:
 
 ```
 daedal thread done <session>
 ```
 
 When the user tells you how they like things done ("at most 3 running",
-"docs threads on codex"), save it in one line in your memory file
-(at Home the `MEMORY.md` your launch prompt names, `TEAM.md` elsewhere), say
-"Saved to memory: ...", and follow it from then on.
-
-The rest of this skill is how a team works, for a lead. The main agent at
-Home does not lead a team.
+"docs members on codex"), save it in one line in `TEAM.md`, say "Saved to
+memory: ...", and follow it from then on.
 
 # Leading a team
 

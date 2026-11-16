@@ -223,12 +223,10 @@ const PALETTE_HIDDEN_COMMANDS = new Set<string>([
 ]);
 import { useCloudState } from "./CloudPanel";
 import { TeamBar, TeamPage } from "./teams/TeamPanel";
-import { HomeBar, ThreadsPane, TrackedIcon } from "./threads/ThreadsPane";
+import { ThreadsPane } from "./threads/ThreadsPane";
 import {
-  homeThreadRows,
   threadMenuItems,
   threadRows,
-  type ThreadFilter,
   type ThreadInputs,
 } from "./threads/thread-groups";
 import { RoutinesHome } from "./routines/RoutinesHome";
@@ -2488,9 +2486,6 @@ export function WorkspaceApp({
     ),
   );
   const viewWorkspaceId = useRef(scopeKey);
-  // The main agent's Threads list shows what it tracks, or every session.
-  const [homeThreadFilter, setHomeThreadFilter] =
-    useState<ThreadFilter>("tracked");
   // Where the World button returns to: the World spans every workspace, so
   // it toggles over whichever workspace view was open.
   const lastWorkspaceView = useRef<WorkspaceView>(
@@ -3765,23 +3760,12 @@ export function WorkspaceApp({
   /** A session's thread actions (`threadMenuItems`), for its menu. */
   const threadMenuActions = (session: AgentSessionDto): MenuAction[] =>
     threadMenuItems(session, {
-      mainId: homeMainAgent?.id,
-      homeWorkspaceId: homeWorkspace?.id,
-      tracked: trackedByMain.has(session.id),
       member: teamOf(session)?.role === "member",
     }).map((item) => ({
       id: item.id,
       label: item.label,
       run: () => {
-        if (item.id === "track")
-          void perform(
-            client.request.threadTrack({
-              trackerId: homeMainAgent?.id ?? "",
-              sessionId: session.id,
-              tracked: item.tracked,
-            }),
-          );
-        else if (item.id === "thread-done")
+        if (item.id === "thread-done")
           void perform(
             client.request.threadResolve({
               sessionId: session.id,
@@ -3932,7 +3916,7 @@ export function WorkspaceApp({
     if (revived) openSession(revived.id);
   }
 
-  // Home's main agent runs in a hidden row that no list of workspaces shows.
+  // Home, behind Activity and Routines, is a hidden row no list of workspaces shows.
   const homeWorkspace = (snapshot?.workspaces ?? []).find(
     (item) => item.kind === "home" && !item.archivedAt,
   );
@@ -3955,7 +3939,7 @@ export function WorkspaceApp({
   const workspace = atHome
     ? homeWorkspace
     : activeWorkspaces.find((item) => item.id === workspaceId);
-  // Home's files are the whole Daedalus home, where the main agent runs, so
+  // Home's files are the whole Daedalus home, so
   // the file panel and editor take that as the folder their paths are under.
   const daedalusHome = snapshot?.settings.home;
   const filesWorkspace = useMemo(
@@ -4011,17 +3995,6 @@ export function WorkspaceApp({
       ? { ...session, archivedAt: archivingStartedAt.current }
       : session,
   );
-  // The main agent: Home's own agent session, in no team.
-  const isMainAgentSession = (session: AgentSessionDto) =>
-    Boolean(
-      homeWorkspace &&
-      session.workspaceId === homeWorkspace.id &&
-      !session.teamId &&
-      session.kind === "agent",
-    );
-  const homeMainAgent = agents.find(
-    (session) => isMainAgentSession(session) && !session.archivedAt,
-  );
   const inScope = (id: string) => id === workspaceId;
   const allTasks = (snapshot?.tasks ?? []).filter((item) =>
     inScope(item.workspaceId),
@@ -4046,17 +4019,6 @@ export function WorkspaceApp({
     (snapshot?.teams ?? []).map((team) => [team.id, team]),
   );
   const teamOf = teamLookup(snapshot?.teams ?? []);
-  // Sessions the main agent at Home tracks: their cards carry an eye.
-  const homeSessionIds = new Set(
-    agents
-      .filter((session) => session.workspaceId === homeWorkspace?.id)
-      .map((session) => session.id),
-  );
-  const trackedByMain = new Set(
-    (snapshot?.tracks ?? [])
-      .filter((track) => homeSessionIds.has(track.trackerSessionId))
-      .map((track) => track.trackedSessionId),
-  );
   const workspaceSessionLaunches = sessionLaunches.filter((item) =>
     inScope(item.workspaceId),
   );
@@ -4162,13 +4124,9 @@ export function WorkspaceApp({
   const activeSessionTeam = activeSession ? teamOf(activeSession) : undefined;
   // A Team tab goes once its team does, however that happened: revoked
   // here or from the CLI, or its lead archived.
-  // A Threads tab goes once its lead stops leading, or the main agent is
-  // archived.
+  // A Threads tab goes once its lead stops leading.
   const teamIds = (snapshot?.teams ?? []).map((team) => team.id).join(" ");
-  const leadIds = [
-    ...(snapshot?.teams ?? []).map((team) => team.leadId),
-    ...(homeMainAgent ? [homeMainAgent.id] : []),
-  ].join(" ");
+  const leadIds = (snapshot?.teams ?? []).map((team) => team.leadId).join(" ");
   const snapshotLoaded = Boolean(snapshot);
   useEffect(() => {
     if (!snapshotLoaded) return;
@@ -6108,7 +6066,6 @@ export function WorkspaceApp({
                   {accountName(session.provider, session.account)}
                 </span>
               )}
-              {trackedByMain.has(session.id) && <TrackedIcon />}
               {team && (
                 <span
                   className="session-team-badge"
@@ -7874,31 +7831,7 @@ export function WorkspaceApp({
     knownTerminalIds.current = current;
   }, [files, terminalIds]);
 
-  // A lead's threads, in the side panel's Threads tab or a tab of their
-  // own: the main agent's at Home, or a team lead's members.
-  const isMainAgent = Boolean(
-    activeSession && isMainAgentSession(activeSession),
-  );
-  const leadsTeam = (session: AgentSessionDto) =>
-    (snapshot?.teams ?? []).some((team) => team.leadId === session.id);
-  // The session in front when it leads; a member's lead, and the main
-  // agent for a session it tracks, so opening a thread from the list keeps
-  // the list beside it; at Home, the main agent whichever session is in
-  // front. Elsewhere there is no Threads tab.
-  const memberOf =
-    activeSessionTeam?.role === "member"
-      ? agents.find(
-          (session) =>
-            session.id === activeSessionTeam.team.leadId && !session.archivedAt,
-        )
-      : undefined;
-  const threadsLead =
-    activeSession && (isMainAgent || leadsTeam(activeSession))
-      ? activeSession
-      : (memberOf ??
-        (atHome || (activeSession && trackedByMain.has(activeSession.id))
-          ? homeMainAgent
-          : undefined));
+  // A team lead's members, in a Threads tab of their own.
   const threadInputs: ThreadInputs = {
     agents,
     teams: snapshot?.teams ?? [],
@@ -7907,21 +7840,9 @@ export function WorkspaceApp({
     attention: attentionById,
     worktrees: snapshot?.worktrees ?? [],
     now,
-    tracks: snapshot?.tracks ?? [],
   };
-  // The main agent tracks sessions rather than leading a team: its list
-  // shows what it tracks, or every session.
   const threadRowsOf = (lead: AgentSessionDto) =>
-    isMainAgentSession(lead) && homeWorkspace
-      ? homeThreadRows(
-          lead.id,
-          homeWorkspace.id,
-          homeThreadFilter,
-          threadInputs,
-        )
-      : threadRows(lead.id, threadInputs);
-  const threadsLeadName = (lead: AgentSessionDto) =>
-    isMainAgentSession(lead) ? "Main agent" : sessionName(lead);
+    threadRows(lead.id, threadInputs);
   // Home's side panel is its file tree alone: the Daedalus home folder.
   const shownPanelTab: SidePanelTab = atHome ? "files" : panelTab;
   const sidePanelTabs = SIDE_PANEL_TABS.filter(
@@ -7983,59 +7904,22 @@ export function WorkspaceApp({
       }}
     />
   );
-  /** The Threads list for a lead, in the side panel or in its own tab. */
-  const renderThreadsList = (
-    lead: AgentSessionDto,
-    { inTab, visible = true }: { inTab: boolean; visible?: boolean },
-  ) => {
-    const main = isMainAgentSession(lead);
-    return (
-      <ThreadsPane
-        client={client}
-        key={lead.id}
-        lead={lead}
-        leadLabel={main ? "Main agent · Home" : `${sessionName(lead)}'s team`}
-        now={now}
-        onOpenThread={(target) => showSession(target.id, target.workspaceId)}
-        {...(inTab
-          ? {}
-          : {
-              onOpenAsTab: () =>
-                files.withEditor((handle) =>
-                  handle.openThreads(lead.id, threadsLeadName(lead)),
-                ),
-            })}
-        poll={visible}
-        rows={threadRowsOf(lead)}
-        run={perform}
-        {...(main
-          ? {
-              filter: homeThreadFilter,
-              onFilter: setHomeThreadFilter,
-              onTrack: (sessionId: string, tracked: boolean) =>
-                void perform(
-                  client.request.threadTrack({
-                    trackerId: lead.id,
-                    sessionId,
-                    tracked,
-                  }),
-                ),
-            }
-          : {})}
-        workspaceName={(id) =>
-          workspaceById.get(id ?? lead.workspaceId)?.name ??
-          id ??
-          "its lead's workspace"
-        }
-      />
-    );
-  };
+  /** A team lead's Threads list, in its own tab. */
+  const renderThreadsList = (lead: AgentSessionDto) => (
+    <ThreadsPane
+      key={lead.id}
+      lead={lead}
+      leadLabel={`${sessionName(lead)}'s team`}
+      now={now}
+      onOpenThread={(target) => showSession(target.id, target.workspaceId)}
+      rows={threadRowsOf(lead)}
+    />
+  );
 
   // The session tab shows whichever session the left column has open.
   const sessionPane = workspace ? (
     <section className="terminal-column">
-      {isMainAgent && <HomeBar />}
-      {activeSessionTeam && activeSession && !isMainAgent && (
+      {activeSessionTeam && activeSession && (
         <TeamBar
           color={activeSession.color}
           handle={activeSessionTeam.handle}
@@ -8966,12 +8850,12 @@ export function WorkspaceApp({
                   if (kind === "team")
                     return snapshot?.teams.find((team) => team.id === id)?.name;
                   const lead = sessionsById.get(id);
-                  return lead ? threadsLeadName(lead) : undefined;
+                  return lead ? sessionName(lead) : undefined;
                 }}
-                renderThreads={(leadId, visible) => {
+                renderThreads={(leadId) => {
                   const lead = sessionsById.get(leadId);
                   return lead ? (
-                    renderThreadsList(lead, { inTab: true, visible })
+                    renderThreadsList(lead)
                   ) : (
                     <div className="terminal-empty">
                       <strong>This session no longer leads threads</strong>

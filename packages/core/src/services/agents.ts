@@ -1813,8 +1813,8 @@ export class AgentService {
       rebirthRequestedAt: new Date().toISOString(),
     });
     let session: AgentSession;
-    // The main agent runs at the Daedalus home, where nothing is written, so
-    // its note goes in the Home folder and the successor is told the path.
+    // A session at Home runs at the Daedalus home, where nothing is written,
+    // so its note goes in the Home folder and the successor is told the path.
     const home = this.repositories.findHomeWorkspace();
     const notePath =
       home?.id === predecessor.workspaceId
@@ -1881,8 +1881,6 @@ export class AgentService {
       // So is the workflow run: the successor carries on at the same step.
       this.repositories.workflows.moveToSession(predecessor.id, session.id);
       this.repositories.routines.moveAgent(predecessor.id, session.id);
-      this.repositories.threads.moveToSession(predecessor.id, session.id);
-      this.repositories.tracks.moveToSession(predecessor.id, session.id);
       // Its open asks, and notices not yet delivered, are the successor's.
       this.repositories.asks.moveToSession(predecessor.id, session.id);
       if (predecessor.teamId)

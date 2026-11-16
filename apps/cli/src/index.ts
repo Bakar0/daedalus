@@ -105,7 +105,7 @@ Usage:
   daedal team <say|chat|list|goal> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
-  daedal thread <new|track|untrack|list|say|suggest|suggestions|start|dismiss|done|reopen> ... [--json]
+  daedal thread <done|reopen> <session> [--json]
   daedal activity <ask|list|show|update|resolve|withdraw> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
@@ -2626,9 +2626,7 @@ export async function runCli(
         callerSession(context).catch(() => undefined),
       );
     if (args[0] === "thread")
-      return await threadCommand(context, args.slice(1), json, () =>
-        callerSession(context).catch(() => undefined),
-      );
+      return await threadCommand(context, args.slice(1), json);
     if (args[0] === "activity")
       return await activityCommand(context, args.slice(1), json, () =>
         callerSession(context).catch(() => undefined),

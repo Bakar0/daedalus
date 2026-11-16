@@ -140,8 +140,8 @@ function modelArguments(args: readonly string[]): string[] {
 export function phoneSnapshot(
   snapshot: DesktopSnapshotDto,
 ): DesktopSnapshotDto {
-  // Home's main agent is a desktop surface; on the phone its hidden row
-  // would read as a workspace.
+  // Home is a desktop surface; on the phone its hidden row would read as a
+  // workspace.
   const home = new Set(
     snapshot.workspaces
       .filter((workspace) => workspace.kind === "home")

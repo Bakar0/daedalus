@@ -67,7 +67,7 @@ export interface WorkspaceDto {
    */
   cloudNotice?: string;
   /**
-   * `home` for the hidden row Home's main agent runs in. Every list of
+   * `home` for Home's hidden row. Every list of
    * workspaces leaves it out.
    */
   kind?: "home";
@@ -148,15 +148,8 @@ export interface AgentSessionDto {
   spawnedBy: string | null;
   /** The cloud host it runs on (`ws:<cloud workspace id>`); null or absent for this Mac. */
   hostId?: string | null;
-  /** When the user or its lead marked this thread done; it shows as Resolved. */
+  /** When the user or its lead marked this member done; it shows as Resolved. */
   resolvedAt?: string | null;
-}
-
-/** A session keeping an eye on another, as the main agent tracks its threads. */
-export interface SessionTrackDto {
-  trackerSessionId: string;
-  trackedSessionId: string;
-  createdAt: string;
 }
 
 /** A question a session asked the user, as Activity shows it. */
@@ -197,17 +190,6 @@ export interface AskPlanDto {
     owner: string | null;
     depth: number;
   }[];
-}
-
-/** Work a lead suggested as a thread, waiting for the user to start it. */
-export interface ThreadSuggestionDto {
-  id: number;
-  leadSessionId: string;
-  title: string;
-  /** Where it would run; null for the lead's own workspace. */
-  workspaceId: string | null;
-  message: string | null;
-  createdAt: string;
 }
 
 /**
@@ -1500,8 +1482,6 @@ export interface DesktopSnapshotDto {
   abilities: SessionAbilityDto[];
   /** Every team: a lead holding orchestration, and what it is called. */
   teams: TeamDto[];
-  /** Which sessions track which: the main agent's threads. */
-  tracks?: SessionTrackDto[];
   /** Workspace journals and team files grown past their compact size. */
   largeFiles?: LargeFileDto[];
   /** The newest workflow run of each session. */
@@ -1761,14 +1741,6 @@ export interface DesktopRpcSchema {
       >;
       /** The Routines agent's session, started in the workspace on first use. */
       routinesAgent: Request<{ workspaceId: string }, AgentSessionDto>;
-      /**
-       * Home's main agent, made on first use: the hidden Home workspace and
-       * its session.
-       */
-      homeAgent: Request<
-        Record<string, never>,
-        { workspace: WorkspaceDto; session: AgentSessionDto }
-      >;
       /** The hidden Home row, made on first use. Starts no agent. */
       homeOpen: Request<Record<string, never>, WorkspaceDto>;
       /**
@@ -1789,20 +1761,7 @@ export interface DesktopRpcSchema {
       askReopen: Request<{ id: number }, AskDto>;
       /** The tasks of the plan an ask is pinned to; null when unreadable. */
       askPlan: Request<{ path: string }, AskPlanDto | null>;
-      /** The threads a lead suggested that wait on the user. */
-      threadSuggestions: Request<{ leadId: string }, ThreadSuggestionDto[]>;
-      /**
-       * Starts a suggested thread: the main agent's as a session it tracks,
-       * another lead's as a new member of its team.
-       */
-      threadSuggestionStart: Request<{ id: number }, AgentSessionDto>;
-      threadSuggestionDismiss: Request<{ id: number }, { id: number }>;
-      /** Starts or stops a session tracking another; it keeps running. */
-      threadTrack: Request<
-        { trackerId: string; sessionId: string; tracked: boolean },
-        { trackerId: string; sessionId: string; tracked: boolean }
-      >;
-      /** Marks a thread done, or open again. */
+      /** Marks a team member done, or open again. */
       threadResolve: Request<
         { sessionId: string; resolved: boolean },
         AgentSessionDto

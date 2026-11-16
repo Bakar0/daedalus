@@ -1,4 +1,3 @@
-import { Database } from "bun:sqlite";
 import { mkdir, readdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -106,63 +105,29 @@ async function withHome(
   });
 }
 
+/** A plain agent in the Home row, as an older build's main agent was. */
+async function spawnAtHome(context: ApplicationContext): Promise<AgentSession> {
+  await context.home.open();
+  return context.agents.spawn({
+    workspace: HOME_WORKSPACE_ID,
+    provider: "claude",
+    name: "Main agent",
+  });
+}
+
 describe("Home", () => {
-  test("the main agent is made once, in a hidden Home row under the workspaces root", async () => {
+  test("Home opens a hidden row without an agent, and a session left there from before is archived", async () => {
     await withHome(async ({ context, tmux }) => {
-      expect(context.home.workspace()).toBeUndefined();
-      const first = await context.home.agent();
-      expect(first.workspace).toMatchObject({
+      const workspace = await context.home.open();
+      expect(workspace).toMatchObject({
         id: HOME_WORKSPACE_ID,
         kind: "home",
         name: "Home",
         path: join(context.config.workspaceRoot, ".home"),
       });
-      expect(first.session.name).toBe("Main agent");
-      // It runs at the Daedalus home itself, not in a session folder.
-      expect(first.session.workingDirectory).toBe(context.config.home);
-      expect(tmux.launches[0]!.cwd).toBe(context.config.home);
-      expect(
-        await Bun.file(
-          join(first.workspace.path, "worktrees", "unassigned"),
-        ).exists(),
-      ).toBe(false);
-      // Its role is in the system prompt, with the memory file, and there is
-      // no visible first message.
-      const args = tmux.launches[0]!.args;
-      const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-      expect(args.at(-1)).toBe("Main agent");
-      expect(args.join(" ")).not.toContain("/daedalus-orchestration");
-      expect(prompt).toContain("Start one thread per piece of work");
-      expect(prompt).toContain("daedal thread new --workspace");
-      expect(prompt).toContain("daedal thread track <session>");
-      expect(prompt).toContain("daedal activity ask");
-      expect(prompt).toContain(join(first.workspace.path, "MEMORY.md"));
-      expect(prompt).toContain(
-        `You run at the Daedalus home, ${context.config.home}`,
-      );
-      expect(prompt).toContain("start a thread there for the change");
-      expect(prompt).toContain(
-        "Do not read accounts/, remote/, claude-settings/, inbox/ or the .db files",
-      );
-      expect(prompt).toContain("Never create CLAUDE.md or AGENTS.md");
-      expect(prompt).toContain(join(first.workspace.path, "REBIRTH.md"));
-      expect(
-        await Bun.file(join(first.workspace.path, "MEMORY.md")).exists(),
-      ).toBe(true);
-
-      const again = await context.home.agent();
-      expect(again.session.id).toBe(first.session.id);
-      expect(tmux.launches).toHaveLength(1);
-      expect(context.home.isHome(first.session)).toBe(true);
-    });
-  });
-
-  test("Home opens without an agent, and a main agent left from before is archived", async () => {
-    await withHome(async ({ context, tmux }) => {
-      const workspace = await context.home.open();
-      expect(workspace.kind).toBe("home");
       expect(tmux.launches).toHaveLength(0);
-      const { session } = await context.home.agent();
+      const session = await spawnAtHome(context);
+      expect(session.workingDirectory).toBe(context.config.home);
       expect(await context.home.retireMainAgent()).toEqual([session.id]);
       expect((await context.agents.get(session.id)).archivedAt).toBeTruthy();
       expect(await context.home.retireMainAgent()).toEqual([]);
@@ -172,7 +137,7 @@ describe("Home", () => {
   test("nothing Daedalus writes for Home lands at the top of its home", async () => {
     await withHome(async ({ context, tmux }) => {
       const before = await readdir(context.config.home);
-      const { session } = await context.home.agent();
+      const session = await spawnAtHome(context);
       await context.workspaceContent.get(HOME_WORKSPACE_ID);
       await context.workspaces.ensureHome();
       const { session: next } = await context.agents.continueSession({
@@ -185,7 +150,7 @@ describe("Home", () => {
       for (const name of ["CLAUDE.md", "AGENTS.md", "REBIRTH.md", "MEMORY.md"])
         expect(added).not.toContain(name);
       // The successor runs there too and finds its note in the Home folder.
-      const folder = context.home.workspace()!.path;
+      const folder = context.repositories.findHomeWorkspace()!.path;
       expect(next.workingDirectory).toBe(context.config.home);
       expect(await Bun.file(join(folder, "REBIRTH.md")).text()).toBe(
         "# Rebirth\n\nGreet the user.\n",
@@ -196,30 +161,9 @@ describe("Home", () => {
     });
   });
 
-  test("a main agent started in its old folder keeps it; its successor moves to the home", async () => {
-    await withHome(async ({ context, tmux }) => {
-      const { session, workspace } = await context.home.agent();
-      const old = join(workspace.path, "worktrees", "unassigned", "claude-1");
-      await mkdir(old, { recursive: true });
-      // As an earlier build left it: in a session folder under `.home`.
-      const database = new Database(context.config.databasePath);
-      database
-        .query("UPDATE agent_sessions SET working_directory = ? WHERE id = ?")
-        .run(old, session.id);
-      database.close();
-      expect(context.home.current()!.workingDirectory).toBe(old);
-      const { session: next } = await context.agents.continueSession({
-        id: session.id,
-      });
-      expect(next.workingDirectory).toBe(context.config.home);
-      expect(tmux.launches.at(-1)!.cwd).toBe(context.config.home);
-      expect(context.home.current()!.id).toBe(next.id);
-    });
-  });
-
   test("Home's files are the whole Daedalus home, its top level kept", async () => {
     await withHome(async ({ context }) => {
-      await context.home.agent();
+      await context.home.open();
       const top =
         await context.workspaceContent.listDirectory(HOME_WORKSPACE_ID);
       const workspacesEntry = top.find((entry) => entry.name === "workspaces");
@@ -275,7 +219,7 @@ describe("Home", () => {
 
   test("Home's repos/ lists the library by name and reads its default branch", async () => {
     await withHome(async ({ context }) => {
-      await context.home.agent();
+      await context.home.open();
       const git = (args: string[], cwd?: string) => {
         const result = Bun.spawnSync(
           [
@@ -458,7 +402,7 @@ describe("Home", () => {
 
   test("lists of workspaces leave the Home row out", async () => {
     await withHome(async ({ context }) => {
-      await context.home.agent();
+      await context.home.open();
       expect((await context.workspaces.list()).map((item) => item.id)).toEqual([
         "docs",
         "checkout",
@@ -471,358 +415,10 @@ describe("Home", () => {
       ).toBe("home");
     });
   });
-
-  test("a thread of the main agent is an ordinary session it tracks, in another workspace", async () => {
-    await withHome(async ({ context, tmux }) => {
-      const { session: main } = await context.home.agent();
-      const session = await context.tracking.start({
-        tracker: main.id,
-        workspace: "checkout",
-        name: "endpoints",
-        message: "Build the cart endpoints",
-      });
-      expect(session).toMatchObject({
-        workspaceId: "checkout",
-        name: "endpoints",
-        teamId: null,
-        teamHandle: null,
-        spawnedBy: main.id,
-      });
-      expect(context.tracking.tracks(main.id, session.id)).toBe(true);
-      expect(context.teams.led(main.id)).toBeUndefined();
-      expect(context.teams.memberOf(session.id)).toBeUndefined();
-      // It is told where its replies go.
-      const prompt = tmux.launches.at(-1)!.args.at(-1)!;
-      expect(prompt).toContain("Build the cart endpoints");
-      expect(prompt).toContain(
-        "The main agent started this session and tracks it",
-      );
-      expect(context.home.current()?.id).toBe(main.id);
-      // The main agent leads no team.
-      await expect(
-        context.teams.spawnMember({
-          team: main.id,
-          addedBy: "lead",
-          workspace: "checkout",
-          name: "other",
-          instructions: "Work",
-        }),
-      ).rejects.toThrow("leads no team; start work with 'daedal thread new");
-      await expect(
-        context.tracking.start({
-          tracker: main.id,
-          workspace: HOME_WORKSPACE_ID,
-          message: "Here",
-        }),
-      ).rejects.toThrow("not at Home");
-    });
-  });
-
-  test("tracking, untracking and the All list", async () => {
-    await withHome(async ({ context }) => {
-      const { session: main } = await context.home.agent();
-      const mine = await context.agents.spawn({
-        provider: "claude",
-        workspace: "checkout",
-        name: "stale",
-      });
-      expect(context.tracking.track(main.id, mine.id).added).toBe(true);
-      expect(context.tracking.track(main.id, mine.id).added).toBe(false);
-      expect(() => context.tracking.track(main.id, main.id)).toThrow(
-        "cannot track itself",
-      );
-      expect(
-        context.tracking.sessions(main.id).map((row) => row.session.name),
-      ).toEqual(["stale"]);
-      const other = await context.agents.spawn({
-        provider: "claude",
-        workspace: "docs",
-        name: "changelog",
-      });
-      // All: every live session in every workspace, never Home's.
-      expect(
-        context.tracking
-          .sessions(main.id, { all: true })
-          .map((row) => [row.session.name, row.tracked])
-          .sort(),
-      ).toEqual([
-        ["changelog", false],
-        ["stale", true],
-      ]);
-      expect(context.tracking.untrack(main.id, mine.id).removed).toBe(true);
-      expect(context.tracking.sessions(main.id)).toEqual([]);
-      expect(context.tracking.isTracked(other.id)).toBe(false);
-      expect(context.repositories.findAgent(mine.id)?.status).toBe("running");
-    });
-  });
 });
 
-/** A turn of a session, as its hooks report it. */
-async function turn(
-  context: ApplicationContext,
-  session: AgentSession,
-  message: string,
-) {
-  await context.activity.record({
-    sessionId: session.id,
-    activity: "working",
-    source: "hook",
-  });
-  return context.activity.record({
-    sessionId: session.id,
-    activity: "done",
-    detail: message.slice(0, 40),
-    message,
-    source: "hook",
-  });
-}
-
-/** Moves a session's last delivery a minute and more into the past. */
-function minuteLater(context: ApplicationContext, sessionId: string) {
-  context.repositories.database
-    .query(
-      "UPDATE track_notes SET delivered_at = ? WHERE recipient_session_id = ? AND delivered_at IS NOT NULL",
-    )
-    .run(new Date(Date.now() - 61_000).toISOString(), sessionId);
-}
-
-describe("reports to the tracker", () => {
-  test("a tracked session's turn end reaches its tracker, at most once a minute", async () => {
-    await withHome(async ({ context, transport }) => {
-      const { session: main } = await context.home.agent();
-      const docs = await context.tracking.start({
-        tracker: main.id,
-        workspace: "docs",
-        name: "cart docs",
-        message: "Document the cart",
-      });
-      const stale = await context.agents.spawn({
-        provider: "claude",
-        workspace: "checkout",
-        name: "stale",
-      });
-      context.tracking.track(main.id, stale.id);
-
-      const finished = await turn(
-        context,
-        docs,
-        "Wrote the discount section.\n\nLinks checked.",
-      );
-      expect(transport.to(main).map((each) => each.text)).toEqual([
-        "[tracked 'cart docs' in Docs] finished:\n\n" +
-          "  Wrote the discount section.\n\n" +
-          "  Links checked.\n\n" +
-          `Reply with: daedal thread say ${docs.id} "..."`,
-      ]);
-      // The main agent tells the user; the tracked turn is not notified.
-      expect(finished.notification).toBeUndefined();
-
-      // A second within the minute waits for the tick.
-      await turn(context, stale, "Picked full cart.");
-      expect(transport.to(main)).toHaveLength(1);
-      expect(await context.tracking.flushDue()).toEqual([]);
-      minuteLater(context, main.id);
-      expect(await context.tracking.flushDue()).toMatchObject([
-        { sessionId: main.id, delivered: true, messages: 1 },
-      ]);
-      expect(transport.to(main).at(-1)!.text).toContain(
-        "[tracked 'stale' in Checkout] finished:\n\n  Picked full cart.",
-      );
-    });
-  });
-
-  test("a tracked session waiting on the user wakes no one alone", async () => {
-    await withHome(async ({ context, transport }) => {
-      const { session: main } = await context.home.agent();
-      const screen = await context.tracking.start({
-        tracker: main.id,
-        workspace: "docs",
-        name: "cart screen",
-        message: "Spec the cart screen",
-      });
-      await context.activity.raise({
-        sessionId: screen.id,
-        reason: "Keep files in the session folder?",
-      });
-      expect(transport.to(main)).toHaveLength(0);
-      minuteLater(context, main.id);
-      await context.tracking.flushDue();
-      expect(transport.to(main)).toHaveLength(0);
-      // The next report takes it along.
-      await turn(context, screen, "Moved them to the root.");
-      const [both] = transport.to(main);
-      expect(both!.text).toContain(
-        "[tracked 'cart screen' in Docs] is waiting on the user: Keep files in the session folder?",
-      );
-      expect(both!.text).toContain("finished:\n\n  Moved them to the root.");
-    });
-  });
-
-  test("say delivers in full at once and takes held reports along", async () => {
-    await withHome(async ({ context, transport }) => {
-      const { session: main } = await context.home.agent();
-      const stale = await context.agents.spawn({
-        provider: "claude",
-        workspace: "checkout",
-        name: "stale",
-      });
-      context.tracking.track(main.id, stale.id);
-      const said = await context.tracking.say({
-        tracker: main.id,
-        session: stale.id,
-        body: "Full cart.\nNot only the version.",
-      });
-      expect(said.delivery.delivered).toBe(true);
-      expect(transport.to(stale).map((each) => each.text)).toEqual([
-        "[from 'Main agent', which tracks you]:\n" +
-          "  Full cart.\n  Not only the version.\n\n" +
-          "When this turn ends, your last message goes back to the main agent, so end with a reply that says what you did.",
-      ]);
-      await expect(
-        context.tracking.say({ tracker: main.id, session: main.id, body: "x" }),
-      ).rejects.toThrow("does not track");
-    });
-  });
-
-  test("a tracked team member reports to both its lead and its tracker", async () => {
-    await withHome(async ({ context, transport }) => {
-      const { session: main } = await context.home.agent();
-      const lead = await context.agents.spawn({
-        provider: "claude",
-        workspace: "checkout",
-        name: "Checkout lead",
-      });
-      const { session: member } = await context.teams.spawnMember({
-        team: lead.id,
-        addedBy: "lead",
-        name: "rate",
-        instructions: "Rate limit",
-      });
-      context.tracking.track(main.id, member.id);
-      await turn(context, member, "Rate limit merged.");
-      expect(transport.to(lead).at(-1)!.text).toContain(
-        "@rate finished:\n\n  Rate limit merged.",
-      );
-      expect(transport.to(main).at(-1)!.text).toContain(
-        "[tracked 'rate' in Checkout] finished:\n\n  Rate limit merged.",
-      );
-      // Still a member of its own lead's team.
-      expect(context.teams.memberOf(member.id)?.team.lead.id).toBe(lead.id);
-    });
-  });
-
-  test("a resolved or untracked session stops reporting", async () => {
-    await withHome(async ({ context, transport }) => {
-      const { session: main } = await context.home.agent();
-      const one = await context.tracking.start({
-        tracker: main.id,
-        workspace: "docs",
-        message: "One",
-      });
-      const two = await context.tracking.start({
-        tracker: main.id,
-        workspace: "docs",
-        message: "Two",
-      });
-      context.threads.resolve(one.id, true);
-      await turn(context, one, "After done.");
-      context.tracking.untrack(main.id, two.id);
-      await turn(context, two, "After untrack.");
-      minuteLater(context, main.id);
-      await context.tracking.flushDue();
-      expect(transport.to(main)).toHaveLength(0);
-    });
-  });
-});
-
-describe("existing main-agent teams", () => {
-  test("members of a team led from Home become tracked sessions, once", async () => {
-    await withHome(async ({ context }) => {
-      const { session: main } = await context.home.agent();
-      // A team made before the main agent tracked instead of leading.
-      const ability = context.abilities.grant(main.id, "orchestration", {
-        live: false,
-      });
-      const changelog = await context.agents.spawn({
-        provider: "claude",
-        workspace: "docs",
-        name: "changelog",
-      });
-      context.repositories.setAgentTeam(changelog.id, ability.id, "changelog");
-      expect(context.teams.led(main.id)).toBeDefined();
-
-      expect(context.home.adoptTeamMembers()).toEqual([changelog.id]);
-      expect(context.repositories.findAgent(changelog.id)).toMatchObject({
-        teamId: null,
-        teamHandle: null,
-      });
-      expect(context.tracking.tracks(main.id, changelog.id)).toBe(true);
-      expect(context.teams.led(main.id)).toBeUndefined();
-      // Running it again changes nothing.
-      expect(context.home.adoptTeamMembers()).toEqual([]);
-      expect(context.tracking.sessions(main.id)).toHaveLength(1);
-    });
-  });
-});
-
-describe("threads", () => {
-  test("a suggested thread waits for Start, then runs as a tracked session where it was suggested", async () => {
-    await withHome(async ({ context }) => {
-      const { session: main } = await context.home.agent();
-      const suggestion = await context.threads.suggest({
-        lead: main.id,
-        title: "  Load-test GET /cart  ",
-        workspace: "checkout",
-        message: "Hit it at 2,400 reads/s and report p99",
-      });
-      expect(suggestion).toMatchObject({
-        title: "Load-test GET /cart",
-        workspaceId: "checkout",
-      });
-      expect(context.threads.suggestions(main.id)).toHaveLength(1);
-
-      const thread = await context.threads.start(suggestion.id);
-      expect(thread).toMatchObject({
-        name: "Load-test GET /cart",
-        workspaceId: "checkout",
-      });
-      expect(thread.teamId).toBeNull();
-      expect(context.tracking.tracks(main.id, thread.id)).toBe(true);
-      expect(context.threads.suggestions(main.id)).toEqual([]);
-      await expect(context.threads.start(suggestion.id)).rejects.toThrow(
-        "already started",
-      );
-    });
-  });
-
-  test("a dismissed suggestion is gone; a thread at Home is refused", async () => {
-    await withHome(async ({ context }) => {
-      const { session: main } = await context.home.agent();
-      const suggestion = await context.threads.suggest({
-        lead: main.id,
-        title: "Add cart_events table",
-        workspace: "checkout",
-      });
-      context.threads.dismiss(suggestion.id);
-      expect(context.threads.suggestions(main.id)).toEqual([]);
-      await expect(
-        context.threads.suggest({
-          lead: main.id,
-          title: "Here",
-          workspace: HOME_WORKSPACE_ID,
-        }),
-      ).rejects.toThrow("not at Home");
-      await expect(
-        context.threads.suggest({ lead: main.id, title: "   " }),
-      ).rejects.toThrow("needs a title");
-      // The main agent's thread needs a workspace to run in.
-      await expect(
-        context.threads.suggest({ lead: main.id, title: "Somewhere" }),
-      ).rejects.toThrow("pass --workspace");
-    });
-  });
-
-  test("a resolved thread does not count against its lead's five", async () => {
+describe("resolving a member", () => {
+  test("a resolved member does not count against its lead's five", async () => {
     await withHome(async ({ context }) => {
       const main = await context.agents.spawn({
         provider: "claude",
@@ -858,7 +454,7 @@ describe("threads", () => {
       ).toEqual(expect.any(String));
       await expect(sixth()).resolves.toBeDefined();
       expect(() => context.threads.resolve(main.id, true)).toThrow(
-        "not a thread",
+        "is in no lead's team",
       );
     });
   });

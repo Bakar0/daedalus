@@ -960,7 +960,7 @@ export class WorkspaceFiles {
 
   /**
    * The folder a workspace's files are listed and resolved under: its own
-   * folder, or at Home the whole Daedalus home, which the main agent runs in.
+   * folder, or at Home the whole Daedalus home.
    */
   private root(workspace: Workspace): string {
     return workspace.kind === "home" ? this.config.home : workspace.path;

@@ -119,10 +119,6 @@ function sources(context: ApplicationContext) {
       () => context.teams.list(),
       unwatched("covered by abilities: a team is its lead's ability"),
     ),
-    tracks: rows(
-      () => repositories.tracks.list(),
-      () => repositories.tracks.list(),
-    ),
     // An agent reports a step a few times an hour at most, so a change
     // reloads the whole window rather than earning a partial part.
     // A run ends in this process's tick; opening one marks it read.

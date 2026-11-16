@@ -34,7 +34,7 @@ import { DaedalusError } from "../errors";
 
 /**
  * Where a plan lives: a workspace's `plans/` folder, or Home's, the
- * workspaces root, which the main agent will use. Home's owners may be
+ * workspaces root. Home's owners may be
  * sessions in any workspace.
  */
 export type PlanScope = { workspace: string } | { home: true };

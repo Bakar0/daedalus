@@ -9,7 +9,6 @@ import type {
 import {
   classifyThread,
   THREAD_IDLE_RESOLVE_MS,
-  homeThreadRows,
   threadMenuItems,
   threadRows,
   waitingCount,
@@ -280,100 +279,20 @@ describe("thread groups", () => {
     expect(waitingCount(rows)).toBe(1);
     expect(threadRows("nobody", inputs())).toEqual([]);
   });
-
-  test("Home lists what the main agent tracks, or every session, in the same groups", () => {
-    const home = inputs({
-      teams: [],
-      agents: [
-        session("main", { workspaceId: "home", teamId: null }),
-        session("discount", { teamId: null, teamHandle: null }),
-        session("stale", { teamId: null, teamHandle: null }),
-        session("refactor", { teamId: null, teamHandle: null }),
-        session("old", { teamId: null, archivedAt: minutesAgo(30) }),
-        session("shell", { teamId: null, kind: "terminal" }),
-        session("home-note", { workspaceId: "home", teamId: null }),
-      ],
-      attention: new Map([["stale", attention("stale", "Full cart?")]]),
-      worktrees: [tree("discount", pr({}))],
-      tracks: [
-        {
-          trackerSessionId: "main",
-          trackedSessionId: "discount",
-          createdAt: "",
-        },
-        { trackerSessionId: "main", trackedSessionId: "stale", createdAt: "" },
-        { trackerSessionId: "main", trackedSessionId: "old", createdAt: "" },
-        {
-          trackerSessionId: "other",
-          trackedSessionId: "refactor",
-          createdAt: "",
-        },
-      ],
-    });
-    const tracked = homeThreadRows("main", "home", "tracked", home);
-    expect(tracked.map((row) => [row.title, row.group, row.tracked])).toEqual([
-      ["stale", "waiting", true],
-      ["discount", "review", true],
-      ["old", "resolved", true],
-    ]);
-    expect(waitingCount(tracked)).toBe(1);
-
-    // All: live agent sessions anywhere but Home, the main agent left out.
-    const all = homeThreadRows("main", "home", "all", home);
-    expect(all.map((row) => [row.title, row.tracked]).sort()).toEqual([
-      ["discount", true],
-      ["refactor", false],
-      ["stale", true],
-    ]);
-    // The dot follows what the filter shows.
-    expect(
-      waitingCount(
-        homeThreadRows("main", "home", "all", {
-          ...home,
-          attention: new Map([
-            ["refactor", attention("refactor", "Which file?")],
-          ]),
-        }),
-      ),
-    ).toBe(1);
-    expect(
-      waitingCount(
-        homeThreadRows("main", "home", "tracked", {
-          ...home,
-          attention: new Map([
-            ["refactor", attention("refactor", "Which file?")],
-          ]),
-        }),
-      ),
-    ).toBe(0);
-  });
 });
 
 describe("threadMenuItems", () => {
-  const context = {
-    mainId: "main",
-    homeWorkspaceId: "home",
-    tracked: false,
-    member: false,
-  };
   const ids = (items: ReturnType<typeof threadMenuItems>) =>
     items.map((item) => item.label);
 
-  test("any session the main agent can track offers Track in Home, and nothing else", () => {
-    expect(
-      ids(threadMenuItems(session("a", { kind: "agent" }), context)),
-    ).toEqual(["Track in Home"]);
-  });
-
-  test("a tracked running session offers Stop tracking, Mark done and Stop", () => {
+  test("a running member offers Mark done and Stop", () => {
     expect(
       ids(
         threadMenuItems(session("a", { kind: "agent", status: "running" }), {
-          ...context,
-          tracked: true,
+          member: true,
         }),
       ),
-    ).toEqual(["Stop tracking", "Mark done", "Stop"]);
+    ).toEqual(["Mark done", "Stop"]);
   });
 
   test("a resolved member that ended offers Reopen thread, and no Stop", () => {
@@ -385,26 +304,24 @@ describe("threadMenuItems", () => {
             status: "exited",
             resolvedAt: minutesAgo(1),
           }),
-          { ...context, mainId: undefined, member: true },
+          { member: true },
         ),
       ),
     ).toEqual(["Reopen thread"]);
   });
 
-  test("the main agent, Home's sessions and archived ones are not trackable", () => {
+  test("a session in no team, or archived, offers nothing", () => {
     expect(
-      threadMenuItems(session("main", { kind: "agent" }), context),
+      threadMenuItems(session("a", { kind: "agent" }), { member: false }),
     ).toEqual([]);
     expect(
       threadMenuItems(
-        session("b", { kind: "agent", workspaceId: "home" }),
-        context,
-      ),
-    ).toEqual([]);
-    expect(
-      threadMenuItems(
-        session("c", { kind: "agent", archivedAt: minutesAgo(1) }),
-        context,
+        session("c", {
+          kind: "agent",
+          status: "exited",
+          archivedAt: minutesAgo(1),
+        }),
+        { member: true },
       ),
     ).toEqual([]);
   });

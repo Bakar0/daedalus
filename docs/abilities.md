@@ -295,43 +295,6 @@ The lead keeps the plan, the members, the contracts between them and every
 decision in `TEAM.md` in its working directory (the `daedalus-orchestration`
 skill). A rebirth successor reads it first.
 
-### Tracking
-
-Tracking is not a team. The main agent at Home tracks the work it starts and
-the sessions the user points it at; any session can track another the same
-way (`--tracker`). A tracked session is an ordinary session in its own
-workspace: no `team_id`, no `team_handle`, no handle chip, and it counts
-against no lead's members. The track is a row in `session_tracks`
-(migration 044); a rebirth on either side moves it to the successor.
-
-```
-daedal thread new --workspace checkout --name discount --message "<instructions>"
-daedal thread track <session>
-daedal thread untrack <session>
-daedal thread list [--all]
-daedal thread say <session> "<text>"
-daedal thread done <session>
-```
-
-- **Reports.** When a tracked session's turn ends, its tracker gets the same
-  note a lead gets as a hand-back, as a `track_notes` row: "[tracked
-  'discount' in Checkout] finished:" and its last message, "failed: <the
-  error>", "was interrupted by the user.", or "is waiting on the user:
-  <its question>". `TrackingService.report` hears `ActivityService.onTurnEnd`
-  beside `TeamService.handBack`, so a session that is tracked and also a
-  member of some other lead's team reports to both.
-- **Rate.** Reports reach a tracker at most once a minute
-  (`HANDBACK_INTERVAL_MS`, from its last delivery); the desktop tick sends
-  what waited (`TrackingService.flushDue`). A waiting note never wakes the
-  tracker alone; it goes with the next delivery. Delivery is in full,
-  through the same inbox and `codex queue` transports as the team chat.
-- **Messages.** `thread say` delivers its text in full, at once, to a session
-  the tracker tracks, with a line saying its turn-end reply goes back to the
-  tracker. A session not running gets it when it runs again.
-- **Stopping.** A resolved session (`thread done`) reports nothing, and
-  `thread untrack` drops its undelivered reports; either way it keeps
-  running.
-
 ### Large journal and team files
 
 Every session that reads `JOURNAL.md` or a lead's `TEAM.md` pays for the whole

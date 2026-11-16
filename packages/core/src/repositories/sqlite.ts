@@ -29,8 +29,6 @@ import { DaedalusError } from "../errors";
 import { AbilityRepository } from "./abilities";
 import { RoutineRepository } from "./routines";
 import { AskRepository } from "./asks";
-import { ThreadRepository } from "./threads";
-import { TrackRepository } from "./tracks";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
 import { WorkflowRepository } from "./workflows";
@@ -67,7 +65,7 @@ interface WorkspaceRow {
   account_models: string;
   default_claude_account: string | null;
   default_codex_account: string | null;
-  /** `workspace`, or `home` for the main agent's hidden row (043). */
+  /** `workspace`, or `home` for Home's hidden row (043). */
   kind?: string;
   /** From `workspace_places`, joined. */
   place: string | null;
@@ -436,8 +434,6 @@ export class SqliteRepositories {
   readonly workflows: WorkflowRepository;
   readonly routines: RoutineRepository;
   readonly asks: AskRepository;
-  readonly threads: ThreadRepository;
-  readonly tracks: TrackRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -450,8 +446,6 @@ export class SqliteRepositories {
     this.workflows = new WorkflowRepository(this.database);
     this.routines = new RoutineRepository(this.database);
     this.asks = new AskRepository(this.database);
-    this.threads = new ThreadRepository(this.database);
-    this.tracks = new TrackRepository(this.database);
   }
 
   /**
@@ -989,14 +983,14 @@ export class SqliteRepositories {
       .run(autoRebirthColumn(value), id);
   }
 
-  /** Marks a thread done, or (null) open again. */
+  /** Marks a team member done, or (null) open again. */
   setAgentResolved(id: string, resolvedAt: string | null): void {
     this.database
       .query("UPDATE agent_sessions SET resolved_at = ? WHERE id = ?")
       .run(resolvedAt, id);
   }
 
-  /** The hidden row the main agent at Home runs in, if it was made. */
+  /** The hidden row that owns Home, if it was made. */
   findHomeWorkspace(): Workspace | undefined {
     const row = this.database
       .query<WorkspaceRow, []>(

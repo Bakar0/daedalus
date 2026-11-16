@@ -36,8 +36,7 @@ const MARKER_DIRECTORY = ".daedalus";
 const MARKER_FILE = "workspace.json";
 
 /**
- * The id, slug and folder name of the hidden Home row the main agent runs
- * in. A slug the user can type is letters, digits and hyphens, so a dot
+ * The id, slug and folder name of the hidden Home row. A slug the user can type is letters, digits and hyphens, so a dot
  * keeps it apart from any workspace they make.
  */
 export const HOME_WORKSPACE_ID = ".home";
@@ -225,9 +224,8 @@ export class WorkspaceService {
   }
 
   /**
-   * The hidden row that owns the main agent at Home, made on first use. The
-   * agent itself runs at the Daedalus home; the row's folder, `.home` under
-   * the workspaces root, holds its memory and the generated workspace files,
+   * The hidden Home row, made on first use. Its folder, `.home` under the
+   * workspaces root, holds the generated workspace files,
    * never the home or the workspaces root: a CLAUDE.md or AGENTS.md written
    * at either would be read by every session in every workspace below it.
    */

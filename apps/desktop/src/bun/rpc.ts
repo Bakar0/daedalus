@@ -353,7 +353,6 @@ export async function desktopSnapshot(
     toasts: view.toasts.map(toastDto),
     abilities: view.abilities.map(sessionAbilityDto),
     teams: view.teams.map(teamDto),
-    tracks: view.tracks.map((track) => ({ ...track })),
     largeFiles: view.largeFiles.map((file) => ({ ...file })),
     workflowRuns: view.workflowRuns.map(workflowRunDto),
     unseenRoutineRuns: view.unseenRoutineRuns.length,
@@ -670,8 +669,8 @@ export function createDesktopRequestHandlers(
     };
   };
   const liveContent = new LiveContentSearch(context.search);
-  // At Home the file panel's paths are relative to the Daedalus home, where
-  // the main agent runs, not to the Home row's own folder: a plan opened
+  // At Home the file panel's paths are relative to the Daedalus home, not
+  // to the Home row's own folder: a plan opened
   // there is found by its full path, and so belongs to its workspace.
   const atHome = (workspace: string) =>
     workspace === context.repositories.findHomeWorkspace()?.id;
@@ -783,14 +782,6 @@ export function createDesktopRequestHandlers(
       ),
     routinesAgent: ({ workspaceId }) =>
       mutate(async () => agentDto(await context.routines.agent(workspaceId))),
-    homeAgent: () =>
-      mutate(async () => {
-        const home = await context.home.agent();
-        return {
-          workspace: workspaceDto(home.workspace),
-          session: agentDto(home.session),
-        };
-      }),
     homeOpen: () => mutate(async () => workspaceDto(await context.home.open())),
     askList: ({ plan }) =>
       result(async () => {
@@ -840,27 +831,6 @@ export function createDesktopRequestHandlers(
         } catch {
           return null;
         }
-      }),
-    threadSuggestions: ({ leadId }) =>
-      result(() =>
-        context.threads.suggestions(leadId).map((suggestion) => ({
-          id: suggestion.id,
-          leadSessionId: suggestion.leadSessionId,
-          title: suggestion.title,
-          workspaceId: suggestion.workspaceId,
-          message: suggestion.message,
-          createdAt: suggestion.createdAt,
-        })),
-      ),
-    threadSuggestionStart: ({ id }) =>
-      mutate(async () => agentDto(await context.threads.start(id))),
-    threadSuggestionDismiss: ({ id }) =>
-      mutate(() => ({ id: context.threads.dismiss(id).id })),
-    threadTrack: ({ trackerId, sessionId, tracked }) =>
-      mutate(() => {
-        if (tracked) context.tracking.track(trackerId, sessionId);
-        else context.tracking.untrack(trackerId, sessionId);
-        return { trackerId, sessionId, tracked };
       }),
     threadResolve: ({ sessionId, resolved }) =>
       mutate(() => agentDto(context.threads.resolve(sessionId, resolved))),

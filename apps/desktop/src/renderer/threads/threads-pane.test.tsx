@@ -38,26 +38,13 @@ const rows = [
   row("Fix checkout copy typo", "resolved", "PR #398 merged"),
 ];
 
-const pane = (
-  home?: Pick<
-    Parameters<typeof ThreadsPane>[0],
-    "filter" | "onFilter" | "onTrack"
-  >,
-  shown: readonly ThreadRow[] = rows,
-  options: { onOpenAsTab?: () => void } = {},
-) =>
+const pane = (shown: readonly ThreadRow[] = rows) =>
   renderToStaticMarkup(
     <ThreadsPane
-      {...home}
-      {...options}
-      client={{} as DesktopClient}
-      lead={session("lead", { name: "Main agent", teamId: null })}
+      lead={session("lead", { name: "Checkout lead", teamId: null })}
       now={now}
       onOpenThread={() => {}}
-      poll={false}
       rows={shown}
-      run={async () => undefined}
-      workspaceName={(id) => id ?? "here"}
     />,
   );
 
@@ -85,40 +72,5 @@ describe("Threads pane", () => {
     // A lead's list has no filter and no tracking.
     expect(html).not.toContain("Stop tracking");
     expect(html).not.toContain("Tracked");
-  });
-
-  test("Open as tab is offered in the side panel, as a text link, and not in the tab", () => {
-    const panel = pane(undefined, rows, { onOpenAsTab: () => {} });
-    expect(panel).toContain(
-      'class="threads-link threads-open-tab" title="Open the threads as a tab you can move and split" type="button">Open as tab<',
-    );
-    expect(pane()).not.toContain("Open as tab");
-  });
-
-  test("at Home: Tracked / All and a Track link on each row", () => {
-    const home = {
-      filter: "all" as const,
-      onFilter: () => {},
-      onTrack: () => {},
-    };
-    const tracked = rows.map((each, index) => ({
-      ...each,
-      tracked: index === 0,
-    }));
-    const html = pane(home, tracked);
-    expect(html).toContain('aria-pressed="false"');
-    expect(html).toContain(">Tracked<");
-    expect(html).toContain(
-      'aria-pressed="true" class="threads-filter-option" type="button">All<',
-    );
-    // The tracked row carries the eye in All, and each row its link.
-    expect(html).toContain("Tracked by the main agent");
-    expect(html).toContain(">Stop tracking<");
-    expect(html).toContain(">Track<");
-    // No filled buttons: every one is a text link.
-    expect(html).not.toContain("threads-button");
-
-    const empty = pane({ ...home, filter: "tracked" }, []);
-    expect(empty).toContain("The main agent is not tracking anything");
   });
 });

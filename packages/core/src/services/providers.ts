@@ -914,21 +914,6 @@ class ConfiguredProvider implements AgentProvider {
         args.length,
         ...(await daedalusInstructionArgs(this.config, this.name, args)),
       );
-    // The main agent runs at the Daedalus home; its role is a system prompt,
-    // on every launch and resume, never a visible first message.
-    if (
-      this.promptArgument &&
-      this.name === "claude" &&
-      this.config &&
-      input.workingDirectory === this.config.home
-    ) {
-      const { homeSystemPrompt } = await import("./home");
-      const index = args.indexOf(CLAUDE_APPEND_PROMPT);
-      if (index >= 0 && index + 1 < args.length)
-        args[index + 1] =
-          `${args[index + 1]}\n\n${homeSystemPrompt(this.config)}`;
-      else args.push(CLAUDE_APPEND_PROMPT, homeSystemPrompt(this.config));
-    }
     if (this.promptArgument && this.name === "claude" && this.config)
       args.splice(
         0,

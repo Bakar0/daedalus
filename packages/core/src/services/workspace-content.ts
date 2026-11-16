@@ -723,7 +723,7 @@ export class WorkspaceContentService {
     const references = this.repositories.listWorkspaceRepositories(
       input.workspace.id,
     );
-    // The main agent runs at the Daedalus home itself, so it sees every
+    // A session at Home runs at the Daedalus home itself, so it sees every
     // workspace, repository and plan below it; a successor moves there too.
     // Nothing is written at that root: an AGENTS.md or CLAUDE.md there would
     // be read by every session in every workspace below it.

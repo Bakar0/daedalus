@@ -53,7 +53,7 @@ export interface Workspace {
   defaultClaudeAccount: string | null;
   defaultCodexAccount: string | null;
   /**
-   * `home` for the one hidden row the main agent at Home runs in. Absent for
+   * `home` for the one hidden row that owns Home. Absent for
    * every workspace the user made; lists that show workspaces leave Home out.
    */
   kind?: "home";
@@ -200,33 +200,6 @@ export interface AgentSession {
   resolvedAt?: string | null;
 }
 
-/** A session keeping an eye on another, as the main agent does (044). */
-export interface SessionTrack {
-  trackerSessionId: UUID;
-  trackedSessionId: UUID;
-  createdAt: string;
-}
-
-/**
- * Between a tracker and a session it tracks: a report of the tracked
- * session's turn end, or a message from the tracker. `peerSessionId` is the
- * other end.
- */
-export type TrackNoteKind = "message" | "report" | "waiting";
-
-export interface TrackNote {
-  id: number;
-  recipientSessionId: UUID;
-  peerSessionId: UUID | null;
-  kind: TrackNoteKind;
-  body: string;
-  createdAt: string;
-  deliveredAt: string | null;
-  lastError: string | null;
-  attemptedAt: string | null;
-}
-
-/** Work a lead suggested as a thread, for the user to start or dismiss. */
 /** Where an ask is: waiting on the user, or finished one of three ways. */
 export type AskState = "open" | "answered" | "dismissed" | "closed";
 
@@ -264,19 +237,6 @@ export interface Ask {
   closedAt: string | null;
   /** When the owner was told how it ended; null while that waits. */
   noticeDeliveredAt: string | null;
-}
-
-export interface ThreadSuggestion {
-  id: number;
-  leadSessionId: UUID;
-  title: string;
-  /** Where it would run; null for the lead's own workspace. */
-  workspaceId: string | null;
-  /** The new thread's instructions; null starts it with the title alone. */
-  message: string | null;
-  createdAt: string;
-  startedSessionId: UUID | null;
-  closedAt: string | null;
 }
 
 export interface IntegratedTerminal {
