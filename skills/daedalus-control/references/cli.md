@@ -57,8 +57,8 @@ library ID.
 
 ```text
 daedal agent models <codex|claude> [--account <account>]
-daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--ability orchestration] [--color <color>] [--pin]
-daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>]
+daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <configured-name>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--color <color>] [--pin]
+daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex] [--model <model>]
 daedal agent list [--workspace <workspace>] [--running|--archived]
 daedal agent get <agent-id>
 daedal agent attach <agent-id>
@@ -76,17 +76,25 @@ daedal session rebirth-at <session> <percent>|off|default
 daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
 daedal team say "<text>" [--team <lead>] [--user]
-daedal team chat [--all] [--team <lead>]
+daedal team chat [--tagged | --all] [--limit <n>] [--team <lead>] [--user]
 daedal team list [--team <lead>]
+daedal team tree [--team <lead>]
 daedal team goal [<text>] [--team <lead>]
+daedal team pause|resume [--team <lead>]
+daedal team move <session> --to <lead> | --out [--user]
 ```
 
 `<session>` is a session id, or its name when only one live session has it.
-An ability adds something to a session. A session that holds
-`orchestration` leads a team: it adds members with `agent spawn --team` and
-talks to them with `daedal team`; the `daedalus-orchestration` and
-`daedalus-team` skills and `daedal team --help` describe it. A rebirth moves a
-session's abilities, pin and color to the successor, which gets ` · 2`.
+Any session can lead a team: the first `agent spawn --team` run inside it
+adds a member and makes it the lead, and it talks to members with
+`daedal team`. A member can lead a team of its own, up to 3 levels below the
+top lead and 5 members a lead that are not archived; a lead frees a place by
+archiving a member whose work is checked (`agent archive <member>`). Stopping
+or archiving a lead does the same to the members below it. `team move
+<session> --to <lead>` moves a running session, with the team it leads, into
+another team without restarting it; a lead moves only sessions below it. The `daedalus-orchestration` and `daedalus-team` skills
+and `daedal team --help` describe it. A rebirth moves a session's team, pin
+and color to the successor, which gets ` · 2`.
 Routines are not an ability: they run on a schedule in a workspace, from the
 Routines page; `daedal routine --help` describes them.
 
@@ -117,6 +125,49 @@ workspace's `defaultModel` when `--provider` is its `defaultProvider`, and
 `data.defaultModel` otherwise. A workspace default the provider no longer
 lists fails the spawn with exit code 2; fix it with `workspace update
 --default-model`. Display labels are descriptive and are not model IDs.
+
+## Plans
+
+```text
+daedal plan new "<title>" [--workspace <workspace> | --home] [--owner <handle>] [--body-file <path|->]
+daedal plan list [--workspace <workspace> | --home]
+daedal plan show <plan>
+daedal plan start <plan> ^<id> [--owner <handle>]
+daedal plan done|block|drop <plan> ^<id>
+daedal plan ask <plan> ^<id> "<question>"
+```
+
+A plan is `plans/<slug>.plan.md` in a workspace (or at Home with `--home`):
+frontmatter `plan:` and `owner:`, free markdown sections, and a nested
+checklist under `## Tasks`, one task per line as `- [ ] Title @owner ^id`.
+States are `[ ]` todo, `[/]` doing, `[x]` done, `[!]` blocked and `[-]`
+dropped; markdown indented under a task is its details, and a `> ? ...` line
+there is a question for the user. `<plan>` is the slug, a path, or the
+absolute path an agent was given. `start` marks the task `[/]` with you as
+its owner; `ask` adds the question under the task, where the app shows it
+under Activity. An `@owner` is a session's team handle or its name as a
+handle (`Cart endpoints` is `@cart-endpoints`). The app opens a plan as an
+interactive document: Start agent on a task, Open its owner, and Ask (⌘L) on
+any selected text, which sends the owner the question, then `path:lines:` and
+the quote. Edit the file directly for anything else.
+
+## Activity
+
+```text
+daedal activity ask "<question>" [--context "<text>" | --context-file <path|->] [--why "<text>"] [--option "<text>"]... [--recommend <n>] [--plan <plan> ^<id>] [--session <session>]
+daedal activity list [--team | --all] [--session <session>]
+daedal activity show <n>
+daedal activity update <n> [--title "<question>"] [--context ...] [--why ...] [--option ...]... [--recommend <n>] [--plan <plan> ^<id>]
+daedal activity resolve <n> [--answer "<what the user said>"]
+daedal activity withdraw <n> ["<why>"]
+```
+
+`activity ask` asks the user once: the app keeps the question as a card under
+Activity until the user answers or dismisses it, and the answer comes back to
+the asking session. Say "Asked #<n>" and do not repeat it. When the user
+answers in your session instead, `activity resolve <n> --answer "..."` closes
+the card; `activity withdraw` closes one no longer needed. See
+`daedal activity --help` for every flag.
 
 ## Accounts
 

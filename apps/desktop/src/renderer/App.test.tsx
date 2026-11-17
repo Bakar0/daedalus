@@ -478,7 +478,8 @@ describe("desktop application shell", () => {
       />,
     );
     expect(html).toContain("Workspaces");
-    expect(html).not.toContain("Activity");
+    // Activity is a sidebar link to Home, not a mode of its own.
+    expect(html.match(/>Activity</g)).toHaveLength(1);
     // No mode switcher: the center shows a session, a file or a task, and
     // the side panel's tabs hold the files, repositories and tasks.
     expect(html).not.toContain('aria-label="Workspace mode"');
@@ -1993,7 +1994,8 @@ describe("desktop application shell", () => {
     expect(html).not.toContain(">CL<");
     expect(html).not.toContain("Opens in /tmp/demo");
     expect(html).not.toContain("Linked task");
-    expect(html).not.toContain("Activity");
+    // Activity is a sidebar link to Home, not a mode of its own.
+    expect(html.match(/>Activity</g)).toHaveLength(1);
   });
 
   test("gives cards no drag affordance and no extra tab stops", () => {

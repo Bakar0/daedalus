@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "vitest";
-import { runMigrations } from "./migrations";
+import { runMigrations, withoutExistingColumns } from "./migrations";
 
 const cleanup: string[] = [];
 afterEach(async () =>
@@ -13,6 +13,54 @@ afterEach(async () =>
 );
 
 describe("runMigrations", () => {
+  test("skips a column an unshipped build already added, and adds the rest", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-migrations-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    await mkdir(migrations);
+    await Bun.write(
+      join(migrations, "001_base.sql"),
+      "CREATE TABLE workspaces (id TEXT PRIMARY KEY);",
+    );
+    // What a local branch build applied under a name main never had.
+    await Bun.write(
+      join(migrations, "002_branch_only.sql"),
+      "ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'workspace'\n  CHECK (kind IN ('workspace', 'home'));",
+    );
+    const databasePath = join(home, "state.db");
+    await runMigrations(databasePath, migrations);
+    await rm(join(migrations, "002_branch_only.sql"));
+    await Bun.write(
+      join(migrations, "003_home.sql"),
+      [
+        "-- ALTER TABLE workspaces ADD COLUMN commented TEXT;",
+        "ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'workspace'",
+        "  CHECK (kind IN ('workspace', 'home'));",
+        "ALTER TABLE workspaces ADD COLUMN resolved_at TEXT;",
+        "CREATE TABLE thread_suggestions (id INTEGER PRIMARY KEY);",
+      ].join("\n"),
+    );
+    await runMigrations(databasePath, migrations);
+    const database = new Database(databasePath);
+    const columns = database
+      .query<{ name: string }, []>("PRAGMA table_info(workspaces)")
+      .all()
+      .map((row) => row.name);
+    expect(columns).toEqual(["id", "kind", "resolved_at"]);
+    expect(
+      database.query("SELECT version FROM schema_migrations").all(),
+    ).toHaveLength(3);
+    database.close();
+    expect(
+      withoutExistingColumns(
+        "ALTER TABLE a ADD b TEXT;\nALTER TABLE a ADD COLUMN c TEXT;",
+        (_table, column) => column === "b",
+      ),
+    ).toBe(
+      "-- skipped, the column already exists: a.b\nALTER TABLE a ADD COLUMN c TEXT;",
+    );
+  });
+
   test("applies ordered migrations exactly once", async () => {
     const home = await mkdtemp(join(tmpdir(), "daedalus-migrations-"));
     cleanup.push(home);

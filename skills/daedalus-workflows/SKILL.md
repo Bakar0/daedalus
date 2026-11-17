@@ -9,7 +9,7 @@ argument-hint: "[workflow name, or what to change]"
 A workflow is an ordered list of steps (plan, build, ship). Its files
 live in `{{workflows}}`: `flows/<name>.md` (frontmatter `name`, `description`,
 `when`, `steps: [a, b]` or `steps: dynamic`, optional `loop: <step>` and
-`until`), `steps/<name>.md`
+`until`; `@name` in `steps` includes another workflow), `steps/<name>.md`
 (frontmatter `name`, `description`, optional `gate: start` or `gate: result`;
 the body is what to do), and `CHOOSING.md` (the user's rules for picking one). A **run** is this
 session's copy, shown as a checklist in its Workflow pane. Changing a run never
@@ -75,6 +75,14 @@ approve>"`: the step waits, attention is raised, the command exits 4, and no
 - **Loops.** A circular run goes back to its loop step after the last one.
   Each time round, check `until`; when it holds or the user says stop,
   `daedal workflow end --note "<why>"`.
+- **Included workflows.** A step that comes from an included workflow
+  (`@release` in `steps`) has an id qualified by it, shown in `status`
+  under a `@release` heading: `release/review`, or `a/b/review` when nested.
+  Report that full id: `daedal workflow step release/review start --note
+"..."`. A bare `review` works only while one step has that name; when the
+  command refuses it as ambiguous, use one of the ids it lists. An included
+  workflow that loops goes round inside itself; when its `until` holds,
+  move on by starting the step after it.
 
 ## Keep and improve
 

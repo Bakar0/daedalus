@@ -91,6 +91,7 @@ describe("desktop application menu", () => {
     expect(Object.fromEntries(shortcuts ?? [])).toEqual({
       // ⌘1 to ⌘9 are the center's tabs now; the views keep their items.
       "view.workspace": undefined,
+      "view.home": "Command+Shift+H",
       "view.board": undefined,
       "view.session": undefined,
       "view.world": undefined,
@@ -119,6 +120,8 @@ describe("desktop application menu", () => {
       ),
     ).toEqual([
       "view.workspace",
+      "view.home",
+      "view.routines",
       "view.board",
       "view.session",
       "view.world",
@@ -256,6 +259,7 @@ describe("File, Go and Help menus", () => {
       ["session.new", "New Session…", "Command+N"],
       ["task.new", "New Task…", "Command+Shift+N"],
       ["terminal.new", "New Terminal", "Command+T"],
+      ["plan.new", "New Plan…", null],
       "divider",
       // ⌘S and ⌘W act on the tabs only, so the menu must not own them: they
       // show in the title and the dispatcher keeps them.

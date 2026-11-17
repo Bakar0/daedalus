@@ -723,6 +723,12 @@ export class WorkspaceContentService {
     const references = this.repositories.listWorkspaceRepositories(
       input.workspace.id,
     );
+    // A session at Home runs at the Daedalus home itself, so it sees every
+    // workspace, repository and plan below it; a successor moves there too.
+    // Nothing is written at that root: an AGENTS.md or CLAUDE.md there would
+    // be read by every session in every workspace below it.
+    if (input.workspace.kind === "home")
+      return { workingDirectory: this.config.home, worktrees: [], references };
     const group = input.task
       ? sessionTaskDirectoryName(input.task)
       : "unassigned";

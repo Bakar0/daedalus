@@ -139,6 +139,70 @@ describe("ReadModel", () => {
     });
   });
 
+  test("an ask asked or answered by another process moves the open asks part", async () => {
+    await withContext(async (context) => {
+      const model = new ReadModel(context);
+      const workspace = await context.workspaces.create({ name: "Asks" });
+      const before = await model.versions();
+      const at = new Date().toISOString();
+      const id = crypto.randomUUID();
+      const now = at;
+      context.repositories.createAgent({
+        id,
+        workspaceId: workspace.id,
+        taskId: null,
+        name: "Asker",
+        provider: "claude",
+        kind: "agent",
+        tmuxSession: `daedalus_${id.replaceAll("-", "")}`,
+        command: "/bin/sh",
+        args: [],
+        workingDirectory: workspace.path,
+        status: "running",
+        exitCode: null,
+        startedAt: now,
+        endedAt: null,
+        providerSessionId: null,
+        archivedAt: null,
+        resumeCount: 0,
+        lostReason: null,
+        rebirthRequestedAt: null,
+        resumeOnStart: false,
+        position: context.repositories.nextAgentPosition(workspace.id),
+        pinnedAt: null,
+        color: null,
+        account: null,
+        teamId: null,
+        teamHandle: null,
+        spawnedBy: null,
+        hostId: null,
+        autoRebirthPercent: null,
+      });
+      const ask = context.repositories.asks.create({
+        workspaceId: workspace.id,
+        sessionId: id,
+        title: "Ship it?",
+        context: null,
+        why: null,
+        options: [],
+        recommended: null,
+        planPath: null,
+        taskKey: null,
+        at,
+      });
+      const asked = await model.versions();
+      expect(asked.openAsks).not.toBe(before.openAsks);
+      expect((await model.snapshot()).openAsks).toBe(1);
+      context.repositories.asks.end(ask.id, {
+        state: "answered",
+        reason: null,
+        notify: true,
+        at,
+      });
+      expect((await model.versions()).openAsks).toBe(before.openAsks);
+    });
+  });
+
   test("rows are read after sessions reconcile with tmux", async () => {
     await withContext(async (context) => {
       const workspace = await context.workspaces.create({ name: "Update" });

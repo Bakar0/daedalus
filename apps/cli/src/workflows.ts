@@ -2,6 +2,8 @@ import {
   currentStepIndex,
   DaedalusError,
   describePosition,
+  includedWorkflow,
+  stepGroupId,
   type ApplicationContext,
   type WorkflowRun,
   type WorkflowStepState,
@@ -16,7 +18,7 @@ export const workflowHelp = `Workflow commands — the agent's place in its work
   daedal workflow step <step> start|done|skip --note "<line>"
   daedal workflow add <step> [--after <step>] [--description "<text>"] [--gate]
   daedal workflow remove <step>
-  daedal workflow approve
+  daedal workflow approve [<step>]
   daedal workflow end [--note "<text>"]
   daedal workflow save <name> [--when "<text>"] [--description "<text>"]
   daedal workflow status
@@ -45,6 +47,13 @@ file for each step that has none.
 Circular runs: a workflow with 'loop: <step>', or a dynamic workflow
 started with --loop, goes back to that step when its last step finishes, and counts the
 iterations. It runs until 'end'.
+
+Sub-workflows: a workflow's steps can include another workflow as @name,
+such as steps: [plan, build, @release]. A run expands it in place, and its
+steps get ids qualified by it: release/review. Report a step by that id; a
+bare 'review' works while only one step has that name. An included
+workflow's own loop goes round inside it only; starting the step after it
+moves on.
 
 'step <step> start' marks the step you begin and finishes the one before.
 It prints one line, so chain it onto the command the step runs anyway:
@@ -87,11 +96,35 @@ function runTitle(run: WorkflowRun): string {
   return `${run.workflow}${tags.length ? ` [${tags.join("; ")}]` : ""}${where}`;
 }
 
-function printRun(run: WorkflowRun): void {
+/**
+ * A run as status prints it: one line per step by its full id, which is
+ * what the agent reports, under a heading for each included workflow.
+ */
+export function runLines(run: WorkflowRun): string[] {
+  const lines: string[] = [];
   const index = currentStepIndex(run);
-  console.log(runTitle(run));
-  if (run.until && !run.endedAt) console.log(`  until: ${run.until}`);
+  lines.push(runTitle(run));
+  if (run.until && !run.endedAt) lines.push(`  until: ${run.until}`);
+  let group = "";
   run.steps.forEach((step, position) => {
+    const stepGroup = stepGroupId(step.name);
+    if (stepGroup !== group) {
+      // A heading for each group this step enters, outermost first.
+      const parts = stepGroup ? stepGroup.split("/") : [];
+      parts.forEach((_part, at) => {
+        const id = parts.slice(0, at + 1).join("/");
+        if (group === id || group.startsWith(`${id}/`)) return;
+        const found = run.groups.find((item) => item.id === id);
+        const loop = found?.loopTo
+          ? ` [loops to ${found.loopTo}, iteration ${found.iteration}]`
+          : "";
+        lines.push(
+          `  ${"  ".repeat(at)}@${found?.workflow ?? parts[at]}${loop}`,
+        );
+      });
+      group = stepGroup;
+    }
+    const indent = "  ".repeat(stepGroup ? stepGroup.split("/").length : 0);
     const tags = [
       step.gate ? `gate: ${step.gate}` : "",
       step.dynamic ? "no file" : "",
@@ -102,12 +135,49 @@ function printRun(run: WorkflowRun): void {
     const said = step.note ?? step.plan;
     const note = said ? ` — ${said}` : "";
     const here = position === index && !run.endedAt ? "  ←" : "";
-    console.log(
-      `  ${STATE_MARK[step.state]} ${step.name}${tags}${note}${here}`,
+    lines.push(
+      `  ${indent}${STATE_MARK[step.state]} ${step.name}${tags}${note}${here}`,
     );
     if (step.dynamic && !said && step.description)
-      console.log(`      ${step.description}`);
+      lines.push(`      ${indent}${step.description}`);
   });
+  return lines;
+}
+
+function printRun(run: WorkflowRun): void {
+  for (const line of runLines(run)) console.log(line);
+}
+
+/** The one line a step change prints, and what follows a loop. */
+export function stepOutcomeLines(outcome: {
+  run: WorkflowRun;
+  looped: boolean;
+  loopedGroup: WorkflowRun["groups"][number] | null;
+}): string[] {
+  const { run } = outcome;
+  const index = currentStepIndex(run);
+  const step = run.steps[index];
+  const lines = [
+    run.endedAt
+      ? `workflow ${run.workflow} finished`
+      : `workflow ${run.workflow}: ${STATE_MARK[step?.state ?? "pending"]} ${step?.name ?? ""} (${index + 1}/${run.steps.length})`,
+  ];
+  if (outcome.looped)
+    lines.push(
+      `Back to '${run.loopTo}' for iteration ${run.iteration}; run 'daedal workflow end' when it should stop${run.until ? `: ${run.until}` : ""}.`,
+    );
+  const group = outcome.loopedGroup;
+  if (group) {
+    const members = run.steps.filter((item) =>
+      item.name.startsWith(`${group.id}/`),
+    );
+    const last = run.steps.indexOf(members[members.length - 1]!);
+    const next = run.steps[last + 1];
+    lines.push(
+      `${group.workflow} goes round: back to '${group.loopTo}' for iteration ${group.iteration}${group.until ? `, until: ${group.until}` : ""}. ${next ? `To move on, start '${next.name}'.` : "Run 'daedal workflow end' when it should stop."}`,
+    );
+  }
+  return lines;
 }
 
 const stepList = (value: string): string[] =>
@@ -168,6 +238,7 @@ export async function workflowCommand(
     const { workflow, steps } = await context.workflows.show(
       parsed.positionals[0]!,
     );
+    const catalog = await context.workflows.catalog();
     printResult({ workflow, steps }, json, () => {
       console.log(`# ${workflow.name}`);
       if (workflow.description) console.log(workflow.description);
@@ -181,6 +252,19 @@ export async function workflowCommand(
       if (workflow.body) console.log(`\n${workflow.body}`);
       workflow.steps.forEach((name, index) => {
         const step = steps[index];
+        const included = includedWorkflow(name);
+        if (included !== null) {
+          const found = catalog.workflows.find(
+            (item) => item.name === included,
+          );
+          console.log(`\n## ${index + 1}. ${name} (workflow)`);
+          console.log(
+            found
+              ? `${found.dynamic ? "steps: dynamic" : found.steps.join(" → ")}; 'daedal workflow show ${included}' for its steps`
+              : "(no workflow file)",
+          );
+          return;
+        }
         console.log(
           `\n## ${index + 1}. ${name}${step?.gate ? ` [gate: ${step.gate}]` : ""}`,
         );
@@ -254,13 +338,13 @@ export async function workflowCommand(
     });
     // A waiting gate fails the command, so whatever was chained after it
     // with && does not run.
-    const isMember =
-      context.teams.membership(sessionId)?.reader.role === "member";
+    const isMember = Boolean(context.teams.memberOf(sessionId));
     if (outcome.waiting)
       throw new DaedalusError(
         "CONFLICT",
         gateWaitingText(
-          parsed.positionals[0]!,
+          outcome.run.steps.find((step) => step.state === "waiting")?.name ??
+            parsed.positionals[0]!,
           stepAction === "done" ? "result" : "start",
           isMember ? sessionId : undefined,
         ),
@@ -268,17 +352,7 @@ export async function workflowCommand(
       );
     printResult(outcome, json, () => {
       // One line: an update is usually chained onto another command.
-      const index = currentStepIndex(outcome.run);
-      const step = outcome.run.steps[index];
-      console.log(
-        outcome.run.endedAt
-          ? `workflow ${outcome.run.workflow} finished`
-          : `workflow ${outcome.run.workflow}: ${STATE_MARK[step?.state ?? "pending"]} ${step?.name ?? ""} (${index + 1}/${outcome.run.steps.length})`,
-      );
-      if (outcome.looped)
-        console.log(
-          `Back to '${outcome.run.loopTo}' for iteration ${outcome.run.iteration}; run 'daedal workflow end' when it should stop${outcome.run.until ? `: ${outcome.run.until}` : ""}.`,
-        );
+      for (const line of stepOutcomeLines(outcome)) console.log(line);
     });
     return 0;
   }
@@ -308,8 +382,13 @@ export async function workflowCommand(
     return 0;
   }
   if (action === "approve") {
-    expectPositionals(parsed.positionals, 0, "daedal workflow approve");
-    const run = context.workflows.approve(sessionId);
+    if (parsed.positionals.length > 1)
+      expectPositionals(
+        parsed.positionals,
+        1,
+        "daedal workflow approve [<step>]",
+      );
+    const run = context.workflows.approve(sessionId, parsed.positionals[0]);
     printResult({ run }, json, () => printRun(run));
     return 0;
   }

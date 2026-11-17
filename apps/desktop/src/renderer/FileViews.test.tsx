@@ -31,13 +31,44 @@ const steps = [
 describe("file read views", () => {
   test("a workflow reads as its purpose, when it fits, and numbered steps", () => {
     const html = renderToStaticMarkup(
-      <WorkflowView flow={flow} onStep={() => {}} steps={steps} />,
+      <WorkflowView
+        flow={flow}
+        flows={[flow]}
+        onFlow={() => {}}
+        onStep={() => {}}
+        steps={steps}
+      />,
     );
     expect(html).toContain("Find it and fix it.");
     expect(html).toContain("Something broken.");
     expect(html).toMatch(/>1<.*reproduce.*Make it happen.*Run it\./s);
     expect(html).toMatch(/>2<.*ship.*gate/s);
     expect(html).toContain("No step file");
+  });
+
+  test("an included workflow is a card marked as one, listing its steps", () => {
+    const release = file({
+      name: "release",
+      description: "Review, prove, ship.",
+      steps: ["review", "proof", "ship"],
+    });
+    const feature = file({
+      name: "feature",
+      steps: ["reproduce", "@release", "@ghost"],
+    });
+    const html = renderToStaticMarkup(
+      <WorkflowView
+        flow={feature}
+        flows={[feature, release]}
+        onFlow={() => {}}
+        onStep={() => {}}
+        steps={steps}
+      />,
+    );
+    expect(html).toMatch(
+      />2<.*step-timeline-card included.*workflow-icon.*release.*workflow.*Review, prove, ship\..*review → proof → ship/s,
+    );
+    expect(html).toMatch(/>3<.*ghost.*No workflow file/s);
   });
 
   test("a step shows its gate and the workflows that use it", () => {

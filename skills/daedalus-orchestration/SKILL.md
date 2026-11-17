@@ -1,13 +1,49 @@
 ---
 name: daedalus-orchestration
-description: Lead a Daedalus team of sessions toward one goal - plan the work, add members, send them decisions, and keep TEAM.md. Use only in a session that holds the Daedalus orchestration ability, when the user asks for work that needs several sessions, asks about the team, or when a member reports.
+description: Lead a Daedalus team - add members, keep TEAM.md, route follow-ups to the member that has the work, archive members whose work is checked, and post to the user when something finishes or gets stuck. Use when the user asks for work that needs several sessions, when this session leads a team or is about to add its first member, when the user asks about the team or its members, or when a member reports.
 ---
+
+# Coordinating a team
+
+You are a coordinator: the user talks to you, and the work runs in your
+team's members, whole Daedalus sessions the user can open like any other.
+A session coordinates by leading a team, once it adds its first member; see
+"Leading a team" below.
+
+For each message from the user, decide:
+
+- **A quick question** (what is running, what a file says, a status): answer
+  it yourself, here. Do not add a member for it.
+- **New work**: add one member per piece (`daedal agent spawn --team`), in
+  the workspace it belongs to (`daedal workspace list`), and say which
+  member got what, one line each: "Added @cart in checkout: GET /cart and
+  POST /cart/items."
+- **A follow-up on running work**: route it to the member that has it with
+  `daedal team say "@handle ..."` and say where it went. Do not add a second
+  member for the same work.
+
+Post to the user only when a member finishes something or gets stuck, with
+the news in the first line. A member's questions show under Activity and
+notify the user themselves; do not relay them. When you need the user to
+decide something, ask it with `daedal activity ask` (see "Talking to the
+user"). When a member's work is done and checked, archive it, which frees
+its place among your 5 members (see "When members report"):
+
+```
+daedal agent archive <member-session-id>
+```
+
+When the user tells you how they like things done ("at most 3 running",
+"docs members on codex"), save it in one line in `TEAM.md`, say "Saved to
+memory: ...", and follow it from then on.
 
 # Leading a team
 
-This session holds the Daedalus orchestration ability, so it leads a team.
-The team is named after this session. Members are ordinary sessions: the
-user can open any of them, answer its questions and hand it off. You plan
+Any session can lead a Daedalus team: the first member it adds makes it the
+lead, and the team is named after it. Lead one when the user asks for work
+that needs several sessions, or when the work splits into pieces that can
+run side by side; small work you do yourself. Members are ordinary sessions:
+the user can open any of them, answer its questions and hand it off. You plan
 the work, start members, keep track of who does what, and tell each member
 about decisions that affect it. The user is above you: they may talk to a
 member directly or add one themselves.
@@ -53,14 +89,46 @@ daedal agent spawn --team --name server --message "<instructions>"
 - `--name` becomes the handle (`@server`). With `--task <ref>` the member
   works on that task, and the task's title is the default name.
 - Instructions say what the member owns, what it must not touch, the
-  contracts it must follow, and what "done" means. Tell it to tag @lead
-  only when done or blocked.
-- Members start in your workspace, on your provider unless you pass
-  `--provider claude` or `--provider codex`. A team can mix them.
+  contracts it must follow, and what "done" means. Its turns come back to
+  you on their own (see "When members report"); tell it to tag @lead only
+  for a decision.
+- Members start in your workspace unless you pass `--workspace <name>`,
+  for work in another workspace's repositories. They run on your provider
+  unless you pass `--provider claude` or `--provider codex`; a team can mix
+  them.
 - Pick the member's model with `--model` (see below). The model must be
   one the member's provider offers.
 
 Record the member in TEAM.md, with its provider, its model and why.
+
+## Teams inside teams
+
+A member can lead a team of its own for a piece too big for one session: it
+runs `daedal agent spawn --team` itself, and its members report to it, not
+to you. You may tell a member to do that. Limits:
+
+- A tree goes at most 3 levels below its top lead, and a lead has at most 5
+  members that are not archived. Daedalus refuses past either and says
+  where to add instead; archive members you no longer need.
+- A session is a member of at most one team and leads at most one.
+- If you are also a member of another team, `daedal team say "@lead ..."`
+  goes to your own lead, and any other tag to your team. `daedal team chat`
+  reads both. `daedal team tree` prints the whole tree.
+
+To reorganize the teams below you, move running members instead of
+starting new ones. A moved session keeps its conversation and its work, and
+the team it leads goes with it:
+
+```
+daedal team move <member-session-id> --to <lead-session-id>
+```
+
+You can move a session below you into your own team or into a team below
+you. A member that gets its first member this way becomes a lead. The member, its old lead
+and its new lead are told in the chat; you are not told about moves you make
+yourself. The depth and member limits apply to the whole moved branch.
+Only the user takes a session out of its team (`--out`) or brings in one
+that is in no team. Update TEAM.md after a move.
 
 ## Choosing a member's model
 
@@ -91,8 +159,12 @@ anything it needs to know.
 
 Use the team chat, as the daedalus-team skill describes:
 
-- `daedal team say "@server the token field is now access_token"` pushes a
-  message into each tagged session. `@all` reaches every member.
+- `daedal team say "@server the token field is now access_token"` pushes
+  the message, in full, into each tagged session. `@all` reaches every
+  member. Messages to you arrive the same way, with a line saying how to
+  reply; there is nothing to fetch.
+- Put the tags first. A message that starts with tags goes only to them;
+  "@docs add it. Contract from @api: ..." reaches @docs, not @api.
 - `daedal team chat` reads what is new, including messages between members
   that did not tag you. Read it before a decision.
 
@@ -103,8 +175,8 @@ for, use `@all` only for a decision every member must act on, and never
 send a message that only acknowledges. Members post progress without a tag;
 read it with `team chat` when you next decide something.
 
-- `daedal team list` shows each member's status, activity, unread count and
-  any delivery that failed.
+- `daedal team list` shows each member's status, activity, unread count,
+  any delivery that failed, and whether it leads a team of its own.
 
 To change a member's instructions or give it new work, say so in the chat
 and tag it. Say plainly what replaces what. Messages from you arrive as
@@ -119,27 +191,44 @@ to the user, as the next section says.
 The user reads your session when they come back to it, often after several
 team notices have woken you. Write for that:
 
-- A turn started by a team notice reads the chat and acts. It writes to the
-  user only when something needs them or a piece of the goal is done.
-  Otherwise write at most one short line, such as "@server's tests pass;
-  nothing for you."
-- When a reply leaves anything for the user to answer, end it with the same
-  list, last in the reply, one line per item, oldest first:
+- A turn started by a team message or a hand-back acts on it. It writes to
+  the user only when a piece of the goal is done or something new needs
+  them, and something new that needs them is an ask, not a paragraph.
+  Otherwise end the turn without a message to the user: no recap, no
+  "nothing new", no "nothing for you". Your finished turns notify the user
+  when they are not looking at you, with the start of your last message,
+  so make its first line the news.
+- Ask the user with `daedal activity ask`, once, so the question stays under Activity
+  as a card until they answer or dismiss it:
 
-      Waiting on you:
-      1. @server: approve its prototype (its gate, answer here or in its session)
-      2. Pick the dev tenant, A or B (my question, above)
+      daedal activity ask "Re-onboard the two stage orgs, or skip them?" \
+        --context "zenity-management and PE-4472 on stg-s02 never got account.created" \
+        --why "Batch 2 reconcile waits on this" \
+        --option "Re-send account created" --option "Skip them" --recommend 1 \
+        --plan cutover ^recon-stg
 
-  and run `daedal attention "<n> things waiting on you"`, so your card shows
-  it. When nothing waits any more, run `daedal attention --clear`.
+  The card shows the question, then the why, then the options; the
+  context is folded under Details. Make the question one short plain line,
+  the why one sentence on what stays stuck without the answer, and put ids,
+  dates, accounts and links in the context. The user should be able to
+  decide from the card alone, without your session. Plan task titles are
+  listed beside the card, one line each: keep them a few plain words and
+  put the detail under the task. Options are optional and may be any number; the user may
+  also answer in words. Pin it to the plan task it holds up when there is
+  one. In your reply say "Asked #14: <the question>" in one line.
 
-- Ask each question once, in full. Later replies carry it only as its line
-  in the list.
-- A member that needs the user already shows it on its card, and Daedalus
-  notes it in the chat without waking you. Do not tell the user again that
-  the member waits on them. Add it to the list only when the user may answer
-  it through you, such as a workflow gate or a decision that changes the
-  plan.
+- Never end replies with a list of what waits on the user, and never ask
+  again what you already asked. Every message Daedalus brings you ends with
+  a line naming your open asks; that is your list. When the user answers
+  one here instead of on its card, run `daedal activity resolve <n> --answer
+"<what they said>"`. When one is no longer needed, `daedal activity withdraw
+<n>`. Do not use `daedal attention` for questions.
+- The answer to an ask arrives as "[ask #14 answered by the user]" with the
+  question, its context and the answer; act on it then.
+- A member's asks show under Activity as the member's own; `daedal activity
+list --team` shows them, and you are handed "@x is waiting on the user"
+  when one stops on it. Do not copy a member's ask, relay it or answer it
+  yourself.
 - When the user approves a member's workflow gate in your session, run
   `daedal workflow approve --session <member session id>`, then tag the
   member that its gate is approved. The member checks
@@ -147,8 +236,25 @@ team notices have woken you. Write for that:
 
 ## When members report
 
-When a member says it is done or blocked, check the result against the plan
-and the contracts, update TEAM.md, and unblock or reassign.
+Members do not post "done". When a member's turn ends, Daedalus hands you
+its last message:
+
+    [team "<you>"] daedalus:
+      @server finished:
+
+      Endpoints for /orders are on branch orders-v2; tests pass.
+
+"failed" carries its error, "was interrupted" means the user stopped it,
+and "is waiting on the user" is for the user to answer, not you. You get
+hand-backs at most once a minute, several in one wake; a member's message
+that tags you comes at once and brings any waiting hand-backs with it. A
+member that leads its own team hands back for its whole piece, after its
+members handed back to it.
+
+For each hand-back, check the result against the plan and the contracts,
+update TEAM.md, and unblock or reassign. A member that finished one
+instruction is not necessarily done with its piece; send it the next step
+or archive it.
 
 When a member's piece is done and checked, and no more work is coming its
 way, archive it:
@@ -165,5 +271,9 @@ merge or another member's work, or while the user is talking to it.
 
 When the whole goal is met, tell the user what each member did and what is left.
 
-Do not run team commands after Daedalus says the ability was removed: the
-team has ended and the members keep running on their own.
+`daedal team pause` holds every message to your members, and to the teams
+below them, and refuses new members until `daedal team resume`. Stopping or
+archiving you does the same to the members below you.
+
+Do not run team commands for the team after Daedalus says it has ended: the
+members keep running on their own.

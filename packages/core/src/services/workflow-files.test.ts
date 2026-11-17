@@ -121,8 +121,14 @@ describe("step and workflow files", () => {
         "change",
         "do",
         "feature",
+        "release",
         "research",
       ]);
+      // feature and bug include release, written once.
+      for (const name of ["feature", "bug"])
+        expect(
+          catalog.workflows.find((item) => item.name === name)?.steps,
+        ).toContain("@release");
       expect(
         catalog.steps
           .filter((item) => item.gate)
@@ -272,6 +278,80 @@ describe("step and workflow files", () => {
       const files = await readWorkflowFiles(folder);
       expect(files.steps.map((item) => item.name)).not.toContain("spare");
       expect(files.flows.map((item) => item.name)).not.toContain("do");
+    });
+  });
+
+  test("@name in steps includes a workflow, written bare in YAML", () => {
+    const flow = parseWorkflowFile(
+      "---\nname: feature\ndescription: Ping @lead, then go\nsteps: [plan, @release, feedback]\nloop: @release\n---\n",
+    );
+    expect(flow.steps).toEqual(["plan", "@release", "feedback"]);
+    expect(flow.loop).toBe("@release");
+    expect(flow.description).toBe("Ping @lead, then go");
+    expect(
+      parseWorkflowFile("---\nname: f\nsteps:\n  - plan\n  - @release\n---\n")
+        .steps,
+    ).toEqual(["plan", "@release"]);
+    expect(parseWorkflowFile(renderWorkflowFile(flow)).steps).toEqual(
+      flow.steps,
+    );
+    expect(() =>
+      parseWorkflowFile("---\nname: f\nsteps: [@release, @release]\n---\n"),
+    ).toThrow("Workflow 'release' is included twice");
+    expect(() =>
+      parseWorkflowFile('---\nname: f\nsteps: [plan, "@Bad"]\n---\n'),
+    ).toThrow("lowercase");
+  });
+
+  test("the editor refuses a workflow that includes itself or nests too deep, and flags a missing one", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const folder = join(home, "workflows");
+      await ensureWorkflowsFolder(folder);
+      const flow = (name: string, steps: string) =>
+        saveWorkflowFile(folder, {
+          kind: "flow",
+          text: `---\nname: ${name}\nsteps: [${steps}]\n---\n`,
+        });
+      await saveWorkflowFile(folder, {
+        kind: "step",
+        text: "---\nname: do\ndescription: Do\n---\nDo it.\n",
+      });
+      await expect(flow("selfish", "do, @selfish")).rejects.toThrow(
+        "Workflow 'selfish' includes itself",
+      );
+      await flow("ping", "do");
+      await flow("pong", "do, @ping");
+      await expect(flow("ping", "do, @pong")).rejects.toThrow(
+        "Workflows include each other in a loop: ping → pong → ping",
+      );
+      await flow("l4", "do");
+      await flow("l3", "do, @l4");
+      await flow("l2", "do, @l3");
+      await flow("l1", "do, @l2");
+      await expect(flow("l0", "do, @l1")).rejects.toThrow(
+        "Included workflows nest more than 3 levels deep: l0 → l1 → l2 → l3 → l4",
+      );
+      // Saving the innermost can make an outer workflow too deep.
+      await flow("l5", "do");
+      await expect(flow("l4", "do, @l5")).rejects.toThrow(
+        "Saving this makes workflow 'l1' unusable",
+      );
+      // A missing workflow is flagged, not refused: its file may come next.
+      await flow("later", "do, @ghost");
+      const files = await readWorkflowFiles(folder);
+      expect(files.flows.find((item) => item.name === "later")?.problem).toBe(
+        "No workflow 'ghost' to include as @ghost",
+      );
+      expect(files.flows.find((item) => item.name === "pong")?.problem).toBe(
+        null,
+      );
+      expect(files.flows.map((item) => item.name)).not.toContain("selfish");
+      // A workflow another includes cannot be deleted.
+      await expect(
+        deleteWorkflowFile(folder, { kind: "flow", name: "ping" }),
+      ).rejects.toThrow(
+        "Workflow 'ping' is included by pong; take @ping out of them first",
+      );
     });
   });
 });

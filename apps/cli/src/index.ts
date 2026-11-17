@@ -29,6 +29,8 @@ import { accountChecks, accountCommand, accountHelp } from "./accounts";
 import { routineCommand, routineHelp } from "./routines";
 import { sessionCommand, sessionHelp } from "./sessions";
 import { workflowCommand, workflowHelp } from "./workflows";
+import { planCommand, planHelp } from "./plans";
+import { activityAlias, activityCommand, activityHelp } from "./asks";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
 import { workspaceArchivedOrExplain } from "./archive";
@@ -94,13 +96,15 @@ Usage:
   daedal workspace <create|list|get|update|archive|restore|delete|remove> ... [--json]
   daedal task <create|list|get|current|update|status|timeline|remove> ... [--json]
   daedal repo <library|list|add|attach|sync|fetch|detach|worktree> ... [--json]
-  daedal agent <spawn|list|get|wait|attach|send|archive|restore|revive|stop|delete|remove> ... [--json]
+  daedal agent <models|spawn|list|reorder|get|wait|attach|send|archive|rebirth|continue|restore|revive|stop|delete|remove> ... [--json]
   daedal skill <list|get|enable|disable|visibility|install|remove|sync|doctor> ... [--json]
   daedal account <list|status|add|rename|remove|login|logout> ... [--json]
-  daedal session <rename|pin|unpin|color|abilities|grant|revoke> ... [--json]
+  daedal session <rename|pin|unpin|color|rebirth-at|abilities|grant|revoke> ... [--json]
   daedal routine <add|list|get|edit|pause|resume|run|remove|runs|log|when> ... [--json]
-  daedal team <say|chat|list|goal> ... [--json]
+  daedal team <say|chat|list|tree|goal|pause|resume> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
+  daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
+  daedal activity <ask|list|show|update|resolve|withdraw> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
   daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
@@ -118,6 +122,8 @@ const commandHelp: Record<string, string> = {
   routine: routineHelp,
   team: teamHelp,
   workflow: workflowHelp,
+  plan: planHelp,
+  activity: activityHelp,
   account: accountHelp,
   secret: secretHelp,
   keys: keysHelp,
@@ -205,7 +211,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal agent models <codex|claude> [--account <account>]
   daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--workflow <name>]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
-  daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--task <task-ref>] [--provider claude|codex] [--user]
+  daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
   daedal agent reorder --workspace <workspace> <agent-id> [<agent-id>...]
   daedal agent get <agent-id>
@@ -238,7 +244,6 @@ workspace's --start-sets-in-progress setting is on, which is the default.
 the task and write the brief back with 'task update --description-file -'
 instead of doing the task, and leaves the status alone.
 
-'agent spawn --ability orchestration' starts a session that leads a team.
 --color and --pin mark the session's card. See 'daedal session --help'.
 Routines are not an ability: they live on the Routines page; see
 'daedal routine --help'.
@@ -247,9 +252,13 @@ Routines are not an ability: they live on the Routines page; see
 already open, so the agent spends nothing choosing one.
 
 'agent spawn --team' adds a member to a team: with no value, the team of the
-lead running it; with a lead, that lead's team, and the lead is told in the
-team chat. The member runs on the lead's provider unless --provider picks
-the other; a team can mix Claude and Codex. See 'daedal team --help'.
+session running it, which becomes a lead if it is not one yet; with a lead,
+that lead's team (made now if the session leads none), and the lead is told
+in the team chat. Any session can lead, a member included, within 3 levels
+and 5 members a lead. The member runs in the lead's workspace unless
+--workspace names another, on the lead's provider unless --provider picks
+the other; a team can mix Claude and Codex. 'agent stop' and 'agent archive'
+on a lead do the same to every member below it. See 'daedal team --help'.
 
 'agent spawn' without --model starts with the workspace's default model when
 --provider is the workspace's default provider. Otherwise Claude is asked for
@@ -1246,7 +1255,8 @@ async function agentCommand(
       1,
       "daedal agent stop <agent-id> [--force]",
     );
-    const result = await context.agents.stop(
+    // A lead's members below it stop with it.
+    const result = await context.agents.stopTree(
       parsed.positionals[0]!,
       parsed.flags.has("force"),
     );
@@ -2484,7 +2494,10 @@ export async function runCli(
     }
   }
   const json = inputArgs.includes("--json");
-  const args = inputArgs.filter((argument) => argument !== "--json");
+  // `daedal ask` is the hidden alias of `daedal activity` from before.
+  const args = activityAlias(
+    inputArgs.filter((argument) => argument !== "--json"),
+  );
   // Hook sinks: they read their payload, hand it to core and return 0 on
   // every path, so a broken control plane never reaches the agent's session.
   if (args[0] === "agent" && args[1] === "telemetry") {
@@ -2558,6 +2571,8 @@ export async function runCli(
       "keys",
       "cloud",
       "workflow",
+      "plan",
+      "activity",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2602,6 +2617,14 @@ export async function runCli(
       );
     if (args[0] === "routine")
       return await routineCommand(context, args.slice(1), json);
+    if (args[0] === "plan")
+      return await planCommand(context, args.slice(1), json, () =>
+        callerSession(context).catch(() => undefined),
+      );
+    if (args[0] === "activity")
+      return await activityCommand(context, args.slice(1), json, () =>
+        callerSession(context).catch(() => undefined),
+      );
     return await agentCommand(context, args.slice(1), json, options);
   } finally {
     context.close();

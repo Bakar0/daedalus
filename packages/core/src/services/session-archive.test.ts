@@ -36,7 +36,8 @@ function setup(options: {
       cloudWorkspaceId: () => (options.linked ? "c1" : undefined),
     } as unknown as SqliteRepositories,
     agents: {
-      archive: async (id: string) => {
+      // With a lead's members below it, when it leads a team.
+      archiveTree: async (id: string) => {
         calls.push(`archive session ${id}`);
         return { id };
       },

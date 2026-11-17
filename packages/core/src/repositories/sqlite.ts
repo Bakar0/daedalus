@@ -28,6 +28,7 @@ import { accountModelKey, derivedDefaultModel } from "../domain";
 import { DaedalusError } from "../errors";
 import { AbilityRepository } from "./abilities";
 import { RoutineRepository } from "./routines";
+import { AskRepository } from "./asks";
 import { SecretRepository } from "./secrets";
 import { TeamRepository } from "./teams";
 import { WorkflowRepository } from "./workflows";
@@ -64,6 +65,8 @@ interface WorkspaceRow {
   account_models: string;
   default_claude_account: string | null;
   default_codex_account: string | null;
+  /** `workspace`, or `home` for Home's hidden row (043). */
+  kind?: string;
   /** From `workspace_places`, joined. */
   place: string | null;
   place_notice: string | null;
@@ -219,6 +222,7 @@ const workspaceFromRow = (row: WorkspaceRow): Workspace => {
     defaultModel: derivedDefaultModel(workspace),
     ...(row.place === "cloud" ? { place: "cloud" as const } : {}),
     ...(row.place_notice ? { cloudNotice: row.place_notice } : {}),
+    ...(row.kind === "home" ? { kind: "home" as const } : {}),
   };
 };
 
@@ -427,6 +431,7 @@ export class SqliteRepositories {
   readonly secrets: SecretRepository;
   readonly workflows: WorkflowRepository;
   readonly routines: RoutineRepository;
+  readonly asks: AskRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -438,6 +443,7 @@ export class SqliteRepositories {
     this.secrets = new SecretRepository(this.database);
     this.workflows = new WorkflowRepository(this.database);
     this.routines = new RoutineRepository(this.database);
+    this.asks = new AskRepository(this.database);
   }
 
   /**
@@ -474,8 +480,8 @@ export class SqliteRepositories {
          (id, slug, name, path, created_at, updated_at, archived_at,
           task_id_prefix, position, start_sets_in_progress, default_provider,
           default_model, auto_handoff_percent, default_claude_account,
-          default_codex_account, account_models, auto_rebirth_percent)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          default_codex_account, account_models, auto_rebirth_percent, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -495,6 +501,7 @@ export class SqliteRepositories {
         workspace.defaultCodexAccount,
         JSON.stringify(workspace.accountModels),
         autoRebirthColumn(workspace.autoRebirthPercent),
+        workspace.kind ?? "workspace",
       );
   }
 
@@ -972,6 +979,16 @@ export class SqliteRepositories {
     this.database
       .query("UPDATE agent_sessions SET auto_rebirth_percent = ? WHERE id = ?")
       .run(autoRebirthColumn(value), id);
+  }
+
+  /** The hidden row that owns Home, if it was made. */
+  findHomeWorkspace(): Workspace | undefined {
+    const row = this.database
+      .query<WorkspaceRow, []>(
+        `${WORKSPACES} WHERE workspaces.kind = 'home' LIMIT 1`,
+      )
+      .get();
+    return row ? workspaceFromRow(row) : undefined;
   }
 
   /**

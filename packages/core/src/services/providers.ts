@@ -383,9 +383,11 @@ export const codexConfigPath = (config: DaedalusConfig): string =>
 export const DAEDALUS_STATUS_INSTRUCTIONS = `You are running inside Daedalus, which shows the user whether each session is working, done, or needs them.
 - When you need the user to decide, answer, or approve something before you can continue, run \`daedal attention "<what you need from them>"\`. If you have a tool for asking the user a question (AskUserQuestion), you may use that instead. A question written only in your reply is shown as done, not as waiting on the user.
 - Run \`daedal attention --clear\` as soon as that is resolved.
+- A question that can wait while you work on, or one the user should decide from its context alone, goes to \`daedal activity ask "<question>" --context "<what it is>"\` instead (see \`daedal activity --help\`): it waits under Activity as a card until answered, and the answer comes back to you. A lead asks the user this way only. Ask once; never repeat it.
 - When you finish what you were asked, just end your turn. Daedalus marks it done.
 - When a command needs an API key, token or password, do not ask the user to paste it. Run \`daedal secret list\` and use one with \`daedal exec --secret NAME -- <command>\`. If it is not there, ask the user to add it from the key icon on the workspace's card in Daedalus (the key in the Workspaces heading for every workspace).
-- When you mention a pull request or issue, write its full URL (https://github.com/<owner>/<repo>/pull/<number>), not just \`#<number>\`. The terminal opens a URL on Cmd-click; a bare number opens nothing.`;
+- When you mention a pull request or issue, write its full URL (https://github.com/<owner>/<repo>/pull/<number>), not just \`#<number>\`. The terminal opens a URL on Cmd-click; a bare number opens nothing.
+- When work needs several sessions, you can lead a team: \`daedal agent spawn --team --message "<instructions>"\` adds a member and makes you its lead. The daedalus-orchestration skill says how to lead.`;
 
 const CLAUDE_APPEND_PROMPT = "--append-system-prompt";
 
@@ -1230,15 +1232,21 @@ export function buildAgentPrompt(input: {
    * `draft-brief` asks for the brief to be written back, not the work done.
    * `continue` starts a session that picks up where an earlier one stopped,
    * in the same working directory and in the same state: waiting on the user
-   * if it was, working if it was. `note` says whether it left one.
+   * if it was, working if it was. `note` says whether it left one in
+   * `REBIRTH.md` in the working directory, or is the note's path when it
+   * left one elsewhere.
    */
   mode?: "execute" | "draft-brief" | "continue";
-  note?: boolean;
+  note?: boolean | string;
 }): string | undefined {
   if (input.mode === "continue") {
     const work = input.taskNumber ? `task #${input.taskNumber}` : "the work";
+    const where =
+      typeof input.note === "string"
+        ? input.note
+        : `${REBIRTH_FILE} in your working directory`;
     const source = input.note
-      ? `It left a note in ${REBIRTH_FILE} in your working directory. Read that first, then check the worktree's actual state with git before relying on it.`
+      ? `It left a note in ${where}. Read that first, then check the worktree's actual state with git before relying on it.`
       : "It left no note, so rebuild the picture from the task brief, JOURNAL.md and the worktree's git state and history.";
     return [
       `Continue ${work}. An earlier session worked on it in this same working directory and was reborn as you because its context was full. ${source} Pick up in the state it stopped in. If it was waiting for the user, show the user the same question or plan again, run \`daedal attention\` with it, and wait for their answer. If it was in the middle of work, carry on from its next step. Instructions from the user in the note come first. Do not redo finished work.`,

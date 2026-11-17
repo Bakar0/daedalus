@@ -32,7 +32,11 @@ import {
 } from "../use-focus-scope";
 import { deleteKeyCloses, tabCloseRequest } from "./tab-keys";
 import { MarkdownPreview } from "../markdown-preview";
+import { isPlanPath, PlanView, type PlanLive } from "./PlanView";
+import { createPlan } from "./plan-actions";
 import { INSTRUCTIONS_ICON_PATH, WORKFLOW_ICON_PATH } from "../WorkflowPane";
+import { PLAN_ICON_PATH } from "../PlansPane";
+import { ACTIVITY_ICON_PATH } from "../ActivityPage";
 import {
   closeDocument,
   documentsIn,
@@ -47,6 +51,7 @@ import {
   subscribeDocuments,
 } from "./documents";
 import { workspaceBaseName } from "./explorer-state";
+import { byUser } from "../user-input";
 import { FileTypeIcon } from "./file-icons";
 import { monaco } from "./monaco";
 import { quickDiff } from "./quick-diff";
@@ -92,6 +97,10 @@ export interface EditorAreaHandle {
   closeTerminal(terminalId: string): void;
   /** Shows the Workflows tab, adding it first if it is not open. */
   openWorkflows(): void;
+  /** Shows the Plans tab, adding it first if it is not open. */
+  openPlans(): void;
+  /** Shows the Activity tab, adding it first if it is not open. */
+  openActivity(): void;
   /** Shows the Custom instructions tab, adding it first if it is not open. */
   openInstructions(): void;
   /** Shows the Routines page, adding it first if it is not open. */
@@ -117,6 +126,8 @@ type AppPanelKind =
   | "web"
   | "terminal"
   | "workflows"
+  | "plans"
+  | "needs"
   | "instructions"
   | "routinesPage"
   | "team";
@@ -129,6 +140,8 @@ export type CenterPanelKind =
   | "web"
   | "terminal"
   | "workflows"
+  | "plans"
+  | "needs"
   | "instructions"
   | "routinesPage"
   | "team";
@@ -138,8 +151,11 @@ export interface EditorAreaProps {
   workspaceId: string;
   theme: AppTheme;
   onActiveChange(path: string | undefined): void;
-  /** The kind of the tab in front changed, or the last tab closed. */
-  onActivePanel?(kind: CenterPanelKind | undefined): void;
+  /**
+   * The kind of the tab in front changed, or the last tab closed. `byUser`
+   * when the user picked it, with a click or a key.
+   */
+  onActivePanel?(kind: CenterPanelKind | undefined, byUser?: boolean): void;
   /** The session or task tab was closed by the user. */
   onAppPanelClosed?(kind: "session" | "task"): void;
   /** The session and task tabs are the app's; it draws their content. */
@@ -151,10 +167,14 @@ export interface EditorAreaProps {
   renderEmpty?(): React.ReactNode;
   /** The agent's icon, for the session tab. */
   sessionIcon?: React.ReactNode;
-  /** A terminal tab's content, drawn by the app. */
-  renderTerminal?(terminalId: string): React.ReactNode;
+  /** A terminal tab's content, drawn by the app; `active` while in front. */
+  renderTerminal?(terminalId: string, active: boolean): React.ReactNode;
   /** The Workflows tab's content, drawn by the app. */
   renderWorkflows?(): React.ReactNode;
+  /** The Plans tab's content, drawn by the app. */
+  renderPlans?(): React.ReactNode;
+  /** The Activity tab's content, drawn by the app. */
+  renderActivity?(): React.ReactNode;
   /** The Custom instructions tab's content, drawn by the app. */
   renderInstructions?(): React.ReactNode;
   /** The Routines page, drawn by the app. */
@@ -165,6 +185,8 @@ export interface EditorAreaProps {
   abilityTabName?(kind: "team", id: string): string | undefined;
   /** The + in the tab strip: a new terminal in a tab. */
   onNewTerminal?(): void;
+  /** What a plan's preview needs from the app: live sessions, and Open. */
+  planLive?: PlanLive;
   /** A terminal tab was closed by the user, so its shell should end. */
   onTerminalTabClosed?(terminalId: string): void;
   /** Hands a web tab's address to the default browser. */
@@ -227,14 +249,17 @@ interface EditorContextValue {
   taskTitle?: string;
   renderEmpty?(): React.ReactNode;
   sessionIcon?: React.ReactNode;
-  renderTerminal?(terminalId: string): React.ReactNode;
+  renderTerminal?(terminalId: string, active: boolean): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
+  renderPlans?(): React.ReactNode;
+  renderActivity?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
   abilityTabName?(kind: "team", id: string): string | undefined;
   onNewTerminal?(): void;
   onOpenExternal?(url: string): void;
+  planLive?: PlanLive;
   load(path: string): Promise<OpenDocument | undefined>;
   save(doc: OpenDocument): Promise<void>;
   close(panel: IDockviewPanel): Promise<void>;
@@ -324,6 +349,8 @@ export default function EditorArea({
   sessionIcon,
   renderTerminal,
   renderWorkflows,
+  renderPlans,
+  renderActivity,
   renderInstructions,
   renderRoutinesPage,
   renderTeam,
@@ -331,6 +358,7 @@ export default function EditorArea({
   onNewTerminal,
   onTerminalTabClosed,
   onOpenExternal,
+  planLive,
   onError,
   onWorkspaceDocumentSaved,
   handleRef,
@@ -548,7 +576,14 @@ export default function EditorArea({
         isImage(path) ? "image" : "file",
         {
           path,
-          mode: options.mode ?? current?.mode ?? "edit",
+          // A plan opens as its interactive document; a link to a line
+          // opens the text at that line.
+          mode:
+            options.mode ??
+            current?.mode ??
+            (isPlanPath(path) && options.line === undefined
+              ? "preview"
+              : "edit"),
           heading: options.heading ?? current?.heading,
         },
         options.pinned,
@@ -700,6 +735,14 @@ export default function EditorArea({
         whenReady(() =>
           placeApp("workflows", { path: "", kind: "workflows" }, "Workflows"),
         ),
+      openPlans: () =>
+        whenReady(() =>
+          placeApp("plans", { path: "", kind: "plans" }, "Plans"),
+        ),
+      openActivity: () =>
+        whenReady(() =>
+          placeApp("needs", { path: "", kind: "needs" }, "Activity"),
+        ),
       openInstructions: () =>
         whenReady(() =>
           placeApp(
@@ -830,6 +873,14 @@ export default function EditorArea({
       : undefined;
     return group?.activePanel ?? api?.activePanel;
   };
+  useCommand("plan.new", {
+    run: () =>
+      void createPlan(client, workspaceId, (message) =>
+        callbacks.current.onError(message),
+      ).then((path) => {
+        if (path) open(path, { pinned: true });
+      }),
+  });
   useCommand("tab.save", {
     enabled: inThisArea,
     run: (context) => {
@@ -948,13 +999,12 @@ export default function EditorArea({
         const raw = window.localStorage.getItem(layoutKey(workspaceId));
         if (raw) {
           api.fromJSON(JSON.parse(raw));
-          // A session's Routines tab is gone; a saved layout may still hold one.
-          for (const panel of [...api.panels])
-            if (
-              (panel.params as { kind?: string } | undefined)?.kind ===
-              "routines"
-            )
-              panel.api.close();
+          // A session's Routines tab and a lead's Threads tab are gone; a
+          // saved layout may still hold one.
+          for (const panel of [...api.panels]) {
+            const kind = (panel.params as { kind?: string } | undefined)?.kind;
+            if (kind === "routines" || kind === "threads") panel.api.close();
+          }
           restored = api.totalPanels > 0;
         }
       } catch {
@@ -978,7 +1028,7 @@ export default function EditorArea({
       api.onDidActivePanelChange((event) => {
         const params = event.panel?.params as FilePanelParams | undefined;
         callbacks.current.onActiveChange(params?.path || undefined);
-        callbacks.current.onActivePanel?.(panelKind(params));
+        callbacks.current.onActivePanel?.(panelKind(params), byUser());
       });
       api.onDidRemovePanel((panel) => {
         const params = panel.params as FilePanelParams | undefined;
@@ -1042,12 +1092,15 @@ export default function EditorArea({
     sessionIcon,
     renderTerminal,
     renderWorkflows,
+    renderPlans,
+    renderActivity,
     renderInstructions,
     renderRoutinesPage,
     renderTeam,
     abilityTabName,
     onNewTerminal,
     onOpenExternal,
+    planLive,
     load,
     save,
     close,
@@ -1076,12 +1129,16 @@ export default function EditorArea({
             web: WebPanel,
             terminal: TerminalPanel,
             workflows: WorkflowsPanel,
+            plans: PlansPanel,
+            needs: ActivityPanel,
             instructions: InstructionsPanel,
             routinesPage: RoutinesPagePanel,
             team: TeamPanel,
-            // A session's Routines tab is gone; a saved layout may still
-            // name it, and is restored with it closed.
+            // A session's Routines tab and a lead's Threads tab are gone; a
+            // saved layout may still name them, and is restored with them
+            // closed.
             routines: RetiredPanel,
+            threads: RetiredPanel,
           }}
           dndStrategy="pointer"
           getTabContextMenuItems={({ panel, group, api }) =>
@@ -1294,13 +1351,17 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
           ? (params.title ?? "Terminal")
           : params.kind === "workflows"
             ? "Workflows"
-            : params.kind === "instructions"
-              ? "Custom instructions"
-              : params.kind === "routinesPage"
-                ? "Routines"
-                : params.kind === "team"
-                  ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
-                  : (params.url ?? "Web");
+            : params.kind === "plans"
+              ? "Plans"
+              : params.kind === "needs"
+                ? "Activity"
+                : params.kind === "instructions"
+                  ? "Custom instructions"
+                  : params.kind === "routinesPage"
+                    ? "Routines"
+                    : params.kind === "team"
+                      ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
+                      : (params.url ?? "Web");
   return (
     <div
       className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
@@ -1350,6 +1411,10 @@ function AppTabIcon({ kind }: { kind: AppPanelKind }) {
         <path d="M3 3.5l1 1 2-2M3 8l1 1 2-2M3 12.5l1 1 2-2M8 3.5h5M8 8h5M8 12.5h5" />
       ) : kind === "workflows" ? (
         <path d={WORKFLOW_ICON_PATH} />
+      ) : kind === "plans" ? (
+        <path d={PLAN_ICON_PATH} />
+      ) : kind === "needs" ? (
+        <path d={ACTIVITY_ICON_PATH} />
       ) : kind === "instructions" ? (
         <path d={INSTRUCTIONS_ICON_PATH} />
       ) : kind === "team" ? (
@@ -1370,11 +1435,20 @@ function SessionPanel() {
   );
 }
 
-function TerminalPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+function TerminalPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   const context = useEditorContext();
+  // Coming to the front asks for the caret; a hidden tab keeps its React
+  // tree, so nothing else would re-render it.
+  const [active, setActive] = useState(api.isActive);
+  useEffect(() => {
+    const disposable = api.onDidActiveChange((event) =>
+      setActive(event.isActive),
+    );
+    return () => disposable.dispose();
+  }, [api]);
   return (
     <div className="app-panel terminal-panel">
-      {params.terminalId && context.renderTerminal?.(params.terminalId)}
+      {params.terminalId && context.renderTerminal?.(params.terminalId, active)}
     </div>
   );
 }
@@ -1388,9 +1462,8 @@ function InstructionsPanel() {
   );
 }
 
-function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
-  const context = useEditorContext();
-  // The tab reads the chat on a timer, so it stops while out of sight.
+/** Whether a tab is in front in its group, kept up to date. */
+function usePanelVisible(api: IDockviewPanelProps<FilePanelParams>["api"]) {
   const [visible, setVisible] = useState(api.isVisible);
   useEffect(() => {
     setVisible(api.isVisible);
@@ -1399,6 +1472,13 @@ function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
     );
     return () => subscription.dispose();
   }, [api]);
+  return visible;
+}
+
+function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
+  const context = useEditorContext();
+  // The tab reads the chat on a timer, so it stops while out of sight.
+  const visible = usePanelVisible(api);
   return (
     // Focusable so opening the tab can put focus in it (`focusAbilityPanel`).
     <div
@@ -1421,6 +1501,22 @@ function RoutinesPagePanel() {
     <div className="app-panel workflows-panel">
       {context.renderRoutinesPage?.()}
     </div>
+  );
+}
+
+function ActivityPanel() {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel workflows-panel">
+      {context.renderActivity?.()}
+    </div>
+  );
+}
+
+function PlansPanel() {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel workflows-panel">{context.renderPlans?.()}</div>
   );
 }
 
@@ -1572,6 +1668,8 @@ function FilePanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   if (!doc) return <div className="editor-loading">Opening…</div>;
   if (params.mode === "preview" && isHtml(params.path))
     return <HtmlPanel doc={doc} />;
+  if (params.mode === "preview" && isPlanPath(params.path))
+    return <PlanPanel doc={doc} />;
   if (params.mode === "preview" && isMarkdown(params.path))
     return (
       <MarkdownPanel
@@ -1823,6 +1921,27 @@ function DiffPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
   if ("message" in loaded)
     return <div className="editor-loading">{loaded.message}</div>;
   return <div className="monaco-panel" ref={container} />;
+}
+
+function PlanPanel({ doc }: { doc: OpenDocument }) {
+  useDocumentsRevision();
+  const context = useEditorContext();
+  return (
+    <div className="markdown-panel plan-panel">
+      <PlanView
+        client={context.client}
+        live={context.planLive}
+        onError={context.onError}
+        onFileChanged={(content) => {
+          if (!isDirty(doc) && content !== doc.model.getValue())
+            reloadDocument(doc, { ...doc.file, content });
+        }}
+        path={doc.path}
+        text={doc.model.getValue()}
+        workspaceId={context.workspaceId}
+      />
+    </div>
+  );
 }
 
 function MarkdownPanel({

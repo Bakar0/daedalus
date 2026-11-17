@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { TeamCursor, TeamMessage } from "../domain";
+import type { TeamCursor, TeamMessage, TeamMessageKind } from "../domain";
 
 interface TeamMessageRow {
   id: number;
@@ -8,6 +8,7 @@ interface TeamMessageRow {
   body: string;
   tags: string;
   created_at: string;
+  kind: string;
 }
 
 interface TeamCursorRow {
@@ -18,6 +19,7 @@ interface TeamCursorRow {
   delivered_through: number;
   last_error: string | null;
   last_attempt_at: string | null;
+  delivered_at: string | null;
 }
 
 const messageFromRow = (row: TeamMessageRow): TeamMessage => ({
@@ -27,6 +29,8 @@ const messageFromRow = (row: TeamMessageRow): TeamMessage => ({
   body: row.body,
   tags: JSON.parse(row.tags) as string[],
   createdAt: row.created_at,
+  kind:
+    row.kind === "handback" || row.kind === "waiting" ? row.kind : "message",
 });
 
 const cursorFromRow = (row: TeamCursorRow): TeamCursor => ({
@@ -37,6 +41,7 @@ const cursorFromRow = (row: TeamCursorRow): TeamCursor => ({
   deliveredThrough: row.delivered_through,
   lastError: row.last_error,
   lastAttemptAt: row.last_attempt_at,
+  deliveredAt: row.delivered_at,
 });
 
 /**
@@ -46,11 +51,13 @@ const cursorFromRow = (row: TeamCursorRow): TeamCursor => ({
 export class TeamRepository {
   constructor(private readonly database: Database) {}
 
-  addMessage(message: Omit<TeamMessage, "id">): TeamMessage {
+  addMessage(
+    message: Omit<TeamMessage, "id" | "kind"> & { kind?: TeamMessageKind },
+  ): TeamMessage {
     const row = this.database
-      .query<TeamMessageRow, [string, string, string, string, string]>(
-        `INSERT INTO team_messages (team_id, author, body, tags, created_at)
-         VALUES (?, ?, ?, ?, ?) RETURNING *`,
+      .query<TeamMessageRow, [string, string, string, string, string, string]>(
+        `INSERT INTO team_messages (team_id, author, body, tags, created_at, kind)
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING *`,
       )
       .get(
         message.teamId,
@@ -58,6 +65,7 @@ export class TeamRepository {
         message.body,
         JSON.stringify(message.tags),
         message.createdAt,
+        message.kind ?? "message",
       );
     if (!row) throw new Error("The team message was not stored");
     return messageFromRow(row);
@@ -111,6 +119,7 @@ export class TeamRepository {
           deliveredThrough: 0,
           lastError: null,
           lastAttemptAt: null,
+          deliveredAt: null,
         };
   }
 
@@ -138,14 +147,15 @@ export class TeamRepository {
     this.database
       .query(
         `INSERT INTO team_cursors
-         (team_id, handle, read_through, tagged_read_through, delivered_through, last_error, last_attempt_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+         (team_id, handle, read_through, tagged_read_through, delivered_through, last_error, last_attempt_at, delivered_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (team_id, handle) DO UPDATE SET
            read_through = excluded.read_through,
            tagged_read_through = excluded.tagged_read_through,
            delivered_through = excluded.delivered_through,
            last_error = excluded.last_error,
-           last_attempt_at = excluded.last_attempt_at`,
+           last_attempt_at = excluded.last_attempt_at,
+           delivered_at = excluded.delivered_at`,
       )
       .run(
         cursor.teamId,
@@ -155,6 +165,7 @@ export class TeamRepository {
         cursor.deliveredThrough,
         cursor.lastError,
         cursor.lastAttemptAt,
+        cursor.deliveredAt,
       );
   }
 }

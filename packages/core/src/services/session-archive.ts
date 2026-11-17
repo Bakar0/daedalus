@@ -36,11 +36,12 @@ export interface SessionArchiveOptions {
 export class SessionArchive {
   constructor(private readonly options: SessionArchiveOptions) {}
 
+  /** Archives a session, and every member below it if it leads a team. */
   archiveSession(input: {
     sessionId: string;
     force?: boolean;
   }): Promise<AgentSession> {
-    return this.options.agents.archive(input.sessionId, input.force);
+    return this.options.agents.archiveTree(input.sessionId, input.force);
   }
 
   async archiveWorkspace(input: {

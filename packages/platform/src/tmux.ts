@@ -276,8 +276,8 @@ export const tmuxPtyArguments = (target: TmuxTerminalTarget): string[] =>
     ";",
     // A drag over a program that reads no mouse, Codex or a shell, is tmux's
     // copy mode, which highlights it black on yellow. The terminal's own
-    // selection colour (`selectionBackground` in the desktop theme) makes
-    // the drag look like the selection it leaves behind.
+    // selection colour (`selectionBackground` in the desktop theme) keeps
+    // it in the app's colours.
     "set-option",
     "-w",
     "-t",

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { extname, isAbsolute, join } from "node:path";
+import { extname, isAbsolute, join, relative, sep } from "node:path";
 import packageJson from "../../../../package.json";
 import { readPasteboardFiles, writePasteboardFiles } from "@daedalus/platform";
 import {
@@ -14,18 +14,25 @@ import {
   DaedalusError,
   isUnseenRun,
   INSTALL_COMMANDS,
+  isPlanPath,
   normalizeError,
+  parsePlan,
+  planTasks,
   ReadModel,
   updateSettings,
   type AccountProfile,
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
+  type AskView,
   type CloudOverview,
   type IntegratedTerminal,
   type PendingNotification,
+  type PlanBoardEntry,
   type PresenceState,
+  LiveContentSearch,
   type RepositoryLibraryEntry,
+  type SearchRoot,
   type SessionAbility,
   type Team,
   type TeamMessage,
@@ -51,6 +58,7 @@ import type {
   AppUpdateDto,
   QuitChoice,
   AgentSessionDto,
+  AskDto,
   CloudMcpServersDto,
   CloudStateDto,
   DesktopRpcSchema,
@@ -162,6 +170,31 @@ const taskDto = (task: Task): TaskDto => ({ ...task });
 const workflowRunDto = (run: WorkflowRun): WorkflowRunDto => ({
   ...run,
   steps: run.steps.map(({ waitingSessionId: _, ...step }) => step),
+  groups: run.groups.map(({ lastRound: _, ...group }) => group),
+});
+const askDto = (ask: AskView): AskDto => ({
+  id: ask.id,
+  workspaceId: ask.workspaceId,
+  workspaceName: ask.workspaceName,
+  sessionId: ask.sessionId,
+  sessionName: ask.sessionName,
+  title: ask.title,
+  context: ask.context,
+  why: ask.why,
+  options: [...ask.options],
+  recommended: ask.recommended,
+  planPath: ask.planPath,
+  taskKey: ask.taskKey,
+  state: ask.state,
+  answer: ask.answer,
+  note: ask.note,
+  closedReason: ask.closedReason,
+  createdAt: ask.createdAt,
+  closedAt: ask.closedAt,
+  undoable:
+    (ask.state === "answered" || ask.state === "dismissed") &&
+    !ask.noticeDeliveredAt,
+  snoozedUntil: ask.snoozedUntil,
 });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
@@ -624,6 +657,34 @@ export function createDesktopRequestHandlers(
     return response;
   };
 
+  // The ⌘K palette searches the workspace on screen, or at Home the whole
+  // Daedalus home. One content search runs at a time, read in slices while
+  // it runs; a new query stops the one before it.
+  const searchRoot = async (workspace: string | null): Promise<SearchRoot> => {
+    const home = context.repositories.findHomeWorkspace();
+    if (workspace === null || workspace === home?.id)
+      return { path: context.config.home, home: true };
+    return {
+      path: (await context.workspaces.get(workspace)).path,
+      home: false,
+    };
+  };
+  const liveContent = new LiveContentSearch(context.search);
+  // At Home the file panel's paths are relative to the Daedalus home, not
+  // to the Home row's own folder: a plan opened
+  // there is found by its full path, and so belongs to its workspace.
+  const atHome = (workspace: string) =>
+    workspace === context.repositories.findHomeWorkspace()?.id;
+  const planFile = (workspace: string, path: string) =>
+    atHome(workspace)
+      ? context.plans.find(
+          undefined,
+          isAbsolute(path) ? path : join(context.config.home, path),
+        )
+      : context.plans.find({ workspace }, path);
+  /** The most plan files the palette reads. */
+  const SEARCH_PLAN_LIMIT = 200;
+
   return {
     // The cloud's parts change only with an announcement that names no
     // parts, so they come with the whole snapshot and never with a part.
@@ -722,6 +783,63 @@ export function createDesktopRequestHandlers(
       ),
     routinesAgent: ({ workspaceId }) =>
       mutate(async () => agentDto(await context.routines.agent(workspaceId))),
+    sessionResumeNow: ({ id }) =>
+      mutate(async () => {
+        const session = await context.agents.resumeMarked(id);
+        return session ? agentDto(session) : null;
+      }),
+    homeOpen: () => mutate(async () => workspaceDto(await context.home.open())),
+    askList: ({ plan }) =>
+      result(async () => {
+        // Reading is not a change; only asks it closed are announced.
+        if ((await context.asks.sweepPlans()).length) onMutation();
+        const asks = context.asks.list();
+        if (!plan) return asks.map(askDto);
+        const file = await context.plans
+          .find({ workspace: plan.workspaceId }, plan.path)
+          .catch(() => undefined);
+        return file
+          ? asks.filter((ask) => ask.planPath === file.absolutePath).map(askDto)
+          : [];
+      }),
+    askAnswer: ({ id, option, note }) =>
+      mutate(async () =>
+        askDto(
+          context.asks.get(
+            (await context.asks.answer(id, { option, note })).id,
+          ),
+        ),
+      ),
+    askDismiss: ({ id }) =>
+      mutate(async () =>
+        askDto(context.asks.get((await context.asks.dismiss(id)).id)),
+      ),
+    askSnooze: ({ id, until }) =>
+      mutate(() => askDto(context.asks.get(context.asks.snooze(id, until).id))),
+    askReopen: ({ id }) =>
+      mutate(() => askDto(context.asks.get(context.asks.reopen(id).id))),
+    askPlan: ({ path }) =>
+      result(async () => {
+        try {
+          const file = await context.plans.find(undefined, path);
+          const { plan } = await context.plans.read(file);
+          return {
+            path: file.absolutePath,
+            title: plan.title ?? file.path,
+            owner: plan.owner,
+            tasks: planTasks(plan).map((task) => ({
+              key: task.key,
+              id: task.id,
+              title: task.title,
+              state: task.state,
+              owner: task.owner,
+              depth: task.depth,
+            })),
+          };
+        } catch {
+          return null;
+        }
+      }),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
     teamSay: ({ teamId, body }) =>
       mutate(async () => {
@@ -1317,6 +1435,133 @@ export function createDesktopRequestHandlers(
           await context.workspaceContent.detachRepository(id),
         ),
       ),
+    searchFiles: ({ workspace, refresh }) =>
+      result(async () => {
+        const root = await searchRoot(workspace);
+        const list = await context.search.listFiles(root, refresh ?? false);
+        return {
+          root: root.path,
+          home: root.home,
+          files: list.files,
+          truncated: list.truncated,
+        };
+      }),
+    searchContent: ({ workspace, query, from }) =>
+      result(async () => {
+        const root = await searchRoot(workspace);
+        const slice = await liveContent.read(root, query, from ?? 0);
+        return { root: root.path, query, ...slice };
+      }),
+    searchPlans: ({ workspace }) =>
+      result(async () => {
+        const root = await searchRoot(workspace);
+        const { files } = await context.search.listFiles(root);
+        const paths = files.filter(isPlanPath).slice(0, SEARCH_PLAN_LIMIT);
+        const plans = await Promise.all(
+          paths.map(async (path) => {
+            try {
+              return [
+                {
+                  path,
+                  ...(await context.plans.outline(join(root.path, path))),
+                },
+              ];
+            } catch {
+              return [];
+            }
+          }),
+        );
+        return { root: root.path, plans: plans.flat() };
+      }),
+    searchPreview: ({ workspace, path, line }) =>
+      result(async () =>
+        context.search.preview(await searchRoot(workspace), path, line),
+      ),
+    planView: ({ workspace, path, text }) =>
+      result(async () => {
+        const file = await planFile(workspace, path);
+        const plan = parsePlan(text);
+        return {
+          title: plan.title,
+          owner: plan.owner,
+          blocks: plan.blocks,
+          hasTasksSection: plan.hasTasksSection,
+          absolutePath: file.absolutePath,
+          owners: await context.plans.owners(file, plan),
+        };
+      }),
+    planList: ({ workspace }) =>
+      result(async () => {
+        const item = (entry: PlanBoardEntry, path: string) => ({
+          path,
+          title: entry.title,
+          done: entry.done,
+          total: entry.total,
+          questions: entry.questions,
+          owner: entry.ownerView,
+        });
+        if (atHome(workspace)) {
+          // Paths are the Home file panel's: relative to the Daedalus home.
+          // A workspace kept outside the home has no path there to open.
+          const groups = (await context.plans.boardEverywhere()).map(
+            (group) => ({
+              workspaceId: group.workspaceId,
+              name: group.name,
+              plans: group.plans.flatMap((entry) => {
+                const path = relative(context.config.home, entry.absolutePath)
+                  .split(sep)
+                  .join("/");
+                return path.startsWith("../") ? [] : [item(entry, path)];
+              }),
+            }),
+          );
+          return {
+            home: true,
+            groups: groups.filter((group) => group.plans.length > 0),
+          };
+        }
+        const { name } = await context.workspaces.get(workspace);
+        const plans = await context.plans.board({ workspace });
+        return {
+          home: false,
+          groups: plans.length
+            ? [
+                {
+                  workspaceId: workspace,
+                  name,
+                  plans: plans.map((entry) => item(entry, entry.path)),
+                },
+              ]
+            : [],
+        };
+      }),
+    planCreate: ({ workspace, title }) =>
+      mutate(async () => {
+        // Home's plans are in the workspaces root's plans/, shown relative
+        // to the Daedalus home like everything else in Home's panel.
+        if (atHome(workspace)) {
+          const file = await context.plans.create({ home: true }, { title });
+          return { path: relative(context.config.home, file.absolutePath) };
+        }
+        return {
+          path: (await context.plans.create({ workspace }, { title })).path,
+        };
+      }),
+    planTaskStart: ({ workspace, path, task }) =>
+      mutate(async () => {
+        const file = await planFile(workspace, path);
+        const { session } = await context.plans.startTask(file, task);
+        return {
+          session: agentDto(session),
+          content: (await context.plans.read(file)).source,
+        };
+      }),
+    planAsk: ({ workspace, path, ...input }) =>
+      mutate(async () => {
+        const file = await planFile(workspace, path);
+        const { session, message } = await context.plans.askOwner(file, input);
+        return { sessionId: session.id, sessionName: session.name, message };
+      }),
     workspaceJournalAppend: (params) =>
       mutate(async () => {
         await context.workspaceContent.appendJournal(params);
@@ -1478,8 +1723,9 @@ export function createDesktopRequestHandlers(
       }),
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
+    // A lead's members below it stop with it.
     agentStop: ({ id, force }) =>
-      mutate(async () => agentDto(await context.agents.stop(id, force))),
+      mutate(async () => agentDto(await context.agents.stopTree(id, force))),
     agentRemove: ({ id }) =>
       mutate(async () => agentDto(await context.agents.remove(id))),
     agentDelete: ({ id }) =>

@@ -348,7 +348,6 @@ export interface SessionMenuModel {
   color: SessionColorDto | null;
   orchestration: boolean;
   offerAbilities: boolean;
-  offerOrchestration: boolean;
   onRename: () => void;
   onPin: (pinned: boolean) => void;
   onColor: (color: SessionColorDto | null) => void;
@@ -374,17 +373,17 @@ export function sessionMenuEntries(model: SessionMenuModel): {
         run: () => model.onPin(!model.pinned),
       },
     ],
+    // Any session leads once a member is added, so there is nothing to
+    // switch on; a lead can end its team.
     abilities:
-      model.offerAbilities && model.offerOrchestration
+      model.offerAbilities && model.orchestration
         ? [
             {
-              id: "orchestration",
-              label: "Orchestration",
-              checked: model.orchestration,
-              description: model.orchestration
-                ? "End the team. Members keep running as ordinary sessions."
-                : "Lead a team: this session plans the work and adds members.",
-              run: () => model.onOrchestration(!model.orchestration),
+              id: "end-team",
+              label: "End team",
+              description:
+                "End the team. Members keep running as ordinary sessions.",
+              run: () => model.onOrchestration(false),
             },
           ]
         : [],
@@ -440,7 +439,6 @@ export function SessionMenu({
   inheritedRebirth,
   orchestration,
   offerAbilities,
-  offerOrchestration,
   onRename,
   onPin,
   onColor,
@@ -460,8 +458,6 @@ export function SessionMenu({
   /** Whether the session leads a team. */
   orchestration: boolean;
   offerAbilities: boolean;
-  /** False for a team's member, which cannot lead one. */
-  offerOrchestration: boolean;
   onRename: () => void;
   onPin: (pinned: boolean) => void;
   onColor: (color: SessionColorDto | null) => void;
@@ -479,7 +475,6 @@ export function SessionMenu({
     color,
     orchestration,
     offerAbilities,
-    offerOrchestration,
     onRename,
     onPin,
     onColor,
@@ -532,27 +527,24 @@ export function SessionMenu({
             onChange={onAutoRebirth}
             value={autoRebirth}
           />
-          <hr className="menu-separator" />
-          <span className="menu-heading">Abilities</span>
-          {abilities.map((item) => (
-            <button
-              aria-checked={Boolean(item.checked)}
-              className="quiet menu-item"
-              key={item.id}
-              onClick={item.run}
-              role="menuitemcheckbox"
-              title={item.description}
-              type="button"
-            >
-              <span className="menu-item-label">{item.label}</span>
-              {/* The look of the skills switch; the item itself is the control. */}
-              <span
-                aria-hidden="true"
-                className="menu-switch"
-                data-on={item.checked ? "true" : undefined}
-              />
-            </button>
-          ))}
+          {abilities.length > 0 && (
+            <>
+              <hr className="menu-separator" />
+              <span className="menu-heading">Team</span>
+              {abilities.map((item) => (
+                <button
+                  className="quiet menu-item"
+                  key={item.id}
+                  onClick={item.run}
+                  role="menuitem"
+                  title={item.description}
+                  type="button"
+                >
+                  <span className="menu-item-label">{item.label}</span>
+                </button>
+              ))}
+            </>
+          )}
         </>
       )}
     </Menu>

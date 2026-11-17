@@ -8,6 +8,7 @@ import type {
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import { channelArtifactName } from "./skills";
+import { TEAM_MAX_DEPTH, teamAncestors } from "./team-tree";
 
 /** The lead's playbook. */
 export const ORCHESTRATION_SKILL = "daedalus-orchestration";
@@ -41,11 +42,11 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
     label: "Orchestration",
     providers: ["claude", "codex"],
     launchLine: (skill) =>
-      `You hold the Daedalus orchestration ability: you lead a team of sessions toward one goal. You plan the work, add members with 'daedal agent spawn --team', and talk with them in the team chat ('daedal team say', 'daedal team chat', 'daedal team list'). Follow the ${skill(ORCHESTRATION_SKILL)} skill, and the ${skill(TEAM_SKILL)} skill for the chat. Keep the plan, the members, the contracts between them and every decision in ${TEAM_FILE} in your working directory; if it exists, read it before anything else.`,
+      `You lead a Daedalus team of sessions toward one goal. You plan the work, add members with 'daedal agent spawn --team', and talk with them in the team chat ('daedal team say', 'daedal team chat', 'daedal team list'). When a member's work is done and checked, archive it ('daedal agent archive <member>'), which frees its place among your 5. Follow the ${skill(ORCHESTRATION_SKILL)} skill, and the ${skill(TEAM_SKILL)} skill for the chat. Keep the plan, the members, the contracts between them and every decision in ${TEAM_FILE} in your working directory; if it exists, read it before anything else.`,
     grantNote: (skill) =>
-      `Daedalus: this session now holds the orchestration ability and leads a team. Read the ${skill(ORCHESTRATION_SKILL)} skill now, then wait for the user.`,
+      `Daedalus: this session now leads a team. Read the ${skill(ORCHESTRATION_SKILL)} skill now, then wait for the user.`,
     revokeNote: () =>
-      "Daedalus: the orchestration ability was removed from this session. Your team has ended and its members keep running as plain sessions; do not run team commands.",
+      "Daedalus: your team has ended and its members keep running as plain sessions; do not run team commands for it.",
   },
 };
 
@@ -180,11 +181,16 @@ export class AbilityService {
       );
     const [ability] = this.validate(session, [abilityId]) as [AbilityId];
     const definition = ABILITIES[ability];
-    if (ability === "orchestration" && session.teamId)
-      throw new DaedalusError(
-        "CONFLICT",
-        `'${session.name}' is a member of a team, and a member cannot lead one`,
-      );
+    if (ability === "orchestration") {
+      // A member may lead a team of its own, as long as its members stay
+      // within the depth a team tree may have.
+      const above = teamAncestors(this.repositories, session.id);
+      if (above.length >= TEAM_MAX_DEPTH)
+        throw new DaedalusError(
+          "CONFLICT",
+          `'${session.name}' is ${above.length} levels below its top lead '${above.at(-1)!.name}', and teams nest at most ${TEAM_MAX_DEPTH} levels, so it cannot lead a team; add members to '${above[0]!.name}' instead ('daedal agent spawn --team ${above[0]!.id}')`,
+        );
+    }
     const note = options.live
       ? (definition.grantNote?.((skill) => this.skillName(skill)) ?? null)
       : null;

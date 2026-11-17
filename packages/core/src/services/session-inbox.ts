@@ -91,17 +91,18 @@ export async function ensureInbox(
 /**
  * Leaves a note for a session that must reach it whatever it is doing: now
  * if its waiter is reading, else when its current turn ends. True when a
- * waiter took it now.
+ * waiter took it now. The mailbox is a file the waiter prints whole, so a
+ * note keeps its line breaks; only the poke on the pipe is one line.
  */
 export async function leaveInInbox(
   config: DaedalusConfig,
   sessionId: string,
-  line: string,
+  note: string,
 ): Promise<boolean> {
   const mail = `${inboxPath(config, sessionId)}.mail`;
   const handle = await open(mail, "a", 0o600);
   try {
-    await handle.write(`${line.replace(/[\r\n]+/g, " ").trim()}\n`);
+    await handle.write(`${note.replace(/\r\n?/g, "\n").trim()}\n`);
   } finally {
     await handle.close();
   }

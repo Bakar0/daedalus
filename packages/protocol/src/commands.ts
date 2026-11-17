@@ -147,6 +147,20 @@ export const COMMAND_SPECS = [
     menu: { bar: "View", section: 0 },
   },
   {
+    id: "view.home",
+    title: "Go to Activity",
+    group: "View",
+    keys: ["mod+shift+h"],
+    menu: { bar: "View", section: 0 },
+  },
+  {
+    id: "view.routines",
+    title: "Go to Routines",
+    group: "View",
+    keys: [],
+    menu: { bar: "View", section: 0 },
+  },
+  {
     id: "view.board",
     title: "Board",
     group: "View",
@@ -378,6 +392,14 @@ export const COMMAND_SPECS = [
     title: "New Terminal",
     group: "File",
     keys: ["mod+t"],
+    menu: { bar: "File", section: 0 },
+  },
+  // No key: the File menu, the palette and the file tree's menu create one.
+  {
+    id: "plan.new",
+    title: "New Plan…",
+    group: "File",
+    keys: [],
     menu: { bar: "File", section: 0 },
   },
   {

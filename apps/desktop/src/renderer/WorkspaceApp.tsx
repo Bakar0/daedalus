@@ -100,6 +100,13 @@ import { WORKFLOWS_SKILL } from "./SkillsPanel";
 import { WorkflowsEditor } from "./WorkflowsEditor";
 import { InstructionsEditor } from "./InstructionsEditor";
 import { InstructionsPane, useInstructionsSummary } from "./InstructionsPane";
+import { PlansPage, PlansPane, usePlanList } from "./PlansPane";
+import {
+  ACTIVITY_ICON_PATH,
+  ActivityPage,
+  useOpenAskCounts,
+} from "./ActivityPage";
+import { createPlan } from "./files/plan-actions";
 import { accountModelKey } from "./account-models";
 import {
   accountCostLabel,
@@ -179,8 +186,14 @@ import {
 } from "./item-actions";
 import { KeyHints, Tooltip } from "./keyboard-ui";
 import { CommandPalette, type PaletteRow } from "./palette/CommandPalette";
+import type { PaletteSearchSource } from "./palette/use-palette-search";
 import { ShortcutsSheet } from "./palette/ShortcutsSheet";
-import { loadRecent, recordRecent, saveRecent } from "./palette/palette-model";
+import {
+  loadRecent,
+  recordRecent,
+  saveRecent,
+  type PaletteScope,
+} from "./palette/palette-model";
 
 /** What the palette suggests when nothing is typed, as row keys. */
 const PALETTE_SUGGESTIONS = [
@@ -230,7 +243,11 @@ import {
   waitingLabel,
   type SessionStatusView,
 } from "./session-view";
-import { sessionDisplayOrder, teamLookup } from "./session-order";
+import {
+  sessionDisplayOrder,
+  sessionDisplayRows,
+  teamLookup,
+} from "./session-order";
 
 // Pixi is about 290 kB (87 kB gzipped) that the app only needs once someone
 // opens the World, so the view and everything under it load on first open.
@@ -282,8 +299,6 @@ export {
 } from "./files/explorer-state";
 import { sessionColorStyle } from "./session-color-style";
 import { TerminalClipboardGate } from "./terminal-clipboard";
-import { copiedSelection, leftButtonReport } from "./terminal-selection";
-import type { Cell } from "./terminal-selection";
 import {
   fileBase64,
   pastedImagePaths,
@@ -334,6 +349,7 @@ const SIDE_PANEL_TABS = [
   ["files", "Files"],
   ["git", "Repositories"],
   ["tasks", "Tasks"],
+  ["activity", "Activity"],
 ] as const;
 
 /** The handle a member name becomes, as the core makes it. */
@@ -391,6 +407,16 @@ const lastViewStorageKey = (workspaceId: string) =>
  * from the session lists nested under each workspace in the left column; it
  * has no tab of its own (#55).
  */
+/**
+ * Stopped by "Quit and stop sessions" and not resumed yet: its card and its
+ * pane say so instead of showing an ended session or a blank terminal.
+ */
+const isResuming = (session: AgentSessionDto) =>
+  Boolean(session.resumeOnStart) &&
+  !session.archivedAt &&
+  session.status !== "running" &&
+  session.status !== "starting";
+
 export type WorkspaceView = "board" | "session" | "workspace" | "world";
 
 export function preferredWorkspaceView(
@@ -695,13 +721,19 @@ export const isLocalWebUrl = (url: string) => {
   }
 };
 
-/** What the side panel can show, each a tab in its strip. */
-export type SidePanelTab = "files" | "git" | "tasks";
+/**
+ * What the side panel can show, each a tab in its strip. At Home only the
+ * file tree; elsewhere Activity shows that workspace's alone.
+ */
+export type SidePanelTab = "files" | "git" | "tasks" | "activity";
 const SIDE_PANEL_TAB_KEY = "daedalus.panel.tab";
 const storedSidePanelTab = (): SidePanelTab => {
   try {
     const stored = window.localStorage.getItem(SIDE_PANEL_TAB_KEY);
-    return stored === "files" || stored === "git" || stored === "tasks"
+    return stored === "files" ||
+      stored === "git" ||
+      stored === "tasks" ||
+      stored === "activity"
       ? stored
       : "tasks";
   } catch {
@@ -730,6 +762,8 @@ function SidePanelTabIcon({ tab }: { tab: SidePanelTab }) {
           <circle cx="11.5" cy="4.5" r="1.6" />
           <path d="M4.5 5.1v5.8M11.5 6.1c0 3-7 2.1-7 4.8" />
         </>
+      ) : tab === "activity" ? (
+        <path d={ACTIVITY_ICON_PATH} />
       ) : (
         <path d="M2.5 3.5l1 1 2-2M2.5 8l1 1 2-2M2.5 12.5l1 1 2-2M7.5 3.5h6M7.5 8h6M7.5 12.5h6" />
       )}
@@ -1586,30 +1620,6 @@ function TerminalSurface({
     // The mouse gestures in this terminal that may copy; tmux copies a
     // drag as the button comes up.
     const clipboardGate = new TerminalClipboardGate();
-    // The left button's last press and release as the program got them, for
-    // `keepCopied`.
-    let pressedAt: Cell | undefined;
-    let releasedAt: Cell | undefined;
-    // tmux leaves copy mode once it has copied, taking its highlight; the
-    // terminal selects the same text so it stays. See terminal-selection.ts.
-    const keepCopied = (copied: string) => {
-      if (!terminal || !pressedAt || !releasedAt) return;
-      const buffer = terminal.buffer.active;
-      const found = copiedSelection({
-        copied,
-        press: pressedAt,
-        release: releasedAt,
-        cols: terminal.cols,
-        lineAt: (row) =>
-          buffer.getLine(buffer.viewportY + row - 1)?.translateToString(),
-      });
-      if (found)
-        terminal.select(
-          found.column,
-          buffer.viewportY + found.row,
-          found.length,
-        );
-    };
     const notePress = (event: MouseEvent) =>
       clipboardGate.press(event.clientX, event.clientY);
     const noteMove = (event: MouseEvent) =>
@@ -1870,7 +1880,6 @@ function TerminalSurface({
           );
           const copied = new TextDecoder().decode(bytes);
           onCopy(copied);
-          keepCopied(copied);
         } catch {
           // Not base64: nothing a program meant to copy.
         }
@@ -2054,11 +2063,6 @@ function TerminalSurface({
         // hidden behind another tab, says `NaN` where the cell goes. The
         // program cannot parse it and takes it for typed text.
         if (/^\u001b\[<\d+;NaN;|^\u001b\[<\d+;\d+;NaN/.test(data)) return;
-        const report = leftButtonReport(data);
-        if (report?.kind === "press") {
-          pressedAt = report.cell;
-          releasedAt = undefined;
-        } else if (report) releasedAt = report.cell;
         if (socket?.readyState === WebSocket.OPEN)
           socket.send(JSON.stringify({ type: "input", data }));
       });
@@ -2290,11 +2294,14 @@ function useArrivalFocus(id: string, active: boolean, mountRevision: number) {
 /** A terminal in a center tab, which takes the caret when it opens. */
 function CenterTerminalSurface({
   mountRevision,
+  active,
   ...props
 }: Omit<Parameters<typeof TerminalSurface>[0], "focused" | "onFocused"> & {
   mountRevision: number;
+  /** In front: coming back to the front takes the caret again. */
+  active: boolean;
 }) {
-  const arrival = useArrivalFocus(props.id, true, mountRevision);
+  const arrival = useArrivalFocus(props.id, active, mountRevision);
   return (
     <div ref={arrival.holderRef} style={{ display: "contents" }}>
       <TerminalSurface
@@ -2613,7 +2620,6 @@ export function WorkspaceApp({
     /** The workspace whose card's + opened the dialog. */
     workspaceId?: string;
     color?: SessionColorDto;
-    orchestration?: boolean;
     /** The team the new session joins as a member the user added. */
     teamId?: string;
     /** A member's instructions, which it needs. */
@@ -2726,19 +2732,26 @@ export function WorkspaceApp({
   // The tab in front of the center decides which view the rest of the app
   // sees: a session's, a task's, or the files'. No tab at all is the board's
   // empty center.
-  const followCenterTab = useCallback((kind?: CenterPanelKind) => {
-    setView((current) =>
-      current === "world"
-        ? current
-        : kind === "session"
-          ? "session"
-          : kind === "task"
-            ? "board"
-            : kind
-              ? "workspace"
-              : "board",
-    );
-  }, []);
+  const followCenterTab = useCallback(
+    (kind?: CenterPanelKind, picked?: boolean) => {
+      // A session tab the user picks takes the caret, as a sidebar pick does;
+      // one Daedalus brings forward on its own leaves focus alone.
+      if (kind === "session" && picked && activeSessionIdRef.current)
+        setFocusedSessionId(activeSessionIdRef.current);
+      setView((current) =>
+        current === "world"
+          ? current
+          : kind === "session"
+            ? "session"
+            : kind === "task"
+              ? "board"
+              : kind
+                ? "workspace"
+                : "board",
+      );
+    },
+    [],
+  );
   const [panelTab, setPanelTab] = useState<SidePanelTab>(
     () => initialPanelTab ?? storedSidePanelTab(),
   );
@@ -3095,7 +3108,10 @@ export function WorkspaceApp({
           (item) => item.id === current && !item.archivedAt,
         )
           ? current
-          : latest.workspaces.find((item) => !item.archivedAt)?.id,
+          : // Home is opened from its own entry, never fallen back to.
+            latest.workspaces.find(
+              (item) => !item.archivedAt && item.kind !== "home",
+            )?.id,
       );
       setSelectedTaskId((current) =>
         latest.tasks.some((item) => item.id === current) ? current : undefined,
@@ -3331,6 +3347,15 @@ export function WorkspaceApp({
     return client.subscribeKeybindings?.(take);
   }, [client]);
   useCommand("view.board", { run: () => setView("board") });
+  // Activity or Routines from anywhere, by key or ⌘K, as the sidebar's do.
+  useCommand("view.home", {
+    enabled: () => !homeOpening,
+    run: () => void openAtHome("activity"),
+  });
+  useCommand("view.routines", {
+    enabled: () => !homeOpening,
+    run: () => void openAtHome("routines"),
+  });
   useCommand("view.world", {
     enabled: () => Boolean(workspaceId),
     run: () =>
@@ -3536,7 +3561,7 @@ export function WorkspaceApp({
   }, [sessionType, snapshot]);
 
   /**
-   * Answers the quit dialog. Not routed through `perform`: archiving a board
+   * Answers the quit dialog. Not routed through `perform`: stopping a board
    * of sessions is slower than one RPC deadline, and the reply to a successful
    * quit never arrives at all because the process is gone by then.
    */
@@ -3700,6 +3725,15 @@ export function WorkspaceApp({
       activityById.get(session.id),
       attentionById.get(session.id),
     );
+    if (isResuming(session))
+      return {
+        ...view,
+        tone: "ended",
+        label: "resuming…",
+        detail: "Coming back after Quit and stop sessions",
+        attention: false,
+        reasons: [],
+      };
     const sleep = cloudSleep(session);
     // Quiet, unlike a lost session: opening the session wakes it. Anything
     // else about the cloud shows on the workspace, not on each card.
@@ -3717,6 +3751,23 @@ export function WorkspaceApp({
         }
       : view;
   };
+
+  /** Stop, on a running team member's menu. */
+  const memberMenuActions = (session: AgentSessionDto): MenuAction[] =>
+    teamOf(session)?.role === "member" &&
+    !session.archivedAt &&
+    (session.status === "running" || session.status === "starting")
+      ? [
+          {
+            id: "stop",
+            label: "Stop",
+            run: () =>
+              void perform(
+                client.request.agentStop({ id: session.id, force: false }),
+              ),
+          },
+        ]
+      : [];
 
   /** A session's card actions, for its menu with their pins. */
   const sessionMenuActions = (session: AgentSessionDto): MenuAction[] => {
@@ -3752,6 +3803,7 @@ export function WorkspaceApp({
             },
           ]
         : []),
+      ...memberMenuActions(session),
       ...(team?.role === "lead" && session.status === "running"
         ? [
             {
@@ -3799,7 +3851,6 @@ export function WorkspaceApp({
       offerAbilities:
         session.kind === "agent" &&
         (session.provider === "claude" || session.provider === "codex"),
-      offerOrchestration: !session.teamId,
       onColor: (color) => void updateSession(session, { color }),
       onOrchestration: (granted) =>
         void setOrchestrationAbility(session, granted),
@@ -3855,14 +3906,39 @@ export function WorkspaceApp({
     if (revived) openSession(revived.id);
   }
 
+  // Home, behind Activity and Routines, is a hidden row no list of workspaces shows.
+  const homeWorkspace = (snapshot?.workspaces ?? []).find(
+    (item) => item.kind === "home" && !item.archivedAt,
+  );
   const activeWorkspaces = (snapshot?.workspaces ?? []).filter(
-    (item) => !item.archivedAt && !archivingWorkspaceIds.has(item.id),
+    (item) =>
+      !item.archivedAt &&
+      item.kind !== "home" &&
+      !archivingWorkspaceIds.has(item.id),
   );
   // Most recently archived first, so the one just put away is on top.
   const archivedWorkspaces = (snapshot?.workspaces ?? [])
-    .filter((item) => item.archivedAt && !deletingWorkspaceIds.has(item.id))
+    .filter(
+      (item) =>
+        item.archivedAt &&
+        item.kind !== "home" &&
+        !deletingWorkspaceIds.has(item.id),
+    )
     .sort((a, b) => b.archivedAt!.localeCompare(a.archivedAt!));
-  const workspace = activeWorkspaces.find((item) => item.id === workspaceId);
+  const atHome = Boolean(homeWorkspace && homeWorkspace.id === workspaceId);
+  const workspace = atHome
+    ? homeWorkspace
+    : activeWorkspaces.find((item) => item.id === workspaceId);
+  // Home's files are the whole Daedalus home, so
+  // the file panel and editor take that as the folder their paths are under.
+  const daedalusHome = snapshot?.settings.home;
+  const filesWorkspace = useMemo(
+    () =>
+      workspace && atHome && daedalusHome
+        ? { ...workspace, path: daedalusHome }
+        : workspace,
+    [workspace, atHome, daedalusHome],
+  );
   const worktreeChanges = useWorktreeChanges(
     client,
     workspacePanelVisible ? workspace?.id : undefined,
@@ -3990,6 +4066,26 @@ export function WorkspaceApp({
   const activeSession = openingLaunch
     ? undefined
     : sessions.find((item) => item.id === activeSessionId);
+  // Opening a session still waiting to resume moves it to the front of the
+  // startup sweep; the core shares one launch if the sweep reaches it too.
+  const resumeNowId =
+    activeSession && isResuming(activeSession) ? activeSession.id : undefined;
+  useEffect(() => {
+    if (!resumeNowId) return;
+    void client.request.sessionResumeNow({ id: resumeNowId }).catch(() => {});
+  }, [client, resumeNowId]);
+  // The side panel's Plans, read only while the dock that shows them is.
+  // A cloud workspace's files are in its pod.
+  const askCounts = useOpenAskCounts(client);
+  const openAsks = askCounts.total;
+  const planList = usePlanList(
+    client,
+    !workspacePanelCollapsed &&
+      activeSession?.kind === "agent" &&
+      workspace?.place !== "cloud"
+      ? workspace?.id
+      : undefined,
+  );
   // A session that was asked for a rebirth, by a click or by the automatic
   // sweep, is followed to its successor: the fresh session in the same
   // working directory that started after the request. Looked up across the
@@ -4617,10 +4713,8 @@ export function WorkspaceApp({
     event.preventDefault();
     if (!sessionWorkspace) return;
     const isTerminal = sessionType === "terminal";
-    const { color, orchestration, teamId, instructions, workflow } =
-      sessionForm;
+    const { color, teamId, instructions, workflow } = sessionForm;
     const cloud = sessionInCloud;
-    const abilities = orchestration ? ["orchestration" as const] : [];
     const launch: SessionLaunchState = {
       key: crypto.randomUUID(),
       workspaceId: sessionWorkspace.id,
@@ -4687,9 +4781,7 @@ export function WorkspaceApp({
               teamId,
               ...(instructions?.trim() ? { message: instructions.trim() } : {}),
             }
-          : abilities.length && !isTerminal
-            ? { abilities }
-            : {}),
+          : {}),
         ...(workflow && !isTerminal && !teamId ? { workflow } : {}),
       });
       if (response.ok) {
@@ -5345,6 +5437,28 @@ export function WorkspaceApp({
     // its last session; the side panel holds its tasks, files and repositories.
   }
 
+  // Activity and Routines are the two pages of Home, the hidden row behind
+  // them; the word Home is not shown. Each page fills the center on its own,
+  // with no tab strip, and the sidebar marks the one shown. A file opened
+  // from Home's file tree shows in the editor instead, until a page is
+  // picked again.
+  const [homeOpening, setHomeOpening] = useState(false);
+  const [homePage, setHomePage] = useState<"activity" | "routines" | "files">(
+    "activity",
+  );
+  async function openAtHome(page: "activity" | "routines") {
+    setHomeOpening(true);
+    try {
+      const home =
+        homeWorkspace ?? (await perform(client.request.homeOpen({})));
+      if (!home) return;
+      setHomePage(page);
+      enterWorkspace(home.id, "workspace");
+    } finally {
+      setHomeOpening(false);
+    }
+  }
+
   /**
    * Lands on a view of one workspace. The scope effect restores that
    * workspace's remembered view when the workspace changes, so the ref is
@@ -5803,6 +5917,8 @@ export function WorkspaceApp({
   const renderSessionCard = (
     session: AgentSessionDto,
     reorder: ReorderHandles,
+    /** How many leads above it are listed: its indent. */
+    depth = 0,
   ) => {
     const task = snapshot?.tasks.find((item) => item.id === session.taskId);
     const tool = sessionTool(session);
@@ -5831,9 +5947,7 @@ export function WorkspaceApp({
       Boolean(sessionsById.get(team.team.leadId)?.archivedAt);
     return (
       <div
-        data-team-member={
-          team?.role === "member" && !leadArchived ? "true" : undefined
-        }
+        data-team-member={depth > 0 ? "true" : undefined}
         className={`session-card tone-${statusView.tone} ${view === "session" && session.id === highlightedSessionId ? "selected" : ""}`}
         data-cloud={session.hostId ? "true" : undefined}
         data-cloud-state={
@@ -5845,6 +5959,7 @@ export function WorkspaceApp({
         style={
           {
             ...sessionColorStyle(session.color),
+            "--team-depth": depth,
             // The title keeps clear of the actions on show: the menu, a
             // revive and a requested rebirth always, the rest on hover.
             "--card-actions-shown":
@@ -6294,7 +6409,7 @@ export function WorkspaceApp({
           const ordered = reorder.order.flatMap(
             (id) => liveSessions.find((session) => session.id === id) ?? [],
           );
-          const grouped = sessionDisplayOrder(ordered, snapshot?.teams ?? []);
+          const grouped = sessionDisplayRows(ordered, snapshot?.teams ?? []);
           return (
             <div
               aria-label={`Sessions in ${item.name}`}
@@ -6307,7 +6422,9 @@ export function WorkspaceApp({
                 data-reordering={reorder.draggingId ? "true" : undefined}
               >
                 {launches.map(renderLaunchCard)}
-                {grouped.map((session) => renderSessionCard(session, reorder))}
+                {grouped.map(({ session, depth }) =>
+                  renderSessionCard(session, reorder, depth),
+                )}
               </div>
               {archived.length > 0 && (
                 <details
@@ -6996,6 +7113,7 @@ export function WorkspaceApp({
   const [palette, setPalette] = useState<{
     context: CommandContext;
     startInActions: boolean;
+    scope?: PaletteScope;
   }>();
   const [recentRows, setRecentRows] = useState(() => loadRecent());
   const [shortcutsAreas, setShortcutsAreas] =
@@ -7005,8 +7123,16 @@ export function WorkspaceApp({
     if (palette || modal || shortcutsAreas) setSwitcher(undefined);
   }, [palette, modal, shortcutsAreas]);
   // Kept as the palette's own context: it is what runs the rows.
-  const openPalette = (context: CommandContext, startInActions = false) =>
-    setPalette({ context: { ...context, source: "palette" }, startInActions });
+  const openPalette = (
+    context: CommandContext,
+    startInActions = false,
+    scope?: PaletteScope,
+  ) =>
+    setPalette({
+      context: { ...context, source: "palette" },
+      startInActions,
+      ...(scope ? { scope } : {}),
+    });
   useCommand("palette.open", { run: (context) => openPalette(context) });
   useCommand("help.shortcuts", {
     run: (context) => setShortcutsAreas(context.areas),
@@ -7299,6 +7425,45 @@ export function WorkspaceApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [palette, snapshot, editingTask],
   );
+  // What the palette searches: the files, content and plans of the workspace
+  // on screen, or at Home of the whole Daedalus home. Made when it opens.
+  // A cloud workspace's files are in its pod, so it has no search here.
+  const paletteSearch = useMemo((): PaletteSearchSource | undefined => {
+    if (!palette) return undefined;
+    if (workspace?.place === "cloud") return undefined;
+    const target = atHome || !workspace ? null : workspace.id;
+    const openIn = homeWorkspace && target === null ? homeWorkspace.id : target;
+    const data = async <T,>(
+      response: Promise<
+        { ok: true; data: T } | { ok: false; error: { message: string } }
+      >,
+    ) => {
+      const settled = await response;
+      if (!settled.ok) throw new Error(settled.error.message);
+      return settled.data;
+    };
+    return {
+      where: target === null ? "Daedalus home" : workspace!.name,
+      listFiles: () => data(client.request.searchFiles({ workspace: target })),
+      searchContent: (query, from) =>
+        data(client.request.searchContent({ workspace: target, query, from })),
+      plans: () => data(client.request.searchPlans({ workspace: target })),
+      preview: (path, line) =>
+        data(
+          client.request.searchPreview({
+            workspace: target,
+            path,
+            ...(line ? { line } : {}),
+          }),
+        ),
+      open: (_root, path, line) => {
+        if (openIn) openFileTarget({ workspaceId: openIn, path }, line);
+      },
+    };
+    // Read when the palette opens; the workspace on screen cannot change
+    // while it is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [palette]);
   // The sessions shown lately rank a little higher; read when it opens.
   const paletteBoost = useMemo(
     () =>
@@ -7662,6 +7827,67 @@ export function WorkspaceApp({
     knownTerminalIds.current = current;
   }, [files, terminalIds]);
 
+  // Home's side panel is its file tree alone: the Daedalus home folder.
+  const shownPanelTab: SidePanelTab = atHome ? "files" : panelTab;
+  const sidePanelTabs = SIDE_PANEL_TABS.filter(
+    ([tab]) => !atHome || tab === "files",
+  );
+  const workspaceAsks = workspace
+    ? (askCounts.byWorkspace.get(workspace.id) ?? 0)
+    : 0;
+  /** The Routines page, in its own tab or as Home's page. */
+  const renderRoutinesHome = () => (
+    <RoutinesHome
+      client={client}
+      onOpenSession={(sessionId) => {
+        const target = sessionsById.get(sessionId);
+        if (target) showSession(target.id, target.workspaceId);
+      }}
+      onOpenAgent={async () => {
+        const home =
+          (atHome ? undefined : workspace?.id) ?? activeWorkspaces[0]?.id;
+        if (!home) return;
+        const agent = await perform(
+          client.request.routinesAgent({ workspaceId: home }),
+        );
+        if (!agent) return;
+        showSession(agent.id, agent.workspaceId);
+        files.withEditor((handle) => handle.showSessionBesideRoutines());
+      }}
+      {...(workspace && !atHome ? { currentWorkspaceId: workspace.id } : {})}
+      run={perform}
+      workspaces={activeWorkspaces.map((item) => ({
+        id: item.id,
+        name: item.name,
+      }))}
+    />
+  );
+  /** Activity: every workspace's at Home, one workspace's in its side panel. */
+  const renderActivityPage = (scope?: string) => (
+    <ActivityPage
+      {...(scope ? { workspaceId: scope } : {})}
+      client={client}
+      onError={setError}
+      onOpenPlan={(path, workspaceId) => {
+        const place = activeWorkspaces.find((item) => item.id === workspaceId);
+        if (place && path.startsWith(`${place.path}/`))
+          openFileTarget({
+            workspaceId: place.id,
+            path: path.slice(place.path.length + 1),
+          });
+        else
+          openFileTarget({
+            workspaceId: null,
+            path,
+            viewable: true,
+          });
+      }}
+      onOpenSession={(sessionId) => {
+        const target = sessionsById.get(sessionId);
+        if (target) showSession(target.id, target.workspaceId);
+      }}
+    />
+  );
   // The session tab shows whichever session the left column has open.
   const sessionPane = workspace ? (
     <section className="terminal-column">
@@ -7707,7 +7933,15 @@ export function WorkspaceApp({
             onDone={() => dismissCloudSignIn(activeSession.id)}
           />
         )}
-      {activeSession ? (
+      {activeSession && isResuming(activeSession) ? (
+        <div aria-busy="true" className="terminal-empty">
+          <strong>Resuming {sessionName(activeSession)}…</strong>
+          <span>
+            Quit and stop sessions stopped it; it comes back with its
+            conversation, and the terminal opens here as soon as it is ready.
+          </span>
+        </div>
+      ) : activeSession ? (
         // The drawer sits over the terminal, below the bars above it, so
         // their buttons stay in reach while it is open.
         <div className="terminal-stage">
@@ -7960,10 +8194,35 @@ export function WorkspaceApp({
               />
             </div>
             <button
-              className="sidebar-routines-link"
-              onClick={() =>
-                files.withEditor((handle) => handle.openRoutinesPage())
+              aria-current={
+                atHome && homePage === "activity" ? "page" : undefined
               }
+              className="sidebar-routines-link sidebar-home-link"
+              disabled={homeOpening}
+              onClick={() => void openAtHome("activity")}
+              title="What waits on you, in every workspace"
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 16 16">
+                <path d={ACTIVITY_ICON_PATH} />
+              </svg>
+              <span>Activity</span>
+              {openAsks > 0 && (
+                <span
+                  aria-label={`${openAsks} open`}
+                  className="sidebar-routines-count sidebar-needs-count"
+                >
+                  {openAsks}
+                </span>
+              )}
+            </button>
+            <button
+              aria-current={
+                atHome && homePage === "routines" ? "page" : undefined
+              }
+              className="sidebar-routines-link"
+              disabled={homeOpening}
+              onClick={() => void openAtHome("routines")}
               type="button"
             >
               <svg aria-hidden="true" viewBox="0 0 16 16">
@@ -8482,6 +8741,12 @@ export function WorkspaceApp({
                   onOpenSession={showSession}
                 />
               </Suspense>
+            ) : atHome && homePage !== "files" ? (
+              <div className="home-page">
+                {homePage === "activity"
+                  ? renderActivityPage()
+                  : renderRoutinesHome()}
+              </div>
             ) : (
               // Sessions, files, tasks and web pages share one tab strip, so
               // opening a file leaves the session one tab away (Orca's layout).
@@ -8503,7 +8768,7 @@ export function WorkspaceApp({
                 onWorkspaceDocumentSaved={() => void refreshWorkspaceContent()}
                 journalTarget={journalTarget}
                 theme={theme}
-                workspace={workspace}
+                workspace={filesWorkspace!}
                 worktreeBases={worktreeBases}
                 onActivePanel={followCenterTab}
                 onAppPanelClosed={(kind) => {
@@ -8536,36 +8801,31 @@ export function WorkspaceApp({
                 renderWorkflows={() => (
                   <WorkflowsEditor client={client} onError={setError} />
                 )}
+                renderActivity={() => renderActivityPage()}
+                renderPlans={() => (
+                  <PlansPage
+                    client={client}
+                    onCreate={() => {
+                      if (!workspace) return;
+                      const target = workspace.id;
+                      void createPlan(client, target, setError).then((path) => {
+                        if (!path) return;
+                        openFileTarget({ workspaceId: target, path });
+                      });
+                    }}
+                    onOpenPlan={(path) => {
+                      if (workspace)
+                        openFileTarget({ workspaceId: workspace.id, path });
+                    }}
+                    workspaceId={
+                      workspace?.place === "cloud" ? undefined : workspace?.id
+                    }
+                  />
+                )}
                 renderInstructions={() => (
                   <InstructionsEditor client={client} onError={setError} />
                 )}
-                renderRoutinesPage={() => (
-                  <RoutinesHome
-                    client={client}
-                    onOpenSession={(sessionId) => {
-                      const target = sessionsById.get(sessionId);
-                      if (target) showSession(target.id, target.workspaceId);
-                    }}
-                    onOpenAgent={async () => {
-                      const home = workspace?.id ?? activeWorkspaces[0]?.id;
-                      if (!home) return;
-                      const agent = await perform(
-                        client.request.routinesAgent({ workspaceId: home }),
-                      );
-                      if (!agent) return;
-                      showSession(agent.id, agent.workspaceId);
-                      files.withEditor((handle) =>
-                        handle.showSessionBesideRoutines(),
-                      );
-                    }}
-                    {...(workspace ? { currentWorkspaceId: workspace.id } : {})}
-                    run={perform}
-                    workspaces={activeWorkspaces.map((item) => ({
-                      id: item.id,
-                      name: item.name,
-                    }))}
-                  />
-                )}
+                renderRoutinesPage={() => renderRoutinesHome()}
                 abilityTabName={(_kind, id) =>
                   snapshot?.teams.find((team) => team.id === id)?.name
                 }
@@ -8583,12 +8843,13 @@ export function WorkspaceApp({
                     visible={visible}
                   />
                 )}
-                renderTerminal={(terminalId) => {
+                renderTerminal={(terminalId, active) => {
                   const terminal = integratedTerminals.find(
                     (item) => item.id === terminalId,
                   );
                   return terminal ? (
                     <CenterTerminalSurface
+                      active={active}
                       terminalEndpoint={terminalEndpoint}
                       fitRevision={terminalFitRevision}
                       id={terminal.id}
@@ -8615,6 +8876,21 @@ export function WorkspaceApp({
                   if (terminal) void closeIntegratedTerminal(terminal);
                 }}
                 onOpenExternal={openExternalLink}
+                planLive={{
+                  // A plan's owner chips follow these: a status, an
+                  // activity or a badge moving is a new key.
+                  liveKey: agents
+                    .map(
+                      (item) =>
+                        `${item.id}:${item.name}:${item.status}:${item.archivedAt ? 1 : 0}:${activityById.get(item.id)?.activity ?? ""}:${attentionById.has(item.id) ? 1 : 0}`,
+                    )
+                    .join("|"),
+                  workspaceName: workspace.name,
+                  openSession: (sessionId) => {
+                    const target = sessionsById.get(sessionId);
+                    if (target) showSession(target.id, target.workspaceId);
+                  },
+                }}
                 loadingContent={
                   view === "session" ? (
                     <div className="app-panel session-panel">{sessionPane}</div>
@@ -8700,23 +8976,29 @@ export function WorkspaceApp({
                 onKeyDown={(event) => onTabListKeyDown(event)}
                 role="tablist"
               >
-                {SIDE_PANEL_TABS.map(([tab, label], index) => (
+                {sidePanelTabs.map(([tab, label], index) => (
                   <button
-                    aria-label={label}
-                    aria-selected={!workspacePanelCollapsed && panelTab === tab}
+                    aria-label={
+                      tab === "activity" && workspaceAsks > 0
+                        ? `${label}, ${workspaceAsks} waiting on you`
+                        : label
+                    }
+                    aria-selected={
+                      !workspacePanelCollapsed && shownPanelTab === tab
+                    }
                     className="side-panel-tab"
                     key={tab}
                     tabIndex={rovingTabIndex(
                       index,
                       workspacePanelCollapsed
                         ? -1
-                        : SIDE_PANEL_TABS.findIndex(
-                            ([item]) => item === panelTab,
+                        : sidePanelTabs.findIndex(
+                            ([item]) => item === shownPanelTab,
                           ),
                     )}
                     onClick={() => {
                       if (workspacePanelCollapsed) toggleBoardDetailPanel();
-                      else if (panelTab === tab) {
+                      else if (shownPanelTab === tab) {
                         toggleBoardDetailPanel();
                         return;
                       }
@@ -8730,10 +9012,20 @@ export function WorkspaceApp({
                     {tab === "tasks" && taskAttentionCount > 0 && (
                       <i aria-hidden="true" className="side-panel-tab-badge" />
                     )}
+                    {tab === "activity" && workspaceAsks > 0 && (
+                      <i
+                        aria-hidden="true"
+                        className="side-panel-tab-badge activity-tab-badge"
+                      />
+                    )}
                   </button>
                 ))}
               </div>
-              {workspacePanelCollapsed ? null : panelTab === "files" ? (
+              {workspacePanelCollapsed ? null : shownPanelTab === "activity" ? (
+                <div className="side-panel-activity">
+                  {renderActivityPage(workspace.id)}
+                </div>
+              ) : shownPanelTab === "files" ? (
                 !workspaceContent ||
                 workspaceContent.workspaceId !== workspace.id ? (
                   <div className="empty">Loading files…</div>
@@ -8747,11 +9039,12 @@ export function WorkspaceApp({
                     onError={setError}
                     onOpenFile={() => {
                       if (view !== "workspace") setView("workspace");
+                      if (atHome) setHomePage("files");
                     }}
-                    workspace={workspace}
+                    workspace={filesWorkspace!}
                   />
                 )
-              ) : panelTab === "git" ? (
+              ) : shownPanelTab === "git" ? (
                 <>
                   <div className="section-heading">
                     <h2>Repositories</h2>
@@ -8842,6 +9135,24 @@ export function WorkspaceApp({
                           )
                         : undefined
                     }
+                  />
+                  <PlansPane
+                    list={planList}
+                    onCreate={() => {
+                      if (!workspace) return;
+                      const target = workspace.id;
+                      void createPlan(client, target, setError).then((path) => {
+                        if (!path) return;
+                        openFileTarget({ workspaceId: target, path });
+                      });
+                    }}
+                    onOpen={() =>
+                      files.withEditor((handle) => handle.openPlans())
+                    }
+                    onOpenPlan={(path) => {
+                      if (workspace)
+                        openFileTarget({ workspaceId: workspace.id, path });
+                    }}
                   />
                   <InstructionsPane
                     onOpen={() =>
@@ -9699,8 +10010,9 @@ export function WorkspaceApp({
                     </select>
                   </label>
                 )}
-              {/* What most sessions leave alone: the account, the colour and
-                  the abilities, folded under one row. */}
+              {/* What most sessions leave alone: the account and the colour,
+                  folded under one row. Any session leads a team once a member
+                  is added, so there is no ability to pick. */}
               {(!memberTeam || sessionAccounts.length > 1) && (
                 <details className="session-more-settings">
                   <summary>More settings</summary>
@@ -9746,43 +10058,6 @@ export function WorkspaceApp({
                         value={sessionForm.color ?? null}
                       />
                     </div>
-                  )}
-                  {sessionType !== "terminal" && !sessionForm.teamId && (
-                    // One row per ability the agent can be given at launch.
-                    <fieldset className="session-tool-picker session-abilities">
-                      <legend>Agent abilities</legend>
-                      {(
-                        [
-                          {
-                            key: "orchestration",
-                            label: "Orchestration",
-                            description:
-                              "Lead a team of sessions toward one goal",
-                          },
-                        ] as const
-                      ).map((ability) => (
-                        <label
-                          className="session-ability-option"
-                          key={ability.key}
-                        >
-                          <span>
-                            <strong>{ability.label}</strong>
-                            <small>{ability.description}</small>
-                          </span>
-                          <input
-                            checked={Boolean(sessionForm[ability.key])}
-                            className="switch"
-                            onChange={(event) =>
-                              setSessionForm({
-                                ...sessionForm,
-                                [ability.key]: event.target.checked,
-                              })
-                            }
-                            type="checkbox"
-                          />
-                        </label>
-                      ))}
-                    </fieldset>
                   )}
                 </details>
               )}
@@ -9830,6 +10105,7 @@ export function WorkspaceApp({
           <CommandPalette
             boost={paletteBoost}
             entries={paletteShown.rows}
+            search={paletteSearch}
             onChoose={(row) => closePaletteFor(row.key, row.run)}
             onChooseAction={(row, action) =>
               closePaletteFor(row.key, action.run)
@@ -9838,6 +10114,7 @@ export function WorkspaceApp({
             recent={recentRows}
             selectedKey={paletteShown.selectedKey}
             startInActions={palette.startInActions}
+            {...(palette.scope ? { initialScope: palette.scope } : {})}
             suggestions={PALETTE_SUGGESTIONS}
           />
         )}

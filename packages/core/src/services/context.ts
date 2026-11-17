@@ -63,6 +63,10 @@ import { TeamService } from "./teams";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkflowService } from "./workflows";
+import { PlanService } from "./plans";
+import { SearchService } from "./search";
+import { HomeService } from "./home";
+import { AskService, OpenAsksTransport } from "./asks";
 import {
   instructionFileOptions,
   WorkspaceContentService,
@@ -105,6 +109,15 @@ export interface ApplicationContext {
   teams: TeamService;
   /** Workflow runs: which workflow each piece of work follows, and where. */
   workflows: WorkflowService;
+  /** Plans: `plans/*.plan.md` in a workspace or at Home, and their owners. */
+  plans: PlanService;
+  /** The ⌘K palette's file list and content search. */
+  search: SearchService;
+  /** Home: the hidden Home workspace row. */
+  home: HomeService;
+  /** A lead marking a team member done. */
+  /** Activity: questions for the user that sessions ask once. */
+  asks: AskService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
   instructions: InstructionService;
   /** The person's own keys, `keybindings.json` in the home. */
@@ -281,6 +294,8 @@ export async function createApplicationContext(
     sessionChannel,
     (sessionId) => {
       activity.forget(sessionId);
+      // An archived session's asks close; one that only stopped keeps them.
+      asks.closeForSession(sessionId);
       // Archiving a running session stops it first, which ends it twice.
       const last = endedNoted.get(sessionId) ?? 0;
       if (Date.now() - last < 10_000) return;
@@ -365,21 +380,38 @@ export async function createApplicationContext(
     sweep: () =>
       sweepProviderActivity({ config, repositories, activity, tmux }),
   });
+  const rawTransport = new HostTeamTransport(
+    options.teamTransport ??
+      new ProviderTeamTransport(config, (session) =>
+        agents.codexExecutable(session),
+      ),
+    sessionChannel,
+    (sessionId) => activity.get(sessionId),
+  );
+  let plans!: PlanService;
+  // Every message Daedalus brings a session ends with its open asks.
+  const asks = new AskService(
+    repositories,
+    () => plans,
+    agents,
+    () => teamTransport,
+    options.now,
+  );
+  const teamTransport = new OpenAsksTransport(rawTransport, (sessionId) =>
+    asks.openLine(sessionId),
+  );
+  agents.onSessionRunning((session) => asks.flushSession(session.id));
   teams = new TeamService(
     repositories,
     abilities,
     agents,
-    new HostTeamTransport(
-      options.teamTransport ??
-        new ProviderTeamTransport(config, (session) =>
-          agents.codexExecutable(session),
-        ),
-      sessionChannel,
-      (sessionId) => activity.get(sessionId),
-    ),
+    teamTransport,
     options.now,
     activity,
   );
+  const home = new HomeService(repositories, workspaces, {
+    archive: (id) => agents.archive(id),
+  });
   const abilityNotes = new AbilityNoteDelivery(
     repositories,
     abilities,
@@ -395,6 +427,8 @@ export async function createApplicationContext(
     // on the restored rows rather than on stale ones.
     await activity.restore();
     await activity.decay();
+    // Home has no agent; a session an older build left there is put away.
+    await home.retireMainAgent();
   }
   workspaceContent.useCloudWorktrees(
     new CloudWorktrees({ config, repositories, workspaces, hosts }),
@@ -471,6 +505,20 @@ export async function createApplicationContext(
       () => workflowsEnabled(config),
       options.now,
     ),
+    plans: (plans = new PlanService({
+      workspaceRoot: config.workspaceRoot,
+      workspace: (reference) => workspaces.getActive(reference),
+      workspaces: () => workspaces.list(),
+      sessions: (workspace) => agents.list({ workspace }),
+      activity: (sessionId) => activity.get(sessionId)?.activity,
+      needsAttention: (sessionId) => Boolean(activity.attentionFor(sessionId)),
+      spawn: (input) => agents.spawn(input),
+      send: (sessionId, text, from) =>
+        agents.send(sessionId, text, from ? { from } : {}),
+    })),
+    search: new SearchService(),
+    home,
+    asks,
     abilityNotes,
     routines: new RoutineService(
       repositories,

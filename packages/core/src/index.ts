@@ -15,6 +15,7 @@ export * from "./services/hook-install";
 export * from "./services/account-homes";
 export * from "./services/accounts";
 export * from "./services/agents";
+export * from "./services/asks";
 export * from "./services/codex-sessions";
 export * from "./services/integrated-terminals";
 export * from "./services/cloud-launch";
@@ -59,6 +60,10 @@ export * from "./services/team-transport";
 export * from "./services/teams";
 export * from "./services/workflow-files";
 export * from "./services/workflows";
+export * from "./domain/plans";
+export * from "./services/plans";
+export * from "./services/search";
+export * from "./services/home";
 export { InstructionService } from "./services/instruction-files";
 export {
   KEYBINDINGS_FILE,

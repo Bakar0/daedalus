@@ -1,5 +1,6 @@
-// Electrobun's postBuild hook: puts the `daedal` launcher and the tmux from
-// scripts/build-tmux.ts into the bundle, and writes Info.plist versions
+// Electrobun's postBuild hook: puts the `daedal` launcher, the tmux from
+// scripts/build-tmux.ts and the ripgrep from scripts/fetch-ripgrep.ts into
+// the bundle, and writes Info.plist versions
 // macOS accepts (see scripts/bundle-version.ts).
 //
 // It goes in Contents/MacOS rather than through `build.copy`, which writes
@@ -41,18 +42,27 @@ console.log(
   `postBuild: Info.plist version ${writeBundleVersion(join(bundle, "Contents", "Info.plist"), packageJson.version)} for ${packageJson.version}`,
 );
 
-const source = resolve(import.meta.dir, "..", "build", "tmux", arch, "tmux");
-if (!(await Bun.file(source).exists())) {
-  const message = `postBuild: no bundled tmux at ${source}. Run \`bun run scripts/build-tmux.ts --arch ${arch}\` first.`;
-  if (channel === "dev") {
-    console.warn(`${message} This dev build will use tmux from PATH.`);
-    process.exit(0);
+/**
+ * Copies a binary built or fetched under build/<folder>/<arch>/ into
+ * Contents/MacOS. A stable or canary build fails without it; a dev build
+ * warns and leaves the app to search PATH.
+ */
+async function bundleBinary(folder: string, name: string, script: string) {
+  const source = resolve(import.meta.dir, "..", "build", folder, arch!, name);
+  if (!(await Bun.file(source).exists())) {
+    const message = `postBuild: no bundled ${name} at ${source}. Run \`bun run ${script} --arch ${arch}\` first.`;
+    if (channel === "dev") {
+      console.warn(`${message} This dev build will use ${name} from PATH.`);
+      return;
+    }
+    console.error(message);
+    process.exit(1);
   }
-  console.error(message);
-  process.exit(1);
+  const destination = join(bundle, "Contents", "MacOS", name);
+  await copyFile(source, destination);
+  await chmod(destination, 0o755);
+  console.log(`postBuild: bundled ${source} as ${destination}`);
 }
 
-const destination = join(bundle, "Contents", "MacOS", "tmux");
-await copyFile(source, destination);
-await chmod(destination, 0o755);
-console.log(`postBuild: bundled ${source} as ${destination}`);
+await bundleBinary("tmux", "tmux", "scripts/build-tmux.ts");
+await bundleBinary("ripgrep", "rg", "scripts/fetch-ripgrep.ts");

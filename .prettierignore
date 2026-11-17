@@ -16,3 +16,4 @@ apps/phone/src/mac-board.css
 
 # Helm templates are Go templates, not YAML.
 deploy/helm/daedalus/templates
+tests/fixtures/plans/

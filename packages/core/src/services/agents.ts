@@ -56,6 +56,8 @@ import {
   resolveProvider,
   sessionLaunchModel,
 } from "./providers";
+import { splitLines } from "./cloud-mark";
+import { teamDescendants } from "./team-tree";
 import type { DeliveryResult, SessionChannel } from "./session-channel";
 import { inboxWaiterAlive, leaveInInbox, usesInbox } from "./session-inbox";
 import { installedSkill, requireSkill } from "./installed-skills";
@@ -447,6 +449,23 @@ export interface CloudLaunchExtras {
   secrets?: Record<string, string>;
 }
 
+/** How many marked sessions the startup sweep resumes at once. */
+const RESUMES_AT_ONCE = 4;
+
+/** Runs `work` over `items`, at most `size` at a time, keeping their order. */
+async function inBatches<T, R>(
+  items: readonly T[],
+  size: number,
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let start = 0; start < items.length; start += size)
+    results.push(
+      ...(await Promise.all(items.slice(start, start + size).map(work))),
+    );
+  return results;
+}
+
 export class AgentService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -501,17 +520,23 @@ export class AgentService {
     this.teamLaunchLines = lines;
   }
 
-  private sessionRunning: (session: AgentSession) => Promise<unknown> =
-    async () => undefined;
+  private readonly sessionRunningListeners: ((
+    session: AgentSession,
+  ) => Promise<unknown>)[] = [];
+
+  private async sessionRunning(session: AgentSession): Promise<void> {
+    for (const listener of this.sessionRunningListeners)
+      await listener(session).catch(() => undefined);
+  }
 
   /**
    * Called once a spawn, restore or revive has the session running, such as
    * to send it team messages that waited while it was not. A resumed session
-   * sits idle, so its own hooks may not fire again for a long time. Must not
-   * throw.
+   * sits idle, so its own hooks may not fire again for a long time. Every
+   * listener is called, in the order they were added.
    */
   onSessionRunning(run: (session: AgentSession) => Promise<unknown>): void {
-    this.sessionRunning = run;
+    this.sessionRunningListeners.push(run);
   }
 
   private cloudAsleep:
@@ -1041,8 +1066,8 @@ export class AgentService {
           sessionName: name,
           model: input.model,
           prompt,
-          acceptPeerMessages:
-            Boolean(team) || abilities.includes("orchestration"),
+          // Any session may lead a team or join one later.
+          acceptPeerMessages: true,
         });
     const session: AgentSession = {
       id,
@@ -1208,9 +1233,7 @@ export class AgentService {
             sessionId: agent.id,
             sessionName: agent.name,
             model: modelArgument(agent.args),
-            acceptPeerMessages:
-              Boolean(agent.teamId) ||
-              Boolean(this.abilities.held(agent.id, "orchestration")),
+            acceptPeerMessages: true,
             resume: {
               ...(agent.providerSessionId
                 ? { nativeId: agent.providerSessionId }
@@ -1305,7 +1328,8 @@ export class AgentService {
      * take over its worktrees, and launch with the continuation prompt.
      */
     continueFrom?: AgentSession;
-    note?: boolean;
+    /** Whether a note was left, or where when it is not in the working directory. */
+    note?: boolean | string;
     /** Abilities the session holds from the start, such as `orchestration`. */
     abilities?: string[];
     color?: SessionColor;
@@ -1461,16 +1485,18 @@ export class AgentService {
           sessionName: name,
           prompt: launchPrompt,
           model,
-          acceptPeerMessages:
-            Boolean(team) || abilities.includes("orchestration"),
+          // Any session may lead a team or join one later.
+          acceptPeerMessages: true,
           workingDirectory: prepared.workingDirectory,
-          additionalDirectories: sessionDirectories(
-            workspace.path,
-            prepared.references.map(
-              (repository) =>
-                repository.referencePath ?? repository.canonicalPath,
+          additionalDirectories: [
+            ...sessionDirectories(
+              workspace.path,
+              prepared.references.map(
+                (repository) =>
+                  repository.referencePath ?? repository.canonicalPath,
+              ),
             ),
-          ),
+          ],
         });
     const session: AgentSession = {
       id,
@@ -1804,6 +1830,13 @@ export class AgentService {
       rebirthRequestedAt: new Date().toISOString(),
     });
     let session: AgentSession;
+    // A session at Home runs at the Daedalus home, where nothing is written,
+    // so its note goes in the Home folder and the successor is told the path.
+    const home = this.repositories.findHomeWorkspace();
+    const notePath =
+      home?.id === predecessor.workspaceId
+        ? join(home.path, REBIRTH_FILE)
+        : undefined;
     try {
       const note = input.note?.trim();
       if (note && predecessor.hostId) {
@@ -1821,7 +1854,7 @@ export class AgentService {
         ]);
       } else if (note)
         await writeFile(
-          join(predecessor.workingDirectory, REBIRTH_FILE),
+          notePath ?? join(predecessor.workingDirectory, REBIRTH_FILE),
           `${note}\n`,
           "utf8",
         );
@@ -1840,7 +1873,7 @@ export class AgentService {
         ...(input.account !== undefined ? { account: input.account } : {}),
         message: input.message,
         continueFrom: predecessor,
-        note: Boolean(note),
+        note: note ? (notePath ?? true) : false,
       });
     } catch (error) {
       // No successor, so the mark would claim a rebirth that is not
@@ -1865,6 +1898,8 @@ export class AgentService {
       // So is the workflow run: the successor carries on at the same step.
       this.repositories.workflows.moveToSession(predecessor.id, session.id);
       this.repositories.routines.moveAgent(predecessor.id, session.id);
+      // Its open asks, and notices not yet delivered, are the successor's.
+      this.repositories.asks.moveToSession(predecessor.id, session.id);
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });
@@ -2135,7 +2170,11 @@ export class AgentService {
       await leaveInInbox(
         this.config,
         agent.id,
-        `[message from session "${from.name}", not the user] ${text}`,
+        // Its lines after the first are indented, so none of them can pass
+        // for another note's header.
+        `[message from session "${from.name}", not the user] ${splitLines(
+          text.trim(),
+        ).join("\n  ")}`,
       );
       return agent;
     }
@@ -2181,6 +2220,33 @@ export class AgentService {
           this.repositories.setAgentColor(member.id, value);
     });
     return { ...agent, color: value };
+  }
+
+  /**
+   * Stops a session and, when it leads a team, every member below it that
+   * is running. A member that will not stop is left as it is; the session
+   * itself must stop.
+   */
+  async stopTree(id: string, force = false): Promise<AgentSession> {
+    const stopped = await this.stop(id, force);
+    for (const member of teamDescendants(this.repositories, stopped.id))
+      if (member.status === "running" || member.status === "starting")
+        await this.stop(member.id, force).catch(() => undefined);
+    return stopped;
+  }
+
+  /**
+   * Archives a session and, when it leads a team, every member below it.
+   * Archiving pauses each team it leads; restoring a lead brings its team
+   * back, and its members are restored one by one.
+   */
+  async archiveTree(id: string, force = false): Promise<AgentSession> {
+    const members = teamDescendants(this.repositories, (await this.get(id)).id);
+    const archived = await this.archive(id, force);
+    for (const member of members)
+      if (!this.repositories.findAgent(member.id)?.archivedAt)
+        await this.archive(member.id, force).catch(() => undefined);
+    return archived;
   }
 
   async stop(id: string, force = false): Promise<AgentSession> {
@@ -2459,7 +2525,7 @@ export class AgentService {
   }
 
   /**
-   * Brings back what "Quit and stop sessions" put away, which is what makes
+   * Brings back what "Quit and stop sessions" stopped, which is what makes
    * that a pause rather than a farewell.
    *
    * Separate from `reviveLostSessions` because the two recover different
@@ -2479,24 +2545,79 @@ export class AgentService {
       resumed: AgentSession[];
       skipped: { sessionId: string; name: string; reason: string }[];
     } = { resumed: [], skipped: [] };
+    // Stopped by "Quit and stop sessions", or archived by a build before it
+    // stopped them instead.
     const marked = this.repositories
       .listAgents()
-      .filter((agent) => agent.resumeOnStart && agent.archivedAt);
+      .filter(
+        (agent) =>
+          agent.resumeOnStart &&
+          (agent.archivedAt ||
+            (agent.status !== "running" && agent.status !== "starting")),
+      );
     if (!marked.length) return result;
     if ((await this.hosts.local.probe()) !== undefined) return result;
-    for (const agent of marked) {
-      try {
-        result.resumed.push(await this.restore(agent.id));
-      } catch (error) {
-        this.repositories.updateAgent({ ...agent, resumeOnStart: false });
+    // A few at a time: each is a provider starting up, and one at a time made
+    // a full board take minutes. The one the user opens goes first through
+    // `resumeMarked`, which this shares so nothing starts twice.
+    const settled = await inBatches(marked, RESUMES_AT_ONCE, (agent) =>
+      this.resumeMarked(agent.id).then(
+        (session) => ({ agent, session }),
+        (error: unknown) => ({ agent, error }),
+      ),
+    );
+    for (const item of settled) {
+      if ("session" in item) {
+        if (item.session) result.resumed.push(item.session);
+      } else
         result.skipped.push({
-          sessionId: agent.id,
-          name: agent.name,
-          reason: reviveFailureReason(error),
+          sessionId: item.agent.id,
+          name: item.agent.name,
+          reason: reviveFailureReason(item.error),
         });
-      }
     }
     return result;
+  }
+
+  /** Resumes in flight, so the sweep and an opened card share one launch. */
+  private readonly resuming = new Map<
+    string,
+    Promise<AgentSession | undefined>
+  >();
+
+  /**
+   * Resumes one session "Quit and stop sessions" marked, now: the startup
+   * sweep calls it for each, and the app when the user opens one still
+   * waiting. Returns undefined when it is no longer marked. The flag is
+   * cleared either way, so a session that cannot come back is not retried
+   * on every launch.
+   */
+  resumeMarked(id: string): Promise<AgentSession | undefined> {
+    const running = this.resuming.get(id);
+    if (running) return running;
+    const work = (async () => {
+      const agent = this.repositories.findAgent(id);
+      if (!agent?.resumeOnStart) return undefined;
+      if (
+        !agent.archivedAt &&
+        (agent.status === "running" || agent.status === "starting")
+      ) {
+        this.repositories.updateAgent({ ...agent, resumeOnStart: false });
+        return agent;
+      }
+      try {
+        return agent.archivedAt
+          ? await this.restore(agent.id)
+          : await this.relaunch({ ...agent, resumeOnStart: false });
+      } catch (error) {
+        const after = this.repositories.findAgent(id);
+        if (after?.resumeOnStart)
+          this.repositories.updateAgent({ ...after, resumeOnStart: false });
+        throw error;
+      }
+    })().finally(() => this.resuming.delete(id));
+    this.resuming.set(id, work);
+    return work;
   }
 
   /**
@@ -2607,9 +2728,7 @@ export class AgentService {
       }).adapter.buildLaunch({
         sessionId: agent.id,
         model: modelArgument(agent.args),
-        acceptPeerMessages:
-          Boolean(agent.teamId) ||
-          Boolean(this.abilities.held(agent.id, "orchestration")),
+        acceptPeerMessages: true,
         workingDirectory: agent.workingDirectory,
         additionalDirectories: sessionDirectories(
           workspace.path,

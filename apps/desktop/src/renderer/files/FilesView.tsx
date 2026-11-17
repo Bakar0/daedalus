@@ -16,6 +16,7 @@ import type {
   EditorAreaHandle,
 } from "./EditorArea";
 import { FileTree, type FileTreeHandle } from "./FileTree";
+import type { PlanLive } from "./PlanView";
 
 // Monaco and dockview are several megabytes the app needs only once someone
 // opens a file, and neither can load outside a browser, which is where the
@@ -192,7 +193,7 @@ export interface FilesEditorProps {
   controller: FilesController;
   workspace: { id: string; name: string; path: string };
   theme: AppTheme;
-  onActivePanel?(kind: CenterPanelKind | undefined): void;
+  onActivePanel?(kind: CenterPanelKind | undefined, byUser?: boolean): void;
   onAppPanelClosed?(kind: "session" | "task"): void;
   renderSession?(): React.ReactNode;
   sessionTitle?: string;
@@ -200,8 +201,10 @@ export interface FilesEditorProps {
   taskTitle?: string;
   renderEmpty?(): React.ReactNode;
   sessionIcon?: React.ReactNode;
-  renderTerminal?(terminalId: string): React.ReactNode;
+  renderTerminal?(terminalId: string, active: boolean): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
+  renderPlans?(): React.ReactNode;
+  renderActivity?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
@@ -209,6 +212,8 @@ export interface FilesEditorProps {
   onNewTerminal?(): void;
   onTerminalTabClosed?(terminalId: string): void;
   onOpenExternal?(url: string): void;
+  /** What a plan's preview needs from the app: live sessions, and Open. */
+  planLive?: PlanLive;
   /** What to show while the editor chunk loads: the tab that will be in front. */
   loadingContent?: React.ReactNode;
   /** Session worktree folders and the commit each branched from. */

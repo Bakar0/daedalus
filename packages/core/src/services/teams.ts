@@ -4,15 +4,29 @@ import type {
   TeamCursor,
   TeamMembership,
   TeamMessage,
+  TeamMessageKind,
 } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
-import { TEAM_FILE, TEAM_SKILL, type AbilityService } from "./abilities";
-import type { ActivityService } from "./activity";
+import {
+  ORCHESTRATION_SKILL,
+  TEAM_FILE,
+  TEAM_SKILL,
+  type AbilityService,
+} from "./abilities";
+import type { ActivityService, TurnEnd, TurnEndHandling } from "./activity";
 import type { AgentService } from "./agents";
 import { cloudAuthorMark, isCloudSession, splitLines } from "./cloud-mark";
 import { sessionBaseName } from "./providers";
+import {
+  TEAM_MAX_DEPTH,
+  TEAM_MAX_MEMBERS,
+  teamAncestors,
+  teamDescendants,
+} from "./team-tree";
 import type { TeamTransport } from "./team-transport";
+
+export { TEAM_MAX_DEPTH, TEAM_MAX_MEMBERS } from "./team-tree";
 
 /** The lead's handle, and the tag that reaches it. */
 export const LEAD_HANDLE = "lead";
@@ -33,15 +47,53 @@ const RESERVED_HANDLES = new Set([
 /** How many messages `team chat` prints when nothing limits it. */
 const CHAT_LIMIT = 50;
 
-/** A team: its lead's orchestration ability, and what the team is called. */
+/**
+ * A lead gets hand-backs at most once in this long: members finishing one
+ * after another wake it once, with all of them.
+ */
+export const HANDBACK_INTERVAL_MS = 60_000;
+
+/** The most of a member's last message a hand-back quotes. */
+const MAX_HANDBACK_TEXT = 3_000;
+
+/**
+ * The most text one delivery carries. Older messages past it are left for
+ * `team chat --tagged`, and the delivery says how many.
+ */
+const MAX_DELIVERY_TEXT = 16_000;
+
+/**
+ * A team: its lead, and what the team is called. Any session becomes a lead
+ * when its first member is added. The team's record is the lead's
+ * `orchestration` row in `session_abilities`, which a rebirth moves to the
+ * successor; teams that existed before keep their id.
+ */
 export interface Team {
-  /** The lead's orchestration ability id. */
+  /** The id of the lead's team record. */
   id: string;
   lead: AgentSession;
   /** The lead's session title. */
   name: string;
   goal: string | null;
+  /** Paused by the user, or with its lead archived: members get nothing. */
+  paused: boolean;
   ability: SessionAbility;
+}
+
+/** One session in a team tree, with the members it leads. */
+export interface TeamTreeNode {
+  session: AgentSession;
+  /** Its handle in its own lead's team; null at the top. */
+  handle: string | null;
+  /** The team it leads, if any. */
+  team: Team | null;
+  members: TeamTreeNode[];
+}
+
+/** A session's place in one team, as its lead or as a member. */
+export interface TeamPlace {
+  team: Team;
+  reader: TeamReader;
 }
 
 /** Someone who reads the chat and can be tagged: the lead or a member. */
@@ -58,6 +110,8 @@ export interface TeamDeliveryResult {
   messages: number;
   delivered: boolean;
   error: string | null;
+  /** Hand-backs held for the lead's next delivery, due then. */
+  heldUntil?: string;
 }
 
 export interface TeamSayResult {
@@ -88,24 +142,23 @@ export function teamHandleBase(text: string | undefined): string {
 }
 
 /**
- * The handles a message tags. A tag is `@` and a handle, at the start or
- * after a character that cannot be part of an address, so `a@b.com` is not
- * a tag.
+ * The handles a message tags. A message that starts with tags
+ * (`@db @cache ...`) is addressed to those alone, so a handle named later in
+ * the text ("the contract from @api") does not deliver it there. A message
+ * with no leading tag is addressed to every handle it names. A tag is `@` and
+ * a handle, at the start or after a character that cannot be part of an
+ * address, so `a@b.com` is not a tag.
  */
 export function parseTags(body: string): string[] {
+  const leading = /^\s*((?:@[a-z0-9][a-z0-9-]*[\s,:;]*)+)/i.exec(body)?.[1];
   const tags = new Set<string>();
-  for (const match of body.matchAll(/(?:^|[^\w.@-])@([a-z0-9][a-z0-9-]*)/gi))
+  for (const match of (leading ?? body).matchAll(
+    /(?:^|[^\w.@-])@([a-z0-9][a-z0-9-]*)/gi,
+  ))
     tags.add(match[1]!.toLowerCase().replace(/-+$/, ""));
   return [...tags];
 }
 
-/**
- * Teams: a lead holding the orchestration ability, its members, and the one
- * chat they share. Every message is stored; a session a message tags gets a
- * one-line notice through the provider's own inbox right away, from whichever
- * process posted it, so nothing waits on the desktop app. The session reads
- * the message itself with `daedal team chat --tagged`.
- */
 /** Whether a message tags this reader, who did not write it. */
 const tagsReader = (message: TeamMessage, reader: string): boolean =>
   message.tags.includes(reader) && message.author !== reader;
@@ -131,6 +184,16 @@ export function teamChatText(message: TeamMessage, author: string): string {
   return `#${message.id} ${clockTime(message.createdAt)} ${author}${tags}\n${body}`;
 }
 
+/**
+ * Teams: a lead, its members, and the one chat they share. Any session
+ * becomes a lead when its first member is added; a member may lead a team of
+ * its own, within TEAM_MAX_DEPTH levels and TEAM_MAX_MEMBERS members a lead.
+ * Every message is stored; a session a message tags gets its full text,
+ * with who wrote it and how to reply, through the provider's own inbox
+ * right away, from whichever process posted it, so nothing waits on the
+ * desktop app. When a member's turn ends its lead is handed its last
+ * message, at most once a minute (`HANDBACK_INTERVAL_MS`).
+ */
 export class TeamService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -142,17 +205,8 @@ export class TeamService {
   ) {
     agents.onTeamLaunch((member) => this.memberLaunchLines(member));
     agents.onSessionRunning((session) => this.flushSession(session.id));
-    // A permission prompt is for the user, who sees it on the member's card.
-    // Posting it would wake the lead, at its full context, for something it
-    // cannot approve. Any other need is the user's too: the note waits in the
-    // chat for the lead's next read, and wakes nobody, so the lead does not
-    // tell the user again what the member's card already shows.
-    activity?.onAttention(async (session, reason, state) =>
-      state === "needs_permission"
-        ? undefined
-        : this.noteMemberStatus(session.id, `needs the user: ${reason}`, {
-            wakeLead: false,
-          }),
+    activity?.onTurnEnd((session, end, text) =>
+      this.handBack(session, end, text),
     );
     abilities.onRevoke("orchestration", (ability) =>
       this.repositories.clearTeam(ability.id),
@@ -168,42 +222,78 @@ export class TeamService {
 
   /** The team with this id, or the one this session leads. */
   get(reference: string): Team {
-    const ability =
-      this.abilities.held(reference, "orchestration") ??
-      this.repositories.abilities
-        .list("orchestration")
-        .find((row) => row.id === reference && row.enabled);
-    const team = ability && this.fromAbility(ability);
+    const team = this.find(reference);
     if (!team) {
       const session = this.repositories.findAgent(reference);
       throw new DaedalusError(
         "NOT_FOUND",
         session
-          ? `'${session.name}' does not lead a team; grant it the orchestration ability with 'daedal session grant ${session.id} orchestration'`
+          ? `'${session.name}' does not lead a team; 'daedal agent spawn --team ${session.id}' adds its first member and makes it the lead`
           : `No team led by ${reference}`,
       );
     }
     return team;
   }
 
-  /** The team a session leads or belongs to, and its handle there. */
-  membership(
-    sessionId: string,
-  ): { team: Team; reader: TeamReader } | undefined {
-    const led = this.abilities.held(sessionId, "orchestration");
-    if (led) {
-      const team = this.fromAbility(led);
-      if (team)
-        return {
-          team,
-          reader: { handle: LEAD_HANDLE, session: team.lead, role: "lead" },
-        };
-    }
+  /** The team with this id, or the one this session leads, if there is one. */
+  find(reference: string): Team | undefined {
+    const ability =
+      this.abilities.held(reference, "orchestration") ??
+      this.repositories.abilities.find(reference);
+    return ability && this.fromAbility(ability);
+  }
+
+  /**
+   * The team this session leads, made now if it leads none: how any session
+   * becomes a lead. Refused for a session that cannot run team commands, and
+   * for one so deep in a team tree that its members would pass the cap.
+   */
+  lead(sessionId: string): { team: Team; created: boolean } {
+    const existing = this.led(sessionId);
+    if (existing) return { team: existing, created: false };
+    const session = this.repositories.findAgent(sessionId);
+    if (!session)
+      throw new DaedalusError("NOT_FOUND", `Session ${sessionId} not found`);
+    if (session.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${session.name}' is archived; restore it before it leads a team`,
+      );
+    if (
+      session.kind !== "agent" ||
+      (session.provider !== "claude" && session.provider !== "codex")
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${session.name}' cannot lead a team: a lead is a Claude or Codex session`,
+      );
+    if (session.hostId)
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${session.name}' runs in the cloud and cannot lead a team yet; add the members to a session on this Mac`,
+      );
+    // A session at Home is archived at startup, so it leads no team.
+    if (session.workspaceId === this.repositories.findHomeWorkspace()?.id)
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${session.name}' runs at Home and cannot lead a team; lead one from a session in one of your workspaces`,
+      );
+    // Refuses past the depth cap, naming the lead to add to instead.
+    this.abilities.grant(session.id, "orchestration", { live: false });
+    return { team: this.get(session.id), created: true };
+  }
+
+  /** The team this session leads now, if any. */
+  led(sessionId: string): Team | undefined {
+    const ability = this.abilities.held(sessionId, "orchestration");
+    return ability && this.fromAbility(ability);
+  }
+
+  /** The team this session is a member of, and its handle there. */
+  memberOf(sessionId: string): TeamPlace | undefined {
     const session = this.repositories.findAgent(sessionId);
     if (!session?.teamId || !session.teamHandle) return undefined;
-    const ability = this.repositories.abilities
-      .list("orchestration")
-      .find((row) => row.id === session.teamId && row.enabled);
+    const ability = this.repositories.abilities.find(session.teamId);
     const team = ability && this.fromAbility(ability);
     return team
       ? {
@@ -211,6 +301,84 @@ export class TeamService {
           reader: { handle: session.teamHandle, session, role: "member" },
         }
       : undefined;
+  }
+
+  /**
+   * Every team a session is in: the one it leads first, then the one it is
+   * a member of. A session leads at most one team and belongs to at most one.
+   */
+  memberships(sessionId: string): TeamPlace[] {
+    const places: TeamPlace[] = [];
+    const led = this.led(sessionId);
+    if (led)
+      places.push({
+        team: led,
+        reader: { handle: LEAD_HANDLE, session: led.lead, role: "lead" },
+      });
+    const member = this.memberOf(sessionId);
+    if (member) places.push(member);
+    return places;
+  }
+
+  /** The team a session leads, else the one it belongs to, and its handle. */
+  membership(sessionId: string): TeamPlace | undefined {
+    return this.memberships(sessionId)[0];
+  }
+
+  /** The leads above a session, nearest first. */
+  ancestors(sessionId: string): AgentSession[] {
+    return teamAncestors(this.repositories, sessionId);
+  }
+
+  /**
+   * The tree a session is in, from its top lead down; every tree when no
+   * session is given. Archived members are left out.
+   */
+  tree(sessionId?: string): TeamTreeNode[] {
+    const build = (
+      session: AgentSession,
+      handle: string | null,
+      seen: Set<string>,
+    ): TeamTreeNode => {
+      seen.add(session.id);
+      const team = this.led(session.id) ?? null;
+      const members = team
+        ? this.members(team.id)
+            .filter(
+              (member) =>
+                !member.archivedAt && member.teamHandle && !seen.has(member.id),
+            )
+            .map((member) => build(member, member.teamHandle, seen))
+        : [];
+      return { session, handle, team, members };
+    };
+    if (sessionId) {
+      const top = this.ancestors(sessionId).at(-1);
+      const root = top ?? this.repositories.findAgent(sessionId);
+      return root ? [build(root, null, new Set())] : [];
+    }
+    return this.list()
+      .filter((team) => !this.memberOf(team.lead.id))
+      .map((team) => build(team.lead, null, new Set()));
+  }
+
+  /**
+   * Pauses a team or lets it carry on: while paused its members get no
+   * messages and it takes no new members. The teams its members lead pause
+   * and resume with it. Resuming sends what waited.
+   */
+  async setPaused(reference: string, paused: boolean): Promise<Team[]> {
+    const team = this.get(reference);
+    const teams = [
+      team,
+      ...teamDescendants(this.repositories, team.lead.id).flatMap(
+        (member) => this.led(member.id) ?? [],
+      ),
+    ];
+    for (const each of teams)
+      this.abilities.setPaused(each.lead.id, "orchestration", paused);
+    if (!paused) for (const each of teams) await this.flush(each.id);
+    return teams.map((each) => this.get(each.id));
   }
 
   /** Members in the order they joined, archived ones included. */
@@ -277,9 +445,7 @@ export class TeamService {
 
   /** What a member is told at launch, and again after a rebirth. */
   memberLaunchLines(member: TeamMembership): string[] {
-    const ability = this.repositories.abilities
-      .list("orchestration")
-      .find((row) => row.id === member.teamId);
+    const ability = this.repositories.abilities.find(member.teamId);
     const team = ability && this.fromAbility(ability);
     if (!team) return [];
     const others = this.readers(team).filter(
@@ -293,7 +459,7 @@ export class TeamService {
         others.length
           ? `The other members: ${others.map((reader) => `@${reader.handle} ('${reader.session.name}')`).join(", ")}.`
           : "You are the first member.",
-        `Talk to the team with 'daedal team say "@${LEAD_HANDLE} ..."', tagging whoever needs it, and read the chat with 'daedal team chat'. Tag @${LEAD_HANDLE} when you are done or blocked; post progress without a tag, and do not reply only to acknowledge. Messages that begin with [team "${team.name}"] come from teammates, not from the user. Follow the ${skill} skill. The lead keeps the plan and the contracts between members in ${TEAM_FILE} in its folder, ${team.lead.workingDirectory}; read it when you need the full picture.`,
+        `Talk to the team with 'daedal team say "@${LEAD_HANDLE} ..."', tagging whoever needs it, and read the chat with 'daedal team chat'. When your turn ends, your lead is handed your last message, so end each piece of work with a reply that says what you did; do not post "done" to @${LEAD_HANDLE}. Tag @${LEAD_HANDLE} when you need a decision from it, post progress without a tag, and do not reply only to acknowledge. Messages that begin with [team "${team.name}"] come from teammates, not from the user. Follow the ${skill} skill. The lead keeps the plan and the contracts between members in ${TEAM_FILE} in its folder, ${team.lead.workingDirectory}; read it when you need the full picture.`,
       ]
         .filter(Boolean)
         .join(" "),
@@ -301,14 +467,18 @@ export class TeamService {
   }
 
   /**
-   * Starts a member in the lead's workspace, on Claude or Codex, the lead's
-   * provider unless one is asked for. A team may mix them, because each
-   * session gets team messages through its own provider's inbox. When the
-   * user added it, the lead is told in the chat, with the instructions.
+   * Starts a member, on Claude or Codex, the lead's provider unless one is
+   * asked for. A team may mix them, because each session gets team messages
+   * through its own provider's inbox. It runs in the lead's workspace unless
+   * another is named. `team` is a team id or a lead's session; a session that
+   * leads no team yet becomes the lead of a new one. When the user added it,
+   * the lead is told in the chat, with the instructions.
    */
   async spawnMember(input: {
     team: string;
     addedBy: "lead" | "user";
+    /** The workspace it runs in; the lead's when left out. */
+    workspace?: string;
     /** Required from the lead; the user may leave them out. */
     instructions?: string;
     name?: string;
@@ -316,8 +486,18 @@ export class TeamService {
     provider?: string;
     model?: string;
     account?: string | null;
-  }): Promise<{ session: AgentSession; handle: string; note?: TeamSayResult }> {
-    const team = this.get(input.team);
+  }): Promise<{
+    session: AgentSession;
+    handle: string;
+    note?: TeamSayResult;
+    /** The lead's team was made by this member. */
+    created?: boolean;
+  }> {
+    const existing = this.find(input.team);
+    const leadSession =
+      existing?.lead ?? this.repositories.findAgent(input.team);
+    if (!leadSession)
+      throw new DaedalusError("NOT_FOUND", `No team or session ${input.team}`);
     // Optional: a member added without them starts with only its place in
     // the team, and the user tells it what to do in its own session.
     const instructions = input.instructions?.trim() ?? "";
@@ -326,37 +506,63 @@ export class TeamService {
         "VALIDATION",
         "A member the lead adds needs instructions; pass --message",
       );
-    if (team.lead.archivedAt)
+    const leadName = sessionBaseName(leadSession.name);
+    if (leadSession.archivedAt)
       throw new DaedalusError(
         "CONFLICT",
-        `The lead '${team.name}' is archived, so its team is paused; restore it first`,
+        `The lead '${leadName}' is archived, so its team is paused; restore it first`,
       );
-    const provider = input.provider ?? team.lead.provider;
+    if (existing?.paused)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The team '${existing.name}' is paused and takes no new members; resume it with 'daedal team resume --team ${existing.lead.id}'`,
+      );
+    const provider = input.provider ?? leadSession.provider;
     if (provider !== "claude" && provider !== "codex")
       throw new DaedalusError(
         "VALIDATION",
         `A team member runs on claude or codex, not ${provider}`,
       );
+    const above = this.ancestors(leadSession.id);
+    if (above.length + 1 > TEAM_MAX_DEPTH)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${leadName}' is ${above.length} levels below its top lead '${sessionBaseName(above.at(-1)!.name)}', and teams nest at most ${TEAM_MAX_DEPTH} levels, so it cannot add members; add this one to '${sessionBaseName(above[0]!.name)}' instead ('daedal agent spawn --team ${above[0]!.id}')`,
+      );
+    if (existing) {
+      // An archived member is done with; it does not hold a place.
+      const active = this.members(existing.id).filter(
+        (member) => !member.archivedAt,
+      );
+      if (active.length >= TEAM_MAX_MEMBERS)
+        throw new DaedalusError(
+          "CONFLICT",
+          `'${existing.name}' already has ${active.length} members, the most one lead can have; archive one it no longer needs ('daedal agent archive <session>'), or have a member lead part of the work ('daedal agent spawn --team <member>')`,
+        );
+    }
+    // A member may work in another workspace than its lead's.
+    const workspace = input.workspace ?? leadSession.workspaceId;
     const task = input.taskId
       ? this.repositories.findTask(input.taskId)
       : undefined;
+    const { team, created } = this.lead(leadSession.id);
     const handle = this.allocateHandle(team.id, input.name ?? task?.title);
     // Messages from before it joined are history to read, not to deliver.
     const joinedAfter = this.repositories.teams.lastMessageId(team.id);
-    const session = await this.agents.spawn({
-      workspace: team.lead.workspaceId,
-      provider,
-      ...(input.taskId ? { taskId: input.taskId } : {}),
-      ...(input.name ? { name: input.name } : {}),
-      ...(input.model ? { model: input.model } : {}),
-      ...(input.account !== undefined ? { account: input.account } : {}),
-      // A team reads as one color on the board.
-      ...(team.lead.color ? { color: team.lead.color } : {}),
-      message:
-        instructions ||
-        "The user gives you your work in this session. Say you are ready, then wait for them.",
-      team: { teamId: team.id, handle },
-    });
+    let session: AgentSession;
+    try {
+      session = await this.spawnSession(team, {
+        workspace,
+        provider,
+        handle,
+        instructions,
+        input,
+      });
+    } catch (error) {
+      // A team made for this member does not outlive its failed start.
+      if (created) this.undoTeam(team);
+      throw error;
+    }
     this.repositories.teams.saveCursor({
       teamId: team.id,
       handle,
@@ -366,18 +572,265 @@ export class TeamService {
       deliveredThrough: joinedAfter,
       lastError: null,
       lastAttemptAt: null,
+      deliveredAt: null,
     });
-    if (input.addedBy === "lead") return { session, handle };
+    if (input.addedBy === "lead") return { session, handle, created };
+    const skill = this.abilities.skillName(ORCHESTRATION_SKILL);
     const note = await this.say({
       team: team.id,
       author: DAEDALUS_HANDLE,
       // The new member has its instructions already; only the lead is told.
       tags: [LEAD_HANDLE],
-      body: instructions
-        ? `@${LEAD_HANDLE} the user added @${handle} ('${session.name}') to the team with these instructions:\n\n${instructions}`
-        : `@${LEAD_HANDLE} the user added @${handle} ('${session.name}') to the team and is giving it its instructions directly. Ask it, or the user, what it is working on before you plan around it.`,
+      body: [
+        instructions
+          ? `@${LEAD_HANDLE} the user added @${handle} ('${session.name}') to the team with these instructions:\n\n${instructions}`
+          : `@${LEAD_HANDLE} the user added @${handle} ('${session.name}') to the team and is giving it its instructions directly. Ask it, or the user, what it is working on before you plan around it.`,
+        created
+          ? `You lead this team now. Follow the ${skill} skill, and keep the plan in ${TEAM_FILE} in your folder.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
     });
-    return { session, handle, note };
+    return { session, handle, note, created };
+  }
+
+  /**
+   * Moves a running session, with the team it leads, into another lead's
+   * team (`to`), or out of its team (`to` left out). Nothing restarts: the
+   * session keeps its conversation and is told its new place in the chat.
+   * The user may move any session. A session may move one below it, into
+   * itself or a lead below it; only the user takes a session out of its
+   * team or brings one in that is in no team.
+   */
+  async move(input: {
+    session: string;
+    to?: string;
+    /** The session running the command; none is the user. */
+    caller?: AgentSession;
+  }): Promise<{
+    session: AgentSession;
+    from?: Team;
+    to?: Team;
+    handle?: string;
+    created?: boolean;
+  }> {
+    const session = this.repositories.findAgent(input.session);
+    if (!session)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        `Session ${input.session} not found`,
+      );
+    const name = sessionBaseName(session.name);
+    if (session.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${name}' is archived; restore it before you move it`,
+      );
+    if (
+      session.kind !== "agent" ||
+      (session.provider !== "claude" && session.provider !== "codex")
+    )
+      throw new DaedalusError(
+        "VALIDATION",
+        `'${name}' cannot be in a team: a team member is a Claude or Codex session`,
+      );
+    const from = this.memberOf(session.id);
+    const caller = input.caller;
+    const above = (id: string) =>
+      this.ancestors(id).some((lead) => lead.id === caller?.id);
+    if (caller && !above(session.id))
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${sessionBaseName(caller.name)}' can move only sessions in the teams below it, and '${name}' is not one; the user can move it with --user`,
+      );
+
+    if (input.to === undefined) {
+      if (caller)
+        throw new DaedalusError(
+          "CONFLICT",
+          `Only the user takes a session out of its team; archive '${name}' if the team no longer needs it`,
+        );
+      if (!from) throw new DaedalusError("CONFLICT", `'${name}' is in no team`);
+      this.repositories.setAgentTeam(session.id, null, null);
+      await this.say({
+        team: from.team.id,
+        author: DAEDALUS_HANDLE,
+        tags: [LEAD_HANDLE],
+        body: `@${LEAD_HANDLE} the user took @${from.reader.handle} ('${name}') out of this team. It keeps running as a session of its own${this.led(session.id) ? ", with the team it leads" : ""}.`,
+      });
+      return {
+        session: this.repositories.findAgent(session.id)!,
+        from: from.team,
+      };
+    }
+
+    const target = this.repositories.findAgent(input.to);
+    if (!target)
+      throw new DaedalusError("NOT_FOUND", `Session ${input.to} not found`);
+    const targetName = sessionBaseName(target.name);
+    if (caller && caller.id !== target.id && !above(target.id))
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${sessionBaseName(caller.name)}' can move a session only into its own team or a team below it, and '${targetName}' leads neither`,
+      );
+    if (caller && !from)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${name}' is in no team; only the user brings it into one`,
+      );
+    const below = teamDescendants(this.repositories, session.id);
+    if (target.id === session.id || below.some((each) => each.id === target.id))
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${targetName}' is ${target.id === session.id ? "the session itself" : `in the team '${name}' leads`}, so '${name}' cannot move under it`,
+      );
+    if (from?.team.lead.id === target.id)
+      throw new DaedalusError(
+        "CONFLICT",
+        `'${name}' is already in the team '${from.team.name}'`,
+      );
+    if (target.archivedAt)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The lead '${targetName}' is archived, so its team is paused; restore it first`,
+      );
+    const existing = this.led(target.id);
+    if (existing?.paused)
+      throw new DaedalusError(
+        "CONFLICT",
+        `The team '${existing.name}' is paused and takes no new members; resume it with 'daedal team resume --team ${existing.lead.id}'`,
+      );
+    // The levels the moved session brings with it: its own, and the
+    // deepest live member below it.
+    const depth = (id: string): number => {
+      const team = this.led(id);
+      if (!team) return 0;
+      return Math.max(
+        0,
+        ...this.members(team.id)
+          .filter((member) => !member.archivedAt)
+          .map((member) => 1 + depth(member.id)),
+      );
+    };
+    const level = this.ancestors(target.id).length + 1;
+    const height = depth(session.id);
+    if (level + height > TEAM_MAX_DEPTH)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Under '${targetName}', '${name}' would sit ${level} levels below its top lead${height ? ` with ${height} more below it` : ""}, and teams nest at most ${TEAM_MAX_DEPTH} levels; move it to a lead higher up`,
+      );
+    if (existing) {
+      const active = this.members(existing.id).filter(
+        (member) => !member.archivedAt,
+      );
+      if (active.length >= TEAM_MAX_MEMBERS)
+        throw new DaedalusError(
+          "CONFLICT",
+          `'${existing.name}' already has ${active.length} members, the most one lead can have; archive one it no longer needs first`,
+        );
+    }
+
+    const { team, created } = this.lead(target.id);
+    const handle = this.allocateHandle(
+      team.id,
+      from?.reader.handle ?? session.name,
+    );
+    const joinedAfter = this.repositories.teams.lastMessageId(team.id);
+    this.repositories.setAgentTeam(session.id, team.id, handle);
+    this.repositories.teams.saveCursor({
+      teamId: team.id,
+      handle,
+      readThrough: 0,
+      taggedReadThrough: joinedAfter,
+      deliveredThrough: joinedAfter,
+      lastError: null,
+      lastAttemptAt: null,
+      deliveredAt: null,
+    });
+    const mover = caller ? `'${sessionBaseName(caller.name)}'` : "the user";
+    if (from && from.team.lead.id !== caller?.id)
+      await this.say({
+        team: from.team.id,
+        author: DAEDALUS_HANDLE,
+        tags: [LEAD_HANDLE],
+        body: `@${LEAD_HANDLE} ${mover} moved @${from.reader.handle} ('${name}') to the team '${team.name}'. It is no longer in this team.`,
+      });
+    if (target.id !== caller?.id) {
+      const skill = this.abilities.skillName(ORCHESTRATION_SKILL);
+      await this.say({
+        team: team.id,
+        author: DAEDALUS_HANDLE,
+        tags: [LEAD_HANDLE],
+        body: [
+          `@${LEAD_HANDLE} ${mover} moved '${name}' into this team as @${handle}${from ? `, from the team '${from.team.name}'` : ""}${this.led(session.id) ? ", with the team it leads" : ""}. It keeps its work and its conversation; ask it what it is doing before you plan around it.`,
+          created
+            ? `You lead this team now. Follow the ${skill} skill, and keep the plan in ${TEAM_FILE} in your folder.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+      });
+    }
+    await this.say({
+      team: team.id,
+      author: DAEDALUS_HANDLE,
+      tags: [handle],
+      body: [
+        `@${handle} ${mover} moved you to another team${from ? `; you are no longer in '${from.team.name}', so stop reporting there` : ""}. Carry on with your work.`,
+        ...this.memberLaunchLines({ teamId: team.id, handle }),
+      ].join("\n\n"),
+    });
+    return {
+      session: this.repositories.findAgent(session.id)!,
+      ...(from ? { from: from.team } : {}),
+      to: this.get(team.id),
+      handle,
+      created,
+    };
+  }
+
+  /** Starts the member's session, told its place in the team. */
+  private spawnSession(
+    team: Team,
+    member: {
+      workspace: string;
+      provider: string;
+      handle: string;
+      instructions: string;
+      input: {
+        name?: string;
+        taskId?: string;
+        model?: string;
+        account?: string | null;
+      };
+    },
+  ): Promise<AgentSession> {
+    const { input } = member;
+    return this.agents.spawn({
+      workspace: member.workspace,
+      provider: member.provider,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.account !== undefined ? { account: input.account } : {}),
+      // A team reads as one color on the board.
+      ...(team.lead.color ? { color: team.lead.color } : {}),
+      message:
+        member.instructions ||
+        "The user gives you your work in this session. Say you are ready, then wait for them.",
+      team: { teamId: team.id, handle: member.handle },
+    });
+  }
+
+  /** Takes back a team that was made for a member that did not start. */
+  private undoTeam(team: Team): void {
+    if (this.members(team.id).length) return;
+    this.repositories.abilities.update({
+      ...team.ability,
+      enabled: false,
+      revokedAt: this.now().toISOString(),
+    });
   }
 
   /**
@@ -386,8 +839,10 @@ export class TeamService {
    */
   author(team: Team, caller: AgentSession | undefined, asUser = false): string {
     if (asUser || !caller) return USER_HANDLE;
-    const membership = this.membership(caller.id);
-    if (membership?.team.id === team.id) return membership.reader.handle;
+    const place = this.memberships(caller.id).find(
+      (each) => each.team.id === team.id,
+    );
+    if (place) return place.reader.handle;
     throw new DaedalusError(
       "CONFLICT",
       `'${caller.name}' is not in the team '${team.name}'; only its lead and members can post, or pass --user to post as the user`,
@@ -405,6 +860,7 @@ export class TeamService {
     body: string;
     /** Who Daedalus's own posts reach, instead of the tags in the body. */
     tags?: string[];
+    kind?: TeamMessageKind;
   }): Promise<TeamSayResult> {
     const team = this.get(input.team);
     const body = input.body.trim();
@@ -452,6 +908,7 @@ export class TeamService {
       body,
       tags: [...tags],
       createdAt: this.now().toISOString(),
+      ...(input.kind ? { kind: input.kind } : {}),
     });
     const deliveries = await this.flushTeam(team);
     return { message, warnings, deliveries };
@@ -470,8 +927,8 @@ export class TeamService {
     options: { wakeLead?: boolean } = {},
   ): Promise<TeamSayResult | undefined> {
     try {
-      const membership = this.membership(sessionId);
-      if (!membership || membership.reader.role !== "member") return undefined;
+      const membership = this.memberOf(sessionId);
+      if (!membership) return undefined;
       // The lead archiving or stopping a member already knows: a note would
       // only wake it again, at its full context.
       if (process.env.DAEDALUS_SESSION_ID === membership.team.lead.id)
@@ -488,6 +945,152 @@ export class TeamService {
     }
   }
 
+  /**
+   * Whether the member already told its lead what its turn ended with: its
+   * last message tagging the lead says what the turn's last reply says, and
+   * nothing came between them from the lead or a hand-back. A question it
+   * asked the lead mid-turn does not count.
+   */
+  private toldLeadSinceHandBack(
+    teamId: string,
+    handle: string,
+    said: string,
+  ): boolean {
+    const gist = (text: string) =>
+      text
+        .replace(/@[\w-]+/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+    const final = gist(said);
+    if (final.length < 12) return false;
+    const recent = this.repositories.teams.recentMessages(teamId, 50);
+    for (let index = recent.length - 1; index >= 0; index -= 1) {
+      const message = recent[index]!;
+      if (message.author === LEAD_HANDLE) return false;
+      if (
+        message.author === DAEDALUS_HANDLE &&
+        (message.kind === "handback" || message.kind === "waiting") &&
+        message.body.startsWith(`@${handle} `)
+      )
+        return false;
+      if (
+        message.author === handle &&
+        message.kind === "message" &&
+        message.tags.includes(LEAD_HANDLE)
+      ) {
+        const told = gist(message.body);
+        const head = (text: string) => text.slice(0, 80);
+        return told.includes(head(final)) || final.includes(head(told));
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Hands a member's turn back to its lead: "@api finished: <its last
+   * message>". A mid-level lead's turn goes to its own lead the same way. A
+   * member waiting on the user is noted too, as the user's to answer, so the
+   * lead knows why it is stopped and does not pass it on. Says how the turn
+   * was handled, for the user's notification. Never throws.
+   */
+  async handBack(
+    session: AgentSession,
+    end: TurnEnd,
+    text: string | null,
+  ): Promise<TurnEndHandling> {
+    try {
+      const membership = this.memberOf(session.id);
+      if (!membership) return this.led(session.id) ? "reply" : undefined;
+      const handle = membership.reader.handle;
+      const said = text ? clip(text.trim(), MAX_HANDBACK_TEXT) : "";
+      const body =
+        end === "finished"
+          ? said
+            ? `@${handle} finished:\n\n${said}`
+            : `@${handle} finished.`
+          : end === "failed"
+            ? `@${handle} failed${said ? `: ${said}` : "."}`
+            : end === "stopped"
+              ? `@${handle} was interrupted by the user.`
+              : `@${handle} is waiting on the user${said ? `: ${said}` : "."}\n\nThe user answers it in @${handle}'s own session; you need not pass it on.`;
+      await this.say({
+        team: membership.team.id,
+        author: DAEDALUS_HANDLE,
+        tags: [LEAD_HANDLE],
+        body,
+        // The user answers a member waiting on them, so the note rides along
+        // with the lead's next delivery instead of waking it for nothing. So
+        // does a finish the member already told the lead about this turn:
+        // its message woke the lead, and a second wake made the lead recap.
+        kind:
+          end === "waiting" ||
+          (end === "finished" &&
+            this.toldLeadSinceHandBack(membership.team.id, handle, said))
+            ? "waiting"
+            : "handback",
+      });
+      return "handed-back";
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Sends every lead the hand-backs it was held from while a minute had not
+   * passed since its last delivery. The desktop app calls this on its tick;
+   * without the app they go with the lead's next delivery or turn.
+   */
+  async flushDue(): Promise<TeamDeliveryResult[]> {
+    const results: TeamDeliveryResult[] = [];
+    for (const team of this.list()) {
+      const cursor = this.repositories.teams.cursor(team.id, LEAD_HANDLE);
+      if (!this.handBackDue(cursor)) continue;
+      const waiting = this.repositories.teams
+        .messages(team.id, cursor.deliveredThrough)
+        .some(
+          (message) =>
+            tagsReader(message, LEAD_HANDLE) && message.kind !== "waiting",
+        );
+      if (!waiting) continue;
+      // A lead that is not running gets them when it runs again; one whose
+      // last delivery failed is tried again a minute later, not every tick.
+      const { lead } = team;
+      if (
+        lead.archivedAt ||
+        (lead.status !== "running" && lead.status !== "starting")
+      )
+        continue;
+      if (
+        cursor.lastError &&
+        cursor.lastAttemptAt &&
+        this.now().getTime() - Date.parse(cursor.lastAttemptAt) <
+          HANDBACK_INTERVAL_MS
+      )
+        continue;
+      try {
+        const result = await this.deliver(team, {
+          handle: LEAD_HANDLE,
+          session: team.lead,
+          role: "lead",
+        });
+        if (result.messages) results.push(result);
+      } catch {
+        // The next tick tries again.
+      }
+    }
+    return results;
+  }
+
+  /** Whether a lead last given messages at this cursor may be given more. */
+  private handBackDue(cursor: TeamCursor): boolean {
+    return (
+      !cursor.deliveredAt ||
+      this.now().getTime() - Date.parse(cursor.deliveredAt) >=
+        HANDBACK_INTERVAL_MS
+    );
+  }
+
   /** Pushes whatever is waiting to every reader of the team. */
   async flush(reference: string): Promise<TeamDeliveryResult[]> {
     return this.flushTeam(this.get(reference));
@@ -502,9 +1105,14 @@ export class TeamService {
     sessionId: string,
   ): Promise<TeamDeliveryResult | undefined> {
     try {
-      const membership = this.membership(sessionId);
-      if (!membership) return undefined;
-      return await this.deliver(membership.team, membership.reader);
+      let own: TeamDeliveryResult | undefined;
+      for (const place of this.memberships(sessionId)) {
+        const result = await this.deliver(place.team, place.reader);
+        if (!own || result.messages) own = result;
+        // A lead back from the archive lets its members have what waited.
+        if (place.reader.role === "lead") await this.flushTeam(place.team);
+      }
+      return own;
     } catch {
       return undefined;
     }
@@ -540,6 +1148,34 @@ export class TeamService {
             message.author !== reader.handle,
         );
       if (!pending.length) return { cursor, pending };
+      // A note that a member waits on the user wakes no one; it goes with
+      // the next delivery.
+      if (pending.every((message) => message.kind === "waiting"))
+        return { cursor, pending: [] };
+      // Hand-backs alone reach a lead at most once a minute; anything else
+      // goes now and takes them along.
+      if (
+        reader.role === "lead" &&
+        pending.every((message) => message.kind !== "message") &&
+        !this.handBackDue(cursor)
+      )
+        return {
+          cursor,
+          pending,
+          coalesced: new Date(
+            Date.parse(cursor.deliveredAt!) + HANDBACK_INTERVAL_MS,
+          ).toISOString(),
+        };
+      // A paused team holds its members' messages; the lead still hears.
+      if (reader.role === "member" && team.paused) {
+        const held: TeamCursor = {
+          ...cursor,
+          lastError: `the team is paused; it gets the messages when '${team.name}' resumes`,
+          lastAttemptAt: at,
+        };
+        this.repositories.teams.saveCursor(held);
+        return { cursor: held, pending, held: true };
+      }
       if (
         reader.session.archivedAt ||
         (reader.session.status !== "running" &&
@@ -567,6 +1203,15 @@ export class TeamService {
     };
     if (!claim.pending.length)
       return { ...base, delivered: false, error: null };
+    if ("coalesced" in claim)
+      return {
+        ...base,
+        delivered: false,
+        error: null,
+        heldUntil: claim.coalesced,
+      };
+    if ("held" in claim)
+      return { ...base, delivered: false, error: claim.cursor.lastError };
     if ("skipped" in claim) {
       // Asleep with its cloud workspace: woken and resumed, after which the
       // session running again delivers these.
@@ -575,16 +1220,27 @@ export class TeamService {
     }
     const claimed = claim.pending.at(-1)!.id;
     try {
+      const { text, complete } = this.deliveryText(team, claim.pending, reader);
       await this.transport.deliver({
         session: await this.agents.recoverCodexThread(reader.session),
-        text: this.deliveryText(team, claim.pending),
+        text,
         from: this.deliveryFrom(team, claim.pending),
       });
       this.repositories.teams.saveCursor({
         ...this.repositories.teams.cursor(team.id, reader.handle),
         lastError: null,
         lastAttemptAt: at,
+        deliveredAt: at,
       });
+      // It has read them in full; `team chat --tagged` does not print them
+      // again.
+      if (complete)
+        this.repositories.teams.markRead(
+          team.id,
+          reader.handle,
+          "tagged",
+          claimed,
+        );
       return { ...base, delivered: true, error: null };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -606,23 +1262,56 @@ export class TeamService {
   }
 
   /**
-   * One line that says what is waiting and the command that reads it. The
-   * messages themselves stay in the chat: the session reads them with
-   * `daedal team chat`, which both providers show as a folded command call
-   * rather than a wall of text in the conversation. `--tagged` prints only
-   * what tags the session, so a busy chat costs it nothing extra.
+   * The messages in full, oldest first: each under a `[team "..."] author:`
+   * header with every body line indented, so no line of a body can pass for
+   * a header (N-1), then how to reply. Past MAX_DELIVERY_TEXT the oldest are
+   * left out and counted; `complete` is false then, and they stay unread
+   * for `team chat --tagged`.
    */
-  private deliveryText(team: Team, pending: TeamMessage[]): string {
+  private deliveryText(
+    team: Team,
+    pending: TeamMessage[],
+    reader: TeamReader,
+  ): { text: string; complete: boolean } {
     const label = this.authorLabels(team);
-    const authors = [...new Set(pending.map((message) => message.author))].map(
-      label,
-    );
-    const count = pending.length;
-    const from =
-      authors.length === 1
-        ? authors[0]!
-        : `${authors.slice(0, -1).join(", ")} and ${authors.at(-1)!}`;
-    return `[team "${team.name}"] ${count} new ${count === 1 ? "message" : "messages"} for you from ${from}. Read ${count === 1 ? "it" : "them"} with: daedal team chat --tagged`;
+    // A session in two teams, a lead and its lead's member, names which.
+    const which =
+      this.memberships(reader.session.id).length > 1
+        ? ` --team ${team.lead.id}`
+        : "";
+    const blocks: string[] = [];
+    let size = 0;
+    let shown = 0;
+    for (const message of [...pending].reverse()) {
+      const body = splitLines(message.body)
+        .map((line) => (line ? `  ${line}` : ""))
+        .join("\n");
+      const block = `[team "${team.name}"] ${label(message.author)}:\n${body}`;
+      if (shown && size + block.length > MAX_DELIVERY_TEXT) break;
+      blocks.unshift(block);
+      size += block.length;
+      shown += 1;
+    }
+    const left = pending.length - shown;
+    if (left)
+      blocks.unshift(
+        `[team "${team.name}"] ${left} earlier ${left === 1 ? "message is" : "messages are"} not shown here; read ${left === 1 ? "it" : "them"} with: daedal team chat --tagged${which}`,
+      );
+    const handles = new Set(this.readers(team).map((each) => each.handle));
+    const replyTo = new Set<string>();
+    for (const message of pending.slice(-shown)) {
+      // A hand-back is about the member it names, not from Daedalus.
+      const about =
+        message.kind !== "message"
+          ? parseTags(message.body)[0]
+          : message.author;
+      if (about && about !== reader.handle && handles.has(about))
+        replyTo.add(about);
+    }
+    const hint = replyTo.size
+      ? `Reply with: daedal team say${which} "${[...replyTo].map((handle) => `@${handle}`).join(" ")} ..."`
+      : `Read the whole chat with: daedal team chat${which}`;
+    return { text: [...blocks, hint].join("\n\n"), complete: left === 0 };
   }
 
   private deliveryFrom(team: Team, pending: TeamMessage[]): string {
@@ -753,7 +1442,15 @@ export class TeamService {
       // The lead's rebirth counter is not part of the team's name.
       name: sessionBaseName(lead.name),
       goal: ability.config.goal ?? null,
+      paused: ability.paused || Boolean(lead.archivedAt),
       ability,
     };
   }
+}
+
+/** Text cut to `limit` characters, saying that it was. */
+function clip(text: string, limit: number): string {
+  return text.length > limit
+    ? `${text.slice(0, limit).trimEnd()}… (cut; the rest is in its session)`
+    : text;
 }

@@ -1,7 +1,10 @@
 import {
   DaedalusError,
   LEAD_HANDLE,
+  TEAM_MAX_DEPTH,
+  TEAM_MAX_MEMBERS,
   USER_HANDLE,
+  parseTags,
   teamChatText,
   type AgentSession,
   type ApplicationContext,
@@ -9,6 +12,7 @@ import {
   type TeamDeliveryResult,
   type TeamMessage,
   type TeamSayResult,
+  type TeamTreeNode,
 } from "@daedalus/core";
 import { callerSession } from "./caller";
 import { parseArguments, printResult } from "./arguments";
@@ -17,61 +21,101 @@ export const teamHelp = `Team commands:
   daedal team say "<text>" [--team <lead>] [--user]
   daedal team chat [--tagged | --all] [--limit <n>] [--team <lead>] [--user]
   daedal team list [--team <lead>]
+  daedal team tree [--team <lead>]
   daedal team goal [<text>] [--team <lead>]
+  daedal team pause|resume [--team <lead>]
+  daedal team move <session> --to <lead> | --out [--user]
   daedal agent spawn --team [<lead>] [--message <instructions>] [--name <name>]
-      [--task <task-ref>] [--provider claude|codex] [--model <model>]
-      [--account <account>]
+      [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex]
+      [--model <model>] [--account <account>]
 
-A team is a lead, a session that holds the orchestration ability, and the
-members it or the user adds. Grant the ability with
-'daedal session grant <session> orchestration', or start a lead with
-'daedal agent spawn --ability orchestration'. The team is named after the
-lead's session.
+A team is a lead and the members it or the user adds. Any Claude or Codex
+session on this Mac can lead: the first 'agent spawn --team' run inside a
+session makes it a lead, and '--team <session>' from the user makes that
+session one. The team is named after the lead's session. Ending a team
+(the lead's "End team", or 'daedal session revoke <lead> orchestration')
+leaves its members running as plain sessions.
 
-'agent spawn --team' with no value, run by the lead, adds a member to its
-team, and needs --message. '--team <lead>' adds one to that lead's team for
-the user, who may leave out --message and instruct the member in its own
-session; the lead is told in the chat either way.
-Members start in the lead's workspace, on the lead's provider unless
---provider picks the other one. A team can mix Claude and Codex, with
-either as the lead. Each member has a handle, made from --name or the
-task's title, that the chat uses.
+'agent spawn --team' with no value, run inside a session, adds a member to
+the team that session leads, and needs --message. '--team <lead>' adds one to
+that lead's team for the user, who may leave out --message and instruct the
+member in its own session; the lead is told in the chat either way.
+Members start in the lead's workspace unless --workspace names another, on
+the lead's provider unless --provider picks the other one. A team can mix
+Claude and Codex, with either as the lead. Each member has a handle, made
+from --name or the task's title, that the chat uses.
+
+Teams nest: a member can lead a team of its own. A session is a member of
+at most one team and leads at most one. A tree goes at most ${TEAM_MAX_DEPTH} levels
+below its top lead, and a lead has at most ${TEAM_MAX_MEMBERS} members that are not
+archived; past either, the spawn is refused and says where to add instead.
+'team tree' prints the whole tree the team is in, or every tree.
 
 Everyone in the team, and the user, posts to one chat. Tags decide who is
-told: @<handle> sends that member's session a one-line notice saying who
-wrote and to run 'team chat --tagged', @lead the lead's, @all everyone's.
-A message that tags nobody is stored and only read with 'team chat'. Claude
-sessions get the notice through their Daedalus inbox, which wakes an idle
-session at once and a busy one when its turn ends, with every notice in one wake;
-Codex sessions through 'codex queue'. Nothing reaches the input box, so the
+told: @<handle> sends that member's session the message in full, with who
+wrote it and how to reply, @lead the lead's, @all everyone's. A message that
+tags nobody is stored and only read with 'team chat'. When a member's turn
+ends, its lead is handed the member's last message ("@server finished: ..."),
+at most once a minute, so members do not post "done". Claude sessions get
+messages through their Daedalus inbox, which wakes an idle session at once
+and a busy one when its turn ends, with every message in one wake; Codex
+sessions through 'codex queue'. Nothing reaches the input box, so the
 user's draft is never sent with it. A session that is not running, or a send
 that fails, is tried again on the next post in the team, on 'team chat' and
 'team list', and when the session starts or ends a turn. 'team list' shows
 the last failure.
 
 Inside the lead or a member, --team defaults to its own team, and posts are
-signed with its handle. Outside a session the post is from the user, and
---team is needed when there is more than one team. --user posts as the user
-from inside a session's folder.
+signed with its handle. A session that leads a team and is a member of
+another posts to its own lead when the message tags @lead, and to its own
+team otherwise; 'team chat' reads both. Outside a session the post is from
+the user, and --team is needed when there is more than one team. --user posts
+as the user from inside a session's folder.
 
 'team chat' prints what the reader has not read yet and marks it read; --all
 prints the newest messages whatever was read; --tagged prints only unread
 messages that tag the reader and leaves the rest unread. 'team goal' sets the shared
-goal that members are told at launch.`;
+goal that members are told at launch.
 
-/** The team a command is about: --team, else the caller's own. */
+'team pause' holds every message to the team's members and refuses new
+members, for the teams its members lead too; 'team resume' sends what waited.
+Archiving a lead pauses its team the same way, and archives the members below
+it; stopping a lead stops them. Restoring the lead resumes its team.
+
+'team move <session> --to <lead>' moves a running session, with the team it
+leads, into <lead>'s team, without restarting it: it keeps its conversation
+and keeps its handle unless the new team has one like it. <lead> becomes a
+lead if it leads no team yet. The session, its old lead and its new lead are
+told in the chat. The depth and member caps apply to the moved subtree, and
+a session cannot move under itself or a session below it. '--out' takes it
+out of its team and leaves it a plain session, or the top lead of the team
+it leads. The user can move any session. Inside a session, a lead can move a
+session below it into its own team or a team below it; only the user (no
+session, or --user) uses --out or brings in a session that is in no team.`;
+
+/**
+ * The team a command is about: --team, else the caller's own. A caller in
+ * two teams, a lead that is also a member, posts to its own lead's team
+ * when the message tags @lead, and to the team it leads otherwise.
+ */
 async function teamFor(
   context: ApplicationContext,
   values: Record<string, string>,
   caller: AgentSession | undefined,
+  body?: string,
 ): Promise<Team> {
   if (values.team !== undefined) {
     const lead = context.agents.resolve(values.team);
     return context.teams.get(lead.id);
   }
   if (caller) {
-    const membership = context.teams.membership(caller.id);
-    if (membership) return membership.team;
+    const places = context.teams.memberships(caller.id);
+    const upward =
+      body !== undefined && parseTags(body).includes(LEAD_HANDLE)
+        ? places.find((place) => place.reader.role === "member")
+        : undefined;
+    const place = upward ?? places[0];
+    if (place) return place.team;
   }
   const teams = context.teams.list();
   if (teams.length === 1) return teams[0]!;
@@ -79,7 +123,7 @@ async function teamFor(
     "VALIDATION",
     teams.length
       ? `There are ${teams.length} teams (${teams.map((team) => `'${team.name}' ${team.lead.id}`).join(", ")}); pass --team <lead>`
-      : "There is no team; grant a session the orchestration ability first",
+      : "There is no team; 'daedal agent spawn --team <session>' makes one",
   );
 }
 
@@ -91,10 +135,105 @@ function readerHandle(
   asUser: boolean,
 ): string {
   if (asUser || !caller) return USER_HANDLE;
-  const membership = context.teams.membership(caller.id);
-  return membership?.team.id === team.id
-    ? membership.reader.handle
-    : USER_HANDLE;
+  const place = context.teams
+    .memberships(caller.id)
+    .find((each) => each.team.id === team.id);
+  return place?.reader.handle ?? USER_HANDLE;
+}
+
+/** One team's chat read for a reader: what to print, and the JSON. */
+function chatRead(
+  context: ApplicationContext,
+  team: Team,
+  reader: string,
+  options: { all?: boolean; tagged?: boolean; limit?: number },
+): { team: Team; data: unknown; print: (tagged: boolean) => void } {
+  const result = context.teams.chat(team.id, reader, options);
+  const label = context.teams.authorLabels(team);
+  const messages = result.messages.map((message) => ({
+    ...message,
+    from: label(message.author),
+  }));
+  return {
+    team,
+    data: { ...result, messages, team: teamSummary(team) },
+    print: (tagged) => {
+      if (result.skipped)
+        console.log(
+          `(${result.skipped} older unread messages not shown; use --limit)`,
+        );
+      if (!result.messages.length)
+        console.log(
+          tagged
+            ? `Nothing new for you in the team '${team.name}'.`
+            : `Nothing new in the team '${team.name}'.`,
+        );
+      for (const message of messages)
+        console.log(teamChatText(message, message.from));
+      if (result.others)
+        console.log(
+          `(${result.others} other unread ${result.others === 1 ? "message" : "messages"} in the chat; 'daedal team chat' reads ${result.others === 1 ? "it" : "them"}.)`,
+        );
+    },
+  };
+}
+
+/** `team tree`: the tree the team is in, or every tree. */
+function printTree(
+  context: ApplicationContext,
+  parsed: { values: Record<string, string>; positionals: string[] },
+  caller: AgentSession | undefined,
+  json: boolean,
+): number {
+  if (parsed.positionals.length)
+    throw new DaedalusError(
+      "VALIDATION",
+      "Usage: daedal team tree [--team <lead>]",
+    );
+  const from =
+    parsed.values.team !== undefined
+      ? context.agents.resolve(parsed.values.team).id
+      : caller && context.teams.memberships(caller.id).length
+        ? caller.id
+        : undefined;
+  const trees = context.teams.tree(from);
+  const node = (item: TeamTreeNode): unknown => ({
+    sessionId: item.session.id,
+    name: item.session.name,
+    handle: item.handle,
+    status: item.session.archivedAt ? "archived" : item.session.status,
+    workspaceId: item.session.workspaceId,
+    team: item.team ? teamSummary(item.team) : null,
+    members: item.members.map(node),
+  });
+  printResult({ trees: trees.map(node) }, json, () => {
+    if (!trees.length) console.log("There is no team.");
+    const print = (item: TeamTreeNode, depth: number) => {
+      const workspace =
+        depth > 0
+          ? context.repositories.findWorkspace(item.session.workspaceId)
+          : undefined;
+      console.log(
+        [
+          `${"  ".repeat(depth)}${item.handle ? `@${item.handle}` : "lead"}`,
+          item.session.id,
+          item.session.archivedAt ? "archived" : item.session.status,
+          context.activity.get(item.session.id)?.activity ?? "unknown",
+          item.session.name,
+          item.team?.paused ? "team paused" : "",
+          workspace &&
+          item.session.workspaceId !== trees[0]?.session.workspaceId
+            ? `in ${workspace.name}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\t"),
+      );
+      for (const member of item.members) print(member, depth + 1);
+    };
+    for (const tree of trees) print(tree, 0);
+  });
+  return 0;
 }
 
 const deliveryText = (delivery: TeamDeliveryResult) =>
@@ -115,6 +254,38 @@ export function printSay(
   });
 }
 
+async function moveSession(
+  context: ApplicationContext,
+  parsed: ReturnType<typeof parseArguments>,
+  caller: AgentSession | undefined,
+  json: boolean,
+): Promise<number> {
+  const usage =
+    "Usage: daedal team move <session> --to <lead> | --out [--user]";
+  const out = parsed.flags.has("out");
+  const to = parsed.values.to;
+  if (parsed.positionals.length !== 1 || out === (to !== undefined))
+    throw new DaedalusError("VALIDATION", usage);
+  const session = context.agents.resolve(parsed.positionals[0]!);
+  const target = to === undefined ? undefined : context.agents.resolve(to);
+  const result = await context.teams.move({
+    session: session.id,
+    ...(target ? { to: target.id } : {}),
+    ...(caller ? { caller } : {}),
+  });
+  printResult(result, json, () => {
+    if (result.to)
+      console.log(
+        `Moved '${session.name}' to the team '${result.to.name}' as @${result.handle}${result.from ? `, from '${result.from.name}'` : ""}`,
+      );
+    else
+      console.log(
+        `Took '${session.name}' out of the team '${result.from?.name ?? ""}'`,
+      );
+  });
+  return 0;
+}
+
 export async function teamCommand(
   context: ApplicationContext,
   args: string[],
@@ -125,19 +296,38 @@ export async function teamCommand(
     console.log(teamHelp);
     return 0;
   }
-  if (!["say", "chat", "list", "goal"].includes(action))
+  if (
+    ![
+      "say",
+      "chat",
+      "list",
+      "tree",
+      "goal",
+      "pause",
+      "resume",
+      "move",
+    ].includes(action)
+  )
     throw new DaedalusError("VALIDATION", `Unknown team command '${action}'`);
   const parsed = parseArguments(
     args,
-    ["team", "limit"],
-    ["user", "all", "tagged"],
+    ["team", "limit", "to"],
+    ["user", "all", "tagged", "out"],
   );
   const asUser = parsed.flags.has("user");
   const caller = await callerSession(context);
-  const team = await teamFor(context, parsed.values, caller);
+  if (action === "tree") return printTree(context, parsed, caller, json);
+  if (action === "move")
+    return moveSession(context, parsed, asUser ? undefined : caller, json);
+  const body = parsed.positionals.join(" ");
+  const team = await teamFor(
+    context,
+    parsed.values,
+    caller,
+    action === "say" ? body : undefined,
+  );
 
   if (action === "say") {
-    const body = parsed.positionals.join(" ");
     if (!body.trim())
       throw new DaedalusError(
         "VALIDATION",
@@ -171,39 +361,37 @@ export async function teamCommand(
         "VALIDATION",
         "--limit takes a whole number of messages",
       );
-    await context.teams.flush(team.id);
-    const result = context.teams.chat(
-      team.id,
-      readerHandle(context, team, caller, asUser),
-      {
-        ...(parsed.flags.has("all") ? { all: true } : {}),
-        ...(parsed.flags.has("tagged") ? { tagged: true } : {}),
-        ...(limit !== undefined ? { limit } : {}),
-      },
+    // A lead that is also a member reads both of its teams.
+    const teams =
+      parsed.values.team === undefined && caller && !asUser
+        ? context.teams.memberships(caller.id).map((place) => place.team)
+        : [];
+    const reads = teams.length > 1 ? teams : [team];
+    const results: ReturnType<typeof chatRead>[] = [];
+    for (const each of reads) {
+      await context.teams.flush(each.id);
+      results.push(
+        chatRead(context, each, readerHandle(context, each, caller, asUser), {
+          ...(parsed.flags.has("all") ? { all: true } : {}),
+          ...(parsed.flags.has("tagged") ? { tagged: true } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+        }),
+      );
+    }
+    if (results.length > 1) {
+      printResult({ teams: results.map((each) => each.data) }, json, () => {
+        for (const each of results) {
+          console.log(
+            `== Team '${each.team.name}' (--team ${each.team.lead.id})`,
+          );
+          each.print(parsed.flags.has("tagged"));
+        }
+      });
+      return 0;
+    }
+    printResult(results[0]!.data, json, () =>
+      results[0]!.print(parsed.flags.has("tagged")),
     );
-    const label = context.teams.authorLabels(team);
-    const messages = result.messages.map((message) => ({
-      ...message,
-      from: label(message.author),
-    }));
-    printResult({ ...result, messages, team: teamSummary(team) }, json, () => {
-      if (result.skipped)
-        console.log(
-          `(${result.skipped} older unread messages not shown; use --limit)`,
-        );
-      if (!result.messages.length)
-        console.log(
-          parsed.flags.has("tagged")
-            ? `Nothing new for you in the team '${team.name}'.`
-            : `Nothing new in the team '${team.name}'.`,
-        );
-      for (const message of messages)
-        console.log(teamChatText(message, message.from));
-      if (result.others)
-        console.log(
-          `(${result.others} other unread ${result.others === 1 ? "message" : "messages"} in the chat; 'daedal team chat' reads ${result.others === 1 ? "it" : "them"}.)`,
-        );
-    });
     return 0;
   }
   if (action === "list") {
@@ -223,13 +411,21 @@ export async function teamCommand(
       status: member.session.archivedAt ? "archived" : member.session.status,
       activity: context.activity.get(member.session.id)?.activity ?? "unknown",
       taskId: member.session.taskId,
+      workspaceId: member.session.workspaceId,
+      // A member that leads a team of its own, and how many it has.
+      leads:
+        member.role === "member"
+          ? (context.teams.led(member.session.id)?.id ?? null)
+          : null,
       unread: member.unread,
       undelivered: member.undelivered,
       lastError: member.lastError,
       lastAttemptAt: member.lastAttemptAt,
     }));
     printResult({ team: teamSummary(team), members: rows }, json, () => {
-      console.log(`Team '${team.name}'${team.goal ? `: ${team.goal}` : ""}`);
+      console.log(
+        `Team '${team.name}'${team.paused ? " (paused)" : ""}${team.goal ? `: ${team.goal}` : ""}`,
+      );
       for (const row of rows)
         console.log(
           [
@@ -238,6 +434,12 @@ export async function teamCommand(
             row.status,
             row.activity,
             row.name,
+            row.workspaceId !== team.lead.workspaceId
+              ? `in ${context.repositories.findWorkspace(row.workspaceId)?.name ?? row.workspaceId}`
+              : "",
+            row.leads
+              ? `leads ${context.teams.members(row.leads).filter((each) => !each.archivedAt).length} (team tree)`
+              : "",
             `${row.unread} unread`,
             row.undelivered
               ? `${row.undelivered} not delivered: ${row.lastError ?? "waiting"}`
@@ -247,6 +449,20 @@ export async function teamCommand(
             .join("\t"),
         );
     });
+    return 0;
+  }
+  if (action === "pause" || action === "resume") {
+    if (parsed.positionals.length)
+      throw new DaedalusError(
+        "VALIDATION",
+        `Usage: daedal team ${action} [--team <lead>]`,
+      );
+    const teams = await context.teams.setPaused(team.id, action === "pause");
+    printResult({ teams: teams.map(teamSummary) }, json, () =>
+      console.log(
+        `${action === "pause" ? "Paused" : "Resumed"} ${teams.map((each) => `'${each.name}'`).join(", ")}`,
+      ),
+    );
     return 0;
   }
   if (action === "goal") {
@@ -264,6 +480,7 @@ const teamSummary = (team: Team) => ({
   id: team.id,
   name: team.name,
   goal: team.goal,
+  paused: team.paused,
   leadId: team.lead.id,
 });
 
@@ -315,52 +532,48 @@ export async function spawnTeamMember(
         `--${flag} cannot be used with --team`,
       );
   const caller = await callerSession(context);
-  let team: Team;
+  // The session whose team gets the member: with no lead, the caller, which
+  // becomes a lead if it is not one yet.
+  let leadId: string;
   if (input.lead === undefined) {
-    const membership = caller && context.teams.membership(caller.id);
-    if (!membership || membership.reader.role !== "lead")
+    if (!caller || input.asUser)
       throw new DaedalusError(
         "VALIDATION",
-        "'--team' without a lead works only inside a lead's session; pass --team <lead>",
+        "'--team' without a lead works only inside a session, which then leads the team; pass --team <lead>",
       );
-    team = membership.team;
+    leadId = caller.id;
   } else {
-    team = context.teams.get(context.agents.resolve(input.lead).id);
+    leadId = context.agents.resolve(input.lead).id;
   }
-  const callerRole =
-    caller && !input.asUser ? context.teams.membership(caller.id) : undefined;
-  if (caller && !input.asUser && callerRole?.team.id !== team.id)
+  const byLead = Boolean(caller && !input.asUser);
+  if (byLead && caller!.id !== leadId) {
+    const name = context.repositories.findAgent(leadId)?.name ?? leadId;
+    const place = context.teams.memberOf(caller!.id);
     throw new DaedalusError(
       "CONFLICT",
-      `'${caller.name}' is not the lead of '${team.name}'; only the lead or the user adds members (--user, from a session's folder)`,
+      place?.team.lead.id === leadId
+        ? `@${place.reader.handle} is a member of '${place.team.name}'; ask @${LEAD_HANDLE} to add a member, or add one to a team of your own with 'agent spawn --team' and no lead`
+        : `'${caller!.name}' is not the lead of '${name}'; only its lead or the user adds members (--user, from a session's folder), or run 'agent spawn --team' with no lead to lead a team of your own`,
     );
-  if (callerRole && callerRole.reader.role !== "lead")
-    throw new DaedalusError(
-      "CONFLICT",
-      `@${callerRole.reader.handle} is a member of '${team.name}'; ask @${LEAD_HANDLE} to add a member`,
-    );
-  const workspace = input.values.workspace;
-  if (
-    workspace !== undefined &&
-    (await context.workspaces.getActive(workspace)).id !== team.lead.workspaceId
-  )
-    throw new DaedalusError(
-      "VALIDATION",
-      `Members start in the lead's workspace; leave out --workspace`,
-    );
+  }
   const instructions = input.values.message;
-  if (callerRole && !instructions?.trim())
+  if (byLead && !instructions?.trim())
     throw new DaedalusError(
       "VALIDATION",
       "A member the lead adds needs instructions: pass --message <text>",
     );
+  const lead = await context.agents.get(leadId);
+  const workspace = input.values.workspace
+    ? (await context.workspaces.getActive(input.values.workspace)).id
+    : lead.workspaceId;
   const taskId = input.values.task
-    ? await input.resolveTask(input.values.task, team.lead.workspaceId)
+    ? await input.resolveTask(input.values.task, workspace)
     : undefined;
   const spawn = (message: string | undefined) =>
     context.teams.spawnMember({
-      team: team.id,
-      addedBy: callerRole ? "lead" : "user",
+      team: leadId,
+      addedBy: byLead ? "lead" : "user",
+      ...(workspace !== lead.workspaceId ? { workspace } : {}),
       ...(message ? { instructions: message } : {}),
       ...(input.values.name ? { name: input.values.name } : {}),
       ...(taskId ? { taskId } : {}),
@@ -382,6 +595,7 @@ export async function spawnTeamMember(
   else spawned = await spawn(instructions);
   if (!spawned) throw new DaedalusError("INTERNAL", "The member did not start");
   const result = spawned;
+  const team = context.teams.get(leadId);
   printResult(
     {
       ...result.session,
@@ -393,6 +607,10 @@ export async function spawnTeamMember(
       console.log(
         `Spawned ${result.session.name} (${result.session.provider}) as @${result.handle} in the team '${team.name}'`,
       );
+      if (result.created)
+        console.log(
+          `'${team.name}' leads the team now; 'daedal team list' shows it`,
+        );
       if (result.note) {
         console.log(
           `Told @${LEAD_HANDLE} in the chat (#${result.note.message.id})`,

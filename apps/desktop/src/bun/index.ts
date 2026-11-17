@@ -22,6 +22,7 @@ import {
   type WorkspaceFilesChanged,
 } from "@daedalus/core";
 import {
+  BUNDLED_RIPGREP_VARIABLE,
   BUNDLED_TMUX_VARIABLE,
   isInheritedSessionVariable,
   pathExists,
@@ -82,6 +83,11 @@ process.env.DAEDALUS_HOME = channelHome(
 const bundledTmux = resolve(PATHS.RESOURCES_FOLDER, "../MacOS/tmux");
 if (await pathExists(bundledTmux))
   process.env[BUNDLED_TMUX_VARIABLE] = bundledTmux;
+// The ripgrep beside it (scripts/fetch-ripgrep.ts) backs the palette's
+// content search; without one the search falls back to PATH.
+const bundledRipgrep = resolve(PATHS.RESOURCES_FOLDER, "../MacOS/rg");
+if (await pathExists(bundledRipgrep))
+  process.env[BUNDLED_RIPGREP_VARIABLE] = bundledRipgrep;
 
 // Opened from an agent's shell, the app inherits that agent's terminal state
 // and session identity. The tmux client already keeps them out of every
@@ -160,26 +166,6 @@ const revivedSessions = await context.agents
 const revivedTerminals = await context.terminals
   .reviveLost({ automatic: true })
   .catch(() => []);
-// What "Quit and stop sessions" put away, brought back. Deliberately not the
-// same sweep as the one above: that one recovers sessions the OS killed and
-// left `lost`, this one reopens ones Daedalus archived on purpose and promised
-// to return to. A session archived by hand carries no flag and is left alone.
-const resumedSessions = await context.agents
-  .resumeMarkedSessions()
-  .catch((error: unknown) => {
-    void context.logger.write("error", "session_resume_sweep_failed", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return undefined;
-  });
-if (
-  resumedSessions &&
-  (resumedSessions.resumed.length || resumedSessions.skipped.length)
-)
-  await context.logger.write("info", "session_resume_sweep", {
-    resumed: resumedSessions.resumed.length,
-    skipped: resumedSessions.skipped,
-  });
 if (revivedSessions)
   await context.logger.write("info", "session_revive_sweep", {
     revived: revivedSessions.revived.length,
@@ -840,6 +826,30 @@ Electrobun.events.on("reopen", () => {
 
 openMainWindow();
 
+// What "Quit and stop sessions" stopped, brought back. Deliberately not the
+// same sweep as the revive one: that recovers sessions the OS killed and left
+// `lost`, this one restarts ones Daedalus stopped on purpose and promised to
+// return to. It runs after the window opens, so a long list does not hold up
+// the start; each session's card shows it coming back.
+void (async () => {
+  const resumedSessions = await context.agents
+    .resumeMarkedSessions()
+    .catch((error: unknown) => {
+      void context.logger.write("error", "session_resume_sweep_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    });
+  if (
+    resumedSessions &&
+    (resumedSessions.resumed.length || resumedSessions.skipped.length)
+  )
+    await context.logger.write("info", "session_resume_sweep", {
+      resumed: resumedSessions.resumed.length,
+      skipped: resumedSessions.skipped,
+    });
+})();
+
 if (nativeStatusProbePath) {
   let probeStarted = false;
   mainWindow.webview.on("dom-ready", () => {
@@ -982,6 +992,28 @@ setInterval(async () => {
       for (const event of notes.events)
         await context.logger.write("info", "abilities", { event });
     }
+    // Hand-backs held while a lead had one within the minute go once the
+    // minute is up. Without the app they wait for the lead's next delivery.
+    for (const delivery of await context.teams.flushDue().catch(() => []))
+      await context.logger.write("info", "teams", {
+        handBack: delivery.sessionId,
+        delivered: delivery.delivered,
+        error: delivery.error,
+      });
+    // Answers and dismissals a session could not take yet go again.
+    await context.asks.flushDue().catch(() => []);
+    // Each new ask notifies the user once, whichever process asked it.
+    for (const ask of context.asks.claimNew())
+      await context.notifications
+        .notify({
+          sessionId: ask.sessionId,
+          workspaceId: ask.workspaceId,
+          level: "info",
+          title: `${ask.sessionName ?? "A session"} asks you`,
+          subtitle: ask.workspaceName ?? undefined,
+          body: ask.title,
+        })
+        .catch(() => undefined);
     // Routines on the Routines page start headless runs; the clock is this
     // tick, like the rest.
     for (const run of await context.routines.tick().catch(async (error) => {

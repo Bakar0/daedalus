@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import type { WorkflowRunDto, WorkflowStepStateDto } from "@daedalus/protocol";
-import { WorkflowPane, WorkflowSteps } from "./WorkflowPane";
+import { stepTree, WorkflowPane, WorkflowSteps } from "./WorkflowPane";
 
 const run = (states: WorkflowStepStateDto[]): WorkflowRunDto => ({
   id: "run",
@@ -144,5 +144,55 @@ describe("workflow pane", () => {
     expect(html).not.toContain("workflow-step");
     // The tab stays reachable, to read or write workflows before turning them on.
     expect(html).toContain("Open ");
+  });
+
+  test("an included workflow is a heading with its steps under it; progress counts every step", () => {
+    const base = run(["done", "active", "pending"]);
+    const step = base.steps[0]!;
+    const nested: WorkflowRunDto = {
+      ...base,
+      steps: [
+        { ...step, name: "plan", state: "done", note: null },
+        { ...step, name: "release/review", state: "done", note: null },
+        { ...step, name: "release/audit/check", state: "active", note: null },
+        { ...step, name: "release/ship", state: "pending", note: null },
+        { ...step, name: "feedback", state: "pending", note: null },
+      ],
+      groups: [
+        {
+          id: "release",
+          workflow: "release",
+          loopTo: "release/review",
+          until: "",
+          iteration: 2,
+        },
+        {
+          id: "release/audit",
+          workflow: "audit",
+          loopTo: null,
+          until: "",
+          iteration: 1,
+        },
+      ],
+    };
+    expect(
+      stepTree(nested.steps).map((node) =>
+        node.kind === "step" ? node.step.name : `group ${node.id}`,
+      ),
+    ).toEqual(["plan", "group release", "feedback"]);
+    const html = renderToStaticMarkup(
+      <WorkflowPane
+        enabled
+        onOpenSettings={() => {}}
+        onOpenEditor={() => {}}
+        run={nested}
+      />,
+    );
+    // The run counts all five steps; release counts its three.
+    expect(html).toContain(">2/5<");
+    expect(html).toMatch(
+      /workflow-group.*release.*↻ 2.*1\/3.*title="release\/review"[^>]*>review<.*workflow-group.*audit.*0\/1.*title="release\/audit\/check"[^>]*>check<.*title="release\/ship"[^>]*>ship<\/span>.*?<\/li><\/ol><\/li><li[^>]*><span[^>]*><\/span><span class="workflow-step-name" title="feedback"[^>]*>feedback</s,
+    );
+    expect(html.match(/class="workflow-step /g)).toHaveLength(5);
   });
 });

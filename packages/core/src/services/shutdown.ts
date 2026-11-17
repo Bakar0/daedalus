@@ -108,6 +108,23 @@ const dispositionFor = (session: AgentSession): ShutdownDisposition =>
     ? "stop"
     : "archive";
 
+/** How many sessions a resumable shutdown stops at once. */
+const RESUME_STOPS_AT_ONCE = 8;
+
+/** Runs `work` over `items`, at most `size` at a time, keeping their order. */
+async function inBatches<T, R>(
+  items: readonly T[],
+  size: number,
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let start = 0; start < items.length; start += size)
+    results.push(
+      ...(await Promise.all(items.slice(start, start + size).map(work))),
+    );
+  return results;
+}
+
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
@@ -164,14 +181,16 @@ export class ShutdownService {
 
   async run(options: ShutdownOptions = {}): Promise<ShutdownResult> {
     const plan = await this.plan();
-    const sessions: ShutdownSessionResult[] = [];
-    // Serial on purpose. Archiving a Codex session shells out to `codex
-    // archive`, and a board of those at once is how a shutdown turns into a
-    // thundering herd on the way out.
-    for (const target of plan.sessions)
-      sessions.push(
-        await this.endSession(target, options.resumeOnNextStart === true),
-      );
+    const resume = options.resumeOnNextStart === true;
+    // Archiving is serial on purpose: archiving a Codex session shells out to
+    // `codex archive`, and a board of those at once is a thundering herd on
+    // the way out. Stopping for a resume is a tmux call each, so a few run at
+    // once and fifty sessions take seconds, not minutes.
+    const sessions = await inBatches(
+      plan.sessions,
+      resume ? RESUME_STOPS_AT_ONCE : 1,
+      (target) => this.endSession(target, resume),
+    );
     const terminals: ShutdownTerminalResult[] = [];
     if (!options.keepTerminals)
       for (const target of plan.terminals) {
@@ -206,11 +225,10 @@ export class ShutdownService {
    * and it is also what keeps a half-spawned `starting` session from being
    * left behind: whatever archiving could not do, the stop still does.
    */
-  /** Flags an archived session for the next startup sweep to bring back. */
+  /** Flags a stopped session for the next startup sweep to bring back. */
   private markForResume(id: string): void {
     const agent = this.repositories.findAgent(id);
-    if (agent?.archivedAt)
-      this.repositories.updateAgent({ ...agent, resumeOnStart: true });
+    if (agent) this.repositories.updateAgent({ ...agent, resumeOnStart: true });
   }
 
   private async endSession(
@@ -229,6 +247,21 @@ export class ShutdownService {
     if (!current) return { ...identity, outcome: "stopped" };
     if (current.archivedAt) return { ...identity, outcome: "archived" };
     if (!isLive(current.status)) return { ...identity, outcome: "stopped" };
+    // "Quit and stop sessions" is a pause: each session is stopped where it
+    // is, its folder and worktrees untouched, and comes back on the next
+    // start. Archiving here once removed every clean, pushed worktree, and
+    // took minutes for a full board.
+    if (resumeOnNextStart) {
+      try {
+        await this.agents.stopForMove(target.id);
+      } catch (error) {
+        return { ...identity, outcome: "failed", reason: message(error) };
+      }
+      // A custom command has no native resume; starting it again unasked
+      // would be wrong, so it is only stopped.
+      if (target.disposition === "archive") this.markForResume(target.id);
+      return { ...identity, outcome: "stopped" };
+    }
     if (target.disposition === "stop") {
       try {
         await this.agents.stop(target.id, true);

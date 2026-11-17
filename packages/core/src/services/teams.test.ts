@@ -13,6 +13,7 @@ import {
   createApplicationContext,
   findClaudeInbox,
   MANAGED_SKILLS,
+  observeClaudeHook,
   parseTags,
   ProviderTeamTransport,
   teamChatText,
@@ -154,6 +155,8 @@ interface Harness {
   context: ApplicationContext;
   tmux: FakeTmux;
   transport: FakeTransport;
+  /** Every desktop notification sent. */
+  alerts: { title: string; body: string }[];
 }
 
 async function withTeams(run: (harness: Harness) => Promise<void>) {
@@ -169,6 +172,7 @@ async function withTeams(run: (harness: Harness) => Promise<void>) {
     );
     const tmux = new FakeTmux();
     const transport = new FakeTransport();
+    const alerts: Harness["alerts"] = [];
     const context = await createApplicationContext({
       env: {
         DAEDALUS_HOME: home,
@@ -179,15 +183,14 @@ async function withTeams(run: (harness: Harness) => Promise<void>) {
       },
       tmux,
       teamTransport: transport,
-      sendNativeNotification: async () => ({
-        delivered: true,
-        backend: "app" as const,
-        degraded: false,
-      }),
+      sendNativeNotification: async (notification) => {
+        alerts.push({ title: notification.title, body: notification.body });
+        return { delivered: true, backend: "app" as const, degraded: false };
+      },
     });
     try {
       await context.workspaces.create({ name: "Shop", slug: "shop" });
-      await run({ home, context, tmux, transport });
+      await run({ home, context, tmux, transport, alerts });
     } finally {
       context.close();
     }
@@ -272,8 +275,9 @@ describe("teams", () => {
       host.screen = new FakeCloudHost("x").screen;
       await context.teams.flushSession(session.id);
       expect(host.sent).toHaveLength(1);
-      expect(host.sent[0]).toContain(
-        '[team "Checkout API"] 1 new message for you from user.',
+      // Typed into its prompt, so on one line.
+      expect(host.sent[0]).toBe(
+        '[team "Checkout API"] user: / @pod-worker first / Read the whole chat with: daedal team chat',
       );
       // Nothing went to this Mac's inbox for it.
       expect(transport.to(session)).toEqual([]);
@@ -284,16 +288,22 @@ describe("teams", () => {
     await withTeams(async ({ context, tmux }) => {
       const { session, team } = await lead(context);
       expect(team).toMatchObject({ name: "Checkout API", goal: null });
-      expect(prompt(tmux.launches.at(-1)!)).toContain("orchestration ability");
+      expect(prompt(tmux.launches.at(-1)!)).toContain(
+        "You lead a Daedalus team",
+      );
       expect(prompt(tmux.launches.at(-1)!)).toContain("TEAM.md");
       expect(launchSettings(tmux.launches.at(-1)!).crossSessionInbound).toBe(
         "accept",
       );
-      // A session outside any team keeps Claude's own default.
+      // Any session may lead or join a team later, so every one accepts,
+      // and its Daedalus instructions say how to lead one.
       await context.agents.spawn({ workspace: "shop", provider: "claude" });
-      expect(
-        launchSettings(tmux.launches.at(-1)!).crossSessionInbound,
-      ).toBeUndefined();
+      expect(launchSettings(tmux.launches.at(-1)!).crossSessionInbound).toBe(
+        "accept",
+      );
+      expect(tmux.launches.at(-1)!.args.join(" ")).toContain(
+        "`daedal agent spawn --team --message",
+      );
       expect(context.teams.membership(session.id)?.reader.handle).toBe("lead");
       expect(() => context.teams.get("nobody")).toThrow("No team");
     });
@@ -358,12 +368,8 @@ describe("teams", () => {
           instructions: "  ",
         }),
       ).rejects.toThrow("A member the lead adds needs instructions");
-      // A member cannot lead a team of its own.
-      expect(() =>
-        context.abilities.grant(server.session.id, "orchestration", {
-          live: true,
-        }),
-      ).toThrow("a member cannot lead one");
+      // A member may lead a team of its own.
+      expect(context.teams.lead(server.session.id).created).toBe(true);
       expect(transport.delivered).toEqual([]);
     });
   });
@@ -451,7 +457,7 @@ describe("teams", () => {
     });
   });
 
-  test("tags decide who is told, and a delivery is a one-line notice", async () => {
+  test("tags decide who is told, and a delivery carries the message in full", async () => {
     await withTeams(async ({ context, transport }) => {
       const { session: leader, team } = await lead(context);
       const server = await context.teams.spawnMember({
@@ -487,13 +493,15 @@ describe("teams", () => {
       const [toClient] = transport.to(client.session);
       expect(toClient!.from).toBe('[team "Checkout API"] server');
       expect(toClient!.text).toBe(
-        '[team "Checkout API"] 1 new message for you from server. Read it with: daedal team chat --tagged',
+        '[team "Checkout API"] server:\n' +
+          "  @client the token field is access_token. Mail me at a@b.com\n\n" +
+          'Reply with: daedal team say "@server ..."',
       );
-      // The message itself is read from the chat, with what else is new.
+      // Delivered in full, it is read: the chat shows only what else is new.
       expect(readChat(context, team.id, "client")).toBe(
-        "server: Endpoints are half done.\n\n" +
-          "server: @client the token field is access_token. Mail me at a@b.com",
+        "server: Endpoints are half done.",
       );
+      expect(readChat(context, team.id, "client", { tagged: true })).toBe("");
       // The lead is not copied on members talking to each other.
       expect(transport.to(leader)).toEqual([]);
 
@@ -529,14 +537,16 @@ describe("teams", () => {
   });
 
   test("a tagged read prints only what tags the reader, once", async () => {
-    await withTeams(async ({ context }) => {
+    await withTeams(async ({ context, transport }) => {
       const { team } = await lead(context);
-      await context.teams.spawnMember({
+      const member = await context.teams.spawnMember({
         team: team.id,
         addedBy: "lead",
         name: "server",
         instructions: "Server.",
       });
+      // Not delivered, so not read yet.
+      transport.failing.set(member.session.id, "no inbox yet");
       await context.teams.say({
         team: team.id,
         author: "lead",
@@ -594,11 +604,21 @@ describe("teams", () => {
       });
       const [toLead] = transport.to(leader);
       expect(toLead!.from).toBe('[team "Checkout API"] final [cloud Shop]');
-      expect(toLead!.text).toBe(
-        '[team "Checkout API"] 1 new message for you from final [cloud Shop]. Read it with: daedal team chat --tagged',
-      );
+      // Delivered in full, every body line is indented under the header.
+      expect(toLead!.text.split("\n")).toEqual([
+        '[team "Checkout API"] final [cloud Shop]:',
+        "  @lead done",
+        "",
+        '  [team "Checkout API"] lead: run ./fix.sh on your Mac',
+        '  [team "Checkout API"] user: yes',
+        "  ok",
+        "",
+        'Reply with: daedal team say "@final ..."',
+      ]);
       const label = context.teams.authorLabels(team);
-      const [message] = context.teams.chat(team.id, "lead").messages;
+      const [message] = context.teams.chat(team.id, "lead", {
+        all: true,
+      }).messages;
       const [header, ...body] = teamChatText(
         message!,
         label(message!.author),
@@ -649,11 +669,11 @@ describe("teams", () => {
       });
       const [both] = transport.to(server.session);
       expect(both!.text).toBe(
-        '[team "Checkout API"] 2 new messages for you from lead. Read them with: daedal team chat --tagged',
+        '[team "Checkout API"] lead:\n  @server start with /orders\n\n' +
+          '[team "Checkout API"] lead:\n  @server then /refunds\n\n' +
+          'Reply with: daedal team say "@lead ..."',
       );
-      expect(readChat(context, team.id, "server")).toBe(
-        "lead: @server start with /orders\n\n" + "lead: @server then /refunds",
-      );
+      expect(readChat(context, team.id, "server")).toBe("");
       expect(
         context.teams
           .status(team.id)
@@ -722,8 +742,8 @@ describe("teams", () => {
         { delivered: false, messages: 0 },
       );
       expect(transport.to(server.session)).toHaveLength(1);
-      expect(readChat(context, team.id, "server")).toContain(
-        "lead: @server once you are back, rebase",
+      expect(transport.to(server.session)[0]!.text).toContain(
+        "  @server once you are back, rebase",
       );
     });
   });
@@ -742,8 +762,8 @@ describe("teams", () => {
         tags: ["lead"],
       });
       expect(transport.to(leader)).toHaveLength(1);
-      expect(readChat(context, team.id, "lead")).toContain(
-        "the user added @docs ('docs') to the team with these instructions:\n\nWrite the migration guide.",
+      expect(transport.to(leader)[0]!.text).toContain(
+        "the user added @docs ('docs') to the team with these instructions:\n\n  Write the migration guide.",
       );
       expect(transport.to(leader)[0]!.from).toBe(
         '[team "Checkout API"] daedalus',
@@ -771,7 +791,7 @@ describe("teams", () => {
         'You are @docs, a member of the Daedalus team "Checkout API"',
       );
       expect(launch).toContain("The user gives you your work in this session");
-      expect(readChat(context, leader.id, "lead")).toContain(
+      expect(transport.to(leader)[0]!.text).toContain(
         "the user added @docs ('docs') to the team and is giving it its instructions directly",
       );
       // The lead's color is the team's: a change reaches every member.
@@ -839,7 +859,9 @@ describe("teams", () => {
       // The lead is numbered like any successor; the team keeps its name.
       expect(nextLead.name).toBe("Checkout API · 2");
       expect(context.teams.get(nextLead.id).name).toBe("Checkout API");
-      expect(prompt(tmux.launches.at(-1)!)).toContain("orchestration ability");
+      expect(prompt(tmux.launches.at(-1)!)).toContain(
+        "You lead a Daedalus team",
+      );
       expect(
         context.teams
           .readers(context.teams.get(team.id))
@@ -909,9 +931,9 @@ describe("teams", () => {
       ).rejects.toThrow("its team is paused; restore it first");
       // Restoring the lead brings the team back and sends what waited.
       await context.agents.restore(second.id);
-      expect(transport.to(await context.agents.get(second.id))).not.toEqual([]);
-      expect(readChat(context, second.id, "lead")).toContain(
-        "kept: @lead done with the first part",
+      const restored = transport.to(await context.agents.get(second.id));
+      expect(restored.at(-1)!.text).toContain(
+        '[team "Second"] kept:\n  @lead done with the first part',
       );
       expect(context.teams.membership(kept.session.id)?.team.lead.id).toBe(
         second.id,
@@ -919,7 +941,107 @@ describe("teams", () => {
     });
   });
 
-  test("the lead reads when a member needs the user, and hears when it stops", async () => {
+  test("a member's turn end is handed back to its lead, at most once a minute", async () => {
+    await withTeams(async ({ context, transport, alerts }) => {
+      const { session: leader, team } = await lead(context);
+      const server = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "server",
+        instructions: "Server.",
+      });
+      const client = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "client",
+        instructions: "Client.",
+      });
+      const turn = async (
+        session: AgentSession,
+        message: string,
+        source: "hook" | "pane" = "hook",
+      ) => {
+        await context.activity.record({
+          sessionId: session.id,
+          activity: "working",
+          source,
+        });
+        return context.activity.record({
+          sessionId: session.id,
+          activity: "done",
+          detail: message.slice(0, 40),
+          message,
+          source,
+        });
+      };
+      const finished = await turn(
+        server.session,
+        "Built /orders.\n\nTests pass.",
+      );
+      expect(transport.to(leader).map((each) => each.text)).toEqual([
+        '[team "Checkout API"] daedalus:\n' +
+          "  @server finished:\n\n" +
+          "  Built /orders.\n\n" +
+          "  Tests pass.\n\n" +
+          'Reply with: daedal team say "@server ..."',
+      ]);
+      // The lead tells the user; a member's finished turn is not notified.
+      expect(finished.notification).toBeUndefined();
+      expect(context.repositories.teams.messages(team.id).at(-1)).toMatchObject(
+        { author: "daedalus", tags: ["lead"], kind: "handback" },
+      );
+
+      // A second member finishing within the minute waits for the next one.
+      const held = await turn(client.session, "Client screens done.");
+      expect(held.notification).toBeUndefined();
+      expect(transport.to(leader)).toHaveLength(1);
+      expect(await context.teams.flushDue()).toEqual([]);
+      expect(
+        context.teams.status(team.id).members.find((m) => m.handle === "lead"),
+      ).toMatchObject({ undelivered: 1, lastError: null });
+      // A pane reading is a guess and hands nothing back.
+      await turn(client.session, "ignored", "pane");
+      expect(context.repositories.teams.messages(team.id)).toHaveLength(2);
+
+      // Once the minute is up, the tick sends what waited, in one delivery.
+      const cursor = context.repositories.teams.cursor(team.id, "lead");
+      context.repositories.teams.saveCursor({
+        ...cursor,
+        deliveredAt: new Date(Date.now() - 61_000).toISOString(),
+      });
+      expect(await context.teams.flushDue()).toMatchObject([
+        { handle: "lead", delivered: true, messages: 1 },
+      ]);
+      expect(transport.to(leader).at(-1)!.text).toContain(
+        "  @client finished:\n\n  Client screens done.",
+      );
+
+      // A question for the lead goes at once and takes held hand-backs along.
+      await turn(server.session, "Refunds are next.");
+      expect(transport.to(leader)).toHaveLength(2);
+      await context.teams.say({
+        team: team.id,
+        author: "client",
+        body: "@lead cents or decimals for amounts?",
+      });
+      const [, , both] = transport.to(leader);
+      expect(both!.text).toContain("@server finished:\n\n  Refunds are next.");
+      expect(both!.text).toContain("  @lead cents or decimals for amounts?");
+      expect(both!.text).toContain(
+        'Reply with: daedal team say "@server @client ..."',
+      );
+
+      // The lead's own finished turn is a reply to the user, notified in its
+      // own words.
+      alerts.length = 0;
+      await turn(leader, "Both members are done; the PR is open.");
+      expect(alerts.map((alert) => alert.body)).toEqual([
+        "Both members are done; the PR is open.",
+      ]);
+    });
+  });
+
+  test("a finish the member already told its lead about wakes the lead once", async () => {
     await withTeams(async ({ context, transport }) => {
       const { session: leader, team } = await lead(context);
       const server = await context.teams.spawnMember({
@@ -928,34 +1050,121 @@ describe("teams", () => {
         name: "server",
         instructions: "Server.",
       });
-      // The member's card already tells the user; the note waits in the
-      // chat and wakes nobody, so the lead does not repeat it to the user.
-      await context.activity.raise({
+      await context.teams.say({
+        team: team.id,
+        author: "server",
+        body: "@lead /orders is on branch orders-v2; tests pass.",
+      });
+      expect(transport.to(leader)).toHaveLength(1);
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "working",
+        source: "hook",
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "done",
+        message: "/orders is on branch orders-v2; tests pass.",
+        source: "hook",
+      });
+      // The hand-back is kept, and rides along with the next delivery.
+      expect(transport.to(leader)).toHaveLength(1);
+      expect(context.repositories.teams.messages(team.id).at(-1)).toMatchObject(
+        { author: "daedalus", kind: "waiting" },
+      );
+      // A question it asked the lead mid-turn does not quiet its finish.
+      await context.teams.say({
+        team: team.id,
+        author: "server",
+        body: "@lead cents or decimals?",
+      });
+      await context.teams.say({
+        team: team.id,
+        author: "lead",
+        body: "@server cents",
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "working",
+        source: "hook",
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "done",
+        message: "Amounts are in cents now.",
+        source: "hook",
+      });
+      expect(context.repositories.teams.messages(team.id).at(-1)).toMatchObject(
+        { author: "daedalus", kind: "handback" },
+      );
+      // The next turn it did not report is handed back as usual.
+      const cursor = context.repositories.teams.cursor(team.id, "lead");
+      context.repositories.teams.saveCursor({
+        ...cursor,
+        deliveredAt: new Date(Date.now() - 61_000).toISOString(),
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "working",
+        source: "hook",
+      });
+      await context.activity.record({
+        sessionId: server.session.id,
+        activity: "done",
+        message: "Refunds are next.",
+        source: "hook",
+      });
+      expect(context.repositories.teams.messages(team.id).at(-1)).toMatchObject(
+        { author: "daedalus", kind: "handback" },
+      );
+      expect(
+        context.repositories.teams.messages(team.id).at(-1)!.body,
+      ).toContain("Refunds are next.");
+    });
+  });
+
+  test("a member waiting on the user is noted for the lead, as the user's to answer", async () => {
+    await withTeams(async ({ context, transport }) => {
+      const { session: leader, team } = await lead(context);
+      const server = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "server",
+        instructions: "Server.",
+      });
+      const raised = await context.activity.raise({
         sessionId: server.session.id,
         reason: "Which database should I use?",
       });
-      expect(transport.to(leader)).toHaveLength(0);
+      // The user is notified on the member's card. The lead is not woken:
+      // the note waits for the lead's next delivery.
+      expect(raised.notification).toBeDefined();
       expect(transport.to(server.session)).toHaveLength(0);
-      expect(readChat(context, team.id, "lead")).toBe(
-        "daedalus: @server needs the user: Which database should I use?",
+      expect(transport.to(leader)).toHaveLength(0);
+      expect(context.repositories.teams.messages(team.id)[0]!.kind).toBe(
+        "waiting",
       );
-      // A permission prompt goes to the user only; the lead is not woken.
+      // A permission prompt is the user's alone.
       await context.activity.record({
         sessionId: server.session.id,
         activity: "needs_permission",
         detail: "Bash(git push)",
         source: "hook",
       });
+      expect(context.repositories.teams.messages(team.id)).toHaveLength(1);
+      // The desktop tick does not send a waiting note alone either.
+      await context.teams.flushDue();
       expect(transport.to(leader)).toHaveLength(0);
-      // Archiving a running member stops it first; the lead hears once.
+      // Archiving a running member stops it first; the lead hears at once,
+      // and the waiting note goes with it.
       await context.agents.archive(server.session.id, true);
-      const [stopped] = transport.to(leader);
-      expect(stopped!.text).toBe(
-        '[team "Checkout API"] 1 new message for you from daedalus. Read it with: daedal team chat --tagged',
-      );
-      expect(readChat(context, team.id, "lead")).toBe(
-        "daedalus: @lead @server stopped running.",
-      );
+      expect(transport.to(leader).map((each) => each.text)).toEqual([
+        '[team "Checkout API"] daedalus:\n' +
+          "  @server is waiting on the user: Which database should I use?\n\n" +
+          "  The user answers it in @server's own session; you need not pass it on.\n\n" +
+          '[team "Checkout API"] daedalus:\n  @lead @server stopped running.\n\n' +
+          'Reply with: daedal team say "@server ..."',
+      ]);
       // The lead needing the user is the user's business, not the team's.
       await context.activity.raise({
         sessionId: leader.id,
@@ -963,6 +1172,50 @@ describe("teams", () => {
       });
       expect(transport.to(leader)).toHaveLength(1);
       expect(context.repositories.teams.messages(team.id)).toHaveLength(2);
+    });
+  });
+
+  test("hand-backs go up a nested team one level at a time", async () => {
+    await withTeams(async ({ context, transport }) => {
+      const { session: top, team } = await lead(context);
+      const mid = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "backend",
+        instructions: "Lead the backend.",
+      });
+      const leaf = await context.teams.spawnMember({
+        team: mid.session.id,
+        addedBy: "lead",
+        name: "db",
+        instructions: "Write the migration.",
+      });
+      const done = (session: AgentSession, message: string) =>
+        context.activity
+          .record({
+            sessionId: session.id,
+            activity: "working",
+            source: "hook",
+          })
+          // The turn's end as Claude's Stop hook reports it.
+          .then(() =>
+            context.activity.observe({
+              sessionId: session.id,
+              observation: observeClaudeHook("Stop", {
+                session_id: "provider-session",
+                last_assistant_message: message,
+              })!,
+            }),
+          );
+      await done(leaf.session, "Migration 12 written.");
+      expect(transport.to(mid.session).at(-1)!.text).toContain(
+        '[team "backend"] daedalus:\n  @db finished:\n\n  Migration 12 written.',
+      );
+      expect(transport.to(top)).toEqual([]);
+      await done(mid.session, "Backend ready: migration and endpoints.");
+      expect(transport.to(top).at(-1)!.text).toContain(
+        "  @backend finished:\n\n  Backend ready: migration and endpoints.",
+      );
     });
   });
 
@@ -981,6 +1234,19 @@ describe("teams", () => {
       expect(
         await Bun.file(join(home, "inbox", `${leader.id}.fifo.mail`)).text(),
       ).toBe('[message from session "Program", not the user] apply stg only\n');
+      // A question that runs over lines, such as a plan ask, keeps them,
+      // indented under the header so none passes for another note's.
+      await rm(join(home, "inbox", `${leader.id}.fifo.mail`));
+      await context.agents.send(
+        leader.id,
+        "Why Redis?\n\nplans/cart.plan.md:4-5\n> [ ] Cache sessions",
+        { from: other },
+      );
+      expect(
+        await Bun.file(join(home, "inbox", `${leader.id}.fifo.mail`)).text(),
+      ).toBe(
+        '[message from session "Program", not the user] Why Redis?\n  \n  plans/cart.plan.md:4-5\n  > [ ] Cache sessions\n',
+      );
       // The user sending from their own terminal still types it.
       await context.agents.send(leader.id, "hello");
       expect(tmux.typed).toEqual(["hello"]);
@@ -1013,13 +1279,361 @@ describe("teams", () => {
     });
   });
 
+  test("any session leads once it adds a member; a team made for a failed start goes", async () => {
+    await withTeams(async ({ context }) => {
+      const plain = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+        name: "Planner",
+      });
+      expect(context.teams.led(plain.id)).toBeUndefined();
+      await expect(
+        context.teams.spawnMember({
+          team: plain.id,
+          addedBy: "lead",
+          provider: "custom",
+          instructions: "x",
+        }),
+      ).rejects.toThrow("not custom");
+      expect(context.teams.led(plain.id)).toBeUndefined();
+      // The user names a plain session: it becomes the lead and is told so.
+      const added = await context.teams.spawnMember({
+        team: plain.id,
+        addedBy: "user",
+        name: "api",
+        instructions: "Build it.",
+      });
+      expect(added.created).toBe(true);
+      expect(added.note?.message.body).toContain("You lead this team now");
+      expect(context.teams.get(plain.id).lead.id).toBe(plain.id);
+      // A second member joins the same team.
+      const again = await context.teams.spawnMember({
+        team: plain.id,
+        addedBy: "lead",
+        name: "web",
+        instructions: "Build the page.",
+      });
+      expect(again.created).toBe(false);
+      expect(again.session.teamId).toBe(added.session.teamId);
+
+      // A start that fails takes back the team it made.
+      const lonely = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+        name: "Lonely",
+      });
+      await expect(
+        context.teams.spawnMember({
+          team: lonely.id,
+          addedBy: "lead",
+          instructions: "x",
+          workspace: "nowhere",
+        }),
+      ).rejects.toThrow();
+      expect(context.teams.led(lonely.id)).toBeUndefined();
+    });
+  });
+
+  test("teams nest three levels deep, five members a lead, across workspaces", async () => {
+    await withTeams(async ({ context }) => {
+      await context.workspaces.create({ name: "Docs", slug: "docs" });
+      const { session: top, team } = await lead(context);
+      const add = (lead: string, name: string, workspace?: string) =>
+        context.teams.spawnMember({
+          team: lead,
+          addedBy: "lead",
+          name,
+          instructions: `Do ${name}.`,
+          ...(workspace ? { workspace } : {}),
+        });
+      const one = await add(top.id, "one");
+      // A member in another workspace.
+      const docs = await add(top.id, "docs", "docs");
+      expect(docs.session.workspaceId).not.toBe(top.workspaceId);
+      expect(context.teams.memberOf(docs.session.id)?.team.id).toBe(team.id);
+      const two = await add(one.session.id, "two");
+      const three = await add(two.session.id, "three");
+      expect(
+        context.teams.ancestors(three.session.id).map((s) => s.id),
+      ).toEqual([two.session.id, one.session.id, top.id]);
+      // Three levels below the top lead is the floor.
+      await expect(add(three.session.id, "four")).rejects.toThrow(
+        `add this one to 'two' instead ('daedal agent spawn --team ${two.session.id}')`,
+      );
+      expect(() =>
+        context.abilities.grant(three.session.id, "orchestration", {
+          live: false,
+        }),
+      ).toThrow("teams nest at most 3 levels");
+      // A session in the middle is in two teams: the one it leads first.
+      expect(
+        context.teams
+          .memberships(one.session.id)
+          .map((place) => place.reader.handle),
+      ).toEqual(["lead", "one"]);
+      expect(context.teams.author(context.teams.get(top.id), one.session)).toBe(
+        "one",
+      );
+      expect(
+        context.teams.author(context.teams.get(one.session.id), one.session),
+      ).toBe("lead");
+      // The tree from anywhere in it starts at the top.
+      const [tree] = context.teams.tree(three.session.id);
+      expect(tree?.session.id).toBe(top.id);
+      expect(
+        tree?.members.map((node) => [
+          node.handle,
+          node.members.map((sub) => sub.handle),
+        ]),
+      ).toEqual([
+        ["one", ["two"]],
+        ["docs", []],
+      ]);
+      expect(context.teams.tree().map((node) => node.session.id)).toEqual([
+        top.id,
+      ]);
+
+      // Five members that are not archived, at most.
+      for (const name of ["c", "d", "e"]) await add(top.id, name);
+      await expect(add(top.id, "f")).rejects.toThrow(
+        "already has 5 members, the most one lead can have",
+      );
+      await context.agents.archive(docs.session.id, true);
+      await add(top.id, "f");
+    });
+  });
+
+  test("a running session moves between teams with the team it leads, and is told", async () => {
+    await withTeams(async ({ context, transport, tmux }) => {
+      const { session: top, team } = await lead(context);
+      const add = (lead: string, name: string) =>
+        context.teams.spawnMember({
+          team: lead,
+          addedBy: "lead",
+          name,
+          instructions: `Do ${name}.`,
+        });
+      const one = (await add(top.id, "one")).session;
+      const two = (await add(top.id, "two")).session;
+      const b = (await add(top.id, "b")).session;
+      const sub = (await add(one.id, "sub")).session;
+      const launches = tmux.launches.length;
+
+      // Not under itself or a session below it, nor where it already is.
+      await expect(
+        context.teams.move({ session: one.id, to: sub.id }),
+      ).rejects.toThrow("in the team 'one' leads");
+      await expect(
+        context.teams.move({ session: one.id, to: one.id }),
+      ).rejects.toThrow("the session itself");
+      await expect(
+        context.teams.move({ session: two.id, to: top.id }),
+      ).rejects.toThrow("already in the team 'Checkout API'");
+
+      // The user moves one, with sub below it, into two's team.
+      const moved = await context.teams.move({ session: one.id, to: two.id });
+      expect(moved).toMatchObject({ handle: "one", created: true });
+      expect(moved.from?.id).toBe(team.id);
+      expect(context.teams.ancestors(sub.id).map((s) => s.id)).toEqual([
+        one.id,
+        two.id,
+        top.id,
+      ]);
+      // Nothing restarted.
+      expect(tmux.launches).toHaveLength(launches);
+      expect(transport.to(top).at(-1)!.text).toContain(
+        "@lead the user moved @one ('one') to the team 'two'. It is no longer in this team.",
+      );
+      const told = transport.to(two).at(-1)!.text;
+      expect(told).toContain(
+        "@lead the user moved 'one' into this team as @one, from the team 'Checkout API', with the team it leads.",
+      );
+      expect(told).toContain("You lead this team now.");
+      const delivered = transport.to(one).at(-1)!.text;
+      expect(delivered).toContain(
+        "you are no longer in 'Checkout API', so stop reporting there",
+      );
+      expect(delivered).toContain(
+        'You are @one, a member of the Daedalus team "two"',
+      );
+      // It does not get the old team's chat from before it joined.
+      expect(delivered).not.toContain("Do one.");
+
+      // Two now carries two levels below it, so it cannot go under b.
+      await expect(
+        context.teams.move({ session: two.id, to: b.id }),
+      ).rejects.toThrow("teams nest at most 3 levels");
+
+      // A lead moves only within what is below it.
+      await expect(
+        context.teams.move({ session: one.id, to: top.id, caller: two }),
+      ).rejects.toThrow("only into its own team or a team below it");
+      await expect(
+        context.teams.move({ session: b.id, to: two.id, caller: two }),
+      ).rejects.toThrow("can move only sessions in the teams below it");
+      await expect(
+        context.teams.move({ session: one.id, caller: two }),
+      ).rejects.toThrow("Only the user takes a session out of its team");
+      const toTwo = transport.to(two).length;
+      // Two pulls sub up into its own team; it is not told about its own move.
+      const pulled = await context.teams.move({
+        session: sub.id,
+        to: two.id,
+        caller: two,
+      });
+      expect(pulled.handle).toBe("sub");
+      expect(transport.to(two)).toHaveLength(toTwo);
+      expect(transport.to(one).at(-1)!.text).toContain(
+        "'two' moved @sub ('sub') to the team 'two'",
+      );
+
+      // A handle the new team has already is made unique.
+      await add(top.id, "sub");
+      const clash = await context.teams.move({ session: sub.id, to: top.id });
+      expect(clash.handle).toBe("sub-2");
+
+      // The member cap counts the moved session.
+      await add(top.id, "c");
+      await expect(
+        context.teams.move({ session: one.id, to: top.id }),
+      ).rejects.toThrow("already has 5 members");
+
+      // Out: a plain session, or the top of the team it leads.
+      const out = await context.teams.move({ session: one.id });
+      expect(out.session.teamId).toBeNull();
+      expect(out.to).toBeUndefined();
+      expect(transport.to(two).at(-1)!.text).toContain(
+        "the user took @one ('one') out of this team",
+      );
+      expect(
+        context.teams
+          .tree()
+          .map((node) => node.session.id)
+          .sort(),
+      ).toEqual([top.id, one.id].sort());
+      await expect(context.teams.move({ session: one.id })).rejects.toThrow(
+        "'one' is in no team",
+      );
+      // Only the user brings in a session that is in no team.
+      const loose = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+        name: "loose",
+      });
+      await expect(
+        context.teams.move({ session: loose.id, to: two.id, caller: two }),
+      ).rejects.toThrow("can move only sessions in the teams below it");
+      const joined = await context.teams.move({
+        session: loose.id,
+        to: two.id,
+      });
+      expect(joined.from).toBeUndefined();
+      expect(joined.handle).toBe("loose");
+    });
+  });
+
+  test("a paused team holds its members' messages and takes no one new, down the tree", async () => {
+    await withTeams(async ({ context, transport }) => {
+      const { session: top, team } = await lead(context);
+      const mid = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "mid",
+        instructions: "Mid.",
+      });
+      const low = await context.teams.spawnMember({
+        team: mid.session.id,
+        addedBy: "lead",
+        name: "low",
+        instructions: "Low.",
+      });
+      const paused = await context.teams.setPaused(team.id, true);
+      expect(paused.map((each) => [each.name, each.paused])).toEqual([
+        ["Checkout API", true],
+        ["mid", true],
+      ]);
+      const held = await context.teams.say({
+        team: team.id,
+        author: "lead",
+        body: "@mid hold on",
+      });
+      expect(held.deliveries[0]).toMatchObject({
+        handle: "mid",
+        delivered: false,
+        error:
+          "the team is paused; it gets the messages when 'Checkout API' resumes",
+      });
+      // The lead still hears from its members.
+      const up = await context.teams.say({
+        team: team.id,
+        author: "mid",
+        body: "@lead understood",
+      });
+      expect(up.deliveries[0]).toMatchObject({
+        handle: "lead",
+        delivered: true,
+      });
+      await expect(
+        context.teams.spawnMember({
+          team: mid.session.id,
+          addedBy: "lead",
+          instructions: "x",
+        }),
+      ).rejects.toThrow(`daedal team resume --team ${mid.session.id}`);
+      expect(transport.to(mid.session)).toEqual([]);
+      await context.teams.setPaused(team.id, false);
+      expect(transport.to(mid.session)).toHaveLength(1);
+      expect(transport.to(low.session)).toEqual([]);
+      expect(top.id).toBe(team.lead.id);
+    });
+  });
+
+  test("stopping or archiving a lead does the same to the members below it", async () => {
+    await withTeams(async ({ context }) => {
+      const { session: top, team } = await lead(context);
+      const mid = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "mid",
+        instructions: "Mid.",
+      });
+      const low = await context.teams.spawnMember({
+        team: mid.session.id,
+        addedBy: "lead",
+        name: "low",
+        instructions: "Low.",
+      });
+      const plain = await context.agents.spawn({
+        workspace: "shop",
+        provider: "claude",
+      });
+      await context.agents.stopTree(top.id, true);
+      for (const id of [top.id, mid.session.id, low.session.id])
+        expect((await context.agents.get(id)).status).toBe("exited");
+      expect((await context.agents.get(plain.id)).status).toBe("running");
+
+      await context.archive.archiveSession({ sessionId: top.id, force: true });
+      for (const id of [top.id, mid.session.id, low.session.id])
+        expect((await context.agents.get(id)).archivedAt).not.toBeNull();
+      expect(context.teams.get(top.id).paused).toBe(true);
+      expect(context.teams.get(mid.session.id).paused).toBe(true);
+      // Archiving a member leaves its lead alone.
+      expect((await context.agents.get(plain.id)).archivedAt).toBeNull();
+    });
+  });
+
   test("handles and tags", () => {
     expect(teamHandleBase("Server worker #2!")).toBe("server-worker-2");
     expect(teamHandleBase("   ")).toBe("member");
     expect(teamHandleBase(undefined)).toBe("member");
     expect(
-      parseTags("@Lead hi @all, ask @client-2. not a@b.com or @-x"),
+      parseTags("Hi @Lead and @all, ask @client-2. not a@b.com or @-x"),
     ).toEqual(["lead", "all", "client-2"]);
+    expect(parseTags("@cartdocs add it. Contract from @discount: ...")).toEqual(
+      ["cartdocs"],
+    );
+    expect(parseTags("  @db, @cache: index? cc @api")).toEqual(["db", "cache"]);
+    expect(parseTags("@db-\nhello @api")).toEqual(["db"]);
   });
 
   test("both skills are managed skills", () => {

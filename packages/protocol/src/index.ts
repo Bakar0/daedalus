@@ -66,6 +66,11 @@ export interface WorkspaceDto {
    * days asleep, or what came home when it was archived.
    */
   cloudNotice?: string;
+  /**
+   * `home` for Home's hidden row. Every list of
+   * workspaces leaves it out.
+   */
+  kind?: "home";
 }
 
 export interface TaskDto {
@@ -102,6 +107,11 @@ export interface TaskReferenceDto {
 
 export interface AgentSessionDto {
   id: string;
+  /**
+   * Stopped by "Quit and stop sessions" and waiting for the startup sweep to
+   * resume it.
+   */
+  resumeOnStart?: boolean;
   workspaceId: string;
   taskId: string | null;
   name: string;
@@ -143,6 +153,48 @@ export interface AgentSessionDto {
   spawnedBy: string | null;
   /** The cloud host it runs on (`ws:<cloud workspace id>`); null or absent for this Mac. */
   hostId?: string | null;
+}
+
+/** A question a session asked the user, as Activity shows it. */
+export interface AskDto {
+  id: number;
+  workspaceId: string;
+  workspaceName: string | null;
+  sessionId: string;
+  sessionName: string | null;
+  title: string;
+  context: string | null;
+  why: string | null;
+  options: string[];
+  recommended: number | null;
+  /** The plan it is pinned to, an absolute path. */
+  planPath: string | null;
+  taskKey: string | null;
+  state: "open" | "answered" | "dismissed" | "closed";
+  answer: string | null;
+  note: string | null;
+  closedReason: string | null;
+  createdAt: string;
+  closedAt: string | null;
+  /** Undo can open it again: its answer has not reached the session yet. */
+  undoable: boolean;
+  /** Put off until then; out of the count while it is in the future. */
+  snoozedUntil: string | null;
+}
+
+/** A plan's tasks, for the map beside Activity. */
+export interface AskPlanDto {
+  path: string;
+  title: string;
+  owner: string | null;
+  tasks: {
+    key: string;
+    id: string | null;
+    title: string;
+    state: "todo" | "doing" | "done" | "blocked" | "dropped";
+    owner: string | null;
+    depth: number;
+  }[];
 }
 
 /**
@@ -408,6 +460,153 @@ export interface WorkspaceFileDto {
   path: string;
   content: string;
   format: "markdown" | "text";
+}
+
+/** A plan file (`*.plan.md`) as its interactive view draws it. */
+export type PlanTaskStateDto =
+  "todo" | "doing" | "done" | "blocked" | "dropped";
+
+/** An owner chip: `none` is a handle no session answers to. */
+export type PlanOwnerStateDto =
+  "working" | "waiting" | "idle" | "error" | "stopped" | "none";
+
+/** Lines are 1-based and inclusive, in the whole file. */
+export interface PlanMarkdownPartDto {
+  kind: "markdown";
+  text: string;
+  startLine: number;
+  endLine: number;
+}
+
+export interface PlanQuestionPartDto {
+  kind: "question";
+  text: string;
+  line: number;
+}
+
+export interface PlanTaskPartDto {
+  kind: "task";
+  task: PlanTaskDto;
+}
+
+export interface PlanTaskDto {
+  /** `^id`, or `L<line>` for a task with no id. */
+  key: string;
+  id: string | null;
+  state: PlanTaskStateDto;
+  title: string;
+  owner: string | null;
+  line: number;
+  endLine: number;
+  depth: number;
+  body: (PlanMarkdownPartDto | PlanQuestionPartDto | PlanTaskPartDto)[];
+}
+
+export interface PlanOwnerDto {
+  handle: string;
+  sessionId: string | null;
+  sessionName: string | null;
+  state: PlanOwnerStateDto;
+}
+
+/**
+ * The ⌘K palette's search. The root is the workspace's folder, or at Home
+ * the Daedalus home; paths are relative to it, with forward slashes.
+ */
+export interface SearchFilesDto {
+  root: string;
+  home: boolean;
+  files: string[];
+  /** The tree held more files than the list does. */
+  truncated: boolean;
+}
+
+export interface SearchContentMatchDto {
+  path: string;
+  line: number;
+  /** The matching line, cut around its first hit when long. */
+  text: string;
+  /** Where the hits are in `text`, as [start, end) characters. */
+  ranges: [number, number][];
+}
+
+export interface SearchContentDto {
+  root: string;
+  /** The query this answers, so a late answer can be told apart. */
+  query: string;
+  /** The lines found from line `from` on, while the search runs. */
+  matches: SearchContentMatchDto[];
+  from: number;
+  /** Ended: ask again with `from` past the last line until it is. */
+  done: boolean;
+  /** More lines matched than were returned. */
+  truncated: boolean;
+  /** Why nothing was searched: there is no ripgrep. */
+  unavailable?: string;
+}
+
+export interface SearchPlanDto {
+  path: string;
+  title: string;
+  owner: string | null;
+  done: number;
+  total: number;
+  tasks: {
+    key: string;
+    title: string;
+    state: PlanTaskStateDto;
+    owner: string | null;
+    line: number;
+  }[];
+}
+
+export interface SearchPlansDto {
+  root: string;
+  plans: SearchPlanDto[];
+}
+
+export interface SearchPreviewDto {
+  /** The first line's number. */
+  start: number;
+  /** Empty for a file that is not text. */
+  lines: string[];
+}
+
+/** A plan as the side panel's Plans section lists it. */
+export interface PlanListItemDto {
+  /** Relative to the file panel's root: the workspace, or at Home the Daedalus home. */
+  path: string;
+  title: string;
+  done: number;
+  total: number;
+  /** Open questions for the user. */
+  questions: number;
+  /** The plan's owner, live; null when it names none. */
+  owner: PlanOwnerDto | null;
+}
+
+export interface PlanListGroupDto {
+  /** Null for Home's own plans. */
+  workspaceId: string | null;
+  name: string;
+  /** Questions for the user first, then unfinished, then finished. */
+  plans: PlanListItemDto[];
+}
+
+export interface PlanListDto {
+  /** At Home: Home's own and every workspace's, in groups. */
+  home: boolean;
+  /** Only groups with plans; one group in a workspace. */
+  groups: PlanListGroupDto[];
+}
+
+export interface PlanViewDto {
+  title: string | null;
+  owner: string | null;
+  blocks: (PlanMarkdownPartDto | PlanTaskPartDto)[];
+  hasTasksSection: boolean;
+  absolutePath: string;
+  owners: PlanOwnerDto[];
 }
 
 export interface WorkspaceImageDto {
@@ -1328,6 +1527,19 @@ export interface WorkflowRunStepDto {
   dynamic: boolean;
 }
 
+/**
+ * A workflow included in a run with `@name`: its steps are the run's steps
+ * whose names start with `<id>/`.
+ */
+export interface WorkflowRunGroupDto {
+  id: string;
+  workflow: string;
+  /** The step the group goes back to after its last; null for none. */
+  loopTo: string | null;
+  until: string;
+  iteration: number;
+}
+
 /** A step as one finished iteration of a circular run left it. */
 export interface WorkflowStepRecordDto {
   iteration: number;
@@ -1352,7 +1564,7 @@ export interface WorkflowFileDto {
   until?: string;
   /** What follows the frontmatter: a step's instructions, a workflow's notes. */
   body?: string;
-  /** For a workflow: its steps; for a step: whether it is gated. */
+  /** For a workflow: its steps, `@name` for an included workflow. */
   steps?: string[];
   /** A workflow with `steps: dynamic`: each run names its own steps. */
   dynamic?: boolean;
@@ -1382,7 +1594,13 @@ export interface WorkflowRunDto {
   workspaceId: string;
   sessionId: string | null;
   workflow: string;
+  /**
+   * In order. A step of an included workflow is named by its group, such as
+   * `release/review`.
+   */
   steps: WorkflowRunStepDto[];
+  /** Included workflows, outermost first; absent or empty for none. */
+  groups?: WorkflowRunGroupDto[];
   /** Built for this run alone, with no workflow file. */
   dynamic: boolean;
   /** Steps were added or removed after a maintained workflow started. */
@@ -1528,6 +1746,33 @@ export interface DesktopRpcSchema {
       >;
       /** The Routines agent's session, started in the workspace on first use. */
       routinesAgent: Request<{ workspaceId: string }, AgentSessionDto>;
+      /** The hidden Home row, made on first use. Starts no agent. */
+      homeOpen: Request<Record<string, never>, WorkspaceDto>;
+      /**
+       * Resumes a session "Quit and stop sessions" marked, now rather than in
+       * its turn: the user opened it. Null when it is no longer waiting.
+       */
+      sessionResumeNow: Request<{ id: string }, AgentSessionDto | null>;
+      /**
+       * Activity: open asks and those ended in the last day, newest first,
+       * in every workspace. Asks whose plan task is done close first.
+       */
+      askList: Request<
+        { plan?: { workspaceId: string; path: string } },
+        AskDto[]
+      >;
+      /** The user answers an ask: an option's index, words, or both. */
+      askAnswer: Request<
+        { id: number; option: number | null; note: string | null },
+        AskDto
+      >;
+      askDismiss: Request<{ id: number }, AskDto>;
+      /** Undo: an answered, dismissed or closed ask is open again. */
+      askReopen: Request<{ id: number }, AskDto>;
+      /** `until` an ISO time; null brings it back now. */
+      askSnooze: Request<{ id: number; until: string | null }, AskDto>;
+      /** The tasks of the plan an ask is pinned to; null when unreadable. */
+      askPlan: Request<{ path: string }, AskPlanDto | null>;
       /** Sends what is waiting, then reads the team as the user. */
       teamDetail: Request<{ teamId: string }, TeamDetailDto>;
       /** Posts to the team chat as the user. */
@@ -2070,6 +2315,68 @@ export interface DesktopRpcSchema {
       workspaceRepositoryDetach: Request<
         { id: string },
         WorkspaceRepositoryDto
+      >;
+      /** Parses a plan's text, as the editor holds it, and finds its owners. */
+      planView: Request<
+        { workspace: string; path: string; text: string },
+        PlanViewDto
+      >;
+      /**
+       * The workspace's plans, or at Home every workspace's and Home's own,
+       * for the side panel.
+       */
+      planList: Request<{ workspace: string }, PlanListDto>;
+      /** Writes `plans/<slug>.plan.md`; the path is workspace-relative. */
+      planCreate: Request<
+        { workspace: string; title: string },
+        { path: string }
+      >;
+      /**
+       * Starts an agent on a task, on the workspace's default provider, and
+       * marks the task `[/]` with the new session as its owner.
+       */
+      planTaskStart: Request<
+        { workspace: string; path: string; task: string },
+        { session: AgentSessionDto; content: string }
+      >;
+      /**
+       * Sends the owner of part of a plan the user's question, then
+       * `path:lines:` and the quote. `owner` null means the plan's own.
+       */
+      planAsk: Request<
+        {
+          workspace: string;
+          path: string;
+          owner: string | null;
+          question: string;
+          startLine: number;
+          endLine: number;
+          quote: string;
+        },
+        { sessionId: string; sessionName: string; message: string }
+      >;
+      /**
+       * The ⌘K palette's search in a workspace's folder, or in the Daedalus
+       * home when `workspace` is Home's or null.
+       */
+      searchFiles: Request<
+        { workspace: string | null; refresh?: boolean },
+        SearchFilesDto
+      >;
+      /**
+       * The lines of a content search from `from` on, waiting briefly for
+       * more while it runs. A new query or root stops the window's previous
+       * search.
+       */
+      searchContent: Request<
+        { workspace: string | null; query: string; from?: number },
+        SearchContentDto
+      >;
+      /** The plan files under the search root, with their tasks. */
+      searchPlans: Request<{ workspace: string | null }, SearchPlansDto>;
+      searchPreview: Request<
+        { workspace: string | null; path: string; line?: number },
+        SearchPreviewDto
       >;
       workspaceJournalAppend: Request<
         {

@@ -113,6 +113,17 @@ describe("Claude hook payloads", () => {
     expect(
       after('~/.daedalus/bin/daedal attention "Merge PR #147"')?.ifNotActivity,
     ).toContain("needs_input");
+    // An ask waits under Activity; the agent goes on working.
+    expect(
+      after('daedal plan ask cart ^stale "Full cart or version?"')
+        ?.ifNotActivity,
+    ).toBeUndefined();
+    expect(
+      after('daedal activity ask "Full cart or version?"')?.ifNotActivity,
+    ).toBeUndefined();
+    expect(
+      after('daedal ask "Full cart or version?"')?.ifNotActivity,
+    ).toBeUndefined();
     expect(after("daedal attention --clear")?.ifNotActivity).toBeUndefined();
     expect(after("daedal agent list")?.ifNotActivity).toBeUndefined();
   });
@@ -293,6 +304,8 @@ describe("Claude hook payloads", () => {
     ).toMatchObject({
       activity: "done",
       detail: "Built the parser. Should I build A?",
+      // In full, with its line breaks, for the hand-back to a lead.
+      message: "Built the parser.\n\nShould I build A?",
     });
   });
 

@@ -26,6 +26,7 @@ import {
 import type { DesktopClient } from "../client-types";
 import { useCommand } from "../commands";
 import { askConfirm, askText, plainLine } from "../dialogs";
+import { createPlan } from "./plan-actions";
 import { type ItemAction, useItemActions } from "../item-actions";
 import { FileTypeIcon } from "./file-icons";
 import {
@@ -894,6 +895,15 @@ export function FileTree({
         section: 0,
         disabled: readOnly,
         run: () => startNewEntry("directory", entry?.path ?? ROOT),
+      },
+      {
+        id: "new-plan",
+        label: "New Plan…",
+        section: 0,
+        run: () =>
+          void createPlan(client, workspaceId, onError).then((path) => {
+            if (path) onOpen(path, { pinned: true });
+          }),
       },
       ...(entry
         ? [

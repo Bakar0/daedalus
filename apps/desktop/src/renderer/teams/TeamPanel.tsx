@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   RpcResult,
   SessionColorDto,
@@ -25,6 +31,7 @@ export function TeamBar({
   color,
   leadArchived = false,
   onOpenPanel,
+  actions,
 }: {
   team: TeamDto;
   role: "lead" | "member";
@@ -36,6 +43,8 @@ export function TeamBar({
   /** The team is paused until its lead is restored. */
   leadArchived?: boolean;
   onOpenPanel: () => void;
+  /** More buttons before Team. */
+  actions?: ReactNode;
 }) {
   return (
     <section
@@ -53,6 +62,7 @@ export function TeamBar({
               : `@${handle} in ${team.name}`}
         </span>
         <span className="notice-bar-actions">
+          {actions}
           <button
             className="quiet"
             data-panel-toggle
