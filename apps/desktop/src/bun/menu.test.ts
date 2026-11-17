@@ -270,6 +270,10 @@ describe("File, Go and Help menus", () => {
 
   test("Go owns the keys that act everywhere and only shows the others", () => {
     expect(rows(menuNamed("Go"))).toEqual([
+      // Taken only while there is somewhere to go, so the shell keeps ⌃-.
+      ["nav.back", "Go Back (⌃-)", null],
+      ["nav.forward", "Go Forward (⌃⇧-)", null],
+      "divider",
       // ⌃Tab waits for ⌃ to be let go, which only the dispatcher sees.
       ["session.switch", "Switch Session (⌃⇥)", null],
       ["session.nextNeedsYou", "Next Session That Needs You", null],

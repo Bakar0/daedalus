@@ -76,7 +76,8 @@ export interface CommandSpec {
   readonly runsIn?: "host" | "renderer";
   /**
    * Its place in the menu bar: the menu, and a section; sections are divided
-   * by a separator and items keep table order. A menu item with a key owns
+   * by a separator and show in number order (one below 0 comes first), and
+   * items keep table order. A menu item with a key owns
    * that key: macOS delivers it through the menu, by id, so the renderer's
    * dispatcher leaves it alone and nothing runs twice.
    *
@@ -372,6 +373,26 @@ export const COMMAND_SPECS = [
     group: "Go",
     keys: [],
     menu: { bar: "Go", section: 0 },
+  },
+  // Back to the place shown before (a session, a task, a file, a board) and
+  // forward again, VS Code's keys on a Mac. Like VS Code, they act from a
+  // terminal too, where ⌃- is otherwise the shell's undo. The menu only
+  // shows the keys: the dispatcher takes them only while there is somewhere
+  // to go, so the shell keeps ⌃- otherwise, and ⌃⇧- does not rest on how
+  // macOS matches a shifted key equivalent.
+  {
+    id: "nav.back",
+    title: "Go Back",
+    group: "Go",
+    keys: ["ctrl+-"],
+    menu: { bar: "Go", section: -1, showKeyOnly: true },
+  },
+  {
+    id: "nav.forward",
+    title: "Go Forward",
+    group: "Go",
+    keys: ["ctrl+shift+-"],
+    menu: { bar: "Go", section: -1, showKeyOnly: true },
   },
   {
     id: "session.new",

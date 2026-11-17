@@ -32,6 +32,7 @@
     "relay-admin": "bun run scripts/relay-admin.ts",
     "test:terminal-agent": "bun run scripts/terminal-agent-check.ts",
     "test:panels": "bun run scripts/panel-browser-check.ts",
+    "test:nav-ui": "bun run scripts/nav-ui-check.ts",
     "test:settings-ui": "bun run scripts/settings-ui-check.ts",
     "test:reorder-ui": "bun run scripts/reorder-ui-check.ts",
     "test:repo-tree-ui": "bun run scripts/repo-tree-ui-check.tsx",

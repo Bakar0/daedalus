@@ -86,6 +86,10 @@ export interface EditorAreaHandle {
   removed(path: string): void;
   /** Shows the session tab, adding it first if it was closed. */
   showSession(): void;
+  /** Brings the tab with this id to the front, if it is still open. */
+  showPanel(id: string): void;
+  /** Whether a tab with this id is open. */
+  hasPanel(id: string): boolean;
   /** Shows the task tab, or closes it when no task is selected. */
   showTask(): void;
   closeTask(): void;
@@ -155,7 +159,11 @@ export interface EditorAreaProps {
    * The kind of the tab in front changed, or the last tab closed. `byUser`
    * when the user picked it, with a click or a key.
    */
-  onActivePanel?(kind: CenterPanelKind | undefined, byUser?: boolean): void;
+  onActivePanel?(
+    kind: CenterPanelKind | undefined,
+    byUser?: boolean,
+    panelId?: string,
+  ): void;
   /** The session or task tab was closed by the user. */
   onAppPanelClosed?(kind: "session" | "task"): void;
   /** The session and task tabs are the app's; it draws their content. */
@@ -713,6 +721,9 @@ export default function EditorArea({
         whenReady(() =>
           placeApp(SESSION_PANEL, { path: "", kind: "session" }, "Session"),
         ),
+      showPanel: (id) =>
+        whenReady(() => apiRef.current?.getPanel(id)?.api.setActive()),
+      hasPanel: (id) => Boolean(apiRef.current?.getPanel(id)),
       showTask: () =>
         whenReady(() =>
           placeApp(TASK_PANEL, { path: "", kind: "task" }, "Task"),
@@ -1028,7 +1039,11 @@ export default function EditorArea({
       api.onDidActivePanelChange((event) => {
         const params = event.panel?.params as FilePanelParams | undefined;
         callbacks.current.onActiveChange(params?.path || undefined);
-        callbacks.current.onActivePanel?.(panelKind(params), byUser());
+        callbacks.current.onActivePanel?.(
+          panelKind(params),
+          byUser(),
+          event.panel?.id,
+        );
       });
       api.onDidRemovePanel((panel) => {
         const params = panel.params as FilePanelParams | undefined;
@@ -1075,7 +1090,11 @@ export default function EditorArea({
       });
       const active = api.activePanel?.params as FilePanelParams | undefined;
       callbacks.current.onActiveChange(active?.path || undefined);
-      callbacks.current.onActivePanel?.(panelKind(active));
+      callbacks.current.onActivePanel?.(
+        panelKind(active),
+        false,
+        api.activePanel?.id,
+      );
     },
     [workspaceId],
   );

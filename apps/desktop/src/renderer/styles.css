@@ -8573,6 +8573,40 @@ button.routine-tick:hover {
   margin: 0 4px 12px;
   min-height: 24px;
 }
+/* Go Back and Go Forward, at the right end of the brand row. */
+.nav-history {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.nav-history-button {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  color: var(--secondary) !important;
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  padding: 0 !important;
+  width: 24px;
+}
+.nav-history-button svg {
+  fill: none;
+  height: 14px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  width: 14px;
+}
+.nav-history-button:hover:not(:disabled) {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.nav-history-button:disabled {
+  opacity: 0.35;
+}
 /* Left: the workspace list, one plain row per workspace and per session. */
 .workspace-column {
   background: var(--panel);
