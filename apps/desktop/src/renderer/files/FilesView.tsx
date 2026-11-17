@@ -193,7 +193,11 @@ export interface FilesEditorProps {
   controller: FilesController;
   workspace: { id: string; name: string; path: string };
   theme: AppTheme;
-  onActivePanel?(kind: CenterPanelKind | undefined, byUser?: boolean): void;
+  onActivePanel?(
+    kind: CenterPanelKind | undefined,
+    byUser?: boolean,
+    panelId?: string,
+  ): void;
   onAppPanelClosed?(kind: "session" | "task"): void;
   renderSession?(): React.ReactNode;
   sessionTitle?: string;

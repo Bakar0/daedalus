@@ -270,6 +270,10 @@ export const PANEL_RAIL_WIDTH = 68;
 export const TERMINAL_PANEL_MIN_HEIGHT = 120;
 export { TERMINAL_FONT_SIZE } from "./terminal-font";
 const PANEL_COMPACT_THRESHOLD = 132;
+/** How long a place stays in front before Go Back counts it. */
+const NAV_SETTLE_MS = 250;
+/** How long a step's way through other views is not counted as places. */
+const NAV_ARRIVAL_MS = 1500;
 const PANEL_STEP = 24;
 
 export const clampPanelSize = (size: number, maximum: number) =>
@@ -322,6 +326,16 @@ import {
   type SwitcherState,
   switcherStart,
 } from "./navigation/session-cycle";
+import {
+  type NavHistory,
+  type Place,
+  type Step,
+  emptyHistory,
+  moveTo,
+  samePlace,
+  stepTarget,
+  visit,
+} from "./navigation/history";
 import {
   type HeldModifiers,
   SessionSwitcher,
@@ -2732,8 +2746,25 @@ export function WorkspaceApp({
   // The tab in front of the center decides which view the rest of the app
   // sees: a session's, a task's, or the files'. No tab at all is the board's
   // empty center.
+  // The tab in front of the center, by its dockview id, and the workspace
+  // whose editor it is in, for Go Back. Another workspace's editor mounts
+  // after the switch, so until it reports, its last tab is not this one's.
+  const [centerTab, setCenterTab] = useState<{
+    workspaceId: string;
+    id: string;
+  }>();
   const followCenterTab = useCallback(
-    (kind?: CenterPanelKind, picked?: boolean) => {
+    (
+      kind?: CenterPanelKind,
+      picked?: boolean,
+      panelId?: string,
+      tabWorkspaceId?: string,
+    ) => {
+      setCenterTab(
+        panelId && tabWorkspaceId
+          ? { workspaceId: tabWorkspaceId, id: panelId }
+          : undefined,
+      );
       // A session tab the user picks takes the caret, as a sidebar pick does;
       // one Daedalus brings forward on its own leaves focus alone.
       if (kind === "session" && picked && activeSessionIdRef.current)
@@ -6968,6 +6999,129 @@ export function WorkspaceApp({
       {},
     );
   }, [selectedTask?.id, taskFocusRequest, view, workspaceId]);
+
+  // ---- ⌃- and ⌃⇧-: back and forward through the places shown ----
+  // Home's Activity and Routines pages are not places; its files are.
+  const placeShown = (): Place | undefined => {
+    if (!workspaceId) return undefined;
+    if (atHome && homePage !== "files")
+      return { workspaceId, kind: "home", id: homePage };
+    if (view === "session")
+      return shownSessionId
+        ? { workspaceId, kind: "session", id: shownSessionId }
+        : undefined;
+    if (view === "board")
+      return selectedTaskId
+        ? { workspaceId, kind: "task", id: selectedTaskId }
+        : { workspaceId, kind: "board" };
+    if (view === "workspace" && centerTab?.workspaceId === workspaceId)
+      return { workspaceId, kind: "tab", id: centerTab.id };
+    return undefined;
+  };
+  const shownPlace = placeShown();
+  const shownPlaceKey = shownPlace ? JSON.stringify(shownPlace) : "";
+  const [navHistory, setNavHistory] = useState<NavHistory>(emptyHistory);
+  // A place counts once it has stayed in front a moment: switching
+  // workspace passes through views on the way, and those are not places
+  // the user went to. Until then it is pending, and a step taken meanwhile
+  // counts it first, so Back from a place just reached returns to the one
+  // before it. State rather than a ref, so the buttons follow it.
+  const [pendingPlace, setPendingPlace] = useState<Place>();
+  // Where a step is going. The views it passes through on the way (the
+  // session tab in front while a file tab is brought up) are not places:
+  // counting one would drop the places ahead of it.
+  const stepArrival = useRef<{ place: Place; until: number }>(undefined);
+  useEffect(() => {
+    if (!shownPlaceKey) return;
+    // The key is this component's own stringify of a Place.
+    const place = JSON.parse(shownPlaceKey) as Place;
+    const arrival = stepArrival.current;
+    if (arrival) {
+      if (samePlace(arrival.place, place)) {
+        stepArrival.current = undefined;
+        return;
+      }
+      if (Date.now() < arrival.until) return;
+      stepArrival.current = undefined;
+    }
+    setPendingPlace(place);
+    const timer = setTimeout(() => {
+      setPendingPlace(undefined);
+      setNavHistory((current) => visit(current, place));
+    }, NAV_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [shownPlaceKey]);
+  const settledHistory = () =>
+    pendingPlace ? visit(navHistory, pendingPlace) : navHistory;
+  const canOpenPlace = (place: Place) => {
+    const inWorkspace =
+      place.workspaceId === homeWorkspace?.id ||
+      activeWorkspaces.some((item) => item.id === place.workspaceId);
+    if (!inWorkspace) return false;
+    if (place.kind === "session") {
+      const session = sessionsByIdForKeys.get(place.id);
+      return Boolean(session && !session.archivedAt);
+    }
+    if (place.kind === "task")
+      return Boolean(snapshot?.tasks.some((item) => item.id === place.id));
+    // Another workspace's tabs are not mounted to ask; a tab closed there
+    // since is found missing on arrival.
+    if (place.kind === "tab" && place.workspaceId === workspaceId)
+      return files.editor.current?.hasPanel(place.id) ?? true;
+    return true;
+  };
+  const navTarget = (direction: Step) =>
+    stepTarget(settledHistory(), direction, canOpenPlace);
+  const goToPlace = (direction: Step) => {
+    const history = settledHistory();
+    const index = stepTarget(history, direction, canOpenPlace);
+    const place = index === undefined ? undefined : history.places[index];
+    if (index === undefined || !place) return;
+    setPendingPlace(undefined);
+    stepArrival.current = { place, until: Date.now() + NAV_ARRIVAL_MS };
+    setNavHistory(moveTo(history, index));
+    if (place.kind === "session") goToSession(place.id);
+    else if (place.kind === "home")
+      void openAtHome(place.id === "routines" ? "routines" : "activity");
+    else if (place.kind === "task") openTask(place.id, place.workspaceId);
+    else if (place.kind === "board") {
+      setSelectedTaskId(undefined);
+      enterWorkspace(place.workspaceId, "board");
+    } else {
+      if (place.workspaceId === homeWorkspace?.id) setHomePage("files");
+      enterWorkspace(place.workspaceId, "workspace");
+      setTabRequest({ workspaceId: place.workspaceId, id: place.id });
+    }
+  };
+  // A tab in another workspace is shown once that workspace's editor is the
+  // one mounted, which is after the render that switches to it.
+  const [tabRequest, setTabRequest] = useState<{
+    workspaceId: string;
+    id: string;
+  }>();
+  useEffect(() => {
+    if (!tabRequest || tabRequest.workspaceId !== workspaceId) return;
+    setTabRequest(undefined);
+    files.withEditor((handle) => handle.showPanel(tabRequest.id));
+  }, [files, tabRequest, workspaceId]);
+  const canGoBack = navTarget(-1) !== undefined;
+  const canGoForward = navTarget(1) !== undefined;
+  // A step keeps the editor's text in its tab, as a terminal's, so it
+  // waits only for a field outside both, or a brief being edited.
+  const mayStep = (context: CommandContext) =>
+    !editingTask &&
+    (!context.typing ||
+      context.areas.includes("terminal") ||
+      context.areas.includes("editor"));
+  useCommand("nav.back", {
+    enabled: (context) => mayStep(context) && canGoBack,
+    run: () => goToPlace(-1),
+  });
+  useCommand("nav.forward", {
+    enabled: (context) => mayStep(context) && canGoForward,
+    run: () => goToPlace(1),
+  });
+
   // New things, each through the flow its button already opens. A new
   // session or task lands on its own page, so these wait while text is
   // being typed too.
@@ -8192,6 +8346,34 @@ export function WorkspaceApp({
                   setModal("settings");
                 }}
               />
+              <div aria-label="History" className="nav-history" role="group">
+                <Tooltip command="nav.back" label="Go back">
+                  <button
+                    aria-label="Go back"
+                    className="nav-history-button"
+                    disabled={!canGoBack}
+                    onClick={() => goToPlace(-1)}
+                    type="button"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 16 16">
+                      <path d="M10 3.5 5.5 8l4.5 4.5" />
+                    </svg>
+                  </button>
+                </Tooltip>
+                <Tooltip command="nav.forward" label="Go forward">
+                  <button
+                    aria-label="Go forward"
+                    className="nav-history-button"
+                    disabled={!canGoForward}
+                    onClick={() => goToPlace(1)}
+                    type="button"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 16 16">
+                      <path d="M6 3.5 10.5 8 6 12.5" />
+                    </svg>
+                  </button>
+                </Tooltip>
+              </div>
             </div>
             <button
               aria-current={
@@ -8770,7 +8952,9 @@ export function WorkspaceApp({
                 theme={theme}
                 workspace={filesWorkspace!}
                 worktreeBases={worktreeBases}
-                onActivePanel={followCenterTab}
+                onActivePanel={(kind, picked, panelId) =>
+                  followCenterTab(kind, picked, panelId, workspace.id)
+                }
                 onAppPanelClosed={(kind) => {
                   if (kind === "task") closeTaskDrawer();
                 }}
