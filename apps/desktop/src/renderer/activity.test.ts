@@ -1,5 +1,10 @@
 import { expect, test } from "vitest";
-import { groupPlanTasks, markPlanTasks } from "./ActivityPage";
+import {
+  groupPlanTasks,
+  isSnoozed,
+  markPlanTasks,
+  snoozeChoices,
+} from "./ActivityPage";
 
 const task = (
   id: string,
@@ -73,4 +78,21 @@ test("every class the Activity page uses has a style rule", async () => {
     (name) => !new RegExp(`\\.${name}(?![a-z-])`).test(css),
   );
   expect(missing).toEqual([]);
+});
+
+test("snooze offers 5 minutes, an hour and tomorrow at 9:00", () => {
+  const now = new Date(2026, 10, 17, 21, 30);
+  const choices = snoozeChoices(now);
+  expect(choices.map((choice) => choice.label)).toEqual([
+    "5 min",
+    "1 hour",
+    "Tomorrow 9:00",
+  ]);
+  expect(choices[0]!.until.getTime() - now.getTime()).toBe(5 * 60_000);
+  expect(choices[1]!.until.getTime() - now.getTime()).toBe(60 * 60_000);
+  expect(choices[2]!.until).toEqual(new Date(2026, 10, 18, 9, 0));
+  const ask = { snoozedUntil: choices[0]!.until.toISOString() };
+  expect(isSnoozed(ask, now.getTime())).toBe(true);
+  expect(isSnoozed(ask, choices[0]!.until.getTime() + 1)).toBe(false);
+  expect(isSnoozed({ snoozedUntil: null }, now.getTime())).toBe(false);
 });

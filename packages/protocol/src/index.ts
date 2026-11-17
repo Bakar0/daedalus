@@ -178,6 +178,8 @@ export interface AskDto {
   closedAt: string | null;
   /** Undo can open it again: its answer has not reached the session yet. */
   undoable: boolean;
+  /** Put off until then; out of the count while it is in the future. */
+  snoozedUntil: string | null;
 }
 
 /** A plan's tasks, for the map beside Activity. */
@@ -1767,6 +1769,8 @@ export interface DesktopRpcSchema {
       askDismiss: Request<{ id: number }, AskDto>;
       /** Undo: an answered, dismissed or closed ask is open again. */
       askReopen: Request<{ id: number }, AskDto>;
+      /** `until` an ISO time; null brings it back now. */
+      askSnooze: Request<{ id: number; until: string | null }, AskDto>;
       /** The tasks of the plan an ask is pinned to; null when unreadable. */
       askPlan: Request<{ path: string }, AskPlanDto | null>;
       /** Sends what is waiting, then reads the team as the user. */

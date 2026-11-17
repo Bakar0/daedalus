@@ -10522,6 +10522,14 @@ button.routine-tick:hover {
   margin-left: auto;
   min-width: 0;
 }
+.needs-card-snooze,
+.needs-card-snoozed {
+  align-items: baseline;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 10px;
+}
 .needs-card-task {
   color: var(--text);
 }

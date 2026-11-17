@@ -155,6 +155,50 @@ describe("Activity asks", () => {
     });
   });
 
+  test("a snoozed ask waits out its time, then notifies the user again", async () => {
+    await withHome(async ({ context, transport }) => {
+      const lead = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "lead",
+      });
+      const { ask } = await context.asks.create({
+        session: lead.id,
+        title: "Ship it?",
+      });
+      expect(context.asks.claimNew().map((item) => item.id)).toEqual([ask.id]);
+      const until = new Date(Date.now() + 60 * 60_000).toISOString();
+      const snoozed = context.asks.snooze(ask.id, until);
+      expect(snoozed).toMatchObject({ state: "open", snoozedUntil: until });
+      // Not notified while it waits.
+      expect(context.asks.claimNew()).toEqual([]);
+      // Its time comes (set straight in the rows, as a clock passing would).
+      context.repositories.asks.snooze(
+        ask.id,
+        new Date(Date.now() - 1_000).toISOString(),
+        new Date().toISOString(),
+      );
+      expect(context.asks.claimNew().map((item) => item.id)).toEqual([ask.id]);
+      expect(context.asks.claimNew()).toEqual([]);
+      // Unsnoozing keeps the notification already sent.
+      context.asks.snooze(ask.id, null);
+      expect(context.asks.get(ask.id).snoozedUntil).toBeNull();
+      expect(context.asks.claimNew()).toEqual([]);
+      // The session is never told.
+      expect(transport.to(lead)).toEqual([]);
+      expect(() =>
+        context.asks.snooze(ask.id, new Date(Date.now() - 5).toISOString()),
+      ).toThrow("A snooze ends in the future");
+      expect(() => context.asks.snooze(ask.id, "soon")).toThrow(
+        "'soon' is not a time",
+      );
+      await context.asks.dismiss(ask.id);
+      expect(() => context.asks.snooze(ask.id, until)).toThrow(
+        "only an open ask can be snoozed",
+      );
+    });
+  });
+
   test("answering tells the session, with the question and its context, once", async () => {
     await withHome(async ({ context, transport }) => {
       const lead = await context.agents.spawn({

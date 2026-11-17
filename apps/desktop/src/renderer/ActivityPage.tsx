@@ -31,6 +31,35 @@ const ago = (from: string, now: number): string => {
   return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
 };
 
+/** Put off by the user until a time that has not come yet. */
+export const isSnoozed = (
+  ask: Pick<AskDto, "snoozedUntil">,
+  now: number,
+): boolean => ask.snoozedUntil !== null && Date.parse(ask.snoozedUntil) > now;
+
+/** The snooze lengths a card offers, as the time each one ends. */
+export function snoozeChoices(now: Date): { label: string; until: Date }[] {
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(9, 0, 0, 0);
+  return [
+    { label: "5 min", until: new Date(now.getTime() + 5 * 60_000) },
+    { label: "1 hour", until: new Date(now.getTime() + 60 * 60_000) },
+    { label: "Tomorrow 9:00", until: tomorrow },
+  ];
+}
+
+const clock = (iso: string, now: number): string => {
+  const at = new Date(iso);
+  const time = at.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return at.toDateString() === new Date(now).toDateString()
+    ? time
+    : `${at.toLocaleDateString([], { weekday: "short" })} ${time}`;
+};
+
 /** Open asks: all of them, and by workspace. */
 export interface OpenAskCounts {
   total: number;
@@ -51,7 +80,10 @@ export function useOpenAskCounts(client: DesktopClient): OpenAskCounts {
       void client.request.askList({}).then(
         (response) => {
           if (live && response.ok) {
-            const open = response.data.filter((ask) => ask.state === "open");
+            const now = Date.now();
+            const open = response.data.filter(
+              (ask) => ask.state === "open" && !isSnoozed(ask, now),
+            );
             const byWorkspace = new Map<string, number>();
             for (const ask of open)
               byWorkspace.set(
@@ -338,6 +370,7 @@ function AskCard({
   onDismiss,
   onUndo,
   onOpenSession,
+  onSnooze,
   children,
 }: {
   client: DesktopClient;
@@ -351,10 +384,14 @@ function AskCard({
   onDismiss: () => void;
   onUndo: () => void;
   onOpenSession: () => void;
+  /** Puts it off until a time, or brings it back with null. */
+  onSnooze?: (until: string | null) => void;
   /** What goes at the card's foot: its plan, in the side panel. */
   children?: React.ReactNode;
 }) {
   const open = ask.state === "open";
+  const [choosing, setChoosing] = useState(false);
+  const snoozed = isSnoozed(ask, now);
   const answer = [ask.answer, ask.note ? `"${ask.note}"` : null]
     .filter(Boolean)
     .join(", ");
@@ -464,6 +501,51 @@ function AskCard({
             >
               Dismiss
             </button>
+            {onSnooze &&
+              (snoozed ? (
+                <span className="needs-card-snoozed">
+                  Snoozed until {clock(ask.snoozedUntil!, now)}{" "}
+                  <button
+                    className="needs-link"
+                    onClick={() => onSnooze(null)}
+                    type="button"
+                  >
+                    Unsnooze
+                  </button>
+                </span>
+              ) : choosing ? (
+                <span className="needs-card-snooze">
+                  {snoozeChoices(new Date()).map((choice) => (
+                    <button
+                      className="needs-link"
+                      key={choice.label}
+                      onClick={() => {
+                        setChoosing(false);
+                        onSnooze(choice.until.toISOString());
+                      }}
+                      type="button"
+                    >
+                      {choice.label}
+                    </button>
+                  ))}
+                  <button
+                    className="needs-link muted"
+                    onClick={() => setChoosing(false)}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  className="needs-link muted"
+                  onClick={() => setChoosing(true)}
+                  title="Put it off: it leaves the count and comes back when the time is up"
+                  type="button"
+                >
+                  Snooze
+                </button>
+              ))}
             {ask.planPath && ask.taskKey && (
               <span className="needs-card-where">
                 In the plan:{" "}
@@ -555,7 +637,11 @@ export function ActivityPage({
   const shown = (asks ?? []).filter(
     (ask) => scope === "all" || ask.workspaceId === scope,
   );
-  const open = shown.filter((ask) => ask.state === "open").reverse();
+  const waiting = shown.filter((ask) => ask.state === "open").reverse();
+  // Snoozed asks are open but put off: out of the count and folded away
+  // until their time comes.
+  const open = waiting.filter((ask) => !isSnoozed(ask, now));
+  const snoozed = waiting.filter((ask) => isSnoozed(ask, now));
   const ended = shown.filter((ask) => ask.state !== "open");
   const current =
     open.find((ask) => ask.id === selected) ??
@@ -580,6 +666,50 @@ export function ActivityPage({
   const draftOf = (id: number): Draft =>
     drafts[id] ?? { option: null, note: "" };
 
+  const openCard = (ask: AskDto) => (
+    <AskCard
+      client={client}
+      ask={ask}
+      draft={draftOf(ask.id)}
+      key={ask.id}
+      now={now}
+      onDismiss={() => void run(client.request.askDismiss({ id: ask.id }))}
+      onDraft={(draft) => setDrafts((all) => ({ ...all, [ask.id]: draft }))}
+      onOpenSession={() => onOpenSession(ask.sessionId)}
+      onSelect={() => setSelected(ask.id)}
+      onSend={() => {
+        const draft = draftOf(ask.id);
+        if (draft.option === null && !draft.note.trim()) return;
+        void run(
+          client.request.askAnswer({
+            id: ask.id,
+            option: draft.option,
+            note: draft.note.trim() || null,
+          }),
+        ).then((sent) => {
+          if (sent) setDrafts(({ [ask.id]: _, ...rest }) => rest);
+        });
+      }}
+      onSnooze={(until) =>
+        void run(client.request.askSnooze({ id: ask.id, until }))
+      }
+      onUndo={() => undefined}
+      selected={!narrow && current?.id === ask.id}
+    >
+      {ask.planPath && (
+        <CardPlan
+          asks={(asks ?? []).filter(
+            (other) =>
+              other.state === "open" && other.planPath === ask.planPath,
+          )}
+          client={client}
+          onOpenPlan={(path) => onOpenPlan(path, ask.workspaceId)}
+          path={ask.planPath}
+          taskKey={ask.taskKey}
+        />
+      )}
+    </AskCard>
+  );
   return (
     <section
       aria-label="Activity"
@@ -617,51 +747,15 @@ export function ActivityPage({
                 : "Nothing waits on you. When a session asks you something with daedal activity ask, it shows here with its context."}
             </p>
           )}
-          {open.map((ask) => (
-            <AskCard
-              client={client}
-              ask={ask}
-              draft={draftOf(ask.id)}
-              key={ask.id}
-              now={now}
-              onDismiss={() =>
-                void run(client.request.askDismiss({ id: ask.id }))
-              }
-              onDraft={(draft) =>
-                setDrafts((all) => ({ ...all, [ask.id]: draft }))
-              }
-              onOpenSession={() => onOpenSession(ask.sessionId)}
-              onSelect={() => setSelected(ask.id)}
-              onSend={() => {
-                const draft = draftOf(ask.id);
-                if (draft.option === null && !draft.note.trim()) return;
-                void run(
-                  client.request.askAnswer({
-                    id: ask.id,
-                    option: draft.option,
-                    note: draft.note.trim() || null,
-                  }),
-                ).then((sent) => {
-                  if (sent) setDrafts(({ [ask.id]: _, ...rest }) => rest);
-                });
-              }}
-              onUndo={() => undefined}
-              selected={!narrow && current?.id === ask.id}
-            >
-              {ask.planPath && (
-                <CardPlan
-                  asks={(asks ?? []).filter(
-                    (other) =>
-                      other.state === "open" && other.planPath === ask.planPath,
-                  )}
-                  client={client}
-                  onOpenPlan={(path) => onOpenPlan(path, ask.workspaceId)}
-                  path={ask.planPath}
-                  taskKey={ask.taskKey}
-                />
-              )}
-            </AskCard>
-          ))}
+          {open.map(openCard)}
+          {snoozed.length > 0 && (
+            <details className="needs-ended">
+              <summary className="needs-section">
+                Snoozed · {snoozed.length}
+              </summary>
+              <div className="needs-ended-cards">{snoozed.map(openCard)}</div>
+            </details>
+          )}
           {ended.length > 0 && (
             // Folded by default: what is done today should not pull the eye
             // from what still waits.

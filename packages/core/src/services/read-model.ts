@@ -126,10 +126,19 @@ function sources(context: ApplicationContext) {
     // reaches the window on the next tick, not on the page's own poll.
     openAsks: rows(
       () => repositories.asks.list({ openOnly: true }).length,
-      () =>
-        repositories.asks
+      () => {
+        // A snooze that runs out changes the count with no write, so the
+        // version says which asks are snoozed now.
+        const now = new Date().toISOString();
+        return repositories.asks
           .list({ openOnly: true })
-          .map((ask) => [ask.id, ask.workspaceId, ask.title]),
+          .map((ask) => [
+            ask.id,
+            ask.workspaceId,
+            ask.title,
+            Boolean(ask.snoozedUntil && ask.snoozedUntil > now),
+          ]);
+      },
     ),
     unseenRoutineRuns: rows(
       () => repositories.routines.unseenRunIds(),

@@ -232,6 +232,8 @@ export interface Ask {
   closedAt: string | null;
   /** When the owner was told how it ended; null while that waits. */
   noticeDeliveredAt: string | null;
+  /** Put off by the user until then: out of Activity's count till it passes. */
+  snoozedUntil: string | null;
 }
 
 export interface IntegratedTerminal {

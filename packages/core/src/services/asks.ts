@@ -390,6 +390,35 @@ export class AskService {
     });
   }
 
+  /**
+   * Puts an open ask off until `until` (an ISO time in the future), or
+   * brings it back now with null. Only the user snoozes; the asking session
+   * is not told.
+   */
+  snooze(id: number, until: string | null): Ask {
+    const now = this.now();
+    if (until !== null) {
+      const time = Date.parse(until);
+      if (Number.isNaN(time))
+        throw new DaedalusError("VALIDATION", `'${until}' is not a time`);
+      if (time <= now.getTime())
+        throw new DaedalusError(
+          "VALIDATION",
+          "A snooze ends in the future; pick a later time",
+        );
+    }
+    const ask = this.repositories.asks.snooze(
+      id,
+      until === null ? null : new Date(until).toISOString(),
+      now.toISOString(),
+    );
+    if (ask) return this.changed(ask);
+    throw new DaedalusError(
+      "CONFLICT",
+      `Ask #${id} is ${this.ask(id).state}; only an open ask can be snoozed`,
+    );
+  }
+
   /** Undo: an ended ask is open again. */
   reopen(id: number): Ask {
     const ask = this.repositories.asks.reopen(id, this.now().toISOString());

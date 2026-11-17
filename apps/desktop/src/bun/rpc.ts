@@ -194,6 +194,7 @@ const askDto = (ask: AskView): AskDto => ({
   undoable:
     (ask.state === "answered" || ask.state === "dismissed") &&
     !ask.noticeDeliveredAt,
+  snoozedUntil: ask.snoozedUntil,
 });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
@@ -813,6 +814,8 @@ export function createDesktopRequestHandlers(
       mutate(async () =>
         askDto(context.asks.get((await context.asks.dismiss(id)).id)),
       ),
+    askSnooze: ({ id, until }) =>
+      mutate(() => askDto(context.asks.get(context.asks.snooze(id, until).id))),
     askReopen: ({ id }) =>
       mutate(() => askDto(context.asks.get(context.asks.reopen(id).id))),
     askPlan: ({ path }) =>

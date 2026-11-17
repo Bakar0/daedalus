@@ -21,6 +21,7 @@ interface AskRow {
   closed_at: string | null;
   notice_delivered_at: string | null;
   notified_at: string | null;
+  snoozed_until: string | null;
 }
 
 const options = (text: string): string[] => {
@@ -53,6 +54,7 @@ const askFromRow = (row: AskRow): Ask => ({
   updatedAt: row.updated_at,
   closedAt: row.closed_at,
   noticeDeliveredAt: row.notice_delivered_at,
+  snoozedUntil: row.snoozed_until,
 });
 
 /** What an asker writes; the rest is the ask's lifecycle. */
@@ -246,13 +248,29 @@ export class AskRepository {
    */
   claimUnnotified(at: string): Ask[] {
     return this.database
-      .query<AskRow, [string]>(
+      .query<AskRow, [string, string]>(
         `UPDATE asks SET notified_at = ? WHERE state = 'open'
-         AND notified_at IS NULL RETURNING *`,
+         AND notified_at IS NULL
+         AND (snoozed_until IS NULL OR snoozed_until <= ?) RETURNING *`,
       )
-      .all(at)
+      .all(at, at)
       .map(askFromRow)
       .sort((a, b) => a.id - b.id);
+  }
+
+  /**
+   * Puts an open ask off until `until`, or brings it back now with null.
+   * Snoozing clears the notification, so it is sent again when it is due.
+   */
+  snooze(id: number, until: string | null, at: string): Ask | undefined {
+    const row = this.database
+      .query<AskRow, (string | number | null)[]>(
+        `UPDATE asks SET snoozed_until = ?, updated_at = ?,
+         notified_at = CASE WHEN ? IS NULL THEN notified_at ELSE NULL END
+         WHERE id = ? AND state = 'open' RETURNING *`,
+      )
+      .get(until, at, until, id);
+    return row ? askFromRow(row) : undefined;
   }
 
   /** A rebirth: the successor owns the open asks and the notices not sent. */
