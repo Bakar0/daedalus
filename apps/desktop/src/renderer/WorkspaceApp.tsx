@@ -1639,12 +1639,23 @@ function TerminalSurface({
         lineAt: (row) =>
           buffer.getLine(buffer.viewportY + row - 1)?.translateToString(),
       });
-      if (found)
-        terminal.select(
-          found.column,
-          buffer.viewportY + found.row,
-          found.length,
-        );
+      if (!found) return;
+      // A program that reads the mouse, Claude Code among them, copies a drag
+      // itself and keeps its own highlight, which skips its margins. A
+      // selection here as well ran from the left edge of each wrapped line,
+      // so ⌘C on it copied the margin as indentation. tmux redraws the pane
+      // as it leaves copy mode; a moment later, a highlighted first cell
+      // means the program still shows the selection.
+      const viewportY = buffer.viewportY;
+      setTimeout(() => {
+        const current = terminal;
+        if (!current || disposed) return;
+        const cell = current.buffer.active
+          .getLine(viewportY + found.row)
+          ?.getCell(found.column);
+        if (cell && !cell.isBgDefault()) return;
+        current.select(found.column, viewportY + found.row, found.length);
+      }, 80);
     };
     const notePress = (event: MouseEvent) =>
       clipboardGate.press(event.clientX, event.clientY);
