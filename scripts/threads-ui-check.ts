@@ -46,6 +46,27 @@ await withBrowser(
       "three open cards, one a member's, and resolved collapsed",
     );
     await browser.screenshot("threads-resolved-collapsed");
+    // A narrow panel never scrolls sideways: the header's names shrink, the
+    // lead's line sits under the title, and the buttons stay on one line.
+    const overflow = await browser.evaluate<string[]>(`(() => {
+      const panel = document.querySelector('.side-panel-activity');
+      panel.style.width = '260px';
+      const wide = [panel, document.querySelector('.threads-head'), ...document.querySelectorAll('.threads-card-head')]
+        .filter((el) => el.scrollWidth > el.clientWidth)
+        .map((el) => el.className + ' ' + el.scrollWidth + '>' + el.clientWidth);
+      const buttons = [...document.querySelectorAll('.threads-head > button')]
+        .filter((button) => button.getClientRects().length > 1 || button.offsetHeight > 24)
+        .map((button) => 'wrapped: ' + button.textContent);
+      return [...wide, ...buttons];
+    })()`);
+    await browser.screenshot("threads-narrow");
+    await browser.evaluate(
+      "document.querySelector('.side-panel-activity').style.width = '380px'",
+    );
+    expect(
+      overflow.length === 0,
+      `the narrow pane overflows: ${JSON.stringify(overflow)}`,
+    );
     await clickText(browser, ".threads-group-toggle", "Resolved");
     await browser.waitFor(
       "document.querySelectorAll('.threads-row').length === 1",
