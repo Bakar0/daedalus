@@ -214,6 +214,7 @@ export class AskService {
     // The thread hangs off what the agent last wrote in main, which its
     // transcript already holds: each block is written before the next tool.
     const anchor = lastAgentMessage(await this.read(session));
+    if (anchor) this.refuseTakenAnchor(session, anchor);
     return {
       ask: this.changed(
         this.repositories.asks.create({
@@ -227,6 +228,26 @@ export class AskService {
       ),
       updated: false,
     };
+  }
+
+  /**
+   * A new question needs its own line in main to hang off. An agent that
+   * skipped it would hang the question off a message about another thread,
+   * so the user reads it as that thread asked twice.
+   */
+  private refuseTakenAnchor(session: AgentSession, anchor: MainMessage): void {
+    const open = this.repositories.asks
+      .list({ sessionIds: [session.id], openOnly: true })
+      .filter((ask) => ask.kind === "question");
+    const named = /^\W*thread\s+#(\d+)\b/i.exec(anchor.text)?.[1];
+    const taken =
+      open.find((ask) => ask.anchorId === anchor.id) ??
+      open.find((ask) => named !== undefined && ask.id === Number(named));
+    if (taken)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Your last message in main is about thread #${taken.id}, so this question would hang off it and read as #${taken.id} again. Write one line in your reply saying what you are asking now, then run this again.`,
+      );
   }
 
   /** Rewrites an open ask; only the session that asked may. */

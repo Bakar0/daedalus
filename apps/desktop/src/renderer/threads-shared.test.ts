@@ -1,5 +1,10 @@
 import { expect, test } from "vitest";
-import { isSnoozed, markPlanTasks, snoozeChoices } from "./threads-shared";
+import {
+  isSnoozed,
+  markPlanTasks,
+  paneAskCount,
+  snoozeChoices,
+} from "./threads-shared";
 
 const task = (
   id: string,
@@ -70,4 +75,19 @@ test("snooze offers 5 minutes, an hour and tomorrow at 9:00", () => {
   expect(isSnoozed(ask, now.getTime())).toBe(true);
   expect(isSnoozed(ask, choices[0]!.until.getTime() + 1)).toBe(false);
   expect(isSnoozed({ snoozedUntil: null }, now.getTime())).toBe(false);
+});
+
+test("the Threads tab counts only what its pane shows", () => {
+  const counts = {
+    bySession: new Map([
+      ["lead", 1],
+      ["member", 2],
+      ["elsewhere", 4],
+    ]),
+  };
+  // Another session's question in the workspace lights nothing here.
+  expect(paneAskCount(counts, ["quiet"])).toBe(0);
+  expect(paneAskCount(counts, ["lead"])).toBe(1);
+  // A lead's pane shows its members' threads too.
+  expect(paneAskCount(counts, ["lead", "member"])).toBe(3);
 });
