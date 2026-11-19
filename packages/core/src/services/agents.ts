@@ -1336,6 +1336,11 @@ export class AgentService {
     pinned?: boolean;
     /** The team it joins, and its handle there. A successor keeps both. */
     team?: TeamMembership;
+    /**
+     * Start as a read-only fork of this session's conversation, in its
+     * working directory: a thread the user talks through beside it.
+     */
+    forkOf?: AgentSession;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     // A workspace in the cloud runs every session there.
@@ -1442,7 +1447,9 @@ export class AgentService {
           task,
           sessionId: id,
           provider: provider?.name,
-          workingDirectory: input.continueFrom?.workingDirectory,
+          workingDirectory:
+            input.continueFrom?.workingDirectory ??
+            input.forkOf?.workingDirectory,
         })
       : { workingDirectory: workspace.path, worktrees: [], references: [] };
     if (input.draftBrief && !task)
@@ -1483,7 +1490,12 @@ export class AgentService {
           taskId: task?.id,
           sessionId: id,
           sessionName: name,
-          prompt: launchPrompt,
+          // A fork carries on the conversation it forks; no new prompt.
+          ...(input.forkOf
+            ? {
+                fork: input.forkOf.providerSessionId ?? input.forkOf.id,
+              }
+            : { prompt: launchPrompt }),
           model,
           // Any session may lead a team or join one later.
           acceptPeerMessages: true,
@@ -2730,6 +2742,10 @@ export class AgentService {
         model: modelArgument(agent.args),
         acceptPeerMessages: true,
         workingDirectory: agent.workingDirectory,
+        // A thread's fork comes back still reading main before each turn.
+        ...(this.repositories.asks.findByFork(agent.id)
+          ? { threadFork: true }
+          : {}),
         additionalDirectories: sessionDirectories(
           workspace.path,
           this.repositories

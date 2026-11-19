@@ -48,6 +48,16 @@ export interface LaunchInput {
   acceptPeerMessages?: boolean;
   /** Carry on an existing conversation rather than start a new one. */
   resume?: ResumeInput;
+  /**
+   * Start as a read-only fork of this conversation (the provider's id for
+   * it): a thread the user talks through beside the session it forks.
+   */
+  fork?: string;
+  /**
+   * A thread's fork, new or resumed: it reads main's new messages before
+   * each turn.
+   */
+  threadFork?: boolean;
   /** Where the session runs. A launch is local unless it says otherwise. */
   target?: LaunchTarget;
   /** Where the session runs, whose project settings Claude reads. */
@@ -168,7 +178,11 @@ export async function claudeDaedalusSettingsArgs(
   config: DaedalusConfig,
   existingArgs: string[],
   sessionId?: string,
-  options: { acceptPeerMessages?: boolean; workingDirectory?: string } = {},
+  options: {
+    acceptPeerMessages?: boolean;
+    workingDirectory?: string;
+    forkCatchUp?: boolean;
+  } = {},
 ): Promise<string[]> {
   // Every Claude session gets an inbox, so notes sent later reach it
   // without typing. A pipe that cannot be made leaves the session without
@@ -383,7 +397,7 @@ export const codexConfigPath = (config: DaedalusConfig): string =>
 export const DAEDALUS_STATUS_INSTRUCTIONS = `You are running inside Daedalus, which shows the user whether each session is working, done, or needs them.
 - When you need the user to decide, answer, or approve something before you can continue, run \`daedal attention "<what you need from them>"\`. If you have a tool for asking the user a question (AskUserQuestion), you may use that instead. A question written only in your reply is shown as done, not as waiting on the user.
 - Run \`daedal attention --clear\` as soon as that is resolved.
-- A question that can wait while you work on, or one the user should decide from its context alone, goes to \`daedal activity ask "<question>" --context "<what it is>"\` instead (see \`daedal activity --help\`): it waits under Activity as a card until answered, and the answer comes back to you. A lead asks the user this way only. Ask once; never repeat it.
+- A question that can wait while you work on, or one the user should decide from its context alone, goes in a thread instead: first write one line in your reply saying what you are asking, then run \`daedal thread start "<question>" --context "<what it is>"\` (see \`daedal thread --help\`). The thread hangs off that line, and the user's answer comes back to you as a message. When you run out of other work and need it, run \`daedal thread bump <n>\` once. A lead asks the user this way only. Ask once; never repeat it.
 - When you finish what you were asked, just end your turn. Daedalus marks it done.
 - When a command needs an API key, token or password, do not ask the user to paste it. Run \`daedal secret list\` and use one with \`daedal exec --secret NAME -- <command>\`. If it is not there, ask the user to add it from the key icon on the workspace's card in Daedalus (the key in the Workspaces heading for every workspace).
 - When you mention a pull request or issue, write its full URL (https://github.com/<owner>/<repo>/pull/<number>), not just \`#<number>\`. The terminal opens a URL on Cmd-click; a bare number opens nothing.
@@ -878,7 +892,11 @@ class ConfiguredProvider implements AgentProvider {
         throw new DaedalusError("VALIDATION", "Model name is invalid");
       args.push("--model", model);
     }
-    if (this.promptArgument)
+    // Codex exits when a read-only sandbox is given writable roots, and a
+    // read-only fork reads every directory anyway.
+    const codexFork =
+      this.name === "codex" && Boolean(input.fork || input.threadFork);
+    if (this.promptArgument && !codexFork)
       for (const directory of input.additionalDirectories ?? [])
         args.push("--add-dir", directory);
     if (input.resume && !this.promptArgument)
@@ -886,8 +904,8 @@ class ConfiguredProvider implements AgentProvider {
         "CONFLICT",
         "Custom sessions do not define a native resume capability",
       );
-    // Never on a resume: see `permissionModeArgs`.
-    if (this.promptArgument && !input.resume)
+    // Never on a resume: see `permissionModeArgs`. A fork is read-only.
+    if (this.promptArgument && !input.resume && !input.fork)
       args.push(
         ...permissionModeArgs(this.name, this.definition.permissionMode),
       );
@@ -898,7 +916,7 @@ class ConfiguredProvider implements AgentProvider {
       // SQLite database under the Daedalus home, so without this one
       // `daedal attention` or `agent continue` fails with "attempt to write a
       // readonly database" whenever the reviewer keeps it sandboxed.
-      if (this.config) args.push("--add-dir", this.config.home);
+      if (this.config && !codexFork) args.push("--add-dir", this.config.home);
       if (this.config)
         args.push(
           ...(await ensureCodexHooks(
@@ -925,13 +943,35 @@ class ConfiguredProvider implements AgentProvider {
           {
             acceptPeerMessages: input.acceptPeerMessages,
             workingDirectory: input.workingDirectory,
+            ...(input.fork || input.threadFork ? { forkCatchUp: true } : {}),
           },
         )),
       );
     if (input.resume) {
-      const resumed = await this.resumeArgs(input.resume);
+      const resumed = await this.resumeArgs(
+        input.threadFork && this.name === "claude"
+          ? { ...input.resume, permissionMode: "plan" }
+          : input.resume,
+      );
       args.push(...resumed);
+      // A thread's fork stays read-only when it comes back.
+      if (input.threadFork && this.name === "codex")
+        args.push("--sandbox", "read-only");
       providerSessionId = resumed.length ? input.resume.nativeId : undefined;
+    } else if (input.fork && this.promptArgument) {
+      if (this.name === "claude") {
+        // Claude writes the fork under the session's own id, so its
+        // transcript is found the way any session's is.
+        args.push(
+          "--resume",
+          input.fork,
+          "--fork-session",
+          ...(input.sessionId ? ["--session-id", input.sessionId] : []),
+          "--permission-mode",
+          "plan",
+        );
+        providerSessionId = input.sessionId;
+      } else args.push("fork", input.fork, "--sandbox", "read-only");
     } else if (
       this.promptArgument &&
       this.name === "claude" &&

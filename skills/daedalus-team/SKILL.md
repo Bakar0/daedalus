@@ -60,19 +60,22 @@ message, and a very long one is cut.
 
 ## Waiting on the user
 
-When you need the user, ask once with `daedal activity ask "<question>" --context
+When you need the user, write one line in your reply saying what you are
+asking, then ask once with `daedal thread start "<question>" --context
 "<what it is>" --why "<what waits on it>"`, with `--option` for each choice
 when there are choices, and `--plan <plan> ^<id>` for the plan task it
 holds up. Make the question one short plain line and the why one sentence
 on what stays stuck without the answer; ids, dates and links go in the
-context, which the card folds under Details. The user sees it as a card
-under Activity and answers there;
-the answer comes to you with the question and its context. Your lead sees
-your asks with `daedal activity list --team`, so do not pass the question to
-the lead too. Work on what does not wait on the answer, or stop. Do not
-ask again while you wait: every message you get ends with your open asks.
-When the user answers in your session instead, run `daedal activity resolve <n>
---answer "<what they said>"`.
+context, which the thread folds under Details. The user sees the thread on
+your message in the Threads tab and answers there; the answer comes to you
+with the question and its context. Your lead sees your threads with
+`daedal thread list --team`, so do not pass the question to the lead too.
+Work on what does not wait on the answer, or stop. Do not ask again while
+you wait: every message you get ends with your open threads. When you run
+out of other work and are blocked on one, run `daedal thread bump <n>` once.
+When the user answers in your session instead, run `daedal thread resolve
+<n> --answer "<what they said>"`; when you no longer need it, `daedal thread
+close <n>`.
 
 At a workflow gate the lead approves for you on the user's word, with
 `daedal workflow approve --session <your id>`. When the lead tags you that

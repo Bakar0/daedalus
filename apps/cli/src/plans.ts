@@ -48,7 +48,7 @@ directly for anything these commands do not cover.
 session's handle.
 'start' marks a task [/] and puts the owner on it: --owner, else you.
 'done', 'block' and 'drop' set [x], [!] and [-]. 'ask' asks the user, pinned to
-the task, as 'daedal activity ask --plan' does; the app shows it under Activity.
+the task, as 'daedal thread start --plan' does; the app shows it under Threads.
 An @owner is a session's team handle, or its name made into a handle
 (a session called "Cart endpoints" answers to @cart-endpoints).`;
 
@@ -247,7 +247,7 @@ export async function planCommand(
     if (!session)
       throw new DaedalusError(
         "VALIDATION",
-        'Ask from the session that waits on the answer, or use daedal activity ask "<question>" --session <session> --plan <plan> ^<id>',
+        'Ask from the session that waits on the answer, or use daedal thread start "<question>" --session <session> --plan <plan> ^<id>',
       );
     const { ask } = await context.asks.create({
       session: session.id,

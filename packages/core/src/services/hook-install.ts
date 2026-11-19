@@ -113,6 +113,11 @@ export function daedalusClaudeSettings(
     inboxHook?: ClaudeHookEntry["hooks"][number];
     /** Workflows are on: remind the agent with every prompt. */
     workflowReminder?: boolean;
+    /**
+     * A thread's fork: before each prompt it reads what main wrote since its
+     * last turn (`daedal thread catch-up`).
+     */
+    forkCatchUp?: boolean;
   } = {},
 ): ClaudeSettings {
   // The session rides on the command, not only in the environment: Claude
@@ -136,6 +141,16 @@ export function daedalusClaudeSettings(
             : []),
           ...(options.workflowReminder && event === "UserPromptSubmit"
             ? [workflowReminderHook]
+            : []),
+          ...(options.forkCatchUp && sessionId && event === "UserPromptSubmit"
+            ? [
+                {
+                  type: "command" as const,
+                  command: daedalExecutable,
+                  args: ["thread", "catch-up", "--session", sessionId],
+                  timeout: 15,
+                },
+              ]
             : []),
         ],
       },

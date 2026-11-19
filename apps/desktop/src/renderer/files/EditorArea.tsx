@@ -36,7 +36,7 @@ import { isPlanPath, PlanView, type PlanLive } from "./PlanView";
 import { createPlan } from "./plan-actions";
 import { INSTRUCTIONS_ICON_PATH, WORKFLOW_ICON_PATH } from "../WorkflowPane";
 import { PLAN_ICON_PATH } from "../PlansPane";
-import { ACTIVITY_ICON_PATH } from "../ActivityPage";
+import { THREADS_ICON_PATH } from "../threads-shared";
 import {
   closeDocument,
   documentsIn,
@@ -103,8 +103,6 @@ export interface EditorAreaHandle {
   openWorkflows(): void;
   /** Shows the Plans tab, adding it first if it is not open. */
   openPlans(): void;
-  /** Shows the Activity tab, adding it first if it is not open. */
-  openActivity(): void;
   /** Shows the Custom instructions tab, adding it first if it is not open. */
   openInstructions(): void;
   /** Shows the Routines page, adding it first if it is not open. */
@@ -116,6 +114,11 @@ export interface EditorAreaHandle {
   showSessionBesideRoutines(): void;
   /** Shows a team's tab, adding it first if it is not open. */
   openTeam(teamId: string, name: string): void;
+  /**
+   * Shows a session's threads in a tab of their own, or with `threadId` one
+   * thread (its fork) in a tab like a session's.
+   */
+  openThreads(sessionId: string, name: string, threadId?: number): void;
   /**
    * Closes every Team tab whose team is not in `teams`, including tabs the
    * saved layout brought back for a team that has since gone.
@@ -131,10 +134,10 @@ type AppPanelKind =
   | "terminal"
   | "workflows"
   | "plans"
-  | "needs"
   | "instructions"
   | "routinesPage"
-  | "team";
+  | "team"
+  | "sessionThreads";
 
 /** What a center tab holds, for the app to follow which one is in front. */
 export type CenterPanelKind =
@@ -145,10 +148,10 @@ export type CenterPanelKind =
   | "terminal"
   | "workflows"
   | "plans"
-  | "needs"
   | "instructions"
   | "routinesPage"
-  | "team";
+  | "team"
+  | "sessionThreads";
 
 export interface EditorAreaProps {
   client: DesktopClient;
@@ -181,14 +184,14 @@ export interface EditorAreaProps {
   renderWorkflows?(): React.ReactNode;
   /** The Plans tab's content, drawn by the app. */
   renderPlans?(): React.ReactNode;
-  /** The Activity tab's content, drawn by the app. */
-  renderActivity?(): React.ReactNode;
   /** The Custom instructions tab's content, drawn by the app. */
   renderInstructions?(): React.ReactNode;
   /** The Routines page, drawn by the app. */
   renderRoutinesPage?(): React.ReactNode;
   /** A team tab's content, drawn by the app; `visible` while in front. */
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
+  /** A session's threads, in a tab of their own. */
+  renderThreads?(sessionId: string, threadId?: number): React.ReactNode;
   /** The current name for a Team tab, so renames show. */
   abilityTabName?(kind: "team", id: string): string | undefined;
   /** The + in the tab strip: a new terminal in a tab. */
@@ -218,6 +221,10 @@ interface FilePanelParams {
   terminalId?: string;
   /** The team a team tab shows. */
   teamId?: string;
+  /** The session a Threads tab shows the threads of. */
+  sessionId?: string;
+  /** On a thread's own tab: the thread. */
+  threadId?: number;
   title?: string;
   preview?: boolean;
   mode?: "edit" | "preview";
@@ -260,10 +267,11 @@ interface EditorContextValue {
   renderTerminal?(terminalId: string, active: boolean): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
   renderPlans?(): React.ReactNode;
-  renderActivity?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
+  /** A session's threads, in a tab of their own. */
+  renderThreads?(sessionId: string, threadId?: number): React.ReactNode;
   abilityTabName?(kind: "team", id: string): string | undefined;
   onNewTerminal?(): void;
   onOpenExternal?(url: string): void;
@@ -358,10 +366,10 @@ export default function EditorArea({
   renderTerminal,
   renderWorkflows,
   renderPlans,
-  renderActivity,
   renderInstructions,
   renderRoutinesPage,
   renderTeam,
+  renderThreads,
   abilityTabName,
   onNewTerminal,
   onTerminalTabClosed,
@@ -750,10 +758,6 @@ export default function EditorArea({
         whenReady(() =>
           placeApp("plans", { path: "", kind: "plans" }, "Plans"),
         ),
-      openActivity: () =>
-        whenReady(() =>
-          placeApp("needs", { path: "", kind: "needs" }, "Activity"),
-        ),
       openInstructions: () =>
         whenReady(() =>
           placeApp(
@@ -800,6 +804,22 @@ export default function EditorArea({
           placeApp(
             `team:${teamId}`,
             { path: "", kind: "team", teamId, title: name },
+            name,
+          ),
+        ),
+      openThreads: (sessionId, name, threadId) =>
+        whenReady(() =>
+          placeApp(
+            threadId === undefined
+              ? `sessionThreads:${sessionId}`
+              : `thread:${threadId}`,
+            {
+              path: "",
+              kind: "sessionThreads",
+              sessionId,
+              title: name,
+              ...(threadId === undefined ? {} : { threadId }),
+            },
             name,
           ),
         ),
@@ -1112,10 +1132,10 @@ export default function EditorArea({
     renderTerminal,
     renderWorkflows,
     renderPlans,
-    renderActivity,
     renderInstructions,
     renderRoutinesPage,
     renderTeam,
+    renderThreads,
     abilityTabName,
     onNewTerminal,
     onOpenExternal,
@@ -1149,15 +1169,17 @@ export default function EditorArea({
             terminal: TerminalPanel,
             workflows: WorkflowsPanel,
             plans: PlansPanel,
-            needs: ActivityPanel,
             instructions: InstructionsPanel,
             routinesPage: RoutinesPagePanel,
             team: TeamPanel,
+            sessionThreads: SessionThreadsPanel,
             // A session's Routines tab and a lead's Threads tab are gone; a
             // saved layout may still name them, and is restored with them
             // closed.
             routines: RetiredPanel,
             threads: RetiredPanel,
+            // The Activity tab, which Threads replaced.
+            needs: RetiredPanel,
           }}
           dndStrategy="pointer"
           getTabContextMenuItems={({ panel, group, api }) =>
@@ -1372,12 +1394,14 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
             ? "Workflows"
             : params.kind === "plans"
               ? "Plans"
-              : params.kind === "needs"
-                ? "Activity"
-                : params.kind === "instructions"
-                  ? "Custom instructions"
-                  : params.kind === "routinesPage"
-                    ? "Routines"
+              : params.kind === "instructions"
+                ? "Custom instructions"
+                : params.kind === "routinesPage"
+                  ? "Routines"
+                  : params.kind === "sessionThreads"
+                    ? params.threadId === undefined
+                      ? `Threads · ${params.title ?? ""}`
+                      : `Thread #${params.threadId} · ${params.title ?? ""}`
                     : params.kind === "team"
                       ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
                       : (params.url ?? "Web");
@@ -1432,8 +1456,8 @@ function AppTabIcon({ kind }: { kind: AppPanelKind }) {
         <path d={WORKFLOW_ICON_PATH} />
       ) : kind === "plans" ? (
         <path d={PLAN_ICON_PATH} />
-      ) : kind === "needs" ? (
-        <path d={ACTIVITY_ICON_PATH} />
+      ) : kind === "sessionThreads" ? (
+        <path d={THREADS_ICON_PATH} />
       ) : kind === "instructions" ? (
         <path d={INSTRUCTIONS_ICON_PATH} />
       ) : kind === "team" ? (
@@ -1494,6 +1518,16 @@ function usePanelVisible(api: IDockviewPanelProps<FilePanelParams>["api"]) {
   return visible;
 }
 
+function SessionThreadsPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel threads-tab-panel">
+      {params.sessionId &&
+        context.renderThreads?.(params.sessionId, params.threadId)}
+    </div>
+  );
+}
+
 function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   const context = useEditorContext();
   // The tab reads the chat on a timer, so it stops while out of sight.
@@ -1519,15 +1553,6 @@ function RoutinesPagePanel() {
   return (
     <div className="app-panel workflows-panel">
       {context.renderRoutinesPage?.()}
-    </div>
-  );
-}
-
-function ActivityPanel() {
-  const context = useEditorContext();
-  return (
-    <div className="app-panel workflows-panel">
-      {context.renderActivity?.()}
     </div>
   );
 }

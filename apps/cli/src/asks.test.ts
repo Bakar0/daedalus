@@ -4,7 +4,7 @@ import {
   NO_LOGIN_SHELL,
   withTemporaryDaedalusHome,
 } from "@daedalus/test-utils";
-import { activityAlias } from "./asks";
+import { threadAlias } from "./asks";
 
 async function cli(home: string, args: string[]) {
   const env: Record<string, string | undefined> = {
@@ -29,61 +29,74 @@ async function cli(home: string, args: string[]) {
   return { exitCode, stdout, stderr };
 }
 
-test("daedal ask maps to daedal activity", () => {
-  expect(activityAlias(["ask", "Which index?", "--why", "x"])).toEqual([
-    "activity",
-    "ask",
+test("daedal activity and daedal ask map to daedal thread", () => {
+  expect(threadAlias(["ask", "Which index?", "--why", "x"])).toEqual([
+    "thread",
+    "start",
     "Which index?",
     "--why",
     "x",
   ]);
-  expect(activityAlias(["ask", "resolve", "3", "--answer", "yes"])).toEqual([
-    "activity",
+  expect(threadAlias(["activity", "ask", "Which index?"])).toEqual([
+    "thread",
+    "start",
+    "Which index?",
+  ]);
+  expect(threadAlias(["activity", "withdraw", "3", "done"])).toEqual([
+    "thread",
+    "close",
+    "3",
+    "done",
+  ]);
+  expect(threadAlias(["ask", "resolve", "3", "--answer", "yes"])).toEqual([
+    "thread",
     "resolve",
     "3",
     "--answer",
     "yes",
   ]);
-  expect(activityAlias(["ask", "list", "--team"])).toEqual([
-    "activity",
+  expect(threadAlias(["activity", "list", "--team"])).toEqual([
+    "thread",
     "list",
     "--team",
   ]);
-  expect(activityAlias(["ask"])).toEqual(["activity"]);
-  expect(activityAlias(["plan", "ask", "cart"])).toEqual([
-    "plan",
-    "ask",
-    "cart",
-  ]);
+  expect(threadAlias(["ask"])).toEqual(["thread"]);
+  expect(threadAlias(["thread", "bump", "2"])).toEqual(["thread", "bump", "2"]);
+  expect(threadAlias(["plan", "ask", "cart"])).toEqual(["plan", "ask", "cart"]);
 });
 
-test("activity commands, with daedal ask kept as a hidden alias", async () => {
+test("thread commands, with daedal activity and daedal ask kept as aliases", async () => {
   await withTemporaryDaedalusHome(async (home) => {
     const help = await cli(home, ["--help"]);
-    expect(help.stdout).toContain("daedal activity <ask|");
+    expect(help.stdout).toContain("daedal thread <start|");
     expect(help.stdout).not.toContain("daedal ask");
 
-    const activityHelp = await cli(home, ["activity", "--help"]);
-    expect(activityHelp.stdout).toContain('daedal activity ask "<question>"');
-    expect(activityHelp.stdout).not.toContain("Needs you");
-    expect((await cli(home, ["ask", "--help"])).stdout).toBe(
-      activityHelp.stdout,
+    const threadHelp = await cli(home, ["thread", "--help"]);
+    expect(threadHelp.stdout).toContain('daedal thread start "<question>"');
+    expect((await cli(home, ["activity", "--help"])).stdout).toBe(
+      threadHelp.stdout,
     );
+    expect((await cli(home, ["ask", "--help"])).stdout).toBe(threadHelp.stdout);
 
-    // Outside a session an ask is refused the same way by both forms.
-    const asked = await cli(home, ["activity", "ask", "Which index?"]);
-    expect(asked.exitCode).not.toBe(0);
-    expect(asked.stderr).toContain("--session <session>");
-    const aliased = await cli(home, ["ask", "Which index?"]);
-    expect(aliased.exitCode).toBe(asked.exitCode);
-    expect(aliased.stderr).toBe(asked.stderr);
+    // Outside a session a thread is refused the same way by every form.
+    const started = await cli(home, ["thread", "start", "Which index?"]);
+    expect(started.exitCode).not.toBe(0);
+    expect(started.stderr).toContain("--session <session>");
+    for (const old of [
+      ["activity", "ask", "Which index?"],
+      ["ask", "Which index?"],
+    ]) {
+      const aliased = await cli(home, old);
+      expect(aliased.exitCode).toBe(started.exitCode);
+      expect(aliased.stderr).toBe(started.stderr);
+    }
 
-    const listed = await cli(home, ["ask", "list", "--all", "--json"]);
+    const listed = await cli(home, ["activity", "list", "--all", "--json"]);
     expect(listed.exitCode).toBe(0);
     expect(JSON.parse(listed.stdout).data).toEqual([]);
 
-    const unknown = await cli(home, ["activity", "frobnicate"]);
+    const unknown = await cli(home, ["thread", "frobnicate"]);
     expect(unknown.exitCode).not.toBe(0);
-    expect(unknown.stderr).toContain("Unknown activity command");
+    expect(unknown.stderr).toContain("Unknown thread command");
   });
 });

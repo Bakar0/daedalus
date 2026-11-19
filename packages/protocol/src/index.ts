@@ -180,9 +180,26 @@ export interface AskDto {
   undoable: boolean;
   /** Put off until then; out of the count while it is in the future. */
   snoozedUntil: string | null;
+  /** The main message the thread hangs off: its transcript id and text. */
+  anchorId: string | null;
+  anchorText: string | null;
+  /** When the agent said it is blocked on it. */
+  bumpedAt: string | null;
+  /** `question` the agent asked; `fork` the user opened on a fork. */
+  kind: "question" | "fork";
+  /** A fork thread's session: the read-only fork the user talks to. */
+  forkSessionId: string | null;
 }
 
 /** A plan's tasks, for the map beside Activity. */
+/** A message in a session's main conversation, from its transcript. */
+export interface MainMessageDto {
+  id: string;
+  role: "user" | "agent";
+  text: string;
+  at: string;
+}
+
 export interface AskPlanDto {
   path: string;
   title: string;
@@ -1493,6 +1510,8 @@ export interface DesktopSnapshotDto {
   workflowRuns?: WorkflowRunDto[];
   /** Finished routine runs the user has not opened, for the sidebar. */
   unseenRoutineRuns?: number;
+  /** Sessions that are a thread's fork; the sidebar and board leave them out. */
+  threadForkIds?: string[];
   /** Sign-in pages cloud sessions asked to open; absent outside the app. */
   cloudSignIns?: CloudSignInDto[];
   /** Workspaces whose cloud copy a new session waits for. */
@@ -1773,6 +1792,28 @@ export interface DesktopRpcSchema {
       askSnooze: Request<{ id: number; until: string | null }, AskDto>;
       /** The tasks of the plan an ask is pinned to; null when unreadable. */
       askPlan: Request<{ path: string }, AskPlanDto | null>;
+      /** A session's main messages from its transcript, oldest first. */
+      sessionMessages: Request<{ sessionId: string }, MainMessageDto[]>;
+      /**
+       * Opens a fork: on an open thread (`threadId`), the thread's own fork;
+       * otherwise a new thread on a message in a session's main. A fork that
+       * is open already comes back as it is.
+       */
+      threadOpenFork: Request<
+        { sessionId: string; anchorId: string | null; threadId?: number },
+        AskDto
+      >;
+      /** The fork's last reply: where a message to main starts. */
+      threadForkDraft: Request<{ id: number }, { text: string }>;
+      /** Sends the user's message from a fork thread to its main. */
+      threadSendToMain: Request<{ id: number; text: string }, { text: string }>;
+      /**
+       * Closes a thread: a question is dismissed, and its owner told; a fork
+       * is archived either way.
+       */
+      threadClose: Request<{ id: number }, AskDto>;
+      /** Reopens a resolved thread; its owner is told if it heard it ended. */
+      threadReopen: Request<{ id: number }, AskDto>;
       /** Sends what is waiting, then reads the team as the user. */
       teamDetail: Request<{ teamId: string }, TeamDetailDto>;
       /** Posts to the team chat as the user. */

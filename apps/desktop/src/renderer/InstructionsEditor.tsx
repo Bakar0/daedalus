@@ -15,7 +15,6 @@ import {
   topicFacts,
   TopicView,
 } from "./FileViews";
-import { INSTRUCTIONS_CHANGED } from "./InstructionsPane";
 import {
   confirmDiscard,
   DOCS_URL,
@@ -143,7 +142,6 @@ export function InstructionsEditor({
     const next = response.data;
     setInstructions(next);
     setEditing(false);
-    window.dispatchEvent(new Event(INSTRUCTIONS_CHANGED));
     // A topic is named after its heading, which the save may have changed,
     // so find it again by what was written.
     if (selection.kind === "topic") {
@@ -173,7 +171,6 @@ export function InstructionsEditor({
       return;
     }
     setInstructions(response.data);
-    window.dispatchEvent(new Event(INSTRUCTIONS_CHANGED));
     setSelection({ kind: "index" });
     setDraft(response.data.index.text);
     setRefusal(undefined);

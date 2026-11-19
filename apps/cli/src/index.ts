@@ -30,7 +30,7 @@ import { routineCommand, routineHelp } from "./routines";
 import { sessionCommand, sessionHelp } from "./sessions";
 import { workflowCommand, workflowHelp } from "./workflows";
 import { planCommand, planHelp } from "./plans";
-import { activityAlias, activityCommand, activityHelp } from "./asks";
+import { threadAlias, threadCommand, threadHelp } from "./asks";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { cloudCommand, cloudHelp } from "./cloud";
 import { workspaceArchivedOrExplain } from "./archive";
@@ -104,7 +104,7 @@ Usage:
   daedal team <say|chat|list|tree|goal|pause|resume> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
-  daedal activity <ask|list|show|update|resolve|withdraw> ... [--json]
+  daedal thread <start|list|show|update|bump|resolve|close> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
   daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
@@ -123,7 +123,8 @@ const commandHelp: Record<string, string> = {
   team: teamHelp,
   workflow: workflowHelp,
   plan: planHelp,
-  activity: activityHelp,
+  thread: threadHelp,
+  activity: threadHelp,
   account: accountHelp,
   secret: secretHelp,
   keys: keysHelp,
@@ -2494,8 +2495,8 @@ export async function runCli(
     }
   }
   const json = inputArgs.includes("--json");
-  // `daedal ask` is the hidden alias of `daedal activity` from before.
-  const args = activityAlias(
+  // `daedal activity` and `daedal ask` are the old names of `daedal thread`.
+  const args = threadAlias(
     inputArgs.filter((argument) => argument !== "--json"),
   );
   // Hook sinks: they read their payload, hand it to core and return 0 on
@@ -2528,6 +2529,30 @@ export async function runCli(
             : {}),
         }),
     });
+    return 0;
+  }
+  // A thread fork's UserPromptSubmit hook: main's new messages, printed for
+  // the fork's context. It runs before every fork turn, so it opens no
+  // reconcile, and a failure prints nothing rather than failing the turn.
+  if (args[0] === "thread" && args[1] === "catch-up") {
+    const fork = hookSession(args.slice(2)) ?? process.env.DAEDALUS_SESSION_ID;
+    if (!fork) return 0;
+    try {
+      const context = await createApplicationContext({
+        reconcile: false,
+        ...(options.migrationsDirectory
+          ? { migrationsDirectory: options.migrationsDirectory }
+          : {}),
+      });
+      try {
+        const text = await context.asks.forkCatchUp(fork);
+        if (text) console.log(text);
+      } finally {
+        context.close();
+      }
+    } catch {
+      // Nothing for the fork this turn.
+    }
     return 0;
   }
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
@@ -2572,7 +2597,7 @@ export async function runCli(
       "cloud",
       "workflow",
       "plan",
-      "activity",
+      "thread",
     ].includes(args[0]!)
   )
     throw new DaedalusError("VALIDATION", `Unknown command '${args[0]}'`);
@@ -2621,12 +2646,14 @@ export async function runCli(
       return await planCommand(context, args.slice(1), json, () =>
         callerSession(context).catch(() => undefined),
       );
-    if (args[0] === "activity")
-      return await activityCommand(context, args.slice(1), json, () =>
+    if (args[0] === "thread")
+      return await threadCommand(context, args.slice(1), json, () =>
         callerSession(context).catch(() => undefined),
       );
     return await agentCommand(context, args.slice(1), json, options);
   } finally {
+    // Archiving a session archives its threads' forks in the background.
+    await context.asks.settled();
     context.close();
   }
 }

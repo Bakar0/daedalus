@@ -511,6 +511,62 @@ describe("buildLaunch permission mode", () => {
     });
   });
 
+  test("a fork is read-only: Claude in plan mode, Codex in a read-only sandbox", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const claude = resolveProvider(config, { provider: "claude" }).adapter;
+      const forked = await claude.buildLaunch({
+        sessionId: "fork-id",
+        fork: "main-id",
+        prompt: "never sent",
+      });
+      const at = forked.args.indexOf("--resume");
+      expect(forked.args.slice(at, at + 7)).toEqual([
+        "--resume",
+        "main-id",
+        "--fork-session",
+        "--session-id",
+        "fork-id",
+        "--permission-mode",
+        "plan",
+      ]);
+      // Only the fork's own mode: never auto next to it.
+      expect(
+        forked.args.filter((arg) => arg === "--permission-mode"),
+      ).toHaveLength(1);
+      expect(forked.providerSessionId).toBe("fork-id");
+      // Before each turn the fork reads what main wrote since its last.
+      const settings = settingsValue(forked.args);
+      const text = settings.trim().startsWith("{")
+        ? settings
+        : await Bun.file(settings).text();
+      expect(text).toContain('"catch-up"');
+      const plain = await claude.buildLaunch({ sessionId: "main-id" });
+      const mainSettings = settingsValue(plain.args);
+      expect(
+        mainSettings.trim().startsWith("{")
+          ? mainSettings
+          : await Bun.file(mainSettings).text(),
+      ).not.toContain('"catch-up"');
+
+      const codex = resolveProvider(config, { provider: "codex" }).adapter;
+      const { args } = await codex.buildLaunch({
+        fork: "main-thread",
+        additionalDirectories: ["/repos/a"],
+      });
+      // Codex exits when a read-only sandbox is given writable roots.
+      expect(args).not.toContain("--add-dir");
+      const fork = args.indexOf("fork");
+      expect(args.slice(fork, fork + 4)).toEqual([
+        "fork",
+        "main-thread",
+        "--sandbox",
+        "read-only",
+      ]);
+      expect(args).not.toContain('approvals_reviewer="auto_review"');
+    });
+  });
+
   test("passes each additional directory once, as an argument", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const config = await isolated(home);
@@ -664,6 +720,43 @@ describe("buildLaunch resume", () => {
           resume: { ...resume(home), nativeId: undefined },
         }),
       ).rejects.toThrow("predates native resume support");
+    });
+  });
+
+  test("a thread's fork comes back read-only", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const config = await isolated(home);
+      const claude = await resolveProvider(config, {
+        provider: "claude",
+      }).adapter.buildLaunch({
+        sessionId: "fork-id",
+        threadFork: true,
+        resume: resume(home),
+      });
+      expect(claude.args.slice(-4)).toEqual([
+        "--permission-mode",
+        "plan",
+        "--resume",
+        nativeId,
+      ]);
+
+      const codex = await codexRecorder(home);
+      config.agents.codex!.executable = codex.path;
+      await writeRollout(home);
+      const launch = await resolveProvider(config, {
+        provider: "codex",
+      }).adapter.buildLaunch({
+        threadFork: true,
+        additionalDirectories: ["/repos/a"],
+        resume: resume(home),
+      });
+      expect(launch.args).not.toContain("--add-dir");
+      expect(launch.args.slice(-4)).toEqual([
+        "resume",
+        nativeId,
+        "--sandbox",
+        "read-only",
+      ]);
     });
   });
 

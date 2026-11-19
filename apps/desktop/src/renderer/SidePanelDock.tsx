@@ -1,5 +1,5 @@
 /**
- * The bottom of the side panel: the Workflow and Custom instructions panes,
+ * The bottom of the side panel: the session's Workflow pane,
  * under whichever tab is open. It stays at the bottom however little the tab
  * shows, fits its panes until the user drags its top edge, and then keeps the
  * height they chose. A double click on the edge gives the fitted size back.
@@ -33,7 +33,7 @@ export function SidePanelDock({ children }: { children: ReactNode }) {
       style={height === null ? undefined : { height }}
     >
       <div
-        aria-label="Resize workflow and custom instructions"
+        aria-label="Resize the workflow pane"
         aria-orientation="horizontal"
         aria-valuemax={Math.round(maxHeight())}
         aria-valuemin={MIN_HEIGHT}
