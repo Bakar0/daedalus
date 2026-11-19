@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  handleSession,
   isSnoozed,
   markPlanTasks,
   paneAskCount,
@@ -90,4 +91,27 @@ test("the Threads tab counts only what its pane shows", () => {
   expect(paneAskCount(counts, ["lead"])).toBe(1);
   // A lead's pane shows its members' threads too.
   expect(paneAskCount(counts, ["lead", "member"])).toBe(3);
+});
+
+test("a handle names a session in the team the owner leads or is in", () => {
+  // cve-lead leads the CVE team and is a member of the FedRAMP team.
+  const teams = [
+    { id: "fedramp", leadId: "fed-lead" },
+    { id: "cve", leadId: "cve-lead" },
+  ];
+  const sessions = [
+    { id: "fed-lead" },
+    { id: "cve-lead", teamId: "fedramp", teamHandle: "cve-lead" },
+    { id: "infra", teamId: "fedramp", teamHandle: "infra" },
+    { id: "quick", teamId: "cve", teamHandle: "quick" },
+  ];
+  // Its own member, though it sits in another team too.
+  expect(handleSession("cve-lead", "quick", teams, sessions)).toBe("quick");
+  // A peer in the team it is a member of, and that team's lead.
+  expect(handleSession("cve-lead", "infra", teams, sessions)).toBe("infra");
+  expect(handleSession("cve-lead", "lead", teams, sessions)).toBe("fed-lead");
+  // A member reaches its teammates; a name in no team stays text.
+  expect(handleSession("quick", "lead", teams, sessions)).toBe("cve-lead");
+  expect(handleSession("infra", "quick", teams, sessions)).toBeUndefined();
+  expect(handleSession("quick", "nobody", teams, sessions)).toBeUndefined();
 });

@@ -38,6 +38,41 @@ export interface OpenAskCounts {
 }
 
 /**
+ * The session an `@handle` in a session's text names. A session can lead one
+ * team and be a member of another (nested teams), and it talks to both: its
+ * members by their handles, its peers by theirs and its own lead as
+ * `@lead`. So the team it leads is searched first, then the one it is in.
+ */
+export function handleSession(
+  ownerId: string,
+  handle: string,
+  teams: readonly { id: string; leadId: string }[],
+  sessions: readonly {
+    id: string;
+    teamId?: string | null;
+    teamHandle?: string | null;
+  }[],
+): string | undefined {
+  const owner = sessions.find((one) => one.id === ownerId);
+  const led = teams.find((team) => team.leadId === ownerId);
+  const joined = owner?.teamId
+    ? teams.find((team) => team.id === owner.teamId)
+    : undefined;
+  if (handle === "lead") return joined?.leadId;
+  for (const team of [led, joined])
+    if (team) {
+      const member = sessions.find(
+        (one) =>
+          one.teamId === team.id &&
+          one.id !== ownerId &&
+          one.teamHandle?.toLowerCase() === handle,
+      );
+      if (member) return member.id;
+    }
+  return undefined;
+}
+
+/**
  * The open questions a session's Threads pane shows: its own and, for a
  * lead, its members'. The pane's tab dot counts these and nothing else.
  */
