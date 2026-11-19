@@ -30,15 +30,27 @@ export function snoozeChoices(now: Date): { label: string; until: Date }[] {
   ];
 }
 
-/** Open asks: all of them, and by workspace. */
+/** Open asks: all of them, by workspace, and by the session that asked. */
 export interface OpenAskCounts {
   total: number;
   byWorkspace: ReadonlyMap<string, number>;
+  bySession: ReadonlyMap<string, number>;
 }
+
+/**
+ * The open questions a session's Threads pane shows: its own and, for a
+ * lead, its members'. The pane's tab dot counts these and nothing else.
+ */
+export const paneAskCount = (
+  counts: Pick<OpenAskCounts, "bySession">,
+  sessionIds: readonly string[],
+): number =>
+  sessionIds.reduce((sum, id) => sum + (counts.bySession.get(id) ?? 0), 0);
 
 const NO_ASKS: OpenAskCounts = {
   total: 0,
   byWorkspace: new Map(),
+  bySession: new Map(),
 };
 
 /**
@@ -62,12 +74,18 @@ export function useOpenAskCounts(client: DesktopClient): OpenAskCounts {
                 !isSnoozed(ask, now),
             );
             const byWorkspace = new Map<string, number>();
-            for (const ask of open)
+            const bySession = new Map<string, number>();
+            for (const ask of open) {
               byWorkspace.set(
                 ask.workspaceId,
                 (byWorkspace.get(ask.workspaceId) ?? 0) + 1,
               );
-            setCount({ total: open.length, byWorkspace });
+              bySession.set(
+                ask.sessionId,
+                (bySession.get(ask.sessionId) ?? 0) + 1,
+              );
+            }
+            setCount({ total: open.length, byWorkspace, bySession });
           }
         },
         () => undefined,

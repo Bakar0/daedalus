@@ -101,7 +101,11 @@ import { WORKFLOWS_SKILL } from "./SkillsPanel";
 import { WorkflowsEditor } from "./WorkflowsEditor";
 import { InstructionsEditor } from "./InstructionsEditor";
 import { PlansPage, PlansPane, usePlanList } from "./PlansPane";
-import { THREADS_ICON_PATH, useOpenAskCounts } from "./threads-shared";
+import {
+  paneAskCount,
+  THREADS_ICON_PATH,
+  useOpenAskCounts,
+} from "./threads-shared";
 import { createPlan } from "./files/plan-actions";
 import { accountModelKey } from "./account-models";
 import {
@@ -7997,9 +8001,23 @@ export function WorkspaceApp({
   const sidePanelTabs = SIDE_PANEL_TABS.filter(
     ([tab]) => !atHome || tab === "files",
   );
-  const workspaceAsks = workspace
-    ? (askCounts.byWorkspace.get(workspace.id) ?? 0)
-    : 0;
+  // The Threads tab's dot counts what its pane shows: the session's own
+  // open questions and, for a lead, its members'. A question elsewhere in
+  // the workspace shows at Home and on its own session, not here.
+  const paneTeam = activeSession
+    ? snapshot?.teams.find((one) => one.leadId === activeSession.id)
+    : undefined;
+  const paneSessionIds = activeSession
+    ? [
+        activeSession.id,
+        ...(paneTeam
+          ? allAgents
+              .filter((one) => one.teamId === paneTeam.id && !one.archivedAt)
+              .map((one) => one.id)
+          : []),
+      ]
+    : [];
+  const paneAsks = paneAskCount(askCounts, paneSessionIds);
   /** The Routines page, in its own tab or as Home's page. */
   const renderRoutinesHome = () => (
     <RoutinesHome
@@ -9263,8 +9281,8 @@ export function WorkspaceApp({
                 {sidePanelTabs.map(([tab, label], index) => (
                   <button
                     aria-label={
-                      tab === "activity" && workspaceAsks > 0
-                        ? `${label}, ${workspaceAsks} waiting on you`
+                      tab === "activity" && paneAsks > 0
+                        ? `${label}, ${paneAsks} waiting on you`
                         : label
                     }
                     aria-selected={
@@ -9296,7 +9314,7 @@ export function WorkspaceApp({
                     {tab === "tasks" && taskAttentionCount > 0 && (
                       <i aria-hidden="true" className="side-panel-tab-badge" />
                     )}
-                    {tab === "activity" && workspaceAsks > 0 && (
+                    {tab === "activity" && paneAsks > 0 && (
                       <i
                         aria-hidden="true"
                         className="side-panel-tab-badge activity-tab-badge"

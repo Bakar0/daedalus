@@ -6,6 +6,12 @@ import {
 } from "@daedalus/core";
 import { parseArguments, printResult } from "./arguments";
 
+/** A message's first line, cut short, as the agent sees it quoted. */
+const firstLine = (text: string): string => {
+  const line = text.trim().split("\n")[0]!.trim();
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+};
+
 export const threadHelp = `Thread commands — a question for the user on your last message in main, kept until answered:
   daedal thread start "<question>" [--context "<text>" | --context-file <path>|-] [--why "<text>"] [--option "<text>"]... [--recommend <n>] [--plan <plan> ^<id>] [--session <session>]
   daedal thread list [--team | --all] [--session <session>]
@@ -18,8 +24,10 @@ export const threadHelp = `Thread commands — a question for the user on your l
 Ask the user once, then keep working on something else. The thread hangs off
 the last thing you wrote in main, so write one line there first that says
 what you asked ("Asked about the retry budget in a thread; moving on to the
-API"). The user answers in the thread and the answer comes back to you as a
-message. Do not repeat the question in your replies: say "Thread #<n>" and go
+API"). Each question needs its own line: 'start' refuses when your last
+message already carries another open thread or is about one ("Thread #12:
+..."), and it prints the line the thread hangs off. The user answers in the
+thread and the answer comes back to you as a message. Do not repeat the question in your replies: say "Thread #<n>" and go
 on. Every message Daedalus brings you ends with a line naming your open
 threads.
 The thread shows the question, then --why, then the options; --context is
@@ -220,7 +228,13 @@ export async function threadCommand(
     });
     printResult({ ask, updated }, json, () =>
       console.log(
-        `${updated ? "Updated" : "Started"} thread #${ask.id}${ask.anchorId ? " on your last message in main" : ""}. The user answers there; the answer comes back to you. Say "Thread #${ask.id}" and go on with other work.`,
+        [
+          `${updated ? "Updated" : "Started"} thread #${ask.id}${ask.anchorId ? " on your last message in main" : ""}. The user answers there; the answer comes back to you. Say "Thread #${ask.id}" and go on with other work.`,
+          // So the agent sees what the user sees the question hang off.
+          ...(ask.anchorText
+            ? [`It hangs off: "${firstLine(ask.anchorText)}"`]
+            : []),
+        ].join("\n"),
       ),
     );
     return 0;

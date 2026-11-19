@@ -504,6 +504,69 @@ describe("Activity asks", () => {
     });
   });
 
+  test("a new question needs its own line in main, not another thread's", async () => {
+    await withHome(async ({ home, context }) => {
+      const main = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "deployer",
+      });
+      const path = claudeTranscriptPath(join(home, "claude", "projects"), main);
+      const said = (...texts: string[]) =>
+        Bun.write(
+          path,
+          texts
+            .map((text, index) =>
+              JSON.stringify({
+                type: "assistant",
+                uuid: `a-${index}`,
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text }],
+                },
+              }),
+            )
+            .join("\n"),
+        );
+      await said("I'm asking you for one thing: OK to copy the images?");
+      const { ask: first } = await context.asks.create({
+        session: main.id,
+        title: "OK to copy the images?",
+      });
+      // No new line: the same message would carry a second question.
+      await expect(
+        context.asks.create({ session: main.id, title: "OK to unlock?" }),
+      ).rejects.toThrow(`is about thread #${first.id}`);
+      // A status message about the first thread is not the second's line.
+      await said(
+        "I'm asking you for one thing: OK to copy the images?",
+        `Thread #${first.id}: I asked for your OK to copy the images.\n\nOther PRs are green.`,
+      );
+      await expect(
+        context.asks.create({ session: main.id, title: "OK to unlock?" }),
+      ).rejects.toThrow("Write one line in your reply");
+      // With its own line, the question hangs off it.
+      await said(
+        "I'm asking you for one thing: OK to copy the images?",
+        `Thread #${first.id}: I asked for your OK to copy the images.`,
+        "Asked whether to force-unlock the stale Terraform lock.",
+      );
+      const { ask: second } = await context.asks.create({
+        session: main.id,
+        title: "OK to unlock?",
+      });
+      expect(second.anchorText).toBe(
+        "Asked whether to force-unlock the stale Terraform lock.",
+      );
+      // Asking the same question again still rewrites it, as before.
+      const again = await context.asks.create({
+        session: main.id,
+        title: "OK to unlock?",
+      });
+      expect(again.updated).toBe(true);
+    });
+  });
+
   test("a fork thread runs a read-only fork of the session and sends its reply to main", async () => {
     await withHome(async ({ home, context, transport }) => {
       const main = await context.agents.spawn({
