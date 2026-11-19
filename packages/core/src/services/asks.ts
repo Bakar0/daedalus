@@ -604,9 +604,9 @@ export class AskService {
   }
 
   /**
-   * Before a fork's turn: main's messages since the fork last read it, as
-   * text for the fork's context. Undefined when nothing is new, or when the
-   * session is no thread's fork. The first time, "since" is when the fork
+   * Before a fork's turn: a reminder of what the fork is, then main's
+   * messages since the fork last read it, as text for the fork's context.
+   * Undefined when the session is no open thread's fork. The first time, "since" is when the fork
    * started, since it was born with main's conversation up to then.
    */
   async forkCatchUp(forkSessionId: string): Promise<string | undefined> {
@@ -620,10 +620,14 @@ export class AskService {
     const fresh = (await this.read(main)).filter(
       (message) => message.at && Date.parse(message.at) > since,
     );
-    if (!fresh.length) return undefined;
+    // Every turn: plan mode's own prompt returns each turn and pulls the
+    // fork toward writing a plan and asking to build it.
+    const reminder = `[Threads] You are thread #${thread.id}, a read-only fork of ${main.name}. Plan mode only keeps you read-only here: write no plan, do not offer to make changes, and answer in chat. When you and the user settle something, end with "For main:" and one to three lines the user can send to ${main.name}.`;
+    if (!fresh.length) return reminder;
     this.repositories.asks.setForkSynced(thread.id, fresh.at(-1)!.at);
     return [
-      `[Threads] While you talked here, ${main.name} (the session you fork) went on. Its new messages in main, oldest first:`,
+      reminder,
+      `While you talked here, ${main.name} (the session you fork) went on. Its new messages in main, oldest first:`,
       ...fresh.map(
         (message) =>
           `${message.role === "user" ? "The user" : main.name}: ${message.text}`,
@@ -633,11 +637,17 @@ export class AskService {
   }
 
   /**
-   * What "send to main" starts from: the fork's last reply, for the user to
-   * read and edit before it goes. Empty while the fork has written nothing.
+   * What "send to main" starts from: the fork's last reply, or only its
+   * "For main:" part when it wrote one, for the user to read and edit before
+   * it goes. Empty while the fork has written nothing.
    */
   async forkDraft(id: number): Promise<string> {
-    return lastAgentMessage(await this.forkConversation(id))?.text ?? "";
+    const reply = lastAgentMessage(await this.forkConversation(id))?.text ?? "";
+    const marker = /(?:^|\n)\s*\**For main:?\**:?\s*/i.exec(reply);
+    const forMain = marker
+      ? reply.slice(marker.index + marker[0].length).trim()
+      : "";
+    return forMain || reply;
   }
 
   /**

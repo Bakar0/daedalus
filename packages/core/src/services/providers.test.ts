@@ -9,6 +9,7 @@ import {
   claudeDaedalusSettingsArgs,
   CODEX_DAEDALUS_TUI_ARGS,
   codexConfigPath,
+  DAEDALUS_FORK_INSTRUCTIONS,
   DAEDALUS_STATUS_INSTRUCTIONS,
   daedalusInstructionArgs,
   ensureCodexHooks,
@@ -535,6 +536,16 @@ describe("buildLaunch permission mode", () => {
         forked.args.filter((arg) => arg === "--permission-mode"),
       ).toHaveLength(1);
       expect(forked.providerSessionId).toBe("fork-id");
+      // It is told it is a thread, not main, and cannot leave plan mode.
+      expect(forked.args).toContain(DAEDALUS_FORK_INSTRUCTIONS);
+      expect(forked.args).not.toContain(DAEDALUS_STATUS_INSTRUCTIONS);
+      const denied = forked.args.indexOf("--disallowedTools");
+      expect(forked.args.slice(denied + 1, denied + 5)).toEqual([
+        "ExitPlanMode",
+        "Write",
+        "Edit",
+        "NotebookEdit",
+      ]);
       // Before each turn the fork reads what main wrote since its last.
       const settings = settingsValue(forked.args);
       const text = settings.trim().startsWith("{")
@@ -548,6 +559,8 @@ describe("buildLaunch permission mode", () => {
           ? mainSettings
           : await Bun.file(mainSettings).text(),
       ).not.toContain('"catch-up"');
+      expect(plain.args).toContain(DAEDALUS_STATUS_INSTRUCTIONS);
+      expect(plain.args).not.toContain("--disallowedTools");
 
       const codex = resolveProvider(config, { provider: "codex" }).adapter;
       const { args } = await codex.buildLaunch({
@@ -556,6 +569,11 @@ describe("buildLaunch permission mode", () => {
       });
       // Codex exits when a read-only sandbox is given writable roots.
       expect(args).not.toContain("--add-dir");
+      expect(
+        args.includes(
+          `developer_instructions=${JSON.stringify(DAEDALUS_FORK_INSTRUCTIONS)}`,
+        ),
+      ).toBe(true);
       const fork = args.indexOf("fork");
       expect(args.slice(fork, fork + 4)).toEqual([
         "fork",
@@ -733,6 +751,8 @@ describe("buildLaunch resume", () => {
         threadFork: true,
         resume: resume(home),
       });
+      expect(claude.args).toContain(DAEDALUS_FORK_INSTRUCTIONS);
+      expect(claude.args).toContain("ExitPlanMode");
       expect(claude.args.slice(-4)).toEqual([
         "--permission-mode",
         "plan",
