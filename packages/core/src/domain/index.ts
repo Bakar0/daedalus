@@ -234,6 +234,22 @@ export interface Ask {
   noticeDeliveredAt: string | null;
   /** Put off by the user until then: out of Activity's count till it passes. */
   snoozedUntil: string | null;
+  /**
+   * The message in its session's main conversation the thread hangs off:
+   * the id in the agent's transcript, and a copy of its text. Null when the
+   * transcript had no agent message to hang it off.
+   */
+  anchorId: string | null;
+  anchorText: string | null;
+  /** When the agent said it is blocked on it; null while it is not. */
+  bumpedAt: string | null;
+  /**
+   * `question`: the agent asked it; the user's answer goes to the agent.
+   * `fork`: the user opened it, to talk it through with a read-only fork
+   * of the session (`forkSessionId`) while the session works on.
+   */
+  kind: "question" | "fork";
+  forkSessionId: string | null;
 }
 
 export interface IntegratedTerminal {

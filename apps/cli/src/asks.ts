@@ -6,41 +6,44 @@ import {
 } from "@daedalus/core";
 import { parseArguments, printResult } from "./arguments";
 
-export const activityHelp = `Activity commands — questions for the user, kept under Activity until answered:
-  daedal activity ask "<question>" [--context "<text>" | --context-file <path>|-] [--why "<text>"] [--option "<text>"]... [--recommend <n>] [--plan <plan> ^<id>] [--session <session>]
-  daedal activity list [--team | --all] [--session <session>]
-  daedal activity show <n>
-  daedal activity update <n> [--title "<question>"] [--context ...] [--why ...] [--option ...]... [--recommend <n>] [--plan <plan> ^<id>]
-  daedal activity resolve <n> [--answer "<what the user said>"]
-  daedal activity withdraw <n> ["<why>"]
+export const threadHelp = `Thread commands — a question for the user on your last message in main, kept until answered:
+  daedal thread start "<question>" [--context "<text>" | --context-file <path>|-] [--why "<text>"] [--option "<text>"]... [--recommend <n>] [--plan <plan> ^<id>] [--session <session>]
+  daedal thread list [--team | --all] [--session <session>]
+  daedal thread show <n>
+  daedal thread update <n> [--title "<question>"] [--context ...] [--why ...] [--option ...]... [--recommend <n>] [--plan <plan> ^<id>]
+  daedal thread bump <n>
+  daedal thread resolve <n> [--answer "<what the user said>"]
+  daedal thread close <n> ["<why>"]
 
-Ask the user once. The app keeps the question as a card under Activity,
-with its context, its options and the plan task it waits on, until the user
-answers or dismisses it there. Do not repeat it in your replies: say "Asked
-#<n>" and go on with other work. Every message Daedalus brings you ends with
-a line naming your open asks.
-The card shows the question, then --why, then the options; --context is
+Ask the user once, then keep working on something else. The thread hangs off
+the last thing you wrote in main, so write one line there first that says
+what you asked ("Asked about the retry budget in a thread; moving on to the
+API"). The user answers in the thread and the answer comes back to you as a
+message. Do not repeat the question in your replies: say "Thread #<n>" and go
+on. Every message Daedalus brings you ends with a line naming your open
+threads.
+The thread shows the question, then --why, then the options; --context is
 folded under "Details". So write the question as one short plain line the
-user can answer ("Who can add our redirect URL to the ServiceNow test
-instances?"), --why as one sentence on what stays stuck without the answer
-("ServiceNow can't be tested on stage until then"), and put ids, dates,
-accounts and links in --context. Together they let the user decide without
-opening your session. --option may be given
-any number of times, or not at all for a question answered in words;
---recommend is the number of the option you recommend. The user may pick
-one, write their own answer, or both.
---plan and ^<id> pin the ask to a task of a plan in your workspace: the plan
-shows that task as waiting on the user, and the ask closes when the task is
-done or dropped. A task without an id gets one from its title.
-Asking the same question again while it is open rewrites it.
-When the user answers or dismisses it in the app, you are told, with the
-question and its context. When they answer it in your session instead, run
-'daedal activity resolve <n> --answer "<what they said>"' so the card closes.
-'withdraw' closes an ask that is no longer needed. Archiving a session
-closes its asks.
-'list' shows your open asks and those ended in the last day; --team adds
+user can answer ("How many delivery tries before a webhook is dead-lettered?"),
+--why as one sentence on what stays stuck without the answer, and put ids,
+dates, accounts and links in --context. --option may be given any number of
+times, or not at all for a question answered in words; --recommend is the
+number of the option you recommend.
+'bump' says you are now blocked on it: the user is told once. Bump a thread
+once, when you run out of other work; a second bump before the user replies
+does nothing.
+--plan and ^<id> pin the thread to a task of a plan in your workspace: the
+plan shows that task as waiting on the user, and the thread closes when the
+task is done or dropped.
+Starting the same question again while it is open rewrites it.
+When the user answers in your session instead, run
+'daedal thread resolve <n> --answer "<what they said>"' so the thread closes.
+'close' ends a thread that is no longer needed. Archiving a session closes
+its threads.
+'list' shows your open threads and those ended in the last day; --team adds
 every member you lead, down every level; --all shows every session's.
-The session is the calling one unless --session names one.`;
+The session is the calling one unless --session names one.
+'daedal activity ask|withdraw|...' still works for now and means the same.`;
 
 /** `--option` may repeat, which `parseArguments` refuses; take them first. */
 function takeRepeated(args: string[], name: string): string[] {
@@ -93,29 +96,45 @@ function describe(ask: AskView): string {
   return lines.join("\n");
 }
 
-export const ACTIVITY_ACTIONS = [
+export const THREAD_ACTIONS = [
+  "start",
   "list",
   "show",
   "update",
+  "bump",
   "resolve",
-  "withdraw",
+  "close",
+  "catch-up",
 ];
 
+/** The names `daedal activity` had, as `daedal thread` calls them. */
+const LEGACY_ACTIONS: Record<string, string> = {
+  ask: "start",
+  withdraw: "close",
+};
+
 /**
- * The CLI before Activity: `daedal ask "<question>"` and `daedal ask <sub>`.
- * Running sessions may still have it in their instructions, so it stays as a
- * hidden alias of `daedal activity ask` and `daedal activity <sub>`.
+ * The CLI before threads: `daedal activity <sub>` and, before that,
+ * `daedal ask`. Running sessions may still have them in their instructions,
+ * so both stay as aliases of `daedal thread`, with `ask` as `start` and
+ * `withdraw` as `close`.
  */
-export function activityAlias(args: string[]): string[] {
-  if (args[0] !== "ask") return args;
-  const rest = args.slice(1);
-  if (rest.length === 0) return ["activity"];
-  if (ACTIVITY_ACTIONS.includes(rest[0]!) || rest[0] === "help")
-    return ["activity", ...rest];
-  return ["activity", "ask", ...rest];
+export function threadAlias(args: string[]): string[] {
+  const [first, ...rest] = args;
+  if (first !== "ask" && first !== "activity") return args;
+  if (
+    first === "ask" &&
+    rest.length &&
+    !LEGACY_ACTIONS[rest[0]!] &&
+    !THREAD_ACTIONS.includes(rest[0]!) &&
+    rest[0] !== "help"
+  )
+    return ["thread", "start", ...rest];
+  if (!rest.length) return ["thread"];
+  return ["thread", LEGACY_ACTIONS[rest[0]!] ?? rest[0]!, ...rest.slice(1)];
 }
 
-export async function activityCommand(
+export async function threadCommand(
   context: ApplicationContext,
   args: string[],
   json: boolean,
@@ -123,16 +142,16 @@ export async function activityCommand(
 ): Promise<number> {
   const first = args[0];
   if (!first || first === "help" || first === "--help") {
-    console.log(activityHelp);
+    console.log(threadHelp);
     return 0;
   }
-  if (first !== "ask" && !ACTIVITY_ACTIONS.includes(first))
+  if (!THREAD_ACTIONS.includes(first))
     throw new DaedalusError(
       "VALIDATION",
-      `Unknown activity command '${first}'; see 'daedal activity --help'`,
+      `Unknown thread command '${first}'; see 'daedal thread --help'`,
     );
   args.shift();
-  const action = first === "ask" ? "create" : first;
+  const action = first === "start" ? "create" : first;
   const options = takeRepeated(args, "option");
   const parsed = parseArguments(
     args,
@@ -201,7 +220,7 @@ export async function activityCommand(
     });
     printResult({ ask, updated }, json, () =>
       console.log(
-        `${updated ? "Updated" : "Asked"} #${ask.id}. It shows under Activity until the user answers; tell them "Asked #${ask.id}" and do not repeat it.`,
+        `${updated ? "Updated" : "Started"} thread #${ask.id}${ask.anchorId ? " on your last message in main" : ""}. The user answers there; the answer comes back to you. Say "Thread #${ask.id}" and go on with other work.`,
       ),
     );
     return 0;
@@ -217,15 +236,43 @@ export async function activityCommand(
       console.log(
         asks.length
           ? asks.map(describe).join("\n\n")
-          : "No asks open or ended in the last day.",
+          : "No threads open or ended in the last day.",
       ),
     );
     return 0;
   }
-  const id = number(rest[0], `daedal activity ${action} <n>`);
+  const id = number(rest[0], `daedal thread ${action} <n>`);
   if (action === "show") {
     const ask = context.asks.get(id);
-    printResult(ask, json, () => console.log(describe(ask)));
+    const conversation = await context.asks.forkConversation(id);
+    printResult({ ...ask, conversation }, json, () => {
+      console.log(describe(ask));
+      if (ask.kind === "fork") {
+        if (ask.anchorText)
+          console.log(`  On your message: ${ask.anchorText.split("\n")[0]}`);
+        console.log(
+          conversation.length
+            ? `\nIn the fork (read-only, the user talking it through):\n${conversation
+                .map(
+                  (message) =>
+                    `${message.role === "user" ? "> " : "● "}${message.text}`,
+                )
+                .join("\n\n")}`
+            : "\nNothing said in the fork yet.",
+        );
+      }
+    });
+    return 0;
+  }
+  if (action === "bump") {
+    const { ask, bumped } = context.asks.bump(id, await session());
+    printResult({ ask, bumped }, json, () =>
+      console.log(
+        bumped
+          ? `Thread #${ask.id} marked blocking; the user is told once.`
+          : `Thread #${ask.id} was bumped already; wait for the user's reply.`,
+      ),
+    );
     return 0;
   }
   if (action === "update") {
@@ -245,7 +292,7 @@ export async function activityCommand(
   }
   const ask = await context.asks.resolve(id, {
     session: await session(),
-    ...(action === "withdraw"
+    ...(action === "close"
       ? {
           withdraw: true,
           ...(rest.slice(1).join(" ")
@@ -258,7 +305,7 @@ export async function activityCommand(
   });
   printResult(ask, json, () =>
     console.log(
-      `${action === "withdraw" ? "Withdrew" : "Resolved"} #${ask.id}; its card is closed.`,
+      `${action === "close" ? "Closed" : "Resolved"} thread #${ask.id}.`,
     ),
   );
   return 0;

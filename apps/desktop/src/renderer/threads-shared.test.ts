@@ -1,10 +1,5 @@
 import { expect, test } from "vitest";
-import {
-  groupPlanTasks,
-  isSnoozed,
-  markPlanTasks,
-  snoozeChoices,
-} from "./ActivityPage";
+import { isSnoozed, markPlanTasks, snoozeChoices } from "./threads-shared";
 
 const task = (
   id: string,
@@ -40,40 +35,20 @@ test("the pinned task waits on the user; later todo siblings are held, up to its
   ).toBe(true);
 });
 
-test("the plan is grouped by what each task needs, leaves only, waits on you first", () => {
-  const tasks = [
-    task("batch1", 0, "done"),
-    task("batch2", 0, "doing"),
-    task("recon", 1, "blocked"),
-    task("run", 1),
-    task("stuck", 1, "blocked"),
-    task("old", 1, "dropped"),
-    task("cve", 0, "doing"),
-  ];
-  const groups = groupPlanTasks(tasks, [{ id: 7, taskKey: "recon" }]);
-  const ids = (key: keyof typeof groups) =>
-    groups[key].map(
-      (item) => `${item.task.id}${item.ask ? `#${item.ask}` : ""}`,
-    );
-  // batch2 has subtasks, so only they are listed.
-  expect(ids("wait")).toEqual(["recon#7"]);
-  expect(ids("blocked")).toEqual(["stuck"]);
-  expect(ids("doing")).toEqual(["cve"]);
-  expect(ids("todo")).toEqual(["run#7"]);
-  expect(ids("done")).toEqual(["batch1", "old"]);
-});
-
-test("every class the Activity page uses has a style rule", async () => {
+test("every class the Threads pane uses has a style rule", async () => {
   const dir = new URL(".", import.meta.url).pathname;
-  const page = await Bun.file(`${dir}ActivityPage.tsx`).text();
+  const page = await Bun.file(`${dir}ThreadsPane.tsx`).text();
   const css = await Bun.file(`${dir}styles.css`).text();
-  // Literal class names, and the fixed part of templated ones.
   const used = new Set(
-    [...page.matchAll(/needs-[a-z-]+[a-z]/g)].map((match) => match[0]),
+    [...page.matchAll(/threads-[a-z-]+[a-z]/g)].map((match) => match[0]),
   );
-  // Parts of templated names, styled through their full forms.
-  for (const prefix of ["needs-task", "needs-group", "needs-progress"])
-    used.delete(prefix);
+  // Element ids, searches and a module name, not classes.
+  for (const id of [
+    "threads-draft",
+    "threads-search-current",
+    "threads-shared",
+  ])
+    used.delete(id);
   const missing = [...used].filter(
     (name) => !new RegExp(`\\.${name}(?![a-z-])`).test(css),
   );

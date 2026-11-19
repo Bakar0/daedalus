@@ -208,10 +208,10 @@ export interface FilesEditorProps {
   renderTerminal?(terminalId: string, active: boolean): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
   renderPlans?(): React.ReactNode;
-  renderActivity?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
+  renderThreads?(sessionId: string, threadId?: number): React.ReactNode;
   abilityTabName?(kind: "team", id: string): string | undefined;
   onNewTerminal?(): void;
   onTerminalTabClosed?(terminalId: string): void;

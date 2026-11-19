@@ -140,6 +140,11 @@ function sources(context: ApplicationContext) {
           ]);
       },
     ),
+    // A thread's fork runs in its thread, not as a session of its own.
+    threadForks: rows(
+      () => repositories.asks.forkSessionIds(),
+      () => repositories.asks.forkSessionIds(),
+    ),
     unseenRoutineRuns: rows(
       () => repositories.routines.unseenRunIds(),
       () => repositories.routines.unseenRunIds(),

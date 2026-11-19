@@ -195,6 +195,11 @@ const askDto = (ask: AskView): AskDto => ({
     (ask.state === "answered" || ask.state === "dismissed") &&
     !ask.noticeDeliveredAt,
   snoozedUntil: ask.snoozedUntil,
+  anchorId: ask.anchorId,
+  anchorText: ask.anchorText,
+  bumpedAt: ask.bumpedAt,
+  kind: ask.kind,
+  forkSessionId: ask.forkSessionId,
 });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
@@ -357,6 +362,7 @@ export async function desktopSnapshot(
     largeFiles: view.largeFiles.map((file) => ({ ...file })),
     workflowRuns: view.workflowRuns.map(workflowRunDto),
     unseenRoutineRuns: view.unseenRoutineRuns.length,
+    threadForkIds: view.threadForks,
     settings: {
       version: packageJson.version,
       channel: buildChannel(config.home),
@@ -818,6 +824,36 @@ export function createDesktopRequestHandlers(
       mutate(() => askDto(context.asks.get(context.asks.snooze(id, until).id))),
     askReopen: ({ id }) =>
       mutate(() => askDto(context.asks.get(context.asks.reopen(id).id))),
+    threadOpenFork: ({ sessionId, anchorId, threadId }) =>
+      mutate(async () =>
+        askDto(
+          context.asks.get(
+            (
+              await context.asks.openFork({
+                sessionId,
+                anchorId,
+                ...(threadId === undefined ? {} : { threadId }),
+              })
+            ).id,
+          ),
+        ),
+      ),
+    threadForkDraft: ({ id }) =>
+      result(async () => ({ text: await context.asks.forkDraft(id) })),
+    threadSendToMain: ({ id, text }) =>
+      mutate(async () => ({
+        text: await context.asks.sendForkToMain(id, text),
+      })),
+    threadReopen: ({ id }) =>
+      mutate(async () =>
+        askDto(context.asks.get((await context.asks.reopenThread(id)).id)),
+      ),
+    threadClose: ({ id }) =>
+      mutate(async () =>
+        askDto(context.asks.get((await context.asks.closeThread(id)).id)),
+      ),
+    sessionMessages: ({ sessionId }) =>
+      result(() => context.asks.mainMessages(sessionId)),
     askPlan: ({ path }) =>
       result(async () => {
         try {

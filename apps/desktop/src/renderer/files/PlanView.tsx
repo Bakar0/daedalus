@@ -22,7 +22,7 @@ import Markdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { DesktopClient } from "../client-types";
 import { OWNER_STATE_TEXT } from "./plan-owner";
-import { markPlanTasks } from "../ActivityPage";
+import { markPlanTasks } from "../threads-shared";
 
 /**
  * A `.plan.md` file drawn as the document it describes: its markdown as

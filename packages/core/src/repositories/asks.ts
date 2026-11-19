@@ -22,6 +22,11 @@ interface AskRow {
   notice_delivered_at: string | null;
   notified_at: string | null;
   snoozed_until: string | null;
+  anchor_id: string | null;
+  anchor_text: string | null;
+  bumped_at: string | null;
+  kind: "question" | "fork";
+  fork_session_id: string | null;
 }
 
 const options = (text: string): string[] => {
@@ -55,6 +60,11 @@ const askFromRow = (row: AskRow): Ask => ({
   closedAt: row.closed_at,
   noticeDeliveredAt: row.notice_delivered_at,
   snoozedUntil: row.snoozed_until,
+  anchorId: row.anchor_id,
+  anchorText: row.anchor_text,
+  bumpedAt: row.bumped_at,
+  kind: row.kind,
+  forkSessionId: row.fork_session_id,
 });
 
 /** What an asker writes; the rest is the ask's lifecycle. */
@@ -74,14 +84,23 @@ export class AskRepository {
   constructor(private readonly database: Database) {}
 
   create(
-    input: AskContent & { workspaceId: string; sessionId: string; at: string },
+    input: AskContent & {
+      workspaceId: string;
+      sessionId: string;
+      at: string;
+      anchorId?: string | null;
+      anchorText?: string | null;
+      kind?: "question" | "fork";
+      forkSessionId?: string | null;
+    },
   ): Ask {
     const row = this.database
       .query<AskRow, (string | number | null)[]>(
         `INSERT INTO asks
          (workspace_id, session_id, title, context, why, options, recommended,
-          plan_path, task_key, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+          plan_path, task_key, created_at, updated_at, anchor_id, anchor_text,
+          kind, fork_session_id, notified_at, fork_started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
       )
       .get(
         input.workspaceId,
@@ -95,6 +114,13 @@ export class AskRepository {
         input.taskKey,
         input.at,
         input.at,
+        input.anchorId ?? null,
+        input.anchorText ?? null,
+        input.kind ?? "question",
+        input.forkSessionId ?? null,
+        // The user opened a fork thread; there is nothing to notify them of.
+        input.kind === "fork" ? input.at : null,
+        input.forkSessionId ? input.at : null,
       );
     if (!row) throw new Error("The ask was not saved");
     return askFromRow(row);
@@ -270,6 +296,98 @@ export class AskRepository {
          WHERE id = ? AND state = 'open' RETURNING *`,
       )
       .get(until, at, until, id);
+    return row ? askFromRow(row) : undefined;
+  }
+
+  /**
+   * The agent says it is blocked on an open ask. Once only: an ask already
+   * bumped is left as it is and undefined comes back.
+   */
+  bump(id: number, at: string): Ask | undefined {
+    const row = this.database
+      .query<AskRow, [string, string, number]>(
+        `UPDATE asks SET bumped_at = ?, updated_at = ?, notified_at = NULL
+         WHERE id = ? AND state = 'open' AND bumped_at IS NULL RETURNING *`,
+      )
+      .get(at, at, id);
+    return row ? askFromRow(row) : undefined;
+  }
+
+  /**
+   * The user reopens an ended thread, whether or not its owner was told it
+   * ended. Its answer and reason are cleared.
+   */
+  reopenEnded(id: number, at: string): Ask | undefined {
+    const row = this.database
+      .query<AskRow, [string, number]>(
+        `UPDATE asks SET state = 'open', answer = NULL, note = NULL,
+         closed_reason = NULL, closed_at = NULL, notice_delivered_at = NULL,
+         snoozed_until = NULL, bumped_at = NULL, updated_at = ?
+         WHERE id = ? AND state != 'open'
+         RETURNING *`,
+      )
+      .get(at, id);
+    return row ? askFromRow(row) : undefined;
+  }
+
+  /** The thread whose fork this session is, if any. */
+  findByFork(forkSessionId: string): Ask | undefined {
+    const row = this.database
+      .query<AskRow, [string]>(
+        `SELECT * FROM asks WHERE fork_session_id = ? ORDER BY id DESC LIMIT 1`,
+      )
+      .get(forkSessionId);
+    return row ? askFromRow(row) : undefined;
+  }
+
+  /** When a thread's fork last read main; null before its first turn. */
+  /** Every session that is or was a thread's fork, however old the thread. */
+  forkSessionIds(): string[] {
+    return this.database
+      .query<{ fork_session_id: string }, []>(
+        `SELECT fork_session_id FROM asks WHERE fork_session_id IS NOT NULL
+         ORDER BY fork_session_id`,
+      )
+      .all()
+      .map((row) => row.fork_session_id);
+  }
+
+  /** When the thread's fork began, or null for a thread without one. */
+  forkStartedAt(id: number): string | null {
+    return (
+      this.database
+        .query<{ fork_started_at: string | null }, [number]>(
+          `SELECT fork_started_at FROM asks WHERE id = ?`,
+        )
+        .get(id)?.fork_started_at ?? null
+    );
+  }
+
+  forkSyncedAt(id: number): string | null {
+    return (
+      this.database
+        .query<{ fork_synced_at: string | null }, [number]>(
+          `SELECT fork_synced_at FROM asks WHERE id = ?`,
+        )
+        .get(id)?.fork_synced_at ?? null
+    );
+  }
+
+  /** The fork has read main up to `at`. */
+  setForkSynced(id: number, at: string): void {
+    this.database
+      .query(`UPDATE asks SET fork_synced_at = ? WHERE id = ?`)
+      .run(at, id);
+  }
+
+  /** A question the user forked: the fork session that now hangs off it. */
+  attachFork(id: number, forkSessionId: string, at: string): Ask | undefined {
+    const row = this.database
+      .query<AskRow, [string, string, string, number]>(
+        `UPDATE asks SET fork_session_id = ?, fork_started_at = ?, updated_at = ?
+         WHERE id = ? AND state = 'open' RETURNING *`,
+      )
+      .get(forkSessionId, at, at, id);
     return row ? askFromRow(row) : undefined;
   }
 

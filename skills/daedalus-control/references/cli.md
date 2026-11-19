@@ -144,30 +144,35 @@ States are `[ ]` todo, `[/]` doing, `[x]` done, `[!]` blocked and `[-]`
 dropped; markdown indented under a task is its details, and a `> ? ...` line
 there is a question for the user. `<plan>` is the slug, a path, or the
 absolute path an agent was given. `start` marks the task `[/]` with you as
-its owner; `ask` adds the question under the task, where the app shows it
-under Activity. An `@owner` is a session's team handle or its name as a
+its owner; `ask` adds the question under the task and starts a thread for
+it, as `daedal thread start --plan` does. An `@owner` is a session's team handle or its name as a
 handle (`Cart endpoints` is `@cart-endpoints`). The app opens a plan as an
 interactive document: Start agent on a task, Open its owner, and Ask (⌘L) on
 any selected text, which sends the owner the question, then `path:lines:` and
 the quote. Edit the file directly for anything else.
 
-## Activity
+## Threads
 
 ```text
-daedal activity ask "<question>" [--context "<text>" | --context-file <path|->] [--why "<text>"] [--option "<text>"]... [--recommend <n>] [--plan <plan> ^<id>] [--session <session>]
-daedal activity list [--team | --all] [--session <session>]
-daedal activity show <n>
-daedal activity update <n> [--title "<question>"] [--context ...] [--why ...] [--option ...]... [--recommend <n>] [--plan <plan> ^<id>]
-daedal activity resolve <n> [--answer "<what the user said>"]
-daedal activity withdraw <n> ["<why>"]
+daedal thread start "<question>" [--context "<text>" | --context-file <path|->] [--why "<text>"] [--option "<text>"]... [--recommend <n>] [--plan <plan> ^<id>] [--session <session>]
+daedal thread list [--team | --all] [--session <session>]
+daedal thread show <n>
+daedal thread update <n> [--title "<question>"] [--context ...] [--why ...] [--option ...]... [--recommend <n>] [--plan <plan> ^<id>]
+daedal thread bump <n>
+daedal thread resolve <n> [--answer "<what the user said>"]
+daedal thread close <n> ["<why>"]
 ```
 
-`activity ask` asks the user once: the app keeps the question as a card under
-Activity until the user answers or dismisses it, and the answer comes back to
-the asking session. Say "Asked #<n>" and do not repeat it. When the user
-answers in your session instead, `activity resolve <n> --answer "..."` closes
-the card; `activity withdraw` closes one no longer needed. See
-`daedal activity --help` for every flag.
+`thread start` asks the user once. Write one line in your reply first that
+says what you asked: the thread hangs off your last message, and the user
+answers it in the app's Threads tab. The answer comes back to you as a
+message. Say "Thread #<n>" and do not repeat the question. When you run out
+of other work and are blocked on it, run `thread bump <n>` once. When the
+user answers in your session instead, `thread resolve <n> --answer "..."`
+closes the thread; `thread close` ends one no longer needed. `thread show
+<n>` prints a thread, with the conversation of its fork if it has one. See
+`daedal thread --help` for every flag. `daedal activity` and `daedal ask`
+still work as aliases.
 
 ## Accounts
 

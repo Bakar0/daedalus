@@ -478,8 +478,10 @@ describe("desktop application shell", () => {
       />,
     );
     expect(html).toContain("Workspaces");
-    // Activity is a sidebar link to Home, not a mode of its own.
-    expect(html.match(/>Activity</g)).toHaveLength(1);
+    // Threads is a sidebar link to Home, not a mode of its own.
+    expect(html.match(/>Threads</g)).toHaveLength(1);
+    // Custom instructions is a Home page too, beside Threads and Routines.
+    expect(html.match(/>Custom instructions</g)).toHaveLength(1);
     // No mode switcher: the center shows a session, a file or a task, and
     // the side panel's tabs hold the files, repositories and tasks.
     expect(html).not.toContain('aria-label="Workspace mode"');
@@ -601,6 +603,11 @@ describe("desktop application shell", () => {
       // The workspace's tasks are in the side panel, with their capture line.
       expect(html).toContain('class="side-panel-board"');
       expect(html).toContain('class="board-capture"');
+      // Plans sit under the tasks in the same tab; they have no tab of their own.
+      expect(html.indexOf('class="side-panel-plans"')).toBeGreaterThan(
+        html.indexOf('class="side-panel-board"'),
+      );
+      expect(html).not.toContain('title="Plans"');
       expect(html).not.toContain("board-card-workspace");
       // Only the selected workspace's tasks.
       expect(html).toContain('aria-label="#1 alpha task 1, Running"');
@@ -1994,8 +2001,8 @@ describe("desktop application shell", () => {
     expect(html).not.toContain(">CL<");
     expect(html).not.toContain("Opens in /tmp/demo");
     expect(html).not.toContain("Linked task");
-    // Activity is a sidebar link to Home, not a mode of its own.
-    expect(html.match(/>Activity</g)).toHaveLength(1);
+    // Threads is a sidebar link to Home, not a mode of its own.
+    expect(html.match(/>Threads</g)).toHaveLength(1);
   });
 
   test("gives cards no drag affordance and no extra tab stops", () => {

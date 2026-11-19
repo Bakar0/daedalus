@@ -1,3 +1,4 @@
+import { readMainMessages } from "./main-messages";
 import { createHash } from "node:crypto";
 import type { PartialReadModelSource } from "./read-model";
 import { join, resolve } from "node:path";
@@ -396,6 +397,7 @@ export async function createApplicationContext(
     agents,
     () => teamTransport,
     options.now,
+    (session) => readMainMessages(config, session),
   );
   const teamTransport = new OpenAsksTransport(rawTransport, (sessionId) =>
     asks.openLine(sessionId),

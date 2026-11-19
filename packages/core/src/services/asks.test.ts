@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import type { TmuxClient, TmuxLaunch } from "@daedalus/platform";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
+  claudeTranscriptPath,
   createApplicationContext,
   HOME_WORKSPACE_ID,
   type AgentSession,
@@ -218,7 +219,9 @@ describe("Activity asks", () => {
       await context.asks.answer(ask.id, { option: 0, note: "link both" });
       const sent = transport.to(lead);
       expect(sent).toHaveLength(1);
-      expect(sent[0]!.text).toContain(`[ask #${ask.id} answered by the user]`);
+      expect(sent[0]!.text).toContain(
+        `[thread #${ask.id} answered by the user]`,
+      );
       expect(sent[0]!.text).toContain("@quick has no ticket for zenity#28274.");
       expect(sent[0]!.text).toContain('Answer: Reuse CTEM-4330, "link both"');
       expect(await context.asks.flushSession(lead.id)).toBe(false);
@@ -353,7 +356,7 @@ describe("Activity asks", () => {
         title: "Second?",
       });
       expect(context.asks.openLine(keep.id)).toContain(
-        `Open asks: #${second.id} Second? (0m)`,
+        `Open threads: #${second.id} Second? (0m)`,
       );
       expect(context.asks.openLine(lead.id)).not.toContain("Second?");
       await context.agents.archive(lead.id, true);
@@ -370,7 +373,7 @@ describe("Activity asks", () => {
       await context.asks.answer(third.id, { note: "yes" });
       const last = transport.to(keep).at(-1)!.text;
       expect(last).toContain("answered by the user");
-      expect(last).toContain(`Open asks: #${second.id} Second?`);
+      expect(last).toContain(`Open threads: #${second.id} Second?`);
     });
   });
 
@@ -396,6 +399,381 @@ describe("Activity asks", () => {
         sessionId: next.id,
         state: "open",
       });
+    });
+  });
+
+  test("a thread hangs off the agent's last message in main; bump counts once", async () => {
+    await withHome(async ({ home, context }) => {
+      const lead = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "lead",
+      });
+      // No transcript yet: the thread opens without an anchor.
+      const { ask: bare } = await context.asks.create({
+        session: lead.id,
+        title: "Branch name?",
+      });
+      expect(bare.anchorId).toBeNull();
+
+      const line = (entry: object) => JSON.stringify(entry);
+      await Bun.write(
+        claudeTranscriptPath(join(home, "claude", "projects"), lead),
+        [
+          line({
+            type: "user",
+            uuid: "u-1",
+            timestamp: "2026-11-18T10:00:00.000Z",
+            message: { role: "user", content: "add retries to webhooks" },
+          }),
+          line({
+            type: "user",
+            uuid: "u-meta",
+            message: {
+              role: "user",
+              content: "<system-reminder>not typed</system-reminder>",
+            },
+          }),
+          line({
+            type: "assistant",
+            uuid: "a-1",
+            timestamp: "2026-11-18T10:00:05.000Z",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "Plan: backoff, then budget." }],
+            },
+          }),
+          line({
+            type: "assistant",
+            uuid: "a-tool",
+            message: {
+              role: "assistant",
+              content: [{ type: "tool_use", id: "t", name: "Bash", input: {} }],
+            },
+          }),
+          line({
+            type: "user",
+            uuid: "u-result",
+            message: {
+              role: "user",
+              content: [
+                { type: "tool_result", tool_use_id: "t", content: "ok" },
+              ],
+            },
+          }),
+          line({
+            type: "assistant",
+            uuid: "a-2",
+            timestamp: "2026-11-18T10:01:00.000Z",
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Asked about the retry budget in a thread.",
+                },
+              ],
+            },
+          }),
+          "{ half a line",
+        ].join("\n"),
+      );
+      const messages = await context.asks.mainMessages(lead.id);
+      expect(messages.map((message) => [message.id, message.role])).toEqual([
+        ["u-1", "user"],
+        ["a-1", "agent"],
+        ["a-2", "agent"],
+      ]);
+      const { ask } = await context.asks.create({
+        session: lead.id,
+        title: "Retry budget?",
+        options: ["3 tries", "5 tries"],
+      });
+      expect(ask.anchorId).toBe("a-2");
+      expect(ask.anchorText).toBe("Asked about the retry budget in a thread.");
+
+      const first = context.asks.bump(ask.id, lead.id);
+      expect(first.bumped).toBe(true);
+      expect(first.ask.bumpedAt).not.toBeNull();
+      expect(context.asks.bump(ask.id, lead.id).bumped).toBe(false);
+      // The user is notified again once, for the bump.
+      expect(context.asks.claimNew().map((item) => item.id)).toContain(ask.id);
+      expect(context.asks.claimNew().map((item) => item.id)).not.toContain(
+        ask.id,
+      );
+    });
+  });
+
+  test("a fork thread runs a read-only fork of the session and sends its reply to main", async () => {
+    await withHome(async ({ home, context, transport }) => {
+      const main = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "webhooks",
+      });
+      const projects = join(home, "claude", "projects");
+      const entry = (uuid: string, type: string, text: string) =>
+        JSON.stringify({
+          type,
+          uuid,
+          message: { role: type, content: [{ type: "text", text }] },
+        });
+      await Bun.write(
+        claudeTranscriptPath(projects, main),
+        [
+          entry("a-plan", "assistant", "Plan: backoff, then a budget."),
+          entry("a-last", "assistant", "Moving on to the dead-letter table."),
+        ].join("\n"),
+      );
+
+      const thread = await context.asks.openFork({
+        sessionId: main.id,
+        anchorId: "a-plan",
+      });
+      expect(thread.kind).toBe("fork");
+      expect(thread.anchorText).toBe("Plan: backoff, then a budget.");
+      const fork = await context.agents.get(thread.forkSessionId!);
+      expect(fork.workingDirectory).toBe(main.workingDirectory);
+      const args = fork.args.join(" ");
+      expect(args).toContain(`--resume ${main.providerSessionId ?? main.id}`);
+      expect(args).toContain("--fork-session");
+      expect(args).toContain("--permission-mode plan");
+      // A fork thread waits on nobody: not in the open line, not notified.
+      expect(context.asks.openLine(main.id)).toBeUndefined();
+      expect(context.asks.claimNew().map((ask) => ask.id)).not.toContain(
+        thread.id,
+      );
+
+      // Main goes on; before the fork's next turn it reads what is new, once.
+      expect(await context.asks.forkCatchUp(thread.forkSessionId!)).toBe(
+        undefined,
+      );
+      const later = new Date(Date.now() + 60_000).toISOString();
+      await Bun.write(
+        claudeTranscriptPath(projects, main),
+        [
+          entry("a-plan", "assistant", "Plan: backoff, then a budget."),
+          entry("a-last", "assistant", "Moving on to the dead-letter table."),
+          JSON.stringify({
+            type: "assistant",
+            uuid: "a-new",
+            timestamp: later,
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "Dead-letter table is in." }],
+            },
+          }),
+        ].join("\n"),
+      );
+      const caught = await context.asks.forkCatchUp(thread.forkSessionId!);
+      expect(caught).toContain("Dead-letter table is in.");
+      expect(caught).toContain("webhooks: ");
+      expect(await context.asks.forkCatchUp(thread.forkSessionId!)).toBe(
+        undefined,
+      );
+      // A session that is no thread's fork reads nothing.
+      expect(await context.asks.forkCatchUp(main.id)).toBe(undefined);
+
+      // The same message forked again is the same thread, not a second one.
+      const again = await context.asks.openFork({
+        sessionId: main.id,
+        anchorId: "a-plan",
+      });
+      expect(again.id).toBe(thread.id);
+
+      expect(await context.asks.forkDraft(thread.id)).toBe("");
+      await expect(context.asks.sendForkToMain(thread.id, " ")).rejects.toThrow(
+        "Write what to send",
+      );
+      await Bun.write(
+        claudeTranscriptPath(projects, fork),
+        entry("f-1", "assistant", "Keep custom backoff; the queue drops jobs."),
+      );
+      expect(await context.asks.forkDraft(thread.id)).toBe(
+        "Keep custom backoff; the queue drops jobs.",
+      );
+      // The user edits the draft before it goes.
+      await context.asks.sendForkToMain(
+        thread.id,
+        "Keep custom backoff; the queue drops jobs. Log each retry too.",
+      );
+      const sent = transport.to(main).at(-1)!;
+      expect(sent.text).toContain(`[thread #${thread.id}]`);
+      expect(sent.text).toContain("the queue drops jobs. Log each retry too.");
+      expect(sent.text).toContain("Plan: backoff, then a budget.");
+      expect(sent.text).toContain(`daedal thread show ${thread.id}`);
+
+      const closed = await context.asks.closeThread(thread.id);
+      expect(closed.state).toBe("closed");
+      expect((await context.agents.get(fork.id)).archivedAt).not.toBeNull();
+    });
+  });
+
+  test("a question's fork is part of the question and answers it", async () => {
+    await withHome(async ({ home, context }) => {
+      const main = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "webhooks",
+      });
+      await Bun.write(
+        claudeTranscriptPath(join(home, "claude", "projects"), main),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "a-ask",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Asked about the retry budget." }],
+          },
+        }),
+      );
+      const { ask } = await context.asks.create({
+        session: main.id,
+        title: "How many tries?",
+        options: ["3", "5"],
+      });
+      const forked = await context.asks.openFork({
+        sessionId: main.id,
+        anchorId: ask.anchorId,
+        threadId: ask.id,
+      });
+      expect(forked.id).toBe(ask.id);
+      expect(forked.kind).toBe("question");
+      expect(forked.forkSessionId).not.toBeNull();
+      // Forking it again opens the same fork.
+      const again = await context.asks.openFork({
+        sessionId: main.id,
+        anchorId: ask.anchorId,
+        threadId: ask.id,
+      });
+      expect(again.forkSessionId).toBe(forked.forkSessionId);
+
+      await context.asks.sendForkToMain(ask.id, "5 tries, and log each one.");
+      const answered = context.asks.get(ask.id);
+      expect(answered.state).toBe("answered");
+      expect(answered.note).toContain("5 tries, and log each one.");
+      expect(
+        (await context.agents.get(forked.forkSessionId!)).archivedAt,
+      ).not.toBeNull();
+    });
+  });
+
+  test("archiving a session archives its threads' forks", async () => {
+    await withHome(async ({ context }) => {
+      const main = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "webhooks",
+      });
+      const thread = await context.asks.openFork({ sessionId: main.id });
+      await context.agents.archive(main.id, true);
+      expect(context.asks.get(thread.id).state).toBe("closed");
+      const deadline = Date.now() + 5_000;
+      while (
+        !(await context.agents.get(thread.forkSessionId!)).archivedAt &&
+        Date.now() < deadline
+      )
+        await Bun.sleep(50);
+      expect(
+        (await context.agents.get(thread.forkSessionId!)).archivedAt,
+      ).not.toBeNull();
+    });
+  });
+
+  test("a fork keeps its own messages apart from main's, across a resolve and a reopen", async () => {
+    await withHome(async ({ home, context }) => {
+      const main = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "webhooks",
+      });
+      const projects = join(home, "claude", "projects");
+      const entry = (uuid: string, at: string, text: string) =>
+        JSON.stringify({
+          type: "assistant",
+          uuid,
+          timestamp: at,
+          message: { role: "assistant", content: [{ type: "text", text }] },
+        });
+      const before = new Date(Date.now() - 60_000).toISOString();
+      await Bun.write(
+        claudeTranscriptPath(projects, main),
+        entry("a-main", before, "Main's own reply."),
+      );
+      const thread = await context.asks.openFork({ sessionId: main.id });
+      const fork = await context.agents.get(thread.forkSessionId!);
+      // Claude's fork starts with main's conversation copied in.
+      await Bun.write(
+        claudeTranscriptPath(projects, fork),
+        entry("a-main", before, "Main's own reply."),
+      );
+      expect(await context.asks.forkDraft(thread.id)).toBe("");
+      await Bun.sleep(5);
+      const later = new Date().toISOString();
+      await Bun.write(
+        claudeTranscriptPath(projects, fork),
+        [
+          entry("a-main", before, "Main's own reply."),
+          entry("f-1", later, "The fork's answer."),
+        ].join("\n"),
+      );
+      expect(await context.asks.forkDraft(thread.id)).toBe(
+        "The fork's answer.",
+      );
+
+      await context.asks.closeThread(thread.id);
+      expect((await context.agents.get(fork.id)).archivedAt).not.toBeNull();
+      await Bun.sleep(5);
+      await context.asks.reopenThread(thread.id);
+      const back = await context.agents.get(fork.id);
+      expect(back.archivedAt).toBeNull();
+      // The restore moved the session's start; the fork's messages stay.
+      expect(Date.parse(back.startedAt)).toBeGreaterThan(Date.parse(later));
+      expect(
+        (await context.asks.forkConversation(thread.id)).map((m) => m.text),
+      ).toEqual(["The fork's answer."]);
+    });
+  });
+
+  test("a reopened question can be bumped again", async () => {
+    await withHome(async ({ context }) => {
+      const main = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "webhooks",
+      });
+      const { ask } = await context.asks.create({
+        session: main.id,
+        title: "Ship on Tuesday?",
+      });
+      await context.asks.bump(ask.id, main.id);
+      await context.asks.closeThread(ask.id);
+      await context.asks.flushSession(main.id);
+      await context.asks.reopenThread(ask.id);
+      expect(context.asks.get(ask.id).bumpedAt).toBeNull();
+    });
+  });
+
+  test("resolving a question ends it, and reopening tells its owner", async () => {
+    await withHome(async ({ context, transport }) => {
+      const main = await context.agents.spawn({
+        provider: "claude",
+        workspace: "checkout",
+        name: "webhooks",
+      });
+      const { ask } = await context.asks.create({
+        session: main.id,
+        title: "Ship on Tuesday?",
+      });
+      const closed = await context.asks.closeThread(ask.id);
+      expect(closed.state).toBe("dismissed");
+      // Told it ended, the owner is told it is open again.
+      await context.asks.flushSession(main.id);
+      const reopened = await context.asks.reopenThread(ask.id);
+      expect(reopened.state).toBe("open");
+      expect(transport.to(main).at(-1)!.text).toContain(
+        `[thread #${ask.id}] The user reopened`,
+      );
     });
   });
 });

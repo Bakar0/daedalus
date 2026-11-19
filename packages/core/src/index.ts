@@ -16,6 +16,7 @@ export * from "./services/account-homes";
 export * from "./services/accounts";
 export * from "./services/agents";
 export * from "./services/asks";
+export * from "./services/main-messages";
 export * from "./services/codex-sessions";
 export * from "./services/integrated-terminals";
 export * from "./services/cloud-launch";
