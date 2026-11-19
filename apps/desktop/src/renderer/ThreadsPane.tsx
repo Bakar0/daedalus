@@ -1027,8 +1027,7 @@ export function ThreadsPane({
           Threads
           {members.length > 0 && (
             <span className="threads-head-sub">
-              {" "}
-              · {session.name ?? "lead"} and {members.length} member
+              {session.name ?? "lead"} and {members.length} member
               {members.length === 1 ? "" : "s"}
             </span>
           )}
