@@ -11,7 +11,15 @@
  * `ThreadsHome` is every session's, at Home; opening one there opens its
  * session with the thread in the pane.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type React from "react";
 import type { ReactNode } from "react";
 import type {
@@ -127,6 +135,84 @@ function useThreads(
  * The message a thread hangs off, quoted, with one plain way to see it in
  * its conversation. The same in a card and in a fork.
  */
+/**
+ * What makes a thread's text clickable: a URL opens in the browser, and an
+ * `@handle` in a thread opens the session it names in that thread's team.
+ * Without a provider the text stays plain.
+ */
+export interface ThreadLinks {
+  openUrl: (url: string) => void;
+  /** The session `@handle` names, as seen from the thread owner's team. */
+  sessionForHandle: (ownerId: string, handle: string) => string | undefined;
+  openSession: (sessionId: string) => void;
+}
+
+export const ThreadLinksContext = createContext<ThreadLinks | null>(null);
+
+const LINK_PATTERN =
+  /(https?:\/\/[^\s<>"'`]+)|(^|[\s(])@([a-z0-9][a-z0-9-]*)/gi;
+
+/** Text with its URLs and team handles as links. */
+export function LinkedText({
+  text,
+  ownerId,
+}: {
+  text: string;
+  /** The session the text belongs to: its team names the handles. */
+  ownerId: string;
+}) {
+  const links = useContext(ThreadLinksContext);
+  if (!links) return <>{text}</>;
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(LINK_PATTERN)) {
+    const at = match.index ?? 0;
+    if (match[1]) {
+      // A sentence's closing punctuation is not part of the URL.
+      const url = match[1].replace(/[.,;:!?)\]]+$/, "");
+      parts.push(text.slice(last, at));
+      parts.push(
+        <a
+          className="threads-text-link"
+          href={url}
+          key={`${at}-url`}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            links.openUrl(url);
+          }}
+        >
+          {url}
+        </a>,
+      );
+      last = at + url.length;
+      continue;
+    }
+    const handle = match[3]!;
+    const target = links.sessionForHandle(ownerId, handle.toLowerCase());
+    if (!target) continue;
+    const start = at + match[2]!.length;
+    parts.push(text.slice(last, start));
+    parts.push(
+      <button
+        className="threads-text-link"
+        key={`${at}-handle`}
+        onClick={(event) => {
+          event.stopPropagation();
+          links.openSession(target);
+        }}
+        title={`Open @${handle}'s session`}
+        type="button"
+      >
+        @{handle}
+      </button>,
+    );
+    last = start + handle.length + 1;
+  }
+  parts.push(text.slice(last));
+  return <>{parts}</>;
+}
+
 function AnchorQuote({
   thread,
   label,
@@ -143,7 +229,9 @@ function AnchorQuote({
       <span className="threads-quote-label">
         {label} {owner}&apos;s message:
       </span>
-      <span className="threads-anchor-text">{thread.anchorText}</span>
+      <span className="threads-anchor-text">
+        <LinkedText ownerId={thread.sessionId} text={thread.anchorText} />
+      </span>
       <button
         className="threads-quote-go"
         onClick={() => onShow(thread.anchorId)}
@@ -538,12 +626,21 @@ function ThreadCard({
         </div>
       ) : (
         <div className="threads-term">
-          <div className="threads-line">● {thread.title}</div>
-          {thread.why && <div className="threads-line dim"> {thread.why}</div>}
+          <div className="threads-line">
+            ● <LinkedText ownerId={thread.sessionId} text={thread.title} />
+          </div>
+          {thread.why && (
+            <div className="threads-line dim">
+              {" "}
+              <LinkedText ownerId={thread.sessionId} text={thread.why} />
+            </div>
+          )}
           {thread.context && (
             <details className="threads-details">
               <summary>Details</summary>
-              <div className="threads-line dim">{thread.context}</div>
+              <div className="threads-line dim">
+                <LinkedText ownerId={thread.sessionId} text={thread.context} />
+              </div>
             </details>
           )}
           {open && thread.forkSessionId && (
@@ -586,7 +683,11 @@ function ThreadCard({
           )}
           {!open && (
             <>
-              {answer && <div className="threads-line you">&gt; {answer}</div>}
+              {answer && (
+                <div className="threads-line you">
+                  &gt; <LinkedText ownerId={thread.sessionId} text={answer} />
+                </div>
+              )}
               <div className="threads-line hint">
                 ⎿{" "}
                 {thread.state === "answered" && !thread.closedReason
@@ -1403,7 +1504,9 @@ function ForkView({
           thread={thread}
         />
         {question && (
-          <div className="threads-fork-question">● {thread.title}</div>
+          <div className="threads-fork-question">
+            ● <LinkedText ownerId={thread.sessionId} text={thread.title} />
+          </div>
         )}
       </div>
       {draft !== null && (

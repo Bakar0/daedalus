@@ -11818,6 +11818,19 @@ button.routine-tick:hover {
   padding: 10px 12px 4px;
   text-transform: uppercase;
 }
+.threads-text-link {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: none;
+  word-break: break-all;
+}
+.threads-text-link:hover {
+  text-decoration: underline;
+}
 .threads-group-toggle {
   background: none;
   border: 0;
