@@ -544,10 +544,11 @@ describe("Activity asks", () => {
         thread.id,
       );
 
-      // Main goes on; before the fork's next turn it reads what is new, once.
-      expect(await context.asks.forkCatchUp(thread.forkSessionId!)).toBe(
-        undefined,
-      );
+      // Every turn the fork is reminded what it is; main's news comes once.
+      const quiet = await context.asks.forkCatchUp(thread.forkSessionId!);
+      expect(quiet).toContain(`You are thread #${thread.id}`);
+      expect(quiet).toContain("For main:");
+      expect(quiet).not.toContain("went on");
       const later = new Date(Date.now() + 60_000).toISOString();
       await Bun.write(
         claudeTranscriptPath(projects, main),
@@ -568,9 +569,7 @@ describe("Activity asks", () => {
       const caught = await context.asks.forkCatchUp(thread.forkSessionId!);
       expect(caught).toContain("Dead-letter table is in.");
       expect(caught).toContain("webhooks: ");
-      expect(await context.asks.forkCatchUp(thread.forkSessionId!)).toBe(
-        undefined,
-      );
+      expect(await context.asks.forkCatchUp(thread.forkSessionId!)).toBe(quiet);
       // A session that is no thread's fork reads nothing.
       expect(await context.asks.forkCatchUp(main.id)).toBe(undefined);
 
@@ -591,6 +590,18 @@ describe("Activity asks", () => {
       );
       expect(await context.asks.forkDraft(thread.id)).toBe(
         "Keep custom backoff; the queue drops jobs.",
+      );
+      // A reply with a "For main:" part drafts only that part.
+      await Bun.write(
+        claudeTranscriptPath(projects, fork),
+        entry(
+          "f-2",
+          "assistant",
+          "The queue drops jobs under load.\n\nFor main:\nKeep custom backoff.",
+        ),
+      );
+      expect(await context.asks.forkDraft(thread.id)).toBe(
+        "Keep custom backoff.",
       );
       // The user edits the draft before it goes.
       await context.asks.sendForkToMain(

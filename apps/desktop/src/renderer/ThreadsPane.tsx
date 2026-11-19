@@ -1457,7 +1457,10 @@ function ForkView({
           type="button"
         >
           {question ? "Answer with what you worked out…" : "Send to main…"}
-          <span>starts from the fork&apos;s last reply; you edit it first</span>
+          <span>
+            starts from the fork&apos;s &quot;For main&quot; lines, or its last
+            reply; you edit it first
+          </span>
         </button>
       )}
       {sent && draft === null && (

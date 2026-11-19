@@ -403,6 +403,19 @@ export const DAEDALUS_STATUS_INSTRUCTIONS = `You are running inside Daedalus, wh
 - When you mention a pull request or issue, write its full URL (https://github.com/<owner>/<repo>/pull/<number>), not just \`#<number>\`. The terminal opens a URL on Cmd-click; a bare number opens nothing.
 - When work needs several sessions, you can lead a team: \`daedal agent spawn --team --message "<instructions>"\` adds a member and makes you its lead. The daedalus-orchestration skill says how to lead.`;
 
+/**
+ * What a thread's fork is told instead of the status instructions. A fork
+ * starts with main's whole conversation, so without this it believes it is
+ * main: in plan mode it writes a plan and asks to leave plan mode, which
+ * would make it writable in main's working directory.
+ */
+export const DAEDALUS_FORK_INSTRUCTIONS = `You are a thread in Daedalus: a read-only fork of a session (main), which the user opened on one message of main's conversation to talk something through beside it. Main keeps working and sees nothing of this conversation.
+- Talk it through with the user and answer in chat. Read files and run read-only commands as you need.
+- You run in plan mode only to stay read-only. Ignore its instructions to write a plan file or to present a plan for approval: never write plans, never offer to make changes, never ask to leave plan mode, and never change files or anything else. Changes are main's to make.
+- Do not run \`daedal thread\`, \`daedal attention\` or \`daedal agent\` commands: this conversation is not main.
+- Before a turn, main's new messages may arrive as context. Main is the source of truth: if it has moved past what this thread is about, say so.
+- When you and the user settle something main should do or know, end your reply with it under "For main:", in one to three lines. The user edits it and sends it to main with "Send to main".`;
+
 const CLAUDE_APPEND_PROMPT = "--append-system-prompt";
 
 /**
@@ -417,6 +430,7 @@ export async function daedalusInstructionArgs(
   config: DaedalusConfig,
   provider: string,
   existingArgs: readonly string[],
+  instructions: string = DAEDALUS_STATUS_INSTRUCTIONS,
 ): Promise<string[]> {
   if (provider === "claude") {
     if (
@@ -428,14 +442,10 @@ export async function daedalusInstructionArgs(
     const index = existingArgs.indexOf(CLAUDE_APPEND_PROMPT);
     if (index >= 0 && index + 1 < existingArgs.length) {
       const args = [...existingArgs];
-      args[index + 1] = `${args[index + 1]}\n\n${DAEDALUS_STATUS_INSTRUCTIONS}`;
+      args[index + 1] = `${args[index + 1]}\n\n${instructions}`;
       return args;
     }
-    return [
-      ...existingArgs,
-      CLAUDE_APPEND_PROMPT,
-      DAEDALUS_STATUS_INSTRUCTIONS,
-    ];
+    return [...existingArgs, CLAUDE_APPEND_PROMPT, instructions];
   }
   if (provider === "codex") {
     const own = await Bun.file(codexConfigPath(config))
@@ -446,7 +456,7 @@ export async function daedalusInstructionArgs(
       ...existingArgs,
       "-c",
       // A JSON string is a valid TOML basic string, escapes included.
-      `developer_instructions=${JSON.stringify(DAEDALUS_STATUS_INSTRUCTIONS)}`,
+      `developer_instructions=${JSON.stringify(instructions)}`,
     ];
   }
   return [...existingArgs];
@@ -930,7 +940,14 @@ class ConfiguredProvider implements AgentProvider {
       args.splice(
         0,
         args.length,
-        ...(await daedalusInstructionArgs(this.config, this.name, args)),
+        ...(await daedalusInstructionArgs(
+          this.config,
+          this.name,
+          args,
+          input.fork || input.threadFork
+            ? DAEDALUS_FORK_INSTRUCTIONS
+            : DAEDALUS_STATUS_INSTRUCTIONS,
+        )),
       );
     if (this.promptArgument && this.name === "claude" && this.config)
       args.splice(
@@ -946,6 +963,17 @@ class ConfiguredProvider implements AgentProvider {
             ...(input.fork || input.threadFork ? { forkCatchUp: true } : {}),
           },
         )),
+      );
+    // A Claude fork cannot ask to leave plan mode: accepting that dialog
+    // would make it writable in main's working directory.
+    if ((input.fork || input.threadFork) && this.name === "claude")
+      args.push(
+        "--disallowedTools",
+        // Plan mode's prompt has it write a plan file, then ask to build it.
+        "ExitPlanMode",
+        "Write",
+        "Edit",
+        "NotebookEdit",
       );
     if (input.resume) {
       const resumed = await this.resumeArgs(
