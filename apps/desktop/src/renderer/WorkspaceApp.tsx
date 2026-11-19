@@ -1,4 +1,9 @@
-import { ThreadsHome, ThreadsPane } from "./ThreadsPane";
+import {
+  ThreadLinksContext,
+  ThreadsHome,
+  ThreadsPane,
+  type ThreadLinks,
+} from "./ThreadsPane";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
@@ -7878,6 +7883,31 @@ export function WorkspaceApp({
   const sessionsById = new Map(
     allAgents.map((session) => [session.id, session]),
   );
+  // Links in thread text: URLs open in the browser, and `@handle` opens the
+  // session of that name in the thread owner's team (`@lead` its lead).
+  const threadLinks: ThreadLinks = {
+    openUrl: openExternalLink,
+    sessionForHandle: (ownerId, handle) => {
+      const owner = sessionsById.get(ownerId);
+      if (!owner) return undefined;
+      const teams = snapshot?.teams ?? [];
+      const team =
+        teams.find((one) => one.id === owner.teamId) ??
+        teams.find((one) => one.leadId === owner.id);
+      if (!team) return undefined;
+      if (handle === "lead") return team.leadId;
+      return allAgents.find(
+        (one) =>
+          one.teamId === team.id &&
+          !one.archivedAt &&
+          one.teamHandle?.toLowerCase() === handle,
+      )?.id;
+    },
+    openSession: (sessionId) => {
+      const target = sessionsById.get(sessionId);
+      if (target) showSession(target.id, target.workspaceId);
+    },
+  };
   const boardView = workspace ? (
     <BoardView
       accounts={snapshot?.settings.accounts}
@@ -8067,51 +8097,53 @@ export function WorkspaceApp({
           .map((one) => ({ id: one.id, name: sessionName(one) }))
       : [];
     return (
-      <ThreadsPane
-        client={client}
-        members={members}
-        onError={setError}
-        {...(!inTab && target
-          ? {
-              onOpenInTab: () =>
-                files.withEditor((handle) =>
-                  handle.openThreads(target.id, sessionName(target)),
-                ),
-              onOpenThreadInTab: (id: number) =>
-                files.withEditor((handle) =>
-                  handle.openThreads(target.id, sessionName(target), id),
-                ),
-            }
-          : {})}
-        {...(threadId === undefined ? {} : { startThreadId: threadId })}
-        openRequest={openRequest ?? null}
-        renderTerminal={(forkId) => {
-          const fork = sessionsById.get(forkId);
-          if (!fork) return null;
-          return (
-            <TerminalSurface
-              activity={activityById.get(fork.id)}
-              attention={attentionById.get(fork.id)}
-              fileLinks={fileLinksFrom([fork.workingDirectory])}
-              fitRevision={terminalFitRevision}
-              focused={false}
-              id={fork.id}
-              key={fork.id}
-              label={sessionName(fork)}
-              locationLabel={workspace?.name ?? ""}
-              onClearAttention={() => void clearAttention(fork.id)}
-              onCopy={copyTerminalText}
-              onFocused={() => undefined}
-              onOpenLink={openTerminalLink}
-              session={fork}
-              status={fork.status}
-              target="agent"
-              terminalEndpoint={terminalEndpoint}
-            />
-          );
-        }}
-        session={target}
-      />
+      <ThreadLinksContext.Provider value={threadLinks}>
+        <ThreadsPane
+          client={client}
+          members={members}
+          onError={setError}
+          {...(!inTab && target
+            ? {
+                onOpenInTab: () =>
+                  files.withEditor((handle) =>
+                    handle.openThreads(target.id, sessionName(target)),
+                  ),
+                onOpenThreadInTab: (id: number) =>
+                  files.withEditor((handle) =>
+                    handle.openThreads(target.id, sessionName(target), id),
+                  ),
+              }
+            : {})}
+          {...(threadId === undefined ? {} : { startThreadId: threadId })}
+          openRequest={openRequest ?? null}
+          renderTerminal={(forkId) => {
+            const fork = sessionsById.get(forkId);
+            if (!fork) return null;
+            return (
+              <TerminalSurface
+                activity={activityById.get(fork.id)}
+                attention={attentionById.get(fork.id)}
+                fileLinks={fileLinksFrom([fork.workingDirectory])}
+                fitRevision={terminalFitRevision}
+                focused={false}
+                id={fork.id}
+                key={fork.id}
+                label={sessionName(fork)}
+                locationLabel={workspace?.name ?? ""}
+                onClearAttention={() => void clearAttention(fork.id)}
+                onCopy={copyTerminalText}
+                onFocused={() => undefined}
+                onOpenLink={openTerminalLink}
+                session={fork}
+                status={fork.status}
+                target="agent"
+                terminalEndpoint={terminalEndpoint}
+              />
+            );
+          }}
+          session={target}
+        />
+      </ThreadLinksContext.Provider>
     );
   };
   // The session tab shows whichever session the left column has open.
@@ -9013,22 +9045,24 @@ export function WorkspaceApp({
             ) : atHome && homePage !== "files" ? (
               <div className="home-page">
                 {homePage === "activity" ? (
-                  <ThreadsHome
-                    client={client}
-                    onError={setError}
-                    onOpenThread={(thread, focus) => {
-                      const target = sessionsById.get(thread.sessionId);
-                      if (!target) return;
-                      showSession(target.id, target.workspaceId);
-                      setPanelTab("activity");
-                      if (workspacePanelCollapsed) toggleBoardDetailPanel();
-                      setThreadRequest({
-                        threadId: thread.id,
-                        focus,
-                        nonce: Date.now(),
-                      });
-                    }}
-                  />
+                  <ThreadLinksContext.Provider value={threadLinks}>
+                    <ThreadsHome
+                      client={client}
+                      onError={setError}
+                      onOpenThread={(thread, focus) => {
+                        const target = sessionsById.get(thread.sessionId);
+                        if (!target) return;
+                        showSession(target.id, target.workspaceId);
+                        setPanelTab("activity");
+                        if (workspacePanelCollapsed) toggleBoardDetailPanel();
+                        setThreadRequest({
+                          threadId: thread.id,
+                          focus,
+                          nonce: Date.now(),
+                        });
+                      }}
+                    />
+                  </ThreadLinksContext.Provider>
                 ) : homePage === "instructions" ? (
                   <InstructionsEditor client={client} onError={setError} />
                 ) : (

@@ -46,6 +46,22 @@ await withBrowser(
       "three open cards, one a member's, and resolved collapsed",
     );
     await browser.screenshot("threads-resolved-collapsed");
+    // A URL in a thread opens in the browser; a team handle opens its
+    // session; a handle that names no session stays text.
+    const linked = await browser.evaluate<string[]>(
+      "[...document.querySelectorAll('#thread-card-13 .threads-text-link')].map((link) => link.textContent)",
+    );
+    expect(
+      JSON.stringify(linked) ===
+        JSON.stringify(["https://example.com/runbook", "@tests"]),
+      `#13 links ${JSON.stringify(linked)}`,
+    );
+    await clickText(browser, "#thread-card-13 .threads-text-link", "https://");
+    await clickText(browser, "#thread-card-13 .threads-text-link", "@tests");
+    await browser.waitFor(
+      "window.requests.some((one) => one.openUrl === 'https://example.com/runbook') && window.requests.some((one) => one.openSession === 's-tests')",
+      "the URL opened and @tests' session shown",
+    );
     // A narrow panel never scrolls sideways: the header's names shrink, the
     // lead's line sits under the title, and the buttons stay on one line.
     const overflow = await browser.evaluate<string[]>(`(() => {

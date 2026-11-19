@@ -13,7 +13,12 @@ import type {
   MainMessageDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
-import { ThreadsHome, ThreadsPane } from "./ThreadsPane";
+import {
+  ThreadLinksContext,
+  ThreadsHome,
+  ThreadsPane,
+  type ThreadLinks,
+} from "./ThreadsPane";
 import "./styles.css";
 
 const style = document.createElement("style");
@@ -82,7 +87,8 @@ let asks: AskDto[] = [
     state: "open",
     createdAt: ago(11),
     anchorId: "a-4",
-    anchorText: "Dead-letter table is in. Asked where alerts should go.",
+    anchorText:
+      "Dead-letter table is in. Asked where alerts should go; runbook at https://example.com/runbook. @tests wrote the alert test, and @nobody is not a session.",
   },
   {
     ...base,
@@ -283,6 +289,14 @@ const client = {
   },
 } as unknown as DesktopClient;
 
+// Links in thread text: recorded, as the app would open them.
+const links: ThreadLinks = {
+  openUrl: (url) => window.requests.push({ openUrl: url }),
+  sessionForHandle: (_owner, handle) =>
+    handle === "tests" ? "s-tests" : handle === "lead" ? "s-lead" : undefined,
+  openSession: (sessionId) => window.requests.push({ openSession: sessionId }),
+};
+
 const query = new URLSearchParams(window.location.search);
 const home = query.has("home");
 // `?thread=<id>`: the pane as a thread's own tab, with that thread's fork.
@@ -317,25 +331,27 @@ else
             borderRight: "1px solid var(--line)",
           }}
         >
-          <ThreadsPane
-            client={client}
-            onError={(message) => console.error(message)}
-            renderTerminal={(id) => (
-              <div className="fake-terminal" data-session={id}>
-                <div>&gt; why not the queue&apos;s built-in retry?</div>
-                <div>
-                  ● The queue retries every 30s and drops the job after 3 tries,
-                  with no record. Keep custom backoff.
+          <ThreadLinksContext.Provider value={links}>
+            <ThreadsPane
+              client={client}
+              onError={(message) => console.error(message)}
+              renderTerminal={(id) => (
+                <div className="fake-terminal" data-session={id}>
+                  <div>&gt; why not the queue&apos;s built-in retry?</div>
+                  <div>
+                    ● The queue retries every 30s and drops the job after 3
+                    tries, with no record. Keep custom backoff.
+                  </div>
+                  <div style={{ color: "var(--muted)" }}>
+                    ⏸ plan mode on (shift+tab to cycle)
+                  </div>
                 </div>
-                <div style={{ color: "var(--muted)" }}>
-                  ⏸ plan mode on (shift+tab to cycle)
-                </div>
-              </div>
-            )}
-            members={[{ id: "s-tests", name: "tests" }]}
-            {...(tabThread === undefined ? {} : { startThreadId: tabThread })}
-            session={session}
-          />
+              )}
+              members={[{ id: "s-tests", name: "tests" }]}
+              {...(tabThread === undefined ? {} : { startThreadId: tabThread })}
+              session={session}
+            />
+          </ThreadLinksContext.Provider>
         </div>
       </div>
     </StrictMode>,
