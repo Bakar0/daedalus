@@ -107,6 +107,7 @@ import { WorkflowsEditor } from "./WorkflowsEditor";
 import { InstructionsEditor } from "./InstructionsEditor";
 import { PlansPage, PlansPane, usePlanList } from "./PlansPane";
 import {
+  handleSession,
   paneAskCount,
   THREADS_ICON_PATH,
   useOpenAskCounts,
@@ -7887,22 +7888,13 @@ export function WorkspaceApp({
   // session of that name in the thread owner's team (`@lead` its lead).
   const threadLinks: ThreadLinks = {
     openUrl: openExternalLink,
-    sessionForHandle: (ownerId, handle) => {
-      const owner = sessionsById.get(ownerId);
-      if (!owner) return undefined;
-      const teams = snapshot?.teams ?? [];
-      const team =
-        teams.find((one) => one.id === owner.teamId) ??
-        teams.find((one) => one.leadId === owner.id);
-      if (!team) return undefined;
-      if (handle === "lead") return team.leadId;
-      return allAgents.find(
-        (one) =>
-          one.teamId === team.id &&
-          !one.archivedAt &&
-          one.teamHandle?.toLowerCase() === handle,
-      )?.id;
-    },
+    sessionForHandle: (ownerId, handle) =>
+      handleSession(
+        ownerId,
+        handle,
+        snapshot?.teams ?? [],
+        allAgents.filter((one) => !one.archivedAt),
+      ),
     openSession: (sessionId) => {
       const target = sessionsById.get(sessionId);
       if (target) showSession(target.id, target.workspaceId);
