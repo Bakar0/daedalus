@@ -161,3 +161,28 @@ test("thread commands through the CLI; old ones fail with exit 2 and write nothi
     expect(unknown.stderr).toContain("Unknown thread command");
   });
 });
+
+test("an old 'thread start' names threads on the same subject and how to write in one", () => {
+  const text = oldThreadCommand(
+    [
+      "start",
+      "How long should the docs site cache images?",
+      "--option",
+      "1 day",
+      "--option",
+      "7 days",
+    ],
+    (message) =>
+      message.includes("cache")
+        ? [{ number: 25, title: "What cache TTL should the docs site use?" }]
+        : [],
+  )!;
+  expect(text).toContain("These threads may be about the same thing:");
+  expect(text).toContain("  #25 What cache TTL should the docs site use?");
+  expect(text).toContain(
+    '  daedal thread say 25 "How long should the docs site cache images?" --option "1 day" --option "7 days"',
+  );
+  expect(text).toContain(
+    '  daedal thread new "How long should the docs site cache images?" --option "1 day" --option "7 days"',
+  );
+});

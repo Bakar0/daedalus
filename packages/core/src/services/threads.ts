@@ -344,7 +344,7 @@ export class ThreadService {
    * "and") would match nearly every thread, so they are left out here;
    * `find` keeps them, since the agent chose them.
    */
-  private related(session: AgentSession, text: string): ThreadView[] {
+  related(session: AgentSession, text: string): ThreadView[] {
     const words = text
       .split(/\W+/)
       .filter((word) => word.length >= 4)

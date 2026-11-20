@@ -87,7 +87,11 @@ const number = (text: string | undefined, usage: string): number => {
  * writes nothing, and prints the command to run instead, built from the
  * caller's own arguments.
  */
-export function oldThreadCommand(args: string[]): string | undefined {
+export function oldThreadCommand(
+  args: string[],
+  /** Threads on the same subject, for an old command that opened one. */
+  related: (message: string) => { number: number; title: string }[] = () => [],
+): string | undefined {
   const [action, ...rest] = args;
   const flags = new Set(rest.filter((item) => item.startsWith("--")));
   const old =
@@ -132,9 +136,11 @@ export function oldThreadCommand(args: string[]): string | undefined {
     ...(session ? ["--session", session] : []),
   ];
   let instead: string[];
+  let same: { number: number; title: string }[] = [];
   if (action === "start" || action === "new") {
     const message = [positionals.join(" "), why].filter(Boolean).join(" ");
     instead = ["new", message || "<message>", ...tail];
+    if (message) same = related(message);
   } else if (action === "say") {
     const [n, ...text] = positionals;
     const message = [text.join(" "), why].filter(Boolean).join(" ");
@@ -150,7 +156,15 @@ export function oldThreadCommand(args: string[]): string | undefined {
   }
   return [
     `Daedalus ${MESSAGING_CHANGED_IN} changed thread commands; your instructions are older.`,
-    "Nothing was written. Run instead:",
+    ...(same.length
+      ? [
+          "Nothing was written. These threads may be about the same thing:",
+          ...same.map((item) => `  #${item.number} ${item.title}`),
+          "If one is, write in it instead of opening another:",
+          `  daedal thread ${["say", String(same[0]!.number), instead[1]!, ...tail.filter((word, index, all) => word === "--option" || all[index - 1] === "--option")].map(shellWord).join(" ")}`,
+          "Otherwise run:",
+        ]
+      : ["Nothing was written. Run instead:"]),
     `  daedal thread ${instead.map(shellWord).join(" ")}`,
     "Run 'daedal thread --help' for the current commands.",
   ].join("\n");
@@ -244,8 +258,21 @@ export async function threadCommand(
     console.log(threadHelp);
     return 0;
   }
-  const old = oldThreadCommand(args);
-  if (old) throw new DaedalusError("VALIDATION", old);
+  if (oldThreadCommand(args)) {
+    // An old command that opened a thread is pointed at threads the asking
+    // session already has on the same subject.
+    const at = args.indexOf("--session");
+    const asker =
+      at >= 0
+        ? context.repositories.findAgent(args[at + 1] ?? "")
+        : await caller().catch(() => undefined);
+    throw new DaedalusError(
+      "VALIDATION",
+      oldThreadCommand(args, (message) =>
+        asker ? context.threads.related(asker, message) : [],
+      )!,
+    );
+  }
   if (!THREAD_ACTIONS.includes(first))
     throw new DaedalusError(
       "VALIDATION",
