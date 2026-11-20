@@ -16,6 +16,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -519,6 +520,14 @@ function ThreadCard({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
+  // Fits its text, as the terminal's prompt does: it grows with each line
+  // and shrinks back when the text goes, sent or deleted.
+  useLayoutEffect(() => {
+    const box = input.current;
+    if (!box) return;
+    box.style.height = "auto";
+    box.style.height = `${box.scrollHeight}px`;
+  }, [draft]);
 
   const markRead = () => {
     if (thread.unread)
@@ -743,12 +752,7 @@ function ThreadCard({
                 autoComplete="off"
                 autoCorrect="off"
                 disabled={sending}
-                onChange={(event) => {
-                  setDraft(event.target.value);
-                  // Grows with each line, as the terminal's prompt does.
-                  event.target.style.height = "auto";
-                  event.target.style.height = `${event.target.scrollHeight}px`;
-                }}
+                onChange={(event) => setDraft(event.target.value)}
                 ref={input}
                 rows={1}
                 spellCheck={false}

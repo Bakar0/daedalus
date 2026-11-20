@@ -262,6 +262,29 @@ await withBrowser(
       `the typed reply sent ${JSON.stringify(typed)}`,
     );
 
+    // The prompt grows with each line and shrinks back once it is sent.
+    const prompt = "#thread-card-13 .threads-prompt textarea";
+    const height = () =>
+      browser.evaluate<number>(
+        `document.querySelector(${JSON.stringify(prompt)}).offsetHeight`,
+      );
+    const oneLine = await height();
+    await type(browser, prompt, "first line\nsecond line\nthird line");
+    const threeLines = await height();
+    expect(
+      threeLines > oneLine,
+      `the prompt grew with its lines (${oneLine}px -> ${threeLines}px)`,
+    );
+    await key(browser, prompt, "Enter");
+    await browser.waitFor(
+      "window.requests.filter((one) => 'threadSay' in one).length === 3",
+      "the three-line reply",
+    );
+    await browser.waitFor(
+      `document.querySelector(${JSON.stringify(prompt)}).value === '' && document.querySelector(${JSON.stringify(prompt)}).offsetHeight === ${oneLine}`,
+      `the prompt back to one line after sending (it is ${await height()}px)`,
+    );
+
     // Resolve ends a thread.
     await clickText(browser, "#thread-card-14 .threads-quiet", "Resolve");
     await browser.waitFor(
