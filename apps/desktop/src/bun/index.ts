@@ -994,26 +994,35 @@ setInterval(async () => {
     }
     // Hand-backs held while a lead had one within the minute go once the
     // minute is up. Without the app they wait for the lead's next delivery.
-    for (const delivery of await context.teams.flushDue().catch(() => []))
-      await context.logger.write("info", "teams", {
+    for (const delivery of await context.channels.flushDue().catch(() => []))
+      await context.logger.write("info", "channels", {
         handBack: delivery.sessionId,
         delivered: delivery.delivered,
         error: delivery.error,
       });
-    // Answers and dismissals a session could not take yet go again.
-    await context.asks.flushDue().catch(() => []);
-    // Each new ask notifies the user once, whichever process asked it.
-    for (const ask of context.asks.claimNew())
+    // What the user wrote in threads that a session could not take yet goes
+    // again.
+    await context.threads.flushDue().catch(() => []);
+    // What an agent writes in a thread notifies the user once, whichever
+    // process wrote it.
+    for (const thread of context.threads.claimNew()) {
+      const latest = thread.messages.at(-1);
       await context.notifications
         .notify({
-          sessionId: ask.sessionId,
-          workspaceId: ask.workspaceId,
+          sessionId: thread.ownerSessionId,
+          workspaceId: thread.workspaceId,
           level: "info",
-          title: `${ask.sessionName ?? "A session"} asks you`,
-          subtitle: ask.workspaceName ?? undefined,
-          body: ask.title,
+          title: thread.status.blocking
+            ? `${thread.ownerName ?? "A session"} is blocked on you`
+            : `${thread.ownerName ?? "A session"} in thread #${thread.number}`,
+          subtitle: thread.workspaceName ?? undefined,
+          body:
+            latest?.kind === "message"
+              ? latest.body.split("\n")[0]!
+              : thread.title,
         })
         .catch(() => undefined);
+    }
     // Routines on the Routines page start headless runs; the clock is this
     // tick, like the rest.
     for (const run of await context.routines.tick().catch(async (error) => {

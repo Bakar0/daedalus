@@ -24,7 +24,7 @@ import {
   type AgentActivityState,
   type AgentSession,
   type ApplicationContext,
-  type AskView,
+  type ThreadView,
   type CloudOverview,
   type IntegratedTerminal,
   type PendingNotification,
@@ -35,7 +35,7 @@ import {
   type SearchRoot,
   type SessionAbility,
   type Team,
-  type TeamMessage,
+  type Message,
   USER_HANDLE,
   type SessionAttention,
   type Task,
@@ -58,7 +58,7 @@ import type {
   AppUpdateDto,
   QuitChoice,
   AgentSessionDto,
-  AskDto,
+  ThreadDto,
   CloudMcpServersDto,
   CloudStateDto,
   DesktopRpcSchema,
@@ -72,7 +72,7 @@ import type {
   SessionAbilityDto,
   TeamDetailDto,
   TeamDto,
-  TeamMessageDto,
+  ChannelMessageDto,
   RpcResult,
   SessionAttentionDto,
   TaskDto,
@@ -172,34 +172,44 @@ const workflowRunDto = (run: WorkflowRun): WorkflowRunDto => ({
   steps: run.steps.map(({ waitingSessionId: _, ...step }) => step),
   groups: run.groups.map(({ lastRound: _, ...group }) => group),
 });
-const askDto = (ask: AskView): AskDto => ({
-  id: ask.id,
-  workspaceId: ask.workspaceId,
-  workspaceName: ask.workspaceName,
-  sessionId: ask.sessionId,
-  sessionName: ask.sessionName,
-  title: ask.title,
-  context: ask.context,
-  why: ask.why,
-  options: [...ask.options],
-  recommended: ask.recommended,
-  planPath: ask.planPath,
-  taskKey: ask.taskKey,
-  state: ask.state,
-  answer: ask.answer,
-  note: ask.note,
-  closedReason: ask.closedReason,
-  createdAt: ask.createdAt,
-  closedAt: ask.closedAt,
-  undoable:
-    (ask.state === "answered" || ask.state === "dismissed") &&
-    !ask.noticeDeliveredAt,
-  snoozedUntil: ask.snoozedUntil,
-  anchorId: ask.anchorId,
-  anchorText: ask.anchorText,
-  bumpedAt: ask.bumpedAt,
-  kind: ask.kind,
-  forkSessionId: ask.forkSessionId,
+const threadDto = (thread: ThreadView): ThreadDto => ({
+  id: thread.number,
+  workspaceId: thread.workspaceId,
+  workspaceName: thread.workspaceName,
+  sessionId: thread.ownerSessionId,
+  sessionName: thread.ownerName,
+  title: thread.title,
+  planPath: thread.planPath,
+  taskKey: thread.taskKey,
+  anchorId: thread.anchorId,
+  anchorText: thread.anchorText,
+  forkSessionId: thread.forkSessionId,
+  blockedAt: thread.blockedAt,
+  snoozedUntil: thread.snoozedUntil,
+  resolvedAt: thread.resolvedAt,
+  resolvedBy: thread.resolvedBy,
+  createdAt: thread.createdAt,
+  updatedAt: thread.updatedAt,
+  // Channel notes never land in a thread.
+  messages: thread.messages.flatMap((message) =>
+    message.kind === "message" || message.kind === "notice"
+      ? [
+          {
+            id: message.id,
+            author: message.author,
+            kind: message.kind,
+            body: message.body,
+            details: message.details,
+            options: [...message.options],
+            picked: message.picked,
+            createdAt: message.createdAt,
+          },
+        ]
+      : [],
+  ),
+  unread: thread.status.unread,
+  turn: thread.status.turn,
+  blocking: thread.status.blocking,
 });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
@@ -399,10 +409,10 @@ const teamDto = (team: Team): TeamDto => ({
   goal: team.goal,
 });
 
-const teamMessageDto = (
-  message: TeamMessage,
+const channelMessageDto = (
+  message: Message,
   cloud: string | undefined,
-): TeamMessageDto => ({
+): ChannelMessageDto => ({
   id: message.id,
   author: message.author,
   ...(cloud ? { cloud } : {}),
@@ -418,9 +428,9 @@ async function teamDetail(
   context: ApplicationContext,
   teamId: string,
 ): Promise<TeamDetailDto> {
-  await context.teams.flush(teamId);
-  const { team, members } = context.teams.status(teamId);
-  const { messages } = context.teams.chat(teamId, USER_HANDLE, {
+  await context.channels.flush(teamId);
+  const { team, members } = context.channels.status(teamId);
+  const { messages } = context.channels.read(teamId, USER_HANDLE, {
     all: true,
     limit: TEAM_PANEL_MESSAGES,
   });
@@ -437,8 +447,9 @@ async function teamDetail(
       undelivered: member.undelivered,
       lastError: member.lastError,
     })),
+    channel: context.channels.name(team),
     messages: messages.map((message) =>
-      teamMessageDto(message, cloud(message.author)),
+      channelMessageDto(message, cloud(message.author)),
     ),
   };
 }
@@ -795,66 +806,62 @@ export function createDesktopRequestHandlers(
         return session ? agentDto(session) : null;
       }),
     homeOpen: () => mutate(async () => workspaceDto(await context.home.open())),
-    askList: ({ plan }) =>
+    threadList: ({ plan }) =>
       result(async () => {
-        // Reading is not a change; only asks it closed are announced.
-        if ((await context.asks.sweepPlans()).length) onMutation();
-        const asks = context.asks.list();
-        if (!plan) return asks.map(askDto);
+        // Reading is not a change; only threads it resolved are announced.
+        if ((await context.threads.sweepPlans()).length) onMutation();
+        const threads = context.threads.list();
+        if (!plan) return threads.map(threadDto);
         const file = await context.plans
           .find({ workspace: plan.workspaceId }, plan.path)
           .catch(() => undefined);
         return file
-          ? asks.filter((ask) => ask.planPath === file.absolutePath).map(askDto)
+          ? threads
+              .filter((thread) => thread.planPath === file.absolutePath)
+              .map(threadDto)
           : [];
       }),
-    askAnswer: ({ id, option, note }) =>
+    threadSay: ({ id, body, option }) =>
       mutate(async () =>
-        askDto(
-          context.asks.get(
-            (await context.asks.answer(id, { option, note })).id,
-          ),
+        threadDto(
+          (
+            await context.threads.say(id, {
+              as: "user",
+              body: body ?? "",
+              picked: option,
+            })
+          ).thread,
         ),
       ),
-    askDismiss: ({ id }) =>
+    threadRead: ({ id }) =>
+      mutate(() => threadDto(context.threads.markRead(id))),
+    threadSnooze: ({ id, until }) =>
+      mutate(() => threadDto(context.threads.snooze(id, until))),
+    threadResolve: ({ id }) =>
       mutate(async () =>
-        askDto(context.asks.get((await context.asks.dismiss(id)).id)),
+        threadDto(await context.threads.resolve(id, { by: "user" })),
       ),
-    askSnooze: ({ id, until }) =>
-      mutate(() => askDto(context.asks.get(context.asks.snooze(id, until).id))),
-    askReopen: ({ id }) =>
-      mutate(() => askDto(context.asks.get(context.asks.reopen(id).id))),
+    threadReopen: ({ id }) =>
+      mutate(async () => threadDto(await context.threads.reopen(id))),
     threadOpenFork: ({ sessionId, anchorId, threadId }) =>
       mutate(async () =>
-        askDto(
-          context.asks.get(
-            (
-              await context.asks.openFork({
-                sessionId,
-                anchorId,
-                ...(threadId === undefined ? {} : { threadId }),
-              })
-            ).id,
-          ),
+        threadDto(
+          await context.threads.openFork({
+            sessionId,
+            anchorId,
+            ...(threadId === undefined ? {} : { threadNumber: threadId }),
+          }),
         ),
       ),
     threadForkDraft: ({ id }) =>
-      result(async () => ({ text: await context.asks.forkDraft(id) })),
+      result(async () => ({ text: await context.threads.forkDraft(id) })),
     threadSendToMain: ({ id, text }) =>
       mutate(async () => ({
-        text: await context.asks.sendForkToMain(id, text),
+        text: await context.threads.sendForkToMain(id, text),
       })),
-    threadReopen: ({ id }) =>
-      mutate(async () =>
-        askDto(context.asks.get((await context.asks.reopenThread(id)).id)),
-      ),
-    threadClose: ({ id }) =>
-      mutate(async () =>
-        askDto(context.asks.get((await context.asks.closeThread(id)).id)),
-      ),
     sessionMessages: ({ sessionId }) =>
-      result(() => context.asks.mainMessages(sessionId)),
-    askPlan: ({ path }) =>
+      result(() => context.threads.mainMessages(sessionId)),
+    threadPlan: ({ path }) =>
       result(async () => {
         try {
           const file = await context.plans.find(undefined, path);
@@ -877,16 +884,16 @@ export function createDesktopRequestHandlers(
         }
       }),
     teamDetail: ({ teamId }) => result(() => teamDetail(context, teamId)),
-    teamSay: ({ teamId, body }) =>
+    channelSay: ({ teamId, body }) =>
       mutate(async () => {
-        const said = await context.teams.say({
+        const said = await context.channels.say({
           team: teamId,
           author: USER_HANDLE,
           body,
         });
         return {
           // The user's own post, never a cloud session's.
-          message: teamMessageDto(said.message, undefined),
+          message: channelMessageDto(said.message, undefined),
           warnings: said.warnings,
         };
       }),

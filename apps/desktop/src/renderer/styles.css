@@ -7107,7 +7107,7 @@ button.routine-tick:hover {
   font-weight: 500;
   padding: 1px 7px;
 }
-.team-chat {
+.team-channel {
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -11885,6 +11885,16 @@ button.routine-tick:hover {
 .threads-row.fork .threads-dot {
   background: #3fb2a5;
 }
+/* With the agent: the user wrote last; quiet until it replies. */
+.threads-row.replied .threads-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+/* Something new from the agent the user has not read. */
+.threads-row.unread .threads-title,
+.threads-card.unread .threads-owner {
+  font-weight: 700;
+}
 .threads-row.ended .threads-dot,
 .threads-row.snoozed .threads-dot {
   background: transparent;
@@ -12227,6 +12237,10 @@ button.routine-tick:hover {
 .threads-state.fork {
   background: color-mix(in srgb, #3fb2a5 16%, transparent);
   color: #3fb2a5;
+}
+.threads-state.replied {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--muted);
 }
 .threads-scroll {
   background: var(--threads-feed-bg);

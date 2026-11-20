@@ -30,8 +30,9 @@ import { routineCommand, routineHelp } from "./routines";
 import { sessionCommand, sessionHelp } from "./sessions";
 import { workflowCommand, workflowHelp } from "./workflows";
 import { planCommand, planHelp } from "./plans";
-import { threadAlias, threadCommand, threadHelp } from "./asks";
+import { oldThreadAlias, threadCommand, threadHelp } from "./thread";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
+import { channelCommand, channelHelp } from "./channel";
 import { cloudCommand, cloudHelp } from "./cloud";
 import { workspaceArchivedOrExplain } from "./archive";
 import {
@@ -101,10 +102,11 @@ Usage:
   daedal account <list|status|add|rename|remove|login|logout> ... [--json]
   daedal session <rename|pin|unpin|color|rebirth-at|abilities|grant|revoke> ... [--json]
   daedal routine <add|list|get|edit|pause|resume|run|remove|runs|log|when> ... [--json]
-  daedal team <say|chat|list|tree|goal|pause|resume> ... [--json]
+  daedal team <list|tree|goal|pause|resume|move> ... [--json]
+  daedal channel <say|read|find|list> ... [--json]
   daedal workflow <list|show|start|step|approve|status> ... [--json]
   daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
-  daedal thread <start|list|show|update|bump|resolve|close> ... [--json]
+  daedal thread <new|say|read|find|list|bump|resolve> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
   daedal cloud <login|status|logout|create|list|get|sleep|wake|delete> ... [--json]
@@ -121,10 +123,10 @@ const commandHelp: Record<string, string> = {
   session: sessionHelp,
   routine: routineHelp,
   team: teamHelp,
+  channel: channelHelp,
   workflow: workflowHelp,
   plan: planHelp,
   thread: threadHelp,
-  activity: threadHelp,
   account: accountHelp,
   secret: secretHelp,
   keys: keysHelp,
@@ -255,7 +257,7 @@ already open, so the agent spends nothing choosing one.
 'agent spawn --team' adds a member to a team: with no value, the team of the
 session running it, which becomes a lead if it is not one yet; with a lead,
 that lead's team (made now if the session leads none), and the lead is told
-in the team chat. Any session can lead, a member included, within 3 levels
+in the team's channel. Any session can lead, a member included, within 3 levels
 and 5 members a lead. The member runs in the lead's workspace unless
 --workspace names another, on the lead's provider unless --provider picks
 the other; a team can mix Claude and Codex. 'agent stop' and 'agent archive'
@@ -2495,10 +2497,11 @@ export async function runCli(
     }
   }
   const json = inputArgs.includes("--json");
-  // `daedal activity` and `daedal ask` are the old names of `daedal thread`.
-  const args = threadAlias(
-    inputArgs.filter((argument) => argument !== "--json"),
-  );
+  const args = inputArgs.filter((argument) => argument !== "--json");
+  // `daedal activity` and `daedal ask`, the old names of `daedal thread`,
+  // tell a session still taught them what to run instead.
+  const oldAlias = oldThreadAlias(args);
+  if (oldAlias) throw new DaedalusError("VALIDATION", oldAlias);
   // Hook sinks: they read their payload, hand it to core and return 0 on
   // every path, so a broken control plane never reaches the agent's session.
   if (args[0] === "agent" && args[1] === "telemetry") {
@@ -2545,7 +2548,7 @@ export async function runCli(
           : {}),
       });
       try {
-        const text = await context.asks.forkCatchUp(fork);
+        const text = await context.threads.forkCatchUp(fork);
         if (text) console.log(text);
       } finally {
         context.close();
@@ -2592,6 +2595,7 @@ export async function runCli(
       "session",
       "routine",
       "team",
+      "channel",
       "secret",
       "keys",
       "cloud",
@@ -2630,6 +2634,8 @@ export async function runCli(
       return await sessionCommand(context, args.slice(1), json);
     if (args[0] === "team")
       return await teamCommand(context, args.slice(1), json);
+    if (args[0] === "channel")
+      return await channelCommand(context, args.slice(1), json);
     if (args[0] === "secret")
       return await secretCommand(context, args.slice(1), json);
     if (args[0] === "keys")
@@ -2653,7 +2659,7 @@ export async function runCli(
     return await agentCommand(context, args.slice(1), json, options);
   } finally {
     // Archiving a session archives its threads' forks in the background.
-    await context.asks.settled();
+    await context.threads.settled();
     context.close();
   }
 }

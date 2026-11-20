@@ -35,6 +35,7 @@ const detail: TeamDetailDto = {
       lastError: "no inbox yet",
     },
   ],
+  channel: "checkout-api",
   messages: [
     {
       id: 1,
@@ -70,9 +71,10 @@ const view = (overrides: Partial<Parameters<typeof TeamView>[0]> = {}) =>
   );
 
 describe("the Team tab", () => {
-  test("shows the goal, members with their state, and the chat", () => {
+  test("shows the goal, members with their state, and the channel", () => {
     const html = view();
     expect(html).toContain("Checkout API");
+    expect(html).toContain("#checkout-api · team channel");
     expect(html).toContain("Lead and 1 member · 2 messages");
     expect(html).toContain("Ship v2");
     expect(html).toContain("A team is a lead session");

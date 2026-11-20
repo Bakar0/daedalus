@@ -236,6 +236,16 @@ export class ConversationRepository {
     return row ? threadFromRow(row) : undefined;
   }
 
+  /** A thread by its conversation id. */
+  threadById(id: number): Thread | undefined {
+    const row = this.database
+      .query<ConversationRow, [number]>(
+        "SELECT * FROM conversations WHERE kind = 'thread' AND id = ?",
+      )
+      .get(id);
+    return row ? threadFromRow(row) : undefined;
+  }
+
   threadByFork(forkSessionId: string): Thread | undefined {
     const row = this.database
       .query<ConversationRow, [string]>(
@@ -330,12 +340,15 @@ export class ConversationRepository {
       .map((row) => row.fork_session_id);
   }
 
-  /** A session that continues another one takes over its open threads. */
+  /**
+   * A session that continues another one takes over its threads, with
+   * whatever waits in them to be brought.
+   */
   moveThreads(fromSessionId: string, toSessionId: string): void {
     this.database
       .query(
         `UPDATE conversations SET owner_session_id = ?
-         WHERE kind = 'thread' AND owner_session_id = ? AND resolved_at IS NULL`,
+         WHERE kind = 'thread' AND owner_session_id = ?`,
       )
       .run(toSessionId, fromSessionId);
   }
@@ -404,6 +417,8 @@ export class ConversationRepository {
     filter: {
       kind: ConversationKind;
       workspaceId?: string;
+      /** Only these conversations. */
+      conversationIds?: readonly number[];
       since?: string;
       limit: number;
     },
@@ -421,6 +436,13 @@ export class ConversationRepository {
     if (filter.workspaceId) {
       where.push("conversations.workspace_id = ?");
       values.push(filter.workspaceId);
+    }
+    if (filter.conversationIds) {
+      if (!filter.conversationIds.length) return [];
+      where.push(
+        `conversations.id IN (${filter.conversationIds.map(() => "?").join(", ")})`,
+      );
+      values.push(...filter.conversationIds);
     }
     if (filter.since) {
       where.push("messages.created_at >= ?");

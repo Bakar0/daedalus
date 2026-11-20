@@ -156,17 +156,26 @@ describe("cloud daedal calls", () => {
     ).toMatchObject({ allowed: false });
   });
 
-  test("keeps team commands to the session's own team, never as the user", () => {
-    expect(decide(["team", "say", "@lead", "done"])).toMatchObject({
+  test("keeps channel commands to the session's own channels, never as the user", () => {
+    expect(decide(["channel", "say", "@lead", "done"])).toMatchObject({
       allowed: true,
       // Marked in its header when shown, from the author's session.
-      argv: ["team", "say", "@lead", "done"],
+      argv: ["channel", "say", "@lead", "done"],
     });
-    expect(decide(["team", "say", "hi", "--user"])).toMatchObject({
+    expect(decide(["channel", "say", "hi", "--user"])).toMatchObject({
       allowed: false,
     });
-    expect(decide(["team", "chat", "--team", "other"])).toMatchObject({
+    expect(decide(["channel", "read", "--team", "other"])).toMatchObject({
       allowed: false,
+    });
+    expect(
+      decide(["channel", "find", "deploy", "--since", "2d"]),
+    ).toMatchObject({
+      allowed: true,
+    });
+    // The old commands pass, so the session reads what to run instead.
+    expect(decide(["team", "say", "@lead", "done"])).toMatchObject({
+      allowed: true,
     });
   });
 
@@ -243,7 +252,7 @@ describe("cloud daedal calls", () => {
     expect(
       decide(["task", "update", "7", "--description-file", "-"]),
     ).toMatchObject({ stdinMark: MARK });
-    expect(decide(["team", "chat"])).not.toHaveProperty("stdinMark");
+    expect(decide(["channel", "read"])).not.toHaveProperty("stdinMark");
   });
 
   test("marks every line, so no line reads as unmarked text (N-1)", () => {
@@ -277,7 +286,7 @@ describe("cloud daedal calls", () => {
       decide(["task", "update", "7", "--title", "--workspace"]),
     ).toMatchObject({ allowed: false });
     expect(decide(["attention", "-x"])).toMatchObject({ allowed: false });
-    expect(decide(["team", "say", "--", "--user"])).toMatchObject({
+    expect(decide(["channel", "say", "--", "--user"])).toMatchObject({
       allowed: false,
     });
   });

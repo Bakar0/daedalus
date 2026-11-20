@@ -3,7 +3,7 @@ import {
   handleSession,
   isSnoozed,
   markPlanTasks,
-  paneAskCount,
+  paneThreadCount,
   snoozeChoices,
 } from "./threads-shared";
 
@@ -35,7 +35,7 @@ test("the pinned task waits on the user; later todo siblings are held, up to its
     "held",
     "",
   ]);
-  expect(marks[3]!.ask).toBe(14);
+  expect(marks[3]!.thread).toBe(14);
   expect(
     markPlanTasks(tasks, [{ id: 1, taskKey: null }]).every((m) => !m.mark),
   ).toBe(true);
@@ -72,9 +72,9 @@ test("snooze offers 5 minutes, an hour and tomorrow at 9:00", () => {
   expect(choices[0]!.until.getTime() - now.getTime()).toBe(5 * 60_000);
   expect(choices[1]!.until.getTime() - now.getTime()).toBe(60 * 60_000);
   expect(choices[2]!.until).toEqual(new Date(2026, 10, 18, 9, 0));
-  const ask = { snoozedUntil: choices[0]!.until.toISOString() };
-  expect(isSnoozed(ask, now.getTime())).toBe(true);
-  expect(isSnoozed(ask, choices[0]!.until.getTime() + 1)).toBe(false);
+  const thread = { snoozedUntil: choices[0]!.until.toISOString() };
+  expect(isSnoozed(thread, now.getTime())).toBe(true);
+  expect(isSnoozed(thread, choices[0]!.until.getTime() + 1)).toBe(false);
   expect(isSnoozed({ snoozedUntil: null }, now.getTime())).toBe(false);
 });
 
@@ -87,10 +87,10 @@ test("the Threads tab counts only what its pane shows", () => {
     ]),
   };
   // Another session's question in the workspace lights nothing here.
-  expect(paneAskCount(counts, ["quiet"])).toBe(0);
-  expect(paneAskCount(counts, ["lead"])).toBe(1);
+  expect(paneThreadCount(counts, ["quiet"])).toBe(0);
+  expect(paneThreadCount(counts, ["lead"])).toBe(1);
   // A lead's pane shows its members' threads too.
-  expect(paneAskCount(counts, ["lead", "member"])).toBe(3);
+  expect(paneThreadCount(counts, ["lead", "member"])).toBe(3);
 });
 
 test("a handle names a session in the team the owner leads or is in", () => {

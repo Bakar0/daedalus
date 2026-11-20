@@ -1,10 +1,10 @@
 import type {
-  AskDto,
   PlanMarkdownPartDto,
   PlanOwnerDto,
   PlanTaskDto,
   PlanTaskStateDto,
   PlanViewDto,
+  ThreadDto,
 } from "@daedalus/protocol";
 import {
   Fragment,
@@ -219,8 +219,8 @@ interface TaskActions {
   starting: string | undefined;
   start(task: PlanTaskDto): void;
   open(sessionId: string): void;
-  /** Tasks an open ask is pinned to, and those held behind them, by id. */
-  waits: Map<string, { mark: "wait" | "held"; ask: number }>;
+  /** Tasks an open thread is pinned to, and those held behind them, by id. */
+  waits: Map<string, { mark: "wait" | "held"; thread: number }>;
 }
 
 function TaskItem({
@@ -271,13 +271,13 @@ function TaskItem({
             className={`plan-wait-tag ${waiting.mark}`}
             title={
               waiting.mark === "wait"
-                ? "A question waits on you under Activity"
+                ? "A thread waits on you under Threads"
                 : "Waits for the answer above it"
             }
           >
             {waiting.mark === "wait"
-              ? `#${waiting.ask} waits on you`
-              : `held by #${waiting.ask}`}
+              ? `#${waiting.thread} waits on you`
+              : `held by #${waiting.thread}`}
           </span>
         )}
         {own && <OwnerChip owner={own} />}
@@ -406,15 +406,15 @@ export function PlanView({
     [view],
   );
 
-  // Open asks pinned to this plan's tasks, from Activity.
-  const [asks, setAsks] = useState<AskDto[]>([]);
+  // Open threads pinned to this plan's tasks.
+  const [threads, setThreads] = useState<ThreadDto[]>([]);
   useEffect(() => {
     let live = true;
     const read = () =>
-      void client.request.askList({ plan: { workspaceId, path } }).then(
+      void client.request.threadList({ plan: { workspaceId, path } }).then(
         (response) => {
           if (!live || !response.ok) return;
-          setAsks(response.data.filter((ask) => ask.state === "open"));
+          setThreads(response.data.filter((thread) => !thread.resolvedAt));
         },
         () => undefined,
       );
@@ -428,18 +428,18 @@ export function PlanView({
     };
   }, [client, workspaceId, path]);
   const waits = useMemo(() => {
-    const out = new Map<string, { mark: "wait" | "held"; ask: number }>();
-    if (!view || !asks.length) return out;
+    const out = new Map<string, { mark: "wait" | "held"; thread: number }>();
+    if (!view || !threads.length) return out;
     const flat: PlanTaskDto[] = [];
     walkTasks(view.blocks, view.owner, (task) => flat.push(task));
-    const marks = markPlanTasks(flat, asks);
+    const marks = markPlanTasks(flat, threads);
     flat.forEach((task, index) => {
       const mark = marks[index]!;
-      if (task.id && mark.mark && mark.ask !== undefined)
-        out.set(task.id, { mark: mark.mark, ask: mark.ask });
+      if (task.id && mark.mark && mark.thread !== undefined)
+        out.set(task.id, { mark: mark.mark, thread: mark.thread });
     });
     return out;
-  }, [view, asks]);
+  }, [view, threads]);
 
   const { questions, done, total } = useMemo(() => {
     const questions: Question[] = [];
@@ -693,11 +693,11 @@ export function PlanView({
             {path}
           </span>
         </header>
-        {questions.length + asks.length > 0 && (
+        {questions.length + threads.length > 0 && (
           <section className="plan-needs" aria-label="Waiting on you">
-            <b>Waiting on you · {questions.length + asks.length}</b>
-            {asks.map((item) => (
-              <div key={`ask${item.id}`}>
+            <b>Waiting on you · {questions.length + threads.length}</b>
+            {threads.map((item) => (
+              <div key={`thread${item.id}`}>
                 {item.sessionName ? `${item.sessionName}: ` : ""}
                 <a
                   href={`#${item.taskKey ?? ""}`}
@@ -712,7 +712,7 @@ export function PlanView({
                 >
                   #{item.id} {item.title}
                 </a>{" "}
-                <span className="plan-needs-where">answer under Activity</span>
+                <span className="plan-needs-where">reply under Threads</span>
               </div>
             ))}
             {questions.map((item) => (

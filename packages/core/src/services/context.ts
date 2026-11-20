@@ -61,13 +61,14 @@ import {
   type TeamTransport,
 } from "./team-transport";
 import { TeamService } from "./teams";
+import { ChannelService } from "./channels";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkflowService } from "./workflows";
 import { PlanService } from "./plans";
 import { SearchService } from "./search";
 import { HomeService } from "./home";
-import { AskService, OpenAsksTransport } from "./asks";
+import { OpenThreadsTransport, ThreadService } from "./threads";
 import {
   instructionFileOptions,
   WorkspaceContentService,
@@ -108,6 +109,7 @@ export interface ApplicationContext {
   abilities: AbilityService;
   /** Teams: a lead, its members, and their chat. */
   teams: TeamService;
+  channels: ChannelService;
   /** Workflow runs: which workflow each piece of work follows, and where. */
   workflows: WorkflowService;
   /** Plans: `plans/*.plan.md` in a workspace or at Home, and their owners. */
@@ -118,7 +120,7 @@ export interface ApplicationContext {
   home: HomeService;
   /** A lead marking a team member done. */
   /** Activity: questions for the user that sessions ask once. */
-  asks: AskService;
+  threads: ThreadService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
   instructions: InstructionService;
   /** The person's own keys, `keybindings.json` in the home. */
@@ -233,6 +235,7 @@ export async function createApplicationContext(
   const hosts = new SessionHosts(new LocalSessionHost(tmux));
   let agents!: AgentService;
   let teams: TeamService | undefined;
+  let channels: ChannelService | undefined;
   const endedNoted = new Map<string, number>();
   let activity!: ActivityService;
   const abilities = new AbilityService(repositories, config, options.now);
@@ -295,13 +298,13 @@ export async function createApplicationContext(
     sessionChannel,
     (sessionId) => {
       activity.forget(sessionId);
-      // An archived session's asks close; one that only stopped keeps them.
-      asks.closeForSession(sessionId);
+      // An archived session's threads resolve; one that only stopped keeps them.
+      threads.closeForSession(sessionId);
       // Archiving a running session stops it first, which ends it twice.
       const last = endedNoted.get(sessionId) ?? 0;
       if (Date.now() - last < 10_000) return;
       endedNoted.set(sessionId, Date.now());
-      void teams?.noteMemberStatus(sessionId, "stopped running.");
+      void channels?.noteMemberStatus(sessionId, "stopped running.");
     },
     (sessionId, reason) =>
       activity.raise({ sessionId, reason }).catch(() => undefined),
@@ -390,8 +393,8 @@ export async function createApplicationContext(
     (sessionId) => activity.get(sessionId),
   );
   let plans!: PlanService;
-  // Every message Daedalus brings a session ends with its open asks.
-  const asks = new AskService(
+  // Every message Daedalus brings a session ends with its open threads.
+  const threads = new ThreadService(
     repositories,
     () => plans,
     agents,
@@ -399,13 +402,22 @@ export async function createApplicationContext(
     options.now,
     (session) => readMainMessages(config, session),
   );
-  const teamTransport = new OpenAsksTransport(rawTransport, (sessionId) =>
-    asks.openLine(sessionId),
+  const teamTransport = new OpenThreadsTransport(
+    rawTransport,
+    (sessionId) => threads.openLine(sessionId),
+    repositories.sessionNotes,
   );
-  agents.onSessionRunning((session) => asks.flushSession(session.id));
+  agents.onSessionRunning((session) => threads.flushSession(session.id));
   teams = new TeamService(
     repositories,
     abilities,
+    agents,
+    () => channels!,
+    options.now,
+  );
+  channels = new ChannelService(
+    repositories,
+    teams,
     agents,
     teamTransport,
     options.now,
@@ -498,6 +510,7 @@ export async function createApplicationContext(
     secrets,
     abilities,
     teams: teams!,
+    channels: channels!,
     instructions: new InstructionService(customInstructionsPath(config.home)),
     keybindings: new KeybindingService(keybindingsPath(config.home)),
     workflows: new WorkflowService(
@@ -520,7 +533,7 @@ export async function createApplicationContext(
     })),
     search: new SearchService(),
     home,
-    asks,
+    threads,
     abilityNotes,
     routines: new RoutineService(
       repositories,

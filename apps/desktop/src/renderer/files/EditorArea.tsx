@@ -1530,7 +1530,7 @@ function SessionThreadsPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
 
 function TeamPanel({ api, params }: IDockviewPanelProps<FilePanelParams>) {
   const context = useEditorContext();
-  // The tab reads the chat on a timer, so it stops while out of sight.
+  // The tab reads the channel on a timer, so it stops while out of sight.
   const visible = usePanelVisible(api);
   return (
     // Focusable so opening the tab can put focus in it (`focusAbilityPanel`).
