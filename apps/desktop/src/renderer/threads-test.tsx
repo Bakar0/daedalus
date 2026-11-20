@@ -106,7 +106,7 @@ let threads: ThreadDto[] = [
     unread: true,
     anchorId: "a-3",
     anchorText:
-      "Asked about the retry budget in a thread. Moving on to the dead-letter table while I wait.",
+      "How many delivery tries should a webhook get before it is dead-lettered? The options are in the thread.",
   },
   {
     ...base,
@@ -203,7 +203,7 @@ const messages: MainMessageDto[] = [
   {
     id: "a-3",
     role: "agent",
-    text: "Asked about the retry budget in a thread. Moving on to the dead-letter table while I wait.",
+    text: "How many delivery tries should a webhook get before it is dead-lettered? The options are in the thread.",
     at: ago(38),
   },
   {

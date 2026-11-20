@@ -65,7 +65,9 @@ message, and a very long one is cut.
 When you need the user, look for a thread on it first with `daedal thread
 find "<words>"`; if there is one, open or resolved, write in it with
 `daedal thread say <n> "<message>"`. Otherwise write one line in your reply
-saying what you are asking, then ask once with `daedal thread new
+that asks the user directly ("Which retry budget should webhooks get? The
+options are in the thread.", never "I'm asking the user in a thread..."),
+then ask once with `daedal thread new
 "<message>" --details "<ids, dates, links>"`, with `--option` for each
 choice when there are choices, and `--plan <plan> ^<id>` for the plan task
 it holds up. Start the message with one short plain line the user can

@@ -127,7 +127,7 @@ await withBrowser(
         await browser.evaluate<string>(
           "document.querySelector('.threads-message.focus').textContent",
         )
-      ).includes("Asked about the retry budget"),
+      ).includes("How many delivery tries should a webhook get"),
       "show focused the wrong message",
     );
     await browser.screenshot("threads-show");
