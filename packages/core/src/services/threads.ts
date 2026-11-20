@@ -268,7 +268,7 @@ export class ThreadService {
    * message. Also returns up to three threads from the last two weeks
    * whose words match, so the agent can post there instead next time.
    */
-  async start(
+  async new(
     input: ThreadPost & {
       /** The owner: its id, or its name when only one has it. */
       session: string;
@@ -459,9 +459,10 @@ export class ThreadService {
       if (author === USER) change.blockedAt = null;
       if (Object.keys(change).length)
         conversations.updateThread(thread.id, change, at);
-      // Its author has seen it, and need not be brought it.
+      // Its author has seen it. The user need not be notified of it; the
+      // owner's delivery cursor stays, since a reply below it may still wait.
       conversations.advance(thread.id, author, "read", written.id);
-      if (author !== LEAD)
+      if (author === USER)
         conversations.advance(thread.id, author, "delivered", written.id);
       return written;
     });
@@ -568,18 +569,12 @@ export class ThreadService {
     if (thread.blockedAt) return { thread: this.get(number), bumped: false };
     const at = this.at();
     this.repositories.immediateTransaction(() => {
-      const message = this.repositories.conversations.post(thread.id, {
+      this.repositories.conversations.post(thread.id, {
         author: AGENT,
         kind: "notice",
         body: "blocked",
         createdAt: at,
       });
-      this.repositories.conversations.advance(
-        thread.id,
-        AGENT,
-        "delivered",
-        message.id,
-      );
       this.repositories.conversations.updateThread(
         thread.id,
         { blockedAt: at },
@@ -673,8 +668,14 @@ export class ThreadService {
         "read",
         message.id,
       );
-      if (by === AGENT || by === DAEDALUS)
-        // Nobody brings the owner news of its own ending, or of Daedalus's.
+      // A thread nothing was written in (a fork the owner never knew of)
+      // ends without telling the owner. Its own and Daedalus's endings are
+      // never brought to it: delivery skips their notices.
+      if (
+        !this.repositories.conversations
+          .messages(thread.id)
+          .some((written) => written.kind === "message")
+      )
         this.repositories.conversations.advance(
           thread.id,
           AGENT,
@@ -1204,14 +1205,16 @@ export class ThreadService {
               message.author !== AGENT &&
               message.author !== DAEDALUS,
           );
-          conversations.advance(thread.id, AGENT, "delivered", all.at(-1)!.id);
+          const through = all.at(-1)!.id;
+          conversations.advance(thread.id, AGENT, "delivered", through);
           return {
             thread,
             cursor,
+            through,
             text: this.deliveryText(
               thread,
               fresh,
-              all.filter((message) => message.id <= cursor.deliveredThrough),
+              all.filter((message) => message.id < fresh[0]!.id),
             ),
           };
         }),
@@ -1228,14 +1231,21 @@ export class ThreadService {
       return true;
     } catch (error) {
       // A held or failed delivery goes again on the app's next tick.
+      // Put back only what no other process moved on since.
       const at = this.at();
-      for (const { cursor } of claimed)
-        conversations.saveCursor({
-          ...conversations.cursor(cursor.conversationId, AGENT),
-          deliveredThrough: cursor.deliveredThrough,
-          lastError: error instanceof Error ? error.message : String(error),
-          lastAttemptAt: at,
-        } satisfies Cursor);
+      this.repositories.immediateTransaction(() => {
+        for (const { cursor, through } of claimed) {
+          const current = conversations.cursor(cursor.conversationId, AGENT);
+          conversations.saveCursor({
+            ...current,
+            ...(current.deliveredThrough === through
+              ? { deliveredThrough: cursor.deliveredThrough }
+              : {}),
+            lastError: error instanceof Error ? error.message : String(error),
+            lastAttemptAt: at,
+          } satisfies Cursor);
+        }
+      });
       return false;
     }
   }

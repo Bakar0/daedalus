@@ -144,7 +144,8 @@ SELECT 'thread', workspace_id, id, session_id, title,
          WHEN state IN ('answered', 'dismissed') AND closed_reason IS NOT 'Answered in its session' THEN 'user'
          WHEN closed_reason = 'Closed by the user' THEN 'user'
          WHEN state = 'open' THEN NULL
-         WHEN closed_reason LIKE '%was archived' OR closed_reason LIKE 'Its %' THEN 'daedalus'
+         WHEN closed_reason LIKE '''%'' was archived' OR closed_reason = 'Its session was deleted'
+           OR closed_reason LIKE 'Its task ^%' THEN 'daedalus'
          ELSE 'agent'
        END,
        created_at, updated_at

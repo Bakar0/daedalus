@@ -251,7 +251,7 @@ export async function planCommand(
         "VALIDATION",
         'Ask from the session that waits on the answer, or use daedal thread new "<message>" --session <session> --plan <plan> ^<id>',
       );
-    const { thread } = await context.threads.start({
+    const { thread } = await context.threads.new({
       session: session.id,
       body: parsed.positionals.slice(2).join(" "),
       plan: found.absolutePath,

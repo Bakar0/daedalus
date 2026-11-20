@@ -295,7 +295,7 @@ export async function threadCommand(
 
   if (action === "new") {
     const text = await details();
-    const { thread, related } = await context.threads.start({
+    const { thread, related } = await context.threads.new({
       session: await session(),
       body: rest.join(" "),
       ...(options.length ? { options } : {}),

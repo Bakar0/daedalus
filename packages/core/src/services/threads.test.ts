@@ -55,7 +55,13 @@ class FakeTmux implements TmuxClient {
 /** Records every delivery, by the session it went to. */
 class RecordingTransport implements TeamTransport {
   readonly sent: TeamDelivery[] = [];
+  /** How many of the next deliveries fail, as a held or timed-out send does. */
+  failing = 0;
   async deliver(delivery: TeamDelivery) {
+    if (this.failing > 0) {
+      this.failing -= 1;
+      throw new Error("held: the session is mid-turn");
+    }
     this.sent.push(delivery);
   }
   to(session: Pick<AgentSession, "id">): TeamDelivery[] {
@@ -164,7 +170,7 @@ describe("Threads", () => {
     await withHome(async ({ home, context }) => {
       const main = await spawn(context, "deployer");
       // No transcript yet: the thread opens without an anchor.
-      const { thread: bare } = await context.threads.start({
+      const { thread: bare } = await context.threads.new({
         session: main.id,
         body: "Branch name?",
       });
@@ -178,7 +184,7 @@ describe("Threads", () => {
         (await context.threads.mainMessages(main.id)).map((m) => m.id),
       ).toEqual(["u-1", "a-1", "a-2"]);
       // A line about another thread is a line like any other.
-      const { thread } = await context.threads.start({
+      const { thread } = await context.threads.new({
         session: main.id,
         body: "OK to copy the 6 images?\nThey go to the ga bucket.",
         details: "gitops#9149",
@@ -196,10 +202,10 @@ describe("Threads", () => {
         options: ["Yes", "No"],
       });
       await expect(
-        context.threads.start({ session: main.id, body: " " }),
+        context.threads.new({ session: main.id, body: " " }),
       ).rejects.toThrow("Write a message");
       await expect(
-        context.threads.start({ session: main.id, body: "x", task: "^a" }),
+        context.threads.new({ session: main.id, body: "x", task: "^a" }),
       ).rejects.toThrow("Name the plan");
     });
   });
@@ -207,7 +213,7 @@ describe("Threads", () => {
   test("the user replies in the thread; the owner is brought it with a quote, and replies back", async () => {
     await withHome(async ({ context, transport }) => {
       const main = await spawn(context, "deployer");
-      const { thread } = await context.threads.start({
+      const { thread } = await context.threads.new({
         session: main.id,
         body: "OK to copy the 6 images?",
         options: ["Yes", "Only the daemons"],
@@ -258,10 +264,42 @@ describe("Threads", () => {
     });
   });
 
+  test("a reply not brought yet survives the owner writing, bumping and resolving", async () => {
+    await withHome(async ({ context, transport }) => {
+      const main = await spawn(context, "deployer");
+      const { thread } = await context.threads.new({
+        session: main.id,
+        body: "Which region?",
+      });
+      transport.failing = 1;
+      await context.threads.say(thread.number, {
+        as: "user",
+        body: "eu-west-1",
+      });
+      expect(transport.to(main)).toHaveLength(0);
+      transport.failing = Number.POSITIVE_INFINITY;
+      await context.threads.say(thread.number, {
+        as: main.id,
+        body: "Still checking quotas",
+      });
+      context.threads.bump(thread.number, main.id);
+      await context.threads.resolve(thread.number, {
+        by: main.id,
+        reason: "done",
+      });
+      transport.failing = 0;
+      expect(await context.threads.flushSession(main.id)).toBe(true);
+      const sent = transport.to(main);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.text).toContain("eu-west-1");
+      expect(await context.threads.flushSession(main.id)).toBe(false);
+    });
+  });
+
   test("bump blocks once until the user replies; a reply clears it", async () => {
     await withHome(async ({ context }) => {
       const main = await spawn(context, "deployer");
-      const { thread } = await context.threads.start({
+      const { thread } = await context.threads.new({
         session: main.id,
         body: "Retry budget?",
       });
@@ -285,7 +323,7 @@ describe("Threads", () => {
     await withHome(async ({ context, transport }) => {
       const main = await spawn(context, "deployer");
       const other = await spawn(context, "other");
-      const { thread } = await context.threads.start({
+      const { thread } = await context.threads.new({
         session: main.id,
         body: "Merge #8789?",
       });
@@ -338,7 +376,7 @@ describe("Threads", () => {
       const lead = await spawn(context, "lead");
       const member = await spawn(context, "worker");
       team(context, lead, member);
-      const { thread } = await context.threads.start({
+      const { thread } = await context.threads.new({
         session: member.id,
         body: "Which index?",
       });
@@ -369,16 +407,16 @@ describe("Threads", () => {
         workspace: "docs",
         name: "docs",
       });
-      const { thread: images } = await context.threads.start({
+      const { thread: images } = await context.threads.new({
         session: main.id,
         body: "OK to copy the daemon images to the ga bucket?",
       });
       await context.threads.resolve(images.number, { by: main.id });
-      await context.threads.start({
+      await context.threads.new({
         session: main.id,
         body: "Restart the istio gateway?",
       });
-      await context.threads.start({
+      await context.threads.new({
         session: elsewhere.id,
         body: "Publish the images page?",
       });
@@ -398,7 +436,7 @@ describe("Threads", () => {
       ).toHaveLength(0);
       expect(context.threads.find("xy", { session: main.id })).toHaveLength(0);
       // Opening a thread names the related ones.
-      const { related } = await context.threads.start({
+      const { related } = await context.threads.new({
         session: main.id,
         body: "Copy the remaining daemon images too?",
       });
@@ -409,7 +447,7 @@ describe("Threads", () => {
   test("a snoozed thread waits out its time, then notifies the user again", async () => {
     await withHome(async ({ context }) => {
       const main = await spawn(context, "deployer");
-      const { thread } = await context.threads.start({
+      const { thread } = await context.threads.new({
         session: main.id,
         body: "Ship on Tuesday?",
       });
@@ -442,7 +480,7 @@ describe("Threads", () => {
         { title: "Cutover" },
       );
       await Bun.write(file.absolutePath, PLAN);
-      const { thread } = await context.threads.start({
+      const { thread } = await context.threads.new({
         session: main.id,
         body: "Re-onboard or skip?",
         plan: "cutover",
@@ -470,8 +508,8 @@ describe("Threads", () => {
     await withHome(async ({ context, transport }) => {
       const gone = await spawn(context, "gone");
       const keep = await spawn(context, "keep");
-      await context.threads.start({ session: gone.id, body: "First?" });
-      const { thread: second } = await context.threads.start({
+      await context.threads.new({ session: gone.id, body: "First?" });
+      const { thread: second } = await context.threads.new({
         session: keep.id,
         body: "Second?",
       });
@@ -505,7 +543,7 @@ describe("Threads", () => {
     await withHome(async ({ context }) => {
       const old = await spawn(context, "old");
       const next = await spawn(context, "next");
-      const { thread } = await context.threads.start({
+      const { thread } = await context.threads.new({
         session: old.id,
         body: "Still open?",
       });
@@ -595,7 +633,7 @@ describe("Threads", () => {
   test("a thread the agent opened gets its own fork once", async () => {
     await withHome(async ({ context }) => {
       const main = await spawn(context, "webhooks");
-      const { thread } = await context.threads.start({
+      const { thread } = await context.threads.new({
         session: main.id,
         body: "How many tries?",
         options: ["3", "5"],

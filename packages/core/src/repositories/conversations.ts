@@ -179,14 +179,16 @@ export class ConversationRepository {
   channel(teamId: string, workspaceId: string, at: string): Channel {
     const found = this.findChannel(teamId);
     if (found) return found;
-    const row = this.database
-      .query<ConversationRow, [string, string, string, string]>(
+    // Two processes may make it at once; the second keeps the first's.
+    this.database
+      .query(
         `INSERT INTO conversations (kind, workspace_id, team_id, created_at, updated_at)
-         VALUES ('channel', ?, ?, ?, ?) RETURNING *`,
+         VALUES ('channel', ?, ?, ?, ?) ON CONFLICT (team_id) DO NOTHING`,
       )
-      .get(workspaceId, teamId, at, at);
-    if (!row) throw new Error("The channel was not stored");
-    return channelFromRow(row);
+      .run(workspaceId, teamId, at, at);
+    const channel = this.findChannel(teamId);
+    if (!channel) throw new Error("The channel was not stored");
+    return channel;
   }
 
   findChannel(teamId: string): Channel | undefined {
