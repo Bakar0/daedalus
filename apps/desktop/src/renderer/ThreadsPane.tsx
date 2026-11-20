@@ -605,16 +605,17 @@ function ThreadCard({
       id={`thread-card-${thread.id}`}
       onFocus={markRead}
       onKeyDown={onKeyDown}
-      onMouseDown={(event) => {
-        markRead();
-        // A click on the card, not on a control, sends the keys here.
+      onMouseDown={markRead}
+      onClick={(event) => {
+        // A click on the card, not on a control, sends the keys to the
+        // reply box. A drag that selected text keeps its selection.
         if (
           (event.target as HTMLElement).closest(
-            "button, a, summary, input, textarea, .threads-anchor-text",
-          )
+            "button, a, summary, input, textarea",
+          ) ||
+          !(window.getSelection()?.isCollapsed ?? true)
         )
           return;
-        event.preventDefault();
         input.current?.focus();
       }}
     >

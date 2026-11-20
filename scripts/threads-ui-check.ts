@@ -112,6 +112,35 @@ await withBrowser(
       ).includes("3 tries"),
       "the picker does not start on the first option",
     );
+    // Text in a card can be selected; a plain click sends keys to the reply box.
+    const text = "#thread-card-12 .threads-line";
+    expect(
+      await browser.evaluate<boolean>(
+        `document.querySelector(${JSON.stringify(text)}).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))`,
+      ),
+      "a press on a message's text cancels the selection it starts",
+    );
+    expect(
+      await browser.evaluate<boolean>(`(() => {
+        const node = document.querySelector(${JSON.stringify(text)});
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+        node.click();
+        return !getSelection().isCollapsed && document.activeElement?.tagName !== 'TEXTAREA';
+      })()`),
+      "a click that ends a selection threw the selection away",
+    );
+    expect(
+      await browser.evaluate<boolean>(`(() => {
+        getSelection().removeAllRanges();
+        document.querySelector(${JSON.stringify(text)}).click();
+        return document.activeElement === document.querySelector('#thread-card-12 .threads-prompt textarea');
+      })()`),
+      "a plain click on the card did not focus the reply box",
+    );
+    await browser.evaluate("document.activeElement?.blur()");
     await browser.screenshot("threads-feed");
 
     // The quoted message opens main's messages with the thread's message in focus.
