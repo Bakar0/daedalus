@@ -77,7 +77,22 @@ export interface ClaudeSettings {
   hooks?: Record<string, ClaudeHookEntry[]>;
   outputStyle?: unknown;
   skillOverrides?: Record<string, unknown>;
+  permissions?: { allow?: string[]; [key: string]: unknown };
   [key: string]: unknown;
+}
+
+/**
+ * Daedalus's messaging commands, approved for every Claude session it
+ * starts. In auto mode Claude's classifier otherwise judges each call, and it
+ * has blocked an agent resolving its own thread as undermining oversight. A
+ * narrow allow rule resolves before the classifier runs. Both spellings an
+ * agent uses are covered: `daedal` on the PATH and the full executable path.
+ */
+export function daedalusAllowRules(daedalExecutable: string): string[] {
+  const commands = [...new Set(["daedal", daedalExecutable])];
+  return commands.flatMap((command) =>
+    ["thread", "channel"].map((group) => `Bash(${command} ${group}:*)`),
+  );
 }
 
 /**
@@ -163,6 +178,7 @@ export function daedalusClaudeSettings(
       padding: 0,
     },
     hooks,
+    permissions: { allow: daedalusAllowRules(daedalExecutable) },
     // A team's chat reaches a Claude member as a message from another
     // session. Without this, a session in bypassPermissions mode holds each
     // one behind an approval dialog.
@@ -204,10 +220,20 @@ export function mergeClaudeSettings(
     ...daedalus.skillOverrides,
     ...existing.skillOverrides,
   };
+  // The user's permissions are kept; Daedalus's allow rules join theirs.
+  const allow = [
+    ...new Set([
+      ...(existing.permissions?.allow ?? []),
+      ...(daedalus.permissions?.allow ?? []),
+    ]),
+  ];
   return {
     ...daedalus,
     ...existing,
     ...(Object.keys(hooks).length ? { hooks } : {}),
+    ...(allow.length
+      ? { permissions: { ...existing.permissions, allow } }
+      : {}),
     ...(Object.keys(skillOverrides).length ? { skillOverrides } : {}),
   };
 }
