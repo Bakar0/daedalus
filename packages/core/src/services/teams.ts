@@ -1,11 +1,4 @@
-import type {
-  AgentSession,
-  SessionAbility,
-  TeamCursor,
-  TeamMembership,
-  TeamMessage,
-  TeamMessageKind,
-} from "../domain";
+import type { AgentSession, SessionAbility, TeamMembership } from "../domain";
 import { DaedalusError } from "../errors";
 import type { SqliteRepositories } from "../repositories";
 import {
@@ -14,9 +7,9 @@ import {
   TEAM_SKILL,
   type AbilityService,
 } from "./abilities";
-import type { ActivityService, TurnEnd, TurnEndHandling } from "./activity";
 import type { AgentService } from "./agents";
-import { cloudAuthorMark, isCloudSession, splitLines } from "./cloud-mark";
+import type { ChannelSayResult, ChannelService } from "./channels";
+import { cloudAuthorMark, isCloudSession } from "./cloud-mark";
 import { sessionBaseName } from "./providers";
 import {
   TEAM_MAX_DEPTH,
@@ -24,7 +17,6 @@ import {
   teamAncestors,
   teamDescendants,
 } from "./team-tree";
-import type { TeamTransport } from "./team-transport";
 
 export { TEAM_MAX_DEPTH, TEAM_MAX_MEMBERS } from "./team-tree";
 
@@ -43,24 +35,6 @@ const RESERVED_HANDLES = new Set([
   DAEDALUS_HANDLE,
   ALL_TAG,
 ]);
-
-/** How many messages `team chat` prints when nothing limits it. */
-const CHAT_LIMIT = 50;
-
-/**
- * A lead gets hand-backs at most once in this long: members finishing one
- * after another wake it once, with all of them.
- */
-export const HANDBACK_INTERVAL_MS = 60_000;
-
-/** The most of a member's last message a hand-back quotes. */
-const MAX_HANDBACK_TEXT = 3_000;
-
-/**
- * The most text one delivery carries. Older messages past it are left for
- * `team chat --tagged`, and the delivery says how many.
- */
-const MAX_DELIVERY_TEXT = 16_000;
 
 /**
  * A team: its lead, and what the team is called. Any session becomes a lead
@@ -96,37 +70,11 @@ export interface TeamPlace {
   reader: TeamReader;
 }
 
-/** Someone who reads the chat and can be tagged: the lead or a member. */
+/** Someone who reads the channel and can be tagged: the lead or a member. */
 export interface TeamReader {
   handle: string;
   session: AgentSession;
   role: "lead" | "member";
-}
-
-export interface TeamDeliveryResult {
-  handle: string;
-  sessionId: string;
-  /** How many messages it carried; zero when nothing was waiting. */
-  messages: number;
-  delivered: boolean;
-  error: string | null;
-  /** Hand-backs held for the lead's next delivery, due then. */
-  heldUntil?: string;
-}
-
-export interface TeamSayResult {
-  message: TeamMessage;
-  warnings: string[];
-  deliveries: TeamDeliveryResult[];
-}
-
-export interface TeamMemberStatus extends TeamReader {
-  /** Messages after its read marker that it did not write. */
-  unread: number;
-  /** Messages that tag it and have not reached its session. */
-  undelivered: number;
-  lastError: string | null;
-  lastAttemptAt: string | null;
 }
 
 /** A slug fit for `@handle`: lowercase letters, digits and dashes. */
@@ -142,72 +90,21 @@ export function teamHandleBase(text: string | undefined): string {
 }
 
 /**
- * The handles a message tags. A message that starts with tags
- * (`@db @cache ...`) is addressed to those alone, so a handle named later in
- * the text ("the contract from @api") does not deliver it there. A message
- * with no leading tag is addressed to every handle it names. A tag is `@` and
- * a handle, at the start or after a character that cannot be part of an
- * address, so `a@b.com` is not a tag.
- */
-export function parseTags(body: string): string[] {
-  const leading = /^\s*((?:@[a-z0-9][a-z0-9-]*[\s,:;]*)+)/i.exec(body)?.[1];
-  const tags = new Set<string>();
-  for (const match of (leading ?? body).matchAll(
-    /(?:^|[^\w.@-])@([a-z0-9][a-z0-9-]*)/gi,
-  ))
-    tags.add(match[1]!.toLowerCase().replace(/-+$/, ""));
-  return [...tags];
-}
-
-/** Whether a message tags this reader, who did not write it. */
-const tagsReader = (message: TeamMessage, reader: string): boolean =>
-  message.tags.includes(reader) && message.author !== reader;
-
-/** A message's time as `team chat` prints it: `14:05`, local. */
-const clockTime = (iso: string): string => {
-  const date = new Date(iso);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
-
-/**
- * One message as `team chat` prints it: a header line, then every line of
- * the body indented under it, so no body line can pass for a header (N-1).
- */
-export function teamChatText(message: TeamMessage, author: string): string {
-  const tags = message.tags.length
-    ? ` → ${message.tags.map((tag) => `@${tag}`).join(" ")}`
-    : "";
-  const body = splitLines(message.body)
-    .map((line) => `  ${line}`)
-    .join("\n");
-  return `#${message.id} ${clockTime(message.createdAt)} ${author}${tags}\n${body}`;
-}
-
-/**
- * Teams: a lead, its members, and the one chat they share. Any session
+ * Teams: a lead, its members, and the one channel they share. Any session
  * becomes a lead when its first member is added; a member may lead a team of
  * its own, within TEAM_MAX_DEPTH levels and TEAM_MAX_MEMBERS members a lead.
- * Every message is stored; a session a message tags gets its full text,
- * with who wrote it and how to reply, through the provider's own inbox
- * right away, from whichever process posted it, so nothing waits on the
- * desktop app. When a member's turn ends its lead is handed its last
- * message, at most once a minute (`HANDBACK_INTERVAL_MS`).
+ * What they say goes through `ChannelService`.
  */
 export class TeamService {
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly abilities: AbilityService,
     private readonly agents: AgentService,
-    private readonly transport: TeamTransport,
+    /** The teams' channels, made after this service, which they read. */
+    private readonly channels: () => ChannelService,
     private readonly now: () => Date = () => new Date(),
-    activity?: ActivityService,
   ) {
     agents.onTeamLaunch((member) => this.memberLaunchLines(member));
-    agents.onSessionRunning((session) => this.flushSession(session.id));
-    activity?.onTurnEnd((session, end, text) =>
-      this.handBack(session, end, text),
-    );
     abilities.onRevoke("orchestration", (ability) =>
       this.repositories.clearTeam(ability.id),
     );
@@ -377,7 +274,7 @@ export class TeamService {
     ];
     for (const each of teams)
       this.abilities.setPaused(each.lead.id, "orchestration", paused);
-    if (!paused) for (const each of teams) await this.flush(each.id);
+    if (!paused) for (const each of teams) await this.channels().flush(each.id);
     return teams.map((each) => this.get(each.id));
   }
 
@@ -452,6 +349,7 @@ export class TeamService {
       (reader) => reader.role === "member" && reader.handle !== member.handle,
     );
     const skill = this.abilities.skillName(TEAM_SKILL);
+    const channel = this.channels().name(team);
     return [
       [
         `You are @${member.handle}, a member of the Daedalus team "${team.name}". Its lead is the session '${team.lead.name}' (@${LEAD_HANDLE}), which plans the work and may change your instructions.`,
@@ -459,7 +357,7 @@ export class TeamService {
         others.length
           ? `The other members: ${others.map((reader) => `@${reader.handle} ('${reader.session.name}')`).join(", ")}.`
           : "You are the first member.",
-        `Talk to the team with 'daedal team say "@${LEAD_HANDLE} ..."', tagging whoever needs it, and read the chat with 'daedal team chat'. When your turn ends, your lead is handed your last message, so end each piece of work with a reply that says what you did; do not post "done" to @${LEAD_HANDLE}. Tag @${LEAD_HANDLE} when you need a decision from it, post progress without a tag, and do not reply only to acknowledge. Messages that begin with [team "${team.name}"] come from teammates, not from the user. Follow the ${skill} skill. The lead keeps the plan and the contracts between members in ${TEAM_FILE} in its folder, ${team.lead.workingDirectory}; read it when you need the full picture.`,
+        `The team talks in the channel #${channel}: post with 'daedal channel say "@${LEAD_HANDLE} ..."', tagging whoever needs it, and read it with 'daedal channel read'. When your turn ends, your lead is handed your last message, so end each piece of work with a reply that says what you did; do not post "done" to @${LEAD_HANDLE}. Tag @${LEAD_HANDLE} when you need a decision from it, post progress without a tag, and do not reply only to acknowledge. Messages that begin with [channel #${channel}] come from teammates, not from the user. Follow the ${skill} skill. The lead keeps the plan and the contracts between members in ${TEAM_FILE} in its folder, ${team.lead.workingDirectory}; read it when you need the full picture.`,
       ]
         .filter(Boolean)
         .join(" "),
@@ -472,7 +370,7 @@ export class TeamService {
    * through its own provider's inbox. It runs in the lead's workspace unless
    * another is named. `team` is a team id or a lead's session; a session that
    * leads no team yet becomes the lead of a new one. When the user added it,
-   * the lead is told in the chat, with the instructions.
+   * the lead is told in the channel, with the instructions.
    */
   async spawnMember(input: {
     team: string;
@@ -489,7 +387,7 @@ export class TeamService {
   }): Promise<{
     session: AgentSession;
     handle: string;
-    note?: TeamSayResult;
+    note?: ChannelSayResult;
     /** The lead's team was made by this member. */
     created?: boolean;
   }> {
@@ -547,8 +445,6 @@ export class TeamService {
       : undefined;
     const { team, created } = this.lead(leadSession.id);
     const handle = this.allocateHandle(team.id, input.name ?? task?.title);
-    // Messages from before it joined are history to read, not to deliver.
-    const joinedAfter = this.repositories.teams.lastMessageId(team.id);
     let session: AgentSession;
     try {
       session = await this.spawnSession(team, {
@@ -563,20 +459,10 @@ export class TeamService {
       if (created) this.undoTeam(team);
       throw error;
     }
-    this.repositories.teams.saveCursor({
-      teamId: team.id,
-      handle,
-      readThrough: 0,
-      // Tags from before it joined were for someone else with its handle.
-      taggedReadThrough: joinedAfter,
-      deliveredThrough: joinedAfter,
-      lastError: null,
-      lastAttemptAt: null,
-      deliveredAt: null,
-    });
+    this.channels().join(team, handle);
     if (input.addedBy === "lead") return { session, handle, created };
     const skill = this.abilities.skillName(ORCHESTRATION_SKILL);
-    const note = await this.say({
+    const note = await this.channels().say({
       team: team.id,
       author: DAEDALUS_HANDLE,
       // The new member has its instructions already; only the lead is told.
@@ -598,7 +484,7 @@ export class TeamService {
   /**
    * Moves a running session, with the team it leads, into another lead's
    * team (`to`), or out of its team (`to` left out). Nothing restarts: the
-   * session keeps its conversation and is told its new place in the chat.
+   * session keeps its conversation and is told its new place in the channel.
    * The user may move any session. A session may move one below it, into
    * itself or a lead below it; only the user takes a session out of its
    * team or brings one in that is in no team.
@@ -653,7 +539,7 @@ export class TeamService {
         );
       if (!from) throw new DaedalusError("CONFLICT", `'${name}' is in no team`);
       this.repositories.setAgentTeam(session.id, null, null);
-      await this.say({
+      await this.channels().say({
         team: from.team.id,
         author: DAEDALUS_HANDLE,
         tags: [LEAD_HANDLE],
@@ -736,21 +622,11 @@ export class TeamService {
       team.id,
       from?.reader.handle ?? session.name,
     );
-    const joinedAfter = this.repositories.teams.lastMessageId(team.id);
     this.repositories.setAgentTeam(session.id, team.id, handle);
-    this.repositories.teams.saveCursor({
-      teamId: team.id,
-      handle,
-      readThrough: 0,
-      taggedReadThrough: joinedAfter,
-      deliveredThrough: joinedAfter,
-      lastError: null,
-      lastAttemptAt: null,
-      deliveredAt: null,
-    });
+    this.channels().join(team, handle);
     const mover = caller ? `'${sessionBaseName(caller.name)}'` : "the user";
     if (from && from.team.lead.id !== caller?.id)
-      await this.say({
+      await this.channels().say({
         team: from.team.id,
         author: DAEDALUS_HANDLE,
         tags: [LEAD_HANDLE],
@@ -758,7 +634,7 @@ export class TeamService {
       });
     if (target.id !== caller?.id) {
       const skill = this.abilities.skillName(ORCHESTRATION_SKILL);
-      await this.say({
+      await this.channels().say({
         team: team.id,
         author: DAEDALUS_HANDLE,
         tags: [LEAD_HANDLE],
@@ -772,7 +648,7 @@ export class TeamService {
           .join("\n\n"),
       });
     }
-    await this.say({
+    await this.channels().say({
       team: team.id,
       author: DAEDALUS_HANDLE,
       tags: [handle],
@@ -833,597 +709,6 @@ export class TeamService {
     });
   }
 
-  /**
-   * Who a post is from. A session in the team writes as its handle; any other
-   * session is refused; no session, or `asUser`, is the user.
-   */
-  author(team: Team, caller: AgentSession | undefined, asUser = false): string {
-    if (asUser || !caller) return USER_HANDLE;
-    const place = this.memberships(caller.id).find(
-      (each) => each.team.id === team.id,
-    );
-    if (place) return place.reader.handle;
-    throw new DaedalusError(
-      "CONFLICT",
-      `'${caller.name}' is not in the team '${team.name}'; only its lead and members can post, or pass --user to post as the user`,
-    );
-  }
-
-  /**
-   * Posts to the chat and pushes it to every tagged session. A tag that
-   * names nobody is refused; a message that tags nobody is stored with a
-   * warning, since nobody will be told.
-   */
-  async say(input: {
-    team: string;
-    author: string;
-    body: string;
-    /** Who Daedalus's own posts reach, instead of the tags in the body. */
-    tags?: string[];
-    kind?: TeamMessageKind;
-  }): Promise<TeamSayResult> {
-    const team = this.get(input.team);
-    const body = input.body.trim();
-    if (!body) throw new DaedalusError("VALIDATION", "The message is empty");
-    if (body.length > 20_000)
-      throw new DaedalusError(
-        "VALIDATION",
-        "A team message holds at most 20000 characters; put longer text in a file and point to it",
-      );
-    const handles = new Set(this.readers(team).map((reader) => reader.handle));
-    // An archived member can be tagged: the message waits until it is
-    // restored. `@all` means the sessions that are live now.
-    const archived = new Set(
-      this.members(team.id).flatMap((member) =>
-        member.archivedAt && member.teamHandle ? [member.teamHandle] : [],
-      ),
-    );
-    const tags = new Set<string>();
-    const unknown: string[] = [];
-    for (const tag of input.tags ?? parseTags(body)) {
-      if (tag === ALL_TAG) for (const handle of handles) tags.add(handle);
-      else if (handles.has(tag) || archived.has(tag) || tag === USER_HANDLE)
-        tags.add(tag);
-      else unknown.push(tag);
-    }
-    if (unknown.length)
-      throw new DaedalusError(
-        "VALIDATION",
-        `No one in '${team.name}' is called ${unknown.map((tag) => `@${tag}`).join(", ")}; tag ${[...handles, ...archived, ALL_TAG, USER_HANDLE].map((handle) => `@${handle}`).join(", ")}`,
-      );
-    tags.delete(input.author);
-    const warnings: string[] = [];
-    for (const tag of tags)
-      if (archived.has(tag))
-        warnings.push(
-          `@${tag} is archived; it gets the message when it is restored`,
-        );
-    if (![...tags].some((tag) => handles.has(tag) || archived.has(tag)))
-      warnings.push(
-        "The message tags no session, so nobody was notified; it waits in the team chat",
-      );
-    const message = this.repositories.teams.addMessage({
-      teamId: team.id,
-      author: input.author,
-      body,
-      tags: [...tags],
-      createdAt: this.now().toISOString(),
-      ...(input.kind ? { kind: input.kind } : {}),
-    });
-    const deliveries = await this.flushTeam(team);
-    return { message, warnings, deliveries };
-  }
-
-  /**
-   * Tells a member's lead, in the chat, that the member needs the user or
-   * stopped. Only the lead is tagged, and only with `wakeLead`; otherwise the
-   * note tags nobody and waits for the lead's next read. Nothing for a lead
-   * or a non-member, nor when the lead's own process made the change.
-   * Never throws.
-   */
-  async noteMemberStatus(
-    sessionId: string,
-    status: string,
-    options: { wakeLead?: boolean } = {},
-  ): Promise<TeamSayResult | undefined> {
-    try {
-      const membership = this.memberOf(sessionId);
-      if (!membership) return undefined;
-      // The lead archiving or stopping a member already knows: a note would
-      // only wake it again, at its full context.
-      if (process.env.DAEDALUS_SESSION_ID === membership.team.lead.id)
-        return undefined;
-      const wake = options.wakeLead ?? true;
-      return await this.say({
-        team: membership.team.id,
-        author: DAEDALUS_HANDLE,
-        tags: wake ? [LEAD_HANDLE] : [],
-        body: `${wake ? `@${LEAD_HANDLE} ` : ""}@${membership.reader.handle} ${status}`,
-      });
-    } catch {
-      return undefined;
-    }
-  }
-
-  /**
-   * Whether the member already told its lead what its turn ended with: its
-   * last message tagging the lead says what the turn's last reply says, and
-   * nothing came between them from the lead or a hand-back. A question it
-   * asked the lead mid-turn does not count.
-   */
-  private toldLeadSinceHandBack(
-    teamId: string,
-    handle: string,
-    said: string,
-  ): boolean {
-    const gist = (text: string) =>
-      text
-        .replace(/@[\w-]+/g, "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-    const final = gist(said);
-    if (final.length < 12) return false;
-    const recent = this.repositories.teams.recentMessages(teamId, 50);
-    for (let index = recent.length - 1; index >= 0; index -= 1) {
-      const message = recent[index]!;
-      if (message.author === LEAD_HANDLE) return false;
-      if (
-        message.author === DAEDALUS_HANDLE &&
-        (message.kind === "handback" || message.kind === "waiting") &&
-        message.body.startsWith(`@${handle} `)
-      )
-        return false;
-      if (
-        message.author === handle &&
-        message.kind === "message" &&
-        message.tags.includes(LEAD_HANDLE)
-      ) {
-        const told = gist(message.body);
-        const head = (text: string) => text.slice(0, 80);
-        return told.includes(head(final)) || final.includes(head(told));
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Hands a member's turn back to its lead: "@api finished: <its last
-   * message>". A mid-level lead's turn goes to its own lead the same way. A
-   * member waiting on the user is noted too, as the user's to answer, so the
-   * lead knows why it is stopped and does not pass it on. Says how the turn
-   * was handled, for the user's notification. Never throws.
-   */
-  async handBack(
-    session: AgentSession,
-    end: TurnEnd,
-    text: string | null,
-  ): Promise<TurnEndHandling> {
-    try {
-      const membership = this.memberOf(session.id);
-      if (!membership) return this.led(session.id) ? "reply" : undefined;
-      const handle = membership.reader.handle;
-      const said = text ? clip(text.trim(), MAX_HANDBACK_TEXT) : "";
-      const body =
-        end === "finished"
-          ? said
-            ? `@${handle} finished:\n\n${said}`
-            : `@${handle} finished.`
-          : end === "failed"
-            ? `@${handle} failed${said ? `: ${said}` : "."}`
-            : end === "stopped"
-              ? `@${handle} was interrupted by the user.`
-              : `@${handle} is waiting on the user${said ? `: ${said}` : "."}\n\nThe user answers it in @${handle}'s own session; you need not pass it on.`;
-      await this.say({
-        team: membership.team.id,
-        author: DAEDALUS_HANDLE,
-        tags: [LEAD_HANDLE],
-        body,
-        // The user answers a member waiting on them, so the note rides along
-        // with the lead's next delivery instead of waking it for nothing. So
-        // does a finish the member already told the lead about this turn:
-        // its message woke the lead, and a second wake made the lead recap.
-        kind:
-          end === "waiting" ||
-          (end === "finished" &&
-            this.toldLeadSinceHandBack(membership.team.id, handle, said))
-            ? "waiting"
-            : "handback",
-      });
-      return "handed-back";
-    } catch {
-      return undefined;
-    }
-  }
-
-  /**
-   * Sends every lead the hand-backs it was held from while a minute had not
-   * passed since its last delivery. The desktop app calls this on its tick;
-   * without the app they go with the lead's next delivery or turn.
-   */
-  async flushDue(): Promise<TeamDeliveryResult[]> {
-    const results: TeamDeliveryResult[] = [];
-    for (const team of this.list()) {
-      const cursor = this.repositories.teams.cursor(team.id, LEAD_HANDLE);
-      if (!this.handBackDue(cursor)) continue;
-      const waiting = this.repositories.teams
-        .messages(team.id, cursor.deliveredThrough)
-        .some(
-          (message) =>
-            tagsReader(message, LEAD_HANDLE) && message.kind !== "waiting",
-        );
-      if (!waiting) continue;
-      // A lead that is not running gets them when it runs again; one whose
-      // last delivery failed is tried again a minute later, not every tick.
-      const { lead } = team;
-      if (
-        lead.archivedAt ||
-        (lead.status !== "running" && lead.status !== "starting")
-      )
-        continue;
-      if (
-        cursor.lastError &&
-        cursor.lastAttemptAt &&
-        this.now().getTime() - Date.parse(cursor.lastAttemptAt) <
-          HANDBACK_INTERVAL_MS
-      )
-        continue;
-      try {
-        const result = await this.deliver(team, {
-          handle: LEAD_HANDLE,
-          session: team.lead,
-          role: "lead",
-        });
-        if (result.messages) results.push(result);
-      } catch {
-        // The next tick tries again.
-      }
-    }
-    return results;
-  }
-
-  /** Whether a lead last given messages at this cursor may be given more. */
-  private handBackDue(cursor: TeamCursor): boolean {
-    return (
-      !cursor.deliveredAt ||
-      this.now().getTime() - Date.parse(cursor.deliveredAt) >=
-        HANDBACK_INTERVAL_MS
-    );
-  }
-
-  /** Pushes whatever is waiting to every reader of the team. */
-  async flush(reference: string): Promise<TeamDeliveryResult[]> {
-    return this.flushTeam(this.get(reference));
-  }
-
-  /**
-   * Pushes what is waiting for one session, if it is in a team. Called from
-   * its own hooks, so a member that was not running yet when a message was
-   * posted gets it once it starts. Never throws.
-   */
-  async flushSession(
-    sessionId: string,
-  ): Promise<TeamDeliveryResult | undefined> {
-    try {
-      let own: TeamDeliveryResult | undefined;
-      for (const place of this.memberships(sessionId)) {
-        const result = await this.deliver(place.team, place.reader);
-        if (!own || result.messages) own = result;
-        // A lead back from the archive lets its members have what waited.
-        if (place.reader.role === "lead") await this.flushTeam(place.team);
-      }
-      return own;
-    } catch {
-      return undefined;
-    }
-  }
-
-  private async flushTeam(team: Team): Promise<TeamDeliveryResult[]> {
-    const results: TeamDeliveryResult[] = [];
-    for (const reader of this.readers(team)) {
-      const result = await this.deliver(team, reader);
-      if (result.messages) results.push(result);
-    }
-    return results;
-  }
-
-  /**
-   * Tells one reader what tags it since its last delivery, as one line that
-   * points it at the chat. The cursor moves
-   * before the send, inside a write lock, so two processes never send the
-   * same messages; a failed send moves it back and records why.
-   */
-  private async deliver(
-    team: Team,
-    reader: TeamReader,
-  ): Promise<TeamDeliveryResult> {
-    const at = this.now().toISOString();
-    const claim = this.repositories.immediateTransaction(() => {
-      const cursor = this.repositories.teams.cursor(team.id, reader.handle);
-      const pending = this.repositories.teams
-        .messages(team.id, cursor.deliveredThrough)
-        .filter(
-          (message) =>
-            message.tags.includes(reader.handle) &&
-            message.author !== reader.handle,
-        );
-      if (!pending.length) return { cursor, pending };
-      // A note that a member waits on the user wakes no one; it goes with
-      // the next delivery.
-      if (pending.every((message) => message.kind === "waiting"))
-        return { cursor, pending: [] };
-      // Hand-backs alone reach a lead at most once a minute; anything else
-      // goes now and takes them along.
-      if (
-        reader.role === "lead" &&
-        pending.every((message) => message.kind !== "message") &&
-        !this.handBackDue(cursor)
-      )
-        return {
-          cursor,
-          pending,
-          coalesced: new Date(
-            Date.parse(cursor.deliveredAt!) + HANDBACK_INTERVAL_MS,
-          ).toISOString(),
-        };
-      // A paused team holds its members' messages; the lead still hears.
-      if (reader.role === "member" && team.paused) {
-        const held: TeamCursor = {
-          ...cursor,
-          lastError: `the team is paused; it gets the messages when '${team.name}' resumes`,
-          lastAttemptAt: at,
-        };
-        this.repositories.teams.saveCursor(held);
-        return { cursor: held, pending, held: true };
-      }
-      if (
-        reader.session.archivedAt ||
-        (reader.session.status !== "running" &&
-          reader.session.status !== "starting")
-      ) {
-        const waiting: TeamCursor = {
-          ...cursor,
-          lastError: `the session is ${reader.session.archivedAt ? "archived" : reader.session.status}; it gets the messages when it runs again`,
-          lastAttemptAt: at,
-        };
-        this.repositories.teams.saveCursor(waiting);
-        return { cursor: waiting, pending, skipped: true };
-      }
-      this.repositories.teams.saveCursor({
-        ...cursor,
-        deliveredThrough: pending.at(-1)!.id,
-        lastAttemptAt: at,
-      });
-      return { cursor, pending };
-    });
-    const base = {
-      handle: reader.handle,
-      sessionId: reader.session.id,
-      messages: claim.pending.length,
-    };
-    if (!claim.pending.length)
-      return { ...base, delivered: false, error: null };
-    if ("coalesced" in claim)
-      return {
-        ...base,
-        delivered: false,
-        error: null,
-        heldUntil: claim.coalesced,
-      };
-    if ("held" in claim)
-      return { ...base, delivered: false, error: claim.cursor.lastError };
-    if ("skipped" in claim) {
-      // Asleep with its cloud workspace: woken and resumed, after which the
-      // session running again delivers these.
-      void this.agents.wakeIfAsleep(reader.session).catch(() => undefined);
-      return { ...base, delivered: false, error: claim.cursor.lastError };
-    }
-    const claimed = claim.pending.at(-1)!.id;
-    try {
-      const { text, complete } = this.deliveryText(team, claim.pending, reader);
-      await this.transport.deliver({
-        session: await this.agents.recoverCodexThread(reader.session),
-        text,
-        from: this.deliveryFrom(team, claim.pending),
-      });
-      this.repositories.teams.saveCursor({
-        ...this.repositories.teams.cursor(team.id, reader.handle),
-        lastError: null,
-        lastAttemptAt: at,
-        deliveredAt: at,
-      });
-      // It has read them in full; `team chat --tagged` does not print them
-      // again.
-      if (complete)
-        this.repositories.teams.markRead(
-          team.id,
-          reader.handle,
-          "tagged",
-          claimed,
-        );
-      return { ...base, delivered: true, error: null };
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      this.repositories.immediateTransaction(() => {
-        const current = this.repositories.teams.cursor(team.id, reader.handle);
-        this.repositories.teams.saveCursor({
-          ...current,
-          // Only undone if no later delivery moved it on meanwhile.
-          deliveredThrough:
-            current.deliveredThrough === claimed
-              ? claim.cursor.deliveredThrough
-              : current.deliveredThrough,
-          lastError: reason,
-          lastAttemptAt: at,
-        });
-      });
-      return { ...base, delivered: false, error: reason };
-    }
-  }
-
-  /**
-   * The messages in full, oldest first: each under a `[team "..."] author:`
-   * header with every body line indented, so no line of a body can pass for
-   * a header (N-1), then how to reply. Past MAX_DELIVERY_TEXT the oldest are
-   * left out and counted; `complete` is false then, and they stay unread
-   * for `team chat --tagged`.
-   */
-  private deliveryText(
-    team: Team,
-    pending: TeamMessage[],
-    reader: TeamReader,
-  ): { text: string; complete: boolean } {
-    const label = this.authorLabels(team);
-    // A session in two teams, a lead and its lead's member, names which.
-    const which =
-      this.memberships(reader.session.id).length > 1
-        ? ` --team ${team.lead.id}`
-        : "";
-    const blocks: string[] = [];
-    let size = 0;
-    let shown = 0;
-    for (const message of [...pending].reverse()) {
-      const body = splitLines(message.body)
-        .map((line) => (line ? `  ${line}` : ""))
-        .join("\n");
-      const block = `[team "${team.name}"] ${label(message.author)}:\n${body}`;
-      if (shown && size + block.length > MAX_DELIVERY_TEXT) break;
-      blocks.unshift(block);
-      size += block.length;
-      shown += 1;
-    }
-    const left = pending.length - shown;
-    if (left)
-      blocks.unshift(
-        `[team "${team.name}"] ${left} earlier ${left === 1 ? "message is" : "messages are"} not shown here; read ${left === 1 ? "it" : "them"} with: daedal team chat --tagged${which}`,
-      );
-    const handles = new Set(this.readers(team).map((each) => each.handle));
-    const replyTo = new Set<string>();
-    for (const message of pending.slice(-shown)) {
-      // A hand-back is about the member it names, not from Daedalus.
-      const about =
-        message.kind !== "message"
-          ? parseTags(message.body)[0]
-          : message.author;
-      if (about && about !== reader.handle && handles.has(about))
-        replyTo.add(about);
-    }
-    const hint = replyTo.size
-      ? `Reply with: daedal team say${which} "${[...replyTo].map((handle) => `@${handle}`).join(" ")} ..."`
-      : `Read the whole chat with: daedal team chat${which}`;
-    return { text: [...blocks, hint].join("\n\n"), complete: left === 0 };
-  }
-
-  private deliveryFrom(team: Team, pending: TeamMessage[]): string {
-    const authors = [...new Set(pending.map((message) => message.author))];
-    return authors.length === 1
-      ? `[team "${team.name}"] ${this.authorLabels(team)(authors[0]!)}`
-      : `[team "${team.name}"]`;
-  }
-
-  /**
-   * What a reader has not read yet, oldest first, and moves its read marker
-   * to the newest message. `all` shows the newest messages whatever was read.
-   * `tagged` shows only unread messages that tag the reader and moves only
-   * their marker, so the rest of the chat stays unread for a full read.
-   */
-  chat(
-    reference: string,
-    reader: string,
-    options: { all?: boolean; tagged?: boolean; limit?: number } = {},
-  ): {
-    team: Team;
-    messages: TeamMessage[];
-    skipped: number;
-    /** For `tagged`: unread messages that do not tag the reader. */
-    others?: number;
-  } {
-    const team = this.get(reference);
-    const limit = Math.max(1, options.limit ?? CHAT_LIMIT);
-    const cursor = this.repositories.teams.cursor(team.id, reader);
-    if (options.tagged) {
-      const after = this.repositories.teams.messages(
-        team.id,
-        cursor.readThrough,
-      );
-      const unread = after.filter(
-        (message) =>
-          message.id > cursor.taggedReadThrough && tagsReader(message, reader),
-      );
-      const others = after.filter(
-        (message) => message.author !== reader && !tagsReader(message, reader),
-      ).length;
-      const messages = unread.slice(-limit);
-      const last = unread.at(-1);
-      if (last)
-        this.repositories.teams.markRead(team.id, reader, "tagged", last.id);
-      return {
-        team,
-        messages,
-        skipped: unread.length - messages.length,
-        others,
-      };
-    }
-    // A tagged message read with --tagged is not printed again.
-    const unread = options.all
-      ? this.repositories.teams.recentMessages(team.id, limit)
-      : this.repositories.teams
-          .messages(team.id, cursor.readThrough)
-          .filter(
-            (message) =>
-              message.id > cursor.taggedReadThrough ||
-              !tagsReader(message, reader),
-          );
-    const messages = unread.slice(-limit);
-    const last = this.repositories.teams.lastMessageId(team.id);
-    if (last > cursor.readThrough)
-      this.repositories.teams.markRead(team.id, reader, "read", last);
-    return {
-      team,
-      messages,
-      skipped: options.all ? 0 : unread.length - messages.length,
-    };
-  }
-
-  /** The lead and members, with what each has not read or been sent. */
-  status(reference: string): { team: Team; members: TeamMemberStatus[] } {
-    const team = this.get(reference);
-    const messages = this.repositories.teams.messages(team.id);
-    const members = [
-      ...this.readers(team),
-      ...this.members(team.id)
-        .filter((member) => member.archivedAt && member.teamHandle)
-        .map((member) => ({
-          handle: member.teamHandle!,
-          session: member,
-          role: "member" as const,
-        })),
-    ].map((reader) => {
-      const cursor = this.repositories.teams.cursor(team.id, reader.handle);
-      return {
-        ...reader,
-        unread: messages.filter(
-          (message) =>
-            message.id > cursor.readThrough &&
-            message.author !== reader.handle &&
-            !(
-              message.id <= cursor.taggedReadThrough &&
-              tagsReader(message, reader.handle)
-            ),
-        ).length,
-        undelivered: messages.filter(
-          (message) =>
-            message.id > cursor.deliveredThrough &&
-            message.tags.includes(reader.handle) &&
-            message.author !== reader.handle,
-        ).length,
-        lastError: cursor.lastError,
-        lastAttemptAt: cursor.lastAttemptAt,
-      };
-    });
-    return { team, members };
-  }
-
   /** Sets what the team is working toward; members are told at launch. */
   setGoal(reference: string, goal: string): Team {
     const team = this.get(reference);
@@ -1446,11 +731,4 @@ export class TeamService {
       ability,
     };
   }
-}
-
-/** Text cut to `limit` characters, saying that it was. */
-function clip(text: string, limit: number): string {
-  return text.length > limit
-    ? `${text.slice(0, limit).trimEnd()}… (cut; the rest is in its session)`
-    : text;
 }

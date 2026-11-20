@@ -42,53 +42,7 @@ export interface SessionAbility {
   revokedAt: string | null;
 }
 
-/** Who wrote a team chat message: the lead, the user, or a member's handle. */
-export type TeamAuthor = string;
-
-/**
- * What a team message is: something a person or session wrote, or the
- * hand-back Daedalus posts to a lead when a member's turn ends.
- */
-/**
- * `handback` is Daedalus's note that a member's turn ended; `waiting` says a
- * member stopped to wait on the user, which never wakes the lead by itself.
- */
-export type TeamMessageKind = "message" | "handback" | "waiting";
-
-/** One message in a team's chat. */
-export interface TeamMessage {
-  id: number;
-  /** The lead's orchestration ability id. */
-  teamId: UUID;
-  author: TeamAuthor;
-  body: string;
-  /** The handles it was pushed to: `lead` or members' handles. */
-  tags: string[];
-  createdAt: string;
-  kind: TeamMessageKind;
-}
-
-/** What one reader of a team chat has read and been delivered. */
-export interface TeamCursor {
-  teamId: UUID;
-  handle: string;
-  /** The last message it read with `team chat`. */
-  readThrough: number;
-  /**
-   * The last message that tags it and that it read with `team chat
-   * --tagged`. Messages up to `readThrough` count as read whatever this is.
-   */
-  taggedReadThrough: number;
-  /** The last message that tags it and reached its session. */
-  deliveredThrough: number;
-  /** Why the last delivery failed, or null after one succeeded. */
-  lastError: string | null;
-  lastAttemptAt: string | null;
-  /** When the last delivery reached its session. */
-  deliveredAt: string | null;
-}
-
-/** A member's place in a team: the team, and its handle in the chat. */
+/** A member's place in a team: the team, and its handle in its channel. */
 export interface TeamMembership {
   teamId: UUID;
   handle: string;

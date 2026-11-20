@@ -65,10 +65,23 @@ const ALLOWED: Record<string, Spec> = {
     flags: ["clear"],
     positionals: { min: 0, max: Number.POSITIVE_INFINITY },
   },
+  "channel say": { positionals: { min: 1, max: Number.POSITIVE_INFINITY } },
+  "channel read": {
+    values: ["limit"],
+    flags: ["all", "tagged"],
+    positionals: { min: 0, max: 1 },
+  },
+  "channel find": {
+    values: ["since"],
+    positionals: { min: 1, max: Number.POSITIVE_INFINITY },
+  },
+  "channel list": { positionals: { min: 0, max: 0 } },
+  // Moved to `channel say` and `channel read`; let through so a session
+  // taught them before gets the error that says what to run instead.
   "team say": { positionals: { min: 1, max: Number.POSITIVE_INFINITY } },
   "team chat": {
     values: ["limit"],
-    flags: ["all"],
+    flags: ["all", "tagged"],
     positionals: { min: 0, max: 0 },
   },
   "team list": { positionals: { min: 0, max: 0 } },
@@ -237,7 +250,10 @@ export function decideCall(
   const command =
     argv[0] === "repo" && argv[1] === "worktree"
       ? `repo worktree ${argv[2] ?? ""}`
-      : argv[0] === "agent" || argv[0] === "team" || argv[0] === "task"
+      : argv[0] === "agent" ||
+          argv[0] === "team" ||
+          argv[0] === "channel" ||
+          argv[0] === "task"
         ? `${argv[0]} ${argv[1] ?? ""}`
         : (argv[0] ?? "");
   const spec = ALLOWED[command];
@@ -270,12 +286,10 @@ export function decideCall(
   if (command === "open-url" && !session)
     return refuse("open-url without a session");
   if (
-    (command === "team say" ||
-      command === "team chat" ||
-      command === "team list") &&
+    (command.startsWith("channel ") || command.startsWith("team ")) &&
     !session
   )
-    return refuse("team commands without a session");
+    return refuse("team and channel commands without a session");
   if (
     parsed.values.has("workspace") &&
     parsed.values.get("workspace") !== workspaceId
@@ -311,7 +325,7 @@ export function decideCall(
 
   // Text a cloud session writes where agents and the user read it is marked
   // as coming from the cloud, on every line, so nobody takes it for the user
-  // or a local agent (M-4, N-1). A team message is marked in its header when
+  // or a local agent (M-4, N-1). A channel message is marked in its header when
   // it is shown, from its author's session, so it is passed on as written.
   const mark = cloudMark(repositories.findWorkspace(workspaceId)?.name);
   let stdinMark: string | undefined;

@@ -139,10 +139,10 @@ describe("ReadModel", () => {
     });
   });
 
-  test("an ask asked or answered by another process moves the open asks part", async () => {
+  test("a thread opened or resolved by another process moves the open threads part", async () => {
     await withContext(async (context) => {
       const model = new ReadModel(context);
-      const workspace = await context.workspaces.create({ name: "Asks" });
+      const workspace = await context.workspaces.create({ name: "Threads" });
       const before = await model.versions();
       const at = new Date().toISOString();
       const id = crypto.randomUUID();
@@ -178,28 +178,25 @@ describe("ReadModel", () => {
         hostId: null,
         autoRebirthPercent: null,
       });
-      const ask = context.repositories.asks.create({
+      const thread = context.repositories.conversations.createThread({
         workspaceId: workspace.id,
-        sessionId: id,
+        ownerSessionId: id,
         title: "Ship it?",
-        context: null,
-        why: null,
-        options: [],
-        recommended: null,
+        anchorId: null,
+        anchorText: null,
         planPath: null,
         taskKey: null,
         at,
       });
       const asked = await model.versions();
-      expect(asked.openAsks).not.toBe(before.openAsks);
-      expect((await model.snapshot()).openAsks).toBe(1);
-      context.repositories.asks.end(ask.id, {
-        state: "answered",
-        reason: null,
-        notify: true,
+      expect(asked.openThreads).not.toBe(before.openThreads);
+      expect((await model.snapshot()).openThreads).toBe(1);
+      context.repositories.conversations.updateThread(
+        thread.id,
+        { resolvedAt: at, resolvedBy: "user" },
         at,
-      });
-      expect((await model.versions()).openAsks).toBe(before.openAsks);
+      );
+      expect((await model.versions()).openThreads).toBe(before.openThreads);
     });
   });
 

@@ -12,7 +12,7 @@ import { TEAM_MAX_DEPTH, teamAncestors } from "./team-tree";
 
 /** The lead's playbook. */
 export const ORCHESTRATION_SKILL = "daedalus-orchestration";
-/** How every member of a team, and its lead, talks in the team chat. */
+/** How every member of a team, and its lead, talks in the team's channel. */
 export const TEAM_SKILL = "daedalus-team";
 /** Where a lead keeps its team's state, in its own working directory. */
 export const TEAM_FILE = "TEAM.md";
@@ -42,7 +42,7 @@ export const ABILITIES: Readonly<Record<AbilityId, AbilityDefinition>> = {
     label: "Orchestration",
     providers: ["claude", "codex"],
     launchLine: (skill) =>
-      `You lead a Daedalus team of sessions toward one goal. You plan the work, add members with 'daedal agent spawn --team', and talk with them in the team chat ('daedal team say', 'daedal team chat', 'daedal team list'). When a member's work is done and checked, archive it ('daedal agent archive <member>'), which frees its place among your 5. Follow the ${skill(ORCHESTRATION_SKILL)} skill, and the ${skill(TEAM_SKILL)} skill for the chat. Keep the plan, the members, the contracts between them and every decision in ${TEAM_FILE} in your working directory; if it exists, read it before anything else.`,
+      `You lead a Daedalus team of sessions toward one goal. You plan the work, add members with 'daedal agent spawn --team', and talk with them in the team's channel ('daedal channel say', 'daedal channel read'; 'daedal team list' shows the members). When a member's work is done and checked, archive it ('daedal agent archive <member>'), which frees its place among your 5. Follow the ${skill(ORCHESTRATION_SKILL)} skill, and the ${skill(TEAM_SKILL)} skill for the channel. Keep the plan, the members, the contracts between them and every decision in ${TEAM_FILE} in your working directory; if it exists, read it before anything else.`,
     grantNote: (skill) =>
       `Daedalus: this session now leads a team. Read the ${skill(ORCHESTRATION_SKILL)} skill now, then wait for the user.`,
     revokeNote: () =>

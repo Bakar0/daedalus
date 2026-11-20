@@ -47,8 +47,8 @@ directly for anything these commands do not cover.
 --body-file ('-' reads stdin). The owner is --owner, else the calling
 session's handle.
 'start' marks a task [/] and puts the owner on it: --owner, else you.
-'done', 'block' and 'drop' set [x], [!] and [-]. 'ask' asks the user, pinned to
-the task, as 'daedal thread start --plan' does; the app shows it under Threads.
+'done', 'block' and 'drop' set [x], [!] and [-]. 'ask' opens a thread with the
+user, pinned to the task, as 'daedal thread new --plan' does.
 An @owner is a session's team handle, or its name made into a handle
 (a session called "Cart endpoints" answers to @cart-endpoints).`;
 
@@ -71,11 +71,13 @@ export function printPlan(
   file: PlanFile,
   plan: PlanDocument,
   owners: PlanOwnerView[],
-  asks: ReadonlyArray<{ id: number; taskKey: string | null }> = [],
+  threads: ReadonlyArray<{ number: number; taskKey: string | null }> = [],
 ): void {
-  // Open asks pinned to a task: the task waits on the user.
+  // Open threads pinned to a task: the task waits on the user.
   const waiting = new Map(
-    asks.flatMap((ask) => (ask.taskKey ? [[ask.taskKey, ask.id]] : [])),
+    threads.flatMap((thread) =>
+      thread.taskKey ? [[thread.taskKey, thread.number]] : [],
+    ),
   );
   const state = new Map(owners.map((owner) => [owner.handle, owner]));
   const chip = (handle: string | null) => {
@@ -197,9 +199,9 @@ export async function planCommand(
     const found = await file(parsed.positionals[0]!);
     const { plan } = await context.plans.read(found);
     const owners = await context.plans.owners(found, plan);
-    const asks = context.asks.onPlan(found.absolutePath);
-    printResult({ file: found, plan, owners, asks }, json, () =>
-      printPlan(found, plan, owners, asks),
+    const threads = context.threads.onPlan(found.absolutePath);
+    printResult({ file: found, plan, owners, threads }, json, () =>
+      printPlan(found, plan, owners, threads),
     );
     return 0;
   }
@@ -247,17 +249,17 @@ export async function planCommand(
     if (!session)
       throw new DaedalusError(
         "VALIDATION",
-        'Ask from the session that waits on the answer, or use daedal thread start "<question>" --session <session> --plan <plan> ^<id>',
+        'Ask from the session that waits on the answer, or use daedal thread new "<message>" --session <session> --plan <plan> ^<id>',
       );
-    const { ask } = await context.asks.create({
+    const { thread } = await context.threads.new({
       session: session.id,
-      title: parsed.positionals.slice(2).join(" "),
+      body: parsed.positionals.slice(2).join(" "),
       plan: found.absolutePath,
       task: parsed.positionals[1]!,
     });
-    printResult({ file: found, ask }, json, () =>
+    printResult({ file: found, thread }, json, () =>
       console.log(
-        `Asked #${ask.id}, pinned to ^${ask.taskKey}; the user sees it under Activity. Add context with 'daedal activity update ${ask.id} --context "..."'.`,
+        `Opened thread #${thread.number}, pinned to ^${thread.taskKey}; the user sees it under Threads. Write more in it with 'daedal thread say ${thread.number} "..."'.`,
       ),
     );
     return 0;

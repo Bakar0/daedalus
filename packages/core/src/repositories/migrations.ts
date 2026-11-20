@@ -34,6 +34,68 @@ export function withoutExistingColumns(
   );
 }
 
+/**
+ * A script's statements, each with its `;`. A `;` inside a string, a quoted
+ * name, a comment, or a trigger's `BEGIN ... END` body does not end one.
+ * Text that is only comments and space is not a statement.
+ */
+export function sqlStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let start = 0;
+  let code = "";
+  let depth = 0;
+  let index = 0;
+  const finish = (end: number) => {
+    if (code.trim()) statements.push(sql.slice(start, end).trim());
+    start = end;
+    code = "";
+    depth = 0;
+  };
+  while (index < sql.length) {
+    const char = sql[index]!;
+    const next = sql[index + 1];
+    if (char === "-" && next === "-") {
+      const end = sql.indexOf("\n", index);
+      index = end === -1 ? sql.length : end;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      const end = sql.indexOf("*/", index + 2);
+      index = end === -1 ? sql.length : end + 2;
+      continue;
+    }
+    const close = { "'": "'", '"': '"', "`": "`", "[": "]" }[char];
+    if (close) {
+      let end = index + 1;
+      while (end < sql.length) {
+        if (sql[end] === close && sql[end + 1] === close && close !== "]")
+          end += 2;
+        else if (sql[end] === close) break;
+        else end += 1;
+      }
+      code += " x ";
+      index = end + 1;
+      continue;
+    }
+    if (/[A-Za-z_]/.test(char)) {
+      const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(sql.slice(index))![0];
+      const upper = word.toUpperCase();
+      if (/^\s*CREATE\s+(TEMP\s+|TEMPORARY\s+)?TRIGGER\b/i.test(code + word)) {
+        if (upper === "BEGIN" || upper === "CASE") depth += 1;
+        else if (upper === "END") depth -= 1;
+      }
+      code += word;
+      index += word.length;
+      continue;
+    }
+    code += char;
+    index += 1;
+    if (char === ";" && depth <= 0) finish(index);
+  }
+  finish(sql.length);
+  return statements;
+}
+
 export async function runMigrations(
   databasePath: string,
   migrationsDirectory: string,
@@ -64,7 +126,13 @@ export async function runMigrations(
         .some((row) => row.name.toLowerCase() === column.toLowerCase());
     const apply = database.transaction(
       (version: string, sql: string, checkForeignKeys: boolean) => {
-        database.exec(withoutExistingColumns(sql, hasColumn));
+        // One statement at a time: given several, Bun's `exec` and `run`
+        // skip one that fails after the first without throwing, which would
+        // commit half a migration.
+        for (const statement of sqlStatements(
+          withoutExistingColumns(sql, hasColumn),
+        ))
+          database.run(statement);
         if (checkForeignKeys) {
           const broken = database
             .query<{ table: string }, []>("PRAGMA foreign_key_check")

@@ -129,19 +129,20 @@ In the app:
 - A lead's or member's terminal has a **Team** bar. Its **Team** button
   opens the team's tab in the center tab strip. It starts with one line
   saying what a team is and a link to this section. Members are listed on
-  the left and the chat fills the right, as in the Workflows tab, and the
+  the left and the channel fills the right, as in the Workflows tab, and the
   line between them drags to resize. It holds the goal, edited in place;
   each member with a status dot, its unread count and any delivery that
-  failed, a click away from its session; the newest 100 messages of the
-  chat, where a message longer than four lines folds; and a box to post as
-  the user (⌘↵ sends). The open tab reads the team again every 4 seconds.
+  failed, a click away from its session; the team's channel, headed
+  "#<name> · team channel", with its newest 100 messages, where a message
+  longer than four lines folds; and a box to post as the user (⌘↵ sends). The open tab reads the team again every 4 seconds.
 
 ```
 daedal agent spawn --team --name server --message "<instructions>"   # inside any session
 daedal agent spawn --team "Checkout API" --message "<instructions>"  # the user
 daedal agent spawn --team --workspace docs --message "<instructions>"  # a member elsewhere
-daedal team say "@server the token field is access_token"
-daedal team chat [--tagged | --all]
+daedal channel say "@server the token field is access_token"
+daedal channel read [--tagged | --all]
+daedal channel find "token field"
 daedal team list
 daedal team tree
 daedal team goal "<text>"
@@ -162,30 +163,30 @@ rebirth successor takes both, and the predecessor leaves the team.
   messages through its own provider's inbox. A task is optional. The handle comes from
   `--name`, else the task title, else `member`, with `-2`, `-3` for repeats.
   `lead`, `user`, `daedalus` and `all` are reserved. The launch prompt names
-  the team, the lead, the other members and the goal, and points to the
-  `daedalus-team` skill.
+  the team, its channel, the lead, the other members and the goal, and
+  points to the `daedalus-team` skill.
 - **The user adds a member** with `--team <lead>`. Daedalus then posts in the
-  chat, as `daedalus` and tagging only the lead, who was added with which
+  channel, as `daedalus` and tagging only the lead, who was added with which
   instructions. The lead manages that member like its own.
 - **Hand-back.** Members do not post "done". When a member's turn ends,
   Daedalus posts to its lead, as `daedalus`, tagging only the lead and with
-  `kind = 'handback'` in `team_messages`: "@server finished:" and the turn's
+  `kind = 'handback'` in `messages`: "@server finished:" and the turn's
   last assistant message (Claude's and Codex's `Stop` hook
   `last_assistant_message`, cut at 3000 characters), "@server failed: <the
   error>" (`StopFailure`), "@server was interrupted by the user." (an
   interrupt straight from `working`), or "@server is waiting on the user:
   <its question>" with a line saying the user answers it in the member's
-  session. `ActivityService.onTurnEnd` calls `TeamService.handBack` on the
+  session. `ActivityService.onTurnEnd` calls `ChannelService.handBack` on the
   transition into each of those; a pane reading is a guess and ends no turn.
   A permission prompt hands nothing back: only the user can answer it, on the
   member's card. A member that leads hands back to its own lead in the same
   way, so a piece of a nested tree reports up one level at a time.
 - **Hand-back rate.** A lead gets hand-backs at most once a minute
-  (`HANDBACK_INTERVAL_MS`), measured from `team_cursors.delivered_at`, its
+  (`HANDBACK_INTERVAL_MS`), measured from the lead's `cursors.delivered_at`, its
   last delivery. A delivery holding only hand-backs inside that minute waits;
   anything else, such as a member's question, goes at once and takes the
   waiting hand-backs with it. The desktop app sends what waited on its tick
-  (`TeamService.flushDue`); with the app closed it goes with the lead's next
+  (`ChannelService.flushDue`); with the app closed it goes with the lead's next
   delivery or turn.
 - **Notifications.** A member's finished turn does not notify the user,
   since its lead got it. Its failure and its wait on the user still do, and
@@ -202,9 +203,9 @@ rebirth successor takes both, and the predecessor leaves the team.
   goes at most 3 levels below its top lead (`TEAM_MAX_DEPTH`) and a lead
   has at most 5 members that are not archived (`TEAM_MAX_MEMBERS`); past
   either, the spawn is refused and the refusal names the lead to add to, or
-  says to archive a member. A session in two teams posts `@lead` to its own
-  lead's team and any other tag to the team it leads; `team chat` reads both,
-  and its notices name the team with `--team <lead>`. `team tree` prints the
+  says to archive a member. A session in two teams is in two channels:
+  `channel say` needs the name, `channel read` reads both, and its notices
+  name the channel in their reply line. `team tree` prints the
   tree from its top lead, and `team list` marks a member that leads.
 - **Pausing and ending a team.** `team pause` pauses a team and every team
   below it: messages to members wait, with the reason in `team list`, and no
@@ -220,39 +221,44 @@ rebirth successor takes both, and the predecessor leaves the team.
 orchestration`) ends a team: every member's team is cleared and they keep
   running as plain sessions, and members that lead keep their own teams.
 
-### The chat
+### The channel
 
-`team_messages` stores every post: the team, the author (`lead`, `user`,
-`daedalus` or a handle), the body and the tags. Tags decide who is told:
-`@<handle>` and `@lead` push the message into that session, `@all` into every
-one but the author's, and `@user` reaches no session. An unknown tag is
-refused with the list of handles; a message that tags no session is stored
-with a warning. The lead is not copied on members' messages to each other.
+A team's channel is a conversation of kind `channel` in `conversations`,
+tied to the team by `team_id`; its name is the lead's session name as a
+slug. `messages` stores every post: the author (`lead`, `user`, `daedalus`
+or a handle), the body and the tags. Tags decide who is told: `@<handle>`
+and `@lead` push the message into that session, `@all` into every one but
+the author's, and `@user` reaches no session. An unknown tag is refused with
+the list of handles; a message that tags no session is stored with a
+warning. The lead is not copied on members' messages to each other.
+`messages_search`, a trigram FTS5 index kept by triggers, serves
+`channel find`.
 
 Delivery runs in the process that posts, so it works with the app closed.
-Each reader has a row in `team_cursors`: `delivered_through`, the last tagged
-message that reached its session, `read_through`, the last one `team
-chat` printed to it, and `tagged_read_through`, the last message tagging it
-that `team chat --tagged` printed. A tagged read moves only that marker, so
-the rest of the chat stays unread, and a later full read skips what it
-printed. Each read updates only its own column, so it never undoes a
-delivery saved meanwhile. One delivery carries every waiting message that
-tags the reader, in full, oldest first: a `[team "<name>"] <author>:` header,
-the body under it with every line indented two spaces, so no body line can
-pass for a header, and last a reply line, `Reply with: daedal team say
-"@server ..."`, naming the sessions that wrote (for a hand-back, the member
-it is about), with `--team <lead>` for a session in two teams. A delivered
-message is marked read for `team chat --tagged`. Past 16,000 characters the
-oldest are left out, counted in a first line that says to read them with
-`team chat --tagged`, and stay unread. The cursor moves under a write lock
-before the send, so two processes never send the same message, and moves
-back if the send fails. A failure is kept in `last_error`, shown by
-`team list`, and the send is tried again on the next post, on `team chat` and
-`team list`, on the session's own `SessionStart` and `Stop` hooks, and when a
-spawn, restore or revive has the session running. A resumed session sits
-idle, so its hooks alone would not deliver. An archived member can be
-tagged; the message waits until it is restored. `@all` reaches live sessions
-only.
+Each reader has a row in `cursors`, keyed by the channel and its handle:
+`delivered_through`, the last tagged message that reached its session,
+`read_through`, the last one `channel read` printed to it, and
+`tagged_read_through`, the last message tagging it that `channel read
+--tagged` printed. A tagged read moves only that marker, so the rest of the
+channel stays unread, and a later full read skips what it printed. Each read
+updates only its own column, so it never undoes a delivery saved meanwhile.
+One delivery carries every waiting message that tags the reader, in full,
+oldest first: a `[channel #<name>] <author>:` header, the body under it
+with every line indented two spaces, so no body line can pass for a header,
+and last a reply line, `Reply with: daedal channel say "@server ..."`,
+naming the sessions that wrote (for a hand-back, the member it is about),
+with the quoted `"#<name>"` for a session in two channels. A delivered
+message is marked read for `channel read --tagged`. Past 16,000 characters
+the oldest are left out, counted in a first line that says to read them
+with `channel read --tagged`, and stay unread. The cursor moves under a
+write lock before the send, so two processes never send the same message,
+and moves back if the send fails. A failure is kept in `last_error`, shown
+by `team list`, and the send is tried again on the next post, on `channel
+read` and `team list`, on the session's own `SessionStart` and `Stop`
+hooks, and when a spawn, restore or revive has the session running. A
+resumed session sits idle, so its hooks alone would not deliver. An
+archived member can be tagged; the message waits until it is restored.
+`@all` reaches live sessions only.
 
 - **Claude** sessions launched with the inbox hook get the messages in their
   Daedalus inbox mailbox (`session-inbox.ts`), line breaks and all: the
@@ -277,7 +283,7 @@ only.
   hold each message behind an approval dialog.
 - **Codex** sessions get it through `codex queue --thread <thread> --message
 <text>`, run with the session's account. A busy session runs it after its
-  current turn, as a user turn; only the `[team ...]` prefix and the skill
+  current turn, as a user turn; only the `[channel #...]` prefix and the skill
   mark it as a teammate's.
 
 Claude adds its own paragraph under every message from another session,

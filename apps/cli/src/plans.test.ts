@@ -146,7 +146,7 @@ test("plan show marks a task that waits on the user's answer", () => {
         "# Release\n\n## Tasks\n\n- [ ] Build ^build\n- [ ] Store ^store\n",
       ),
       [],
-      [{ id: 5, taskKey: "store" }],
+      [{ number: 5, taskKey: "store" }],
     );
   } finally {
     console.log = log;

@@ -1,16 +1,17 @@
 /**
  * The page `scripts/threads-ui-check.ts` drives: the Threads pane for one
- * session, over a fake host. Thread #12 is a question the agent bumped
- * (blocking), #13 a free-text question, #11 one already answered, #14 a
- * question from the team member `tests`. Every call
- * the pane makes is recorded in `window.requests`.
+ * session, over a fake host. Thread #12 is one the agent bumped (blocking),
+ * #13 a free-text question, #11 one the user replied to and resolved, #14
+ * one from the team member `tests`. Every call the pane makes is recorded
+ * in `window.requests`.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import type {
   AgentSessionDto,
-  AskDto,
   MainMessageDto,
+  ThreadDto,
+  ThreadMessageDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
 import {
@@ -42,40 +43,67 @@ const session = {
   workspaceId: "ws",
 } as unknown as AgentSessionDto;
 
+let nextMessage = 100;
+const message = (
+  author: string,
+  body: string,
+  at: string,
+  extra: Partial<ThreadMessageDto> = {},
+): ThreadMessageDto => ({
+  id: (nextMessage += 1),
+  author,
+  kind: "message",
+  body,
+  details: null,
+  options: [],
+  picked: null,
+  createdAt: at,
+  ...extra,
+});
+
 const base = {
   workspaceId: "ws",
   workspaceName: "Daedalus",
   sessionId: "s-lead",
   sessionName: "webhook-retries",
-  context: null,
-  why: null,
-  options: [],
-  recommended: null,
   planPath: null,
   taskKey: null,
-  answer: null,
-  note: null,
-  closedReason: null,
-  closedAt: null,
-  undoable: false,
-  snoozedUntil: null,
-  bumpedAt: null,
-  kind: "question" as const,
   forkSessionId: null,
-} satisfies Partial<AskDto>;
+  blockedAt: null,
+  snoozedUntil: null,
+  resolvedAt: null,
+  resolvedBy: null,
+  unread: false,
+  turn: "user" as const,
+  blocking: false,
+} satisfies Partial<ThreadDto>;
 
-let asks: AskDto[] = [
+let threads: ThreadDto[] = [
   {
     ...base,
     id: 12,
     title: "How many delivery tries before a webhook is dead-lettered?",
-    why: "The retry config is the last piece before the migration.",
-    context: "Load test: both pass. 5 tries adds about 5 minutes worst case.",
-    options: ["3 tries (1s, 4s, 16s)", "5 tries (1s, 4s, 16s, 64s, 256s)"],
-    recommended: 1,
-    state: "open",
+    messages: [
+      message(
+        "agent",
+        "How many delivery tries before a webhook is dead-lettered?\n\nThe retry config is the last piece before the migration.",
+        ago(38),
+        {
+          details:
+            "Load test: both pass. 5 tries adds about 5 minutes worst case.",
+          options: [
+            "3 tries (1s, 4s, 16s)",
+            "5 tries (1s, 4s, 16s, 64s, 256s)",
+          ],
+        },
+      ),
+      message("agent", "blocked", ago(4), { kind: "notice" }),
+    ],
     createdAt: ago(38),
-    bumpedAt: ago(4),
+    updatedAt: ago(4),
+    blockedAt: ago(4),
+    blocking: true,
+    unread: true,
     anchorId: "a-3",
     anchorText:
       "Asked about the retry budget in a thread. Moving on to the dead-letter table while I wait.",
@@ -84,8 +112,15 @@ let asks: AskDto[] = [
     ...base,
     id: 13,
     title: "Which Slack channel should failed webhooks alert?",
-    state: "open",
+    messages: [
+      message(
+        "agent",
+        "Which Slack channel should failed webhooks alert?",
+        ago(11),
+      ),
+    ],
     createdAt: ago(11),
+    updatedAt: ago(11),
     anchorId: "a-4",
     anchorText:
       "Dead-letter table is in. Asked where alerts should go; runbook at https://example.com/runbook. @tests wrote the alert test, and @nobody is not a session.",
@@ -94,11 +129,21 @@ let asks: AskDto[] = [
     ...base,
     id: 11,
     title: "Branch name: webhook-retries or fix/gateway-retries?",
-    options: ["webhook-retries", "fix/gateway-retries"],
-    state: "answered",
-    answer: "webhook-retries",
+    messages: [
+      message(
+        "agent",
+        "Branch name: webhook-retries or fix/gateway-retries?",
+        ago(55),
+        { options: ["webhook-retries", "fix/gateway-retries"] },
+      ),
+      message("user", "webhook-retries", ago(52), { picked: 0 }),
+      message("agent", "resolved", ago(52), { kind: "notice" }),
+    ],
+    turn: null,
+    resolvedAt: ago(52),
+    resolvedBy: "agent",
     createdAt: ago(55),
-    closedAt: ago(52),
+    updatedAt: ago(52),
     anchorId: "a-1",
     anchorText: "Starting on webhook retries. I need a branch name first.",
   },
@@ -111,15 +156,30 @@ let asks: AskDto[] = [
     workspaceName: "Docs",
     sessionName: "tests",
     title: "Use a real HTTP server in the flaky-delivery test?",
-    options: ["Real server on a random port", "Mock fetch"],
-    recommended: 0,
-    state: "open",
+    messages: [
+      message(
+        "agent",
+        "Use a real HTTP server in the flaky-delivery test?",
+        ago(7),
+        { options: ["Real server on a random port", "Mock fetch"] },
+      ),
+    ],
     createdAt: ago(7),
+    updatedAt: ago(7),
     anchorId: "m-2",
     anchorText:
       "The flaky-server test is half written. Asked how real it should be.",
   },
 ];
+
+/** Changes one thread and tells the pane, as the host would. */
+const change = (id: number, update: (thread: ThreadDto) => ThreadDto) => {
+  threads = threads.map((thread) =>
+    thread.id === id ? update(thread) : thread,
+  );
+  queueMicrotask(() => listeners.forEach((listener) => listener()));
+  return ok(threads.find((thread) => thread.id === id)!);
+};
 
 const messages: MainMessageDto[] = [
   {
@@ -164,32 +224,43 @@ const listeners = new Set<() => void>();
 const ok = <T,>(data: T) => Promise.resolve({ ok: true as const, data });
 const client = {
   request: {
-    askList: (params: unknown) => {
-      window.requests.push({ askList: params });
-      return ok(asks);
+    threadList: (params: unknown) => {
+      window.requests.push({ threadList: params });
+      return ok(threads);
     },
-    askAnswer: (params: {
+    threadSay: (params: {
       id: number;
+      body: string | null;
       option: number | null;
-      note: string | null;
     }) => {
-      window.requests.push({ askAnswer: params });
-      asks = asks.map((ask) =>
-        ask.id === params.id
-          ? {
-              ...ask,
-              state: "answered",
-              answer:
-                params.option === null
-                  ? null
-                  : (ask.options[params.option] ?? null),
-              note: params.note,
-              closedAt: new Date().toISOString(),
-            }
-          : ask,
-      );
-      queueMicrotask(() => listeners.forEach((listener) => listener()));
-      return ok(asks.find((ask) => ask.id === params.id)!);
+      window.requests.push({ threadSay: params });
+      return change(params.id, (thread) => {
+        const offer = thread.messages
+          .filter((item) => item.kind === "message" && item.options.length)
+          .at(-1);
+        const picked =
+          params.option === null ? null : offer?.options[params.option];
+        return {
+          ...thread,
+          messages: [
+            ...thread.messages,
+            message(
+              "user",
+              [picked, params.body].filter(Boolean).join("\n"),
+              new Date().toISOString(),
+              { picked: params.option },
+            ),
+          ],
+          turn: "agent",
+          blocking: false,
+          blockedAt: null,
+          resolvedAt: null,
+        };
+      });
+    },
+    threadRead: (params: { id: number }) => {
+      window.requests.push({ threadRead: params });
+      return change(params.id, (thread) => ({ ...thread, unread: false }));
     },
     threadOpenFork: (params: {
       sessionId: string;
@@ -197,29 +268,26 @@ const client = {
       threadId?: number;
     }) => {
       window.requests.push({ threadOpenFork: params });
-      if (params.threadId !== undefined) {
-        // A question's own fork: the question gets it, no new thread.
-        asks = asks.map((ask) =>
-          ask.id === params.threadId
-            ? { ...ask, forkSessionId: "s-fork" }
-            : ask,
-        );
-        queueMicrotask(() => listeners.forEach((listener) => listener()));
-        return ok(asks.find((ask) => ask.id === params.threadId)!);
-      }
-      const anchor = messages.find((message) => message.id === params.anchorId);
-      const fork: AskDto = {
+      if (params.threadId !== undefined)
+        // A thread's own fork: the thread gets it, no new thread.
+        return change(params.threadId, (thread) => ({
+          ...thread,
+          forkSessionId: "s-fork",
+        }));
+      const anchor = messages.find((item) => item.id === params.anchorId);
+      const fork: ThreadDto = {
         ...base,
         id: 20,
-        kind: "fork",
         forkSessionId: "s-fork",
         title: anchor?.text.split("\n")[0] ?? "Thread",
-        state: "open",
+        messages: [],
+        turn: null,
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         anchorId: params.anchorId,
         anchorText: anchor?.text ?? null,
       };
-      asks = [...asks, fork];
+      threads = [...threads, fork];
       return ok(fork);
     },
     threadForkDraft: (params: { id: number }) => {
@@ -228,55 +296,54 @@ const client = {
         text: "Keep custom backoff: the queue drops a job after 3 tries with no record.",
       });
     },
-    threadClose: (params: { id: number }) => {
-      window.requests.push({ threadClose: params });
-      asks = asks.map((ask) =>
-        ask.id === params.id
-          ? {
-              ...ask,
-              state: ask.kind === "question" ? "dismissed" : "closed",
-              closedAt: new Date().toISOString(),
-            }
-          : ask,
-      );
-      queueMicrotask(() => listeners.forEach((listener) => listener()));
-      return ok(asks.find((ask) => ask.id === params.id)!);
+    threadResolve: (params: { id: number }) => {
+      window.requests.push({ threadResolve: params });
+      return change(params.id, (thread) => ({
+        ...thread,
+        resolvedAt: new Date().toISOString(),
+        resolvedBy: "user",
+        turn: null,
+        messages: [
+          ...thread.messages,
+          message("user", "resolved", new Date().toISOString(), {
+            kind: "notice",
+          }),
+        ],
+      }));
     },
     threadReopen: (params: { id: number }) => {
       window.requests.push({ threadReopen: params });
-      asks = asks.map((ask) =>
-        ask.id === params.id
-          ? { ...ask, state: "open", answer: null, note: null, closedAt: null }
-          : ask,
-      );
-      queueMicrotask(() => listeners.forEach((listener) => listener()));
-      return ok(asks.find((ask) => ask.id === params.id)!);
+      return change(params.id, (thread) => ({
+        ...thread,
+        resolvedAt: null,
+        resolvedBy: null,
+        turn: "agent",
+        messages: [
+          ...thread.messages,
+          message("user", "reopened", new Date().toISOString(), {
+            kind: "notice",
+          }),
+        ],
+      }));
     },
     threadSendToMain: (params: { id: number; text: string }) => {
       window.requests.push({ threadSendToMain: params });
-      const thread = asks.find((ask) => ask.id === params.id);
-      if (thread?.kind === "question") {
-        asks = asks.map((ask) =>
-          ask.id === params.id
-            ? {
-                ...ask,
-                state: "answered",
-                note: params.text,
-                closedAt: new Date().toISOString(),
-              }
-            : ask,
-        );
-        queueMicrotask(() => listeners.forEach((listener) => listener()));
-      }
+      void change(params.id, (thread) => ({
+        ...thread,
+        turn: "agent",
+        messages: [
+          ...thread.messages,
+          message("user", params.text, new Date().toISOString()),
+        ],
+      }));
       return ok({ text: params.text });
     },
-    askSnooze: (params: { id: number; until: string | null }) => {
-      window.requests.push({ askSnooze: params });
-      asks = asks.map((ask) =>
-        ask.id === params.id ? { ...ask, snoozedUntil: params.until } : ask,
-      );
-      queueMicrotask(() => listeners.forEach((listener) => listener()));
-      return ok(asks.find((ask) => ask.id === params.id)!);
+    threadSnooze: (params: { id: number; until: string | null }) => {
+      window.requests.push({ threadSnooze: params });
+      return change(params.id, (thread) => ({
+        ...thread,
+        snoozedUntil: params.until,
+      }));
     },
     sessionMessages: (params: unknown) => {
       window.requests.push({ sessionMessages: params });
@@ -302,8 +369,8 @@ const home = query.has("home");
 // `?thread=<id>`: the pane as a thread's own tab, with that thread's fork.
 const tabThread = query.get("thread") ? Number(query.get("thread")) : undefined;
 if (tabThread !== undefined)
-  asks = asks.map((ask) =>
-    ask.id === tabThread ? { ...ask, forkSessionId: "s-fork" } : ask,
+  threads = threads.map((thread) =>
+    thread.id === tabThread ? { ...thread, forkSessionId: "s-fork" } : thread,
   );
 if (home)
   createRoot(document.getElementById("root")!).render(

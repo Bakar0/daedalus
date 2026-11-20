@@ -1910,8 +1910,8 @@ export class AgentService {
       // So is the workflow run: the successor carries on at the same step.
       this.repositories.workflows.moveToSession(predecessor.id, session.id);
       this.repositories.routines.moveAgent(predecessor.id, session.id);
-      // Its open asks, and notices not yet delivered, are the successor's.
-      this.repositories.asks.moveToSession(predecessor.id, session.id);
+      // Its threads, and what waits in them to be brought, are the successor's.
+      this.repositories.conversations.moveThreads(predecessor.id, session.id);
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });
@@ -2743,7 +2743,7 @@ export class AgentService {
         acceptPeerMessages: true,
         workingDirectory: agent.workingDirectory,
         // A thread's fork comes back still reading main before each turn.
-        ...(this.repositories.asks.findByFork(agent.id)
+        ...(this.repositories.conversations.threadByFork(agent.id)
           ? { threadFork: true }
           : {}),
         additionalDirectories: sessionDirectories(

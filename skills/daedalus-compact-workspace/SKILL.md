@@ -79,7 +79,7 @@ The file is `JOURNAL.md` at the workspace root, the folder that holds
 The file is `TEAM.md` in your working directory. Run this only as the team's
 lead; a member says so and stops.
 
-1. Read it and the last part of `daedal team chat --all`, so you know what is
+1. Read it and the last part of `daedal channel read --all`, so you know what is
    still open.
 2. Keep in `TEAM.md`:
    - the goal, and the plan's open items;
@@ -99,4 +99,4 @@ lead; a member says so and stops.
    large. Long contracts or plans can move to a file beside `TEAM.md`,
    linked from it; ask the user before doing that.
 6. Tell the user in two lines: the size before and after, and what moved.
-   Do not post in the team chat; members read the file when they need it.
+   Do not post in the team's channel; members read the file when they need it.

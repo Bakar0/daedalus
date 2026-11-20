@@ -135,10 +135,10 @@ export async function ingestHook(input: HookIngestInput): Promise<void> {
       ...(providerSessionId ? { providerSessionId } : {}),
     });
     if (input.event === "SessionStart" || input.event === "Stop")
-      // Team messages that could not reach the session before: it was not
-      // running yet, or a send failed. Retried on the next post, chat or turn.
+      // Channel messages that could not reach the session before: it was not
+      // running yet, or a send failed. Retried on the next post, read or turn.
       await context()
-        .then((opened) => opened.teams.flushSession(sessionId))
+        .then((opened) => opened.channels.flushSession(sessionId))
         .catch(() => undefined);
   } catch {
     // An activity hook must never interfere with the provider session.

@@ -9,16 +9,16 @@ import { splitLines } from "./cloud-mark";
 import type { SessionChannel } from "./session-channel";
 import { inboxWaiterAlive, leaveInInbox, usesInbox } from "./session-inbox";
 
-/** One delivery of team chat messages into a member's or the lead's session. */
+/** One delivery of channel messages into a member's or the lead's session. */
 export interface TeamDelivery {
   session: AgentSession;
   text: string;
-  /** Who it is from, as the session shows it: `[team "API"] server-worker`. */
+  /** Who it is from, as the session shows it: `[channel #api] server-worker`. */
   from: string;
 }
 
 /**
- * How a team chat message reaches a running session without typing into its
+ * How a channel message reaches a running session without typing into its
  * pane. Throws when it was not delivered, with a reason fit for `team list`.
  */
 export interface TeamTransport {

@@ -12,7 +12,7 @@ import type {
   SessionAbilityDto,
   SessionColorDto,
   TeamDetailDto,
-  TeamMessageDto,
+  ChannelMessageDto,
 } from "@daedalus/protocol";
 import { App } from "./App";
 import type { DesktopClient } from "./client-types";
@@ -208,8 +208,8 @@ let current: DesktopSnapshotDto = {
 /** Every spawn the dialog asked for, for a script to read back. */
 const spawns: unknown[] = [];
 
-/** The team chat, as the stub keeps it. */
-const teamMessages: TeamMessageDto[] = [
+/** The team channel, as the stub keeps it. */
+const teamMessages: ChannelMessageDto[] = [
   {
     id: 1,
     author: "daedalus",
@@ -249,6 +249,7 @@ const teamDetail = (): TeamDetailDto => ({
       lastError: "Claude has no live session api-worker",
     },
   ],
+  channel: "reviewer",
   messages: teamMessages,
 });
 
@@ -394,8 +395,8 @@ const client = {
           topics: [],
         }),
       teamDetail: async () => ok(teamDetail()),
-      teamSay: async ({ body }: { body: string }) => {
-        const message: TeamMessageDto = {
+      channelSay: async ({ body }: { body: string }) => {
+        const message: ChannelMessageDto = {
           id: teamMessages.length + 1,
           author: "user",
           body,
@@ -408,7 +409,7 @@ const client = {
           warnings: message.tags.length
             ? []
             : [
-                "The message tags no session, so nobody was notified; it waits in the team chat",
+                "The message tags no session, so nobody was notified; it waits in the channel",
               ],
         });
       },

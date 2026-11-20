@@ -28,9 +28,9 @@ import { accountModelKey, derivedDefaultModel } from "../domain";
 import { DaedalusError } from "../errors";
 import { AbilityRepository } from "./abilities";
 import { RoutineRepository } from "./routines";
-import { AskRepository } from "./asks";
 import { SecretRepository } from "./secrets";
-import { TeamRepository } from "./teams";
+import { ConversationRepository } from "./conversations";
+import { SessionNoteRepository } from "./session-notes";
 import { WorkflowRepository } from "./workflows";
 
 /** A gateway account: the gateway's origin and the user's id on it. */
@@ -427,11 +427,11 @@ export class SqliteRepositories {
   readonly database: Database;
 
   readonly abilities: AbilityRepository;
-  readonly teams: TeamRepository;
   readonly secrets: SecretRepository;
   readonly workflows: WorkflowRepository;
   readonly routines: RoutineRepository;
-  readonly asks: AskRepository;
+  readonly conversations: ConversationRepository;
+  readonly sessionNotes: SessionNoteRepository;
 
   constructor(databasePath: string) {
     this.database = new Database(databasePath, { create: true });
@@ -439,11 +439,11 @@ export class SqliteRepositories {
       "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
     );
     this.abilities = new AbilityRepository(this.database);
-    this.teams = new TeamRepository(this.database);
     this.secrets = new SecretRepository(this.database);
     this.workflows = new WorkflowRepository(this.database);
     this.routines = new RoutineRepository(this.database);
-    this.asks = new AskRepository(this.database);
+    this.conversations = new ConversationRepository(this.database);
+    this.sessionNotes = new SessionNoteRepository(this.database);
   }
 
   /**

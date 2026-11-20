@@ -122,28 +122,29 @@ function sources(context: ApplicationContext) {
     // An agent reports a step a few times an hour at most, so a change
     // reloads the whole window rather than earning a partial part.
     // A run ends in this process's tick; opening one marks it read.
-    // Activity's count: an ask asked, answered or closed by any process
-    // reaches the window on the next tick, not on the page's own poll.
-    openAsks: rows(
-      () => repositories.asks.list({ openOnly: true }).length,
+    // The Threads count: a thread written in, resolved or snoozed by any
+    // process reaches the window on the next tick, not on the page's own
+    // poll.
+    openThreads: rows(
+      () => repositories.conversations.threads({ open: true }).length,
       () => {
         // A snooze that runs out changes the count with no write, so the
-        // version says which asks are snoozed now.
+        // version says which threads are snoozed now.
         const now = new Date().toISOString();
-        return repositories.asks
-          .list({ openOnly: true })
-          .map((ask) => [
-            ask.id,
-            ask.workspaceId,
-            ask.title,
-            Boolean(ask.snoozedUntil && ask.snoozedUntil > now),
+        return repositories.conversations
+          .threads({ open: true })
+          .map((thread) => [
+            thread.number,
+            thread.workspaceId,
+            thread.updatedAt,
+            Boolean(thread.snoozedUntil && thread.snoozedUntil > now),
           ]);
       },
     ),
     // A thread's fork runs in its thread, not as a session of its own.
     threadForks: rows(
-      () => repositories.asks.forkSessionIds(),
-      () => repositories.asks.forkSessionIds(),
+      () => repositories.conversations.forkSessionIds(),
+      () => repositories.conversations.forkSessionIds(),
     ),
     unseenRoutineRuns: rows(
       () => repositories.routines.unseenRunIds(),

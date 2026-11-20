@@ -11,7 +11,7 @@ import type {
   TeamDetailDto,
   TeamDto,
   TeamMemberDto,
-  TeamMessageDto,
+  ChannelMessageDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "../client-types";
 import { relativeTime } from "../routines/time";
@@ -77,7 +77,7 @@ export function TeamBar({
   );
 }
 
-/** How often the open tab reads the chat; it moves without the snapshot. */
+/** How often the open tab reads the channel; it moves without the snapshot. */
 const REFRESH_MS = 4_000;
 /** A message longer than this many lines folds until asked for. */
 const FOLD_LINES = 4;
@@ -97,12 +97,12 @@ function memberState(member: TeamMemberDto): {
   return { tone: "idle", text: member.status };
 }
 
-/** One chat message; a long body folds after a few lines. */
-function TeamMessage({
+/** One channel message; a long body folds after a few lines. */
+function ChannelMessage({
   message,
   now,
 }: {
-  message: TeamMessageDto;
+  message: ChannelMessageDto;
   now: number;
 }) {
   const long = message.body.split("\n").length > FOLD_LINES;
@@ -153,7 +153,7 @@ export function TeamPage({
 }: {
   client: DesktopClient;
   teamId: string;
-  /** Whether the tab is in front; it reads the chat only then. */
+  /** Whether the tab is in front; it reads the channel only then. */
   visible: boolean;
   busy: boolean;
   now: number;
@@ -194,7 +194,7 @@ export function TeamPage({
         })
       }
       onPost={async (body) => {
-        const said = await run(client.request.teamSay({ teamId, body }));
+        const said = await run(client.request.channelSay({ teamId, body }));
         await load();
         return said?.warnings;
       }}
@@ -208,8 +208,8 @@ export function TeamPage({
 }
 
 /**
- * What the Team tab shows: the goal, who is in the team, and the chat. The
- * user posts as `user`; tags decide whose session is told.
+ * What the Team tab shows: the goal, who is in the team, and its channel.
+ * The user posts as `user`; tags decide whose session is told.
  */
 export function TeamView({
   teamId,
@@ -239,10 +239,10 @@ export function TeamView({
   const [goal, setGoal] = useState(detail?.team.goal ?? "");
   useEffect(() => setGoal(detail?.team.goal ?? ""), [detail?.team.goal]);
   const goalChanged = goal.trim() !== (detail?.team.goal ?? "").trim();
-  const chatEnd = useRef<HTMLDivElement>(null);
+  const channelEnd = useRef<HTMLDivElement>(null);
   const newest = detail?.messages.at(-1)?.id;
   useEffect(() => {
-    chatEnd.current?.scrollIntoView({ block: "end" });
+    channelEnd.current?.scrollIntoView({ block: "end" });
   }, [newest]);
 
   if (!detail)
@@ -275,8 +275,8 @@ export function TeamView({
     <div className="workflows-tab team-tab">
       <TabIntro onReadMore={onReadMore}>
         A team is a lead session and the members it adds, working toward one
-        goal. Tag a member to send its session a one-line notice; it reads the
-        message with daedal team chat --tagged.
+        goal, talking in the team's channel. Tag a member to send its session
+        the message; it replies with daedal channel say.
       </TabIntro>
       <SplitList
         id="team"
@@ -297,9 +297,9 @@ export function TeamView({
           </Group>
         }
       >
-        <section aria-label="Chat" className="team-detail">
+        <section aria-label="Channel" className="team-detail">
           <header className="team-detail-heading">
-            <h2>{detail.team.name}</h2>
+            <h2>#{detail.channel} · team channel</h2>
             <small>
               {memberCount === 0
                 ? "Only the lead"
@@ -341,16 +341,16 @@ export function TeamView({
               </div>
             )}
           </form>
-          <div className="team-chat" role="log">
+          <div className="team-channel" role="log">
             {detail.messages.length === 0 && (
               <p className="ability-page-empty">
                 No messages yet. Tag a member to tell its session.
               </p>
             )}
             {detail.messages.map((message) => (
-              <TeamMessage key={message.id} message={message} now={now} />
+              <ChannelMessage key={message.id} message={message} now={now} />
             ))}
-            <div ref={chatEnd} />
+            <div ref={channelEnd} />
           </div>
           <form
             className="team-composer"
@@ -360,7 +360,7 @@ export function TeamView({
             }}
           >
             <textarea
-              aria-label="Message to the team"
+              aria-label="Message to the channel"
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
@@ -368,7 +368,7 @@ export function TeamView({
                   void post();
                 }
               }}
-              placeholder={`Message the team. Tag who should get it: ${[...handles, "@all"].join(", ")}`}
+              placeholder={`Message #${detail.channel}. Tag who should get it: ${[...handles, "@all"].join(", ")}`}
               rows={2}
               value={draft}
             />

@@ -1,10 +1,11 @@
 /**
  * The Threads feed in a real browser against `threads-test.tsx`: open
- * questions are cards, blocking first, answered in place with the picker or
- * typed words (shift+enter is a new line); resolved threads fold to rows; the
- * quoted message opens main's messages at the thread's message; ctrl+f forks a
- * question in place; a conversation is searched and a thread opened on a
- * match; Resolve ends a thread and Reopen brings it back. Screenshots land in artifacts/threads-*.png.
+ * threads are cards, blocking first, replied to in place with the picker or
+ * typed words (shift+enter is a new line), and stay open with the reply in
+ * them; resolved threads fold to rows; the quoted message opens main's
+ * messages at the thread's message; ctrl+f forks a thread in place; a
+ * conversation is searched and a thread opened on a match; Resolve ends a
+ * thread and Reopen brings it back. Screenshots land in artifacts/threads-*.png.
  *
  *   bun run test:threads-ui
  */
@@ -35,7 +36,7 @@ const openResolved = async (browser: Browser) => {
     await clickText(browser, ".threads-group-toggle", "Resolved");
 };
 const answers = async (browser: Browser) =>
-  (await browser.requests()).filter((one) => "askAnswer" in one);
+  (await browser.requests()).filter((one) => "threadSay" in one);
 
 await withBrowser(
   { port: 41830, page: "threads-test.html", width: 900, height: 760 },
@@ -108,8 +109,8 @@ await withBrowser(
         await browser.evaluate<string>(
           "document.querySelector('#thread-card-12 .threads-option.on').textContent",
         )
-      ).includes("5 tries"),
-      "the picker does not start on the recommended option",
+      ).includes("3 tries"),
+      "the picker does not start on the first option",
     );
     await browser.screenshot("threads-feed");
 
@@ -155,45 +156,46 @@ await withBrowser(
     );
     await clickText(browser, ".threads-back", "Threads");
 
-    // A number on the card picks and sends; the card folds to a resolved row.
+    // A number on the card picks and sends; the reply shows in the card,
+    // which stays open, now with the agent.
     await browser.waitFor(
       "document.querySelector('#thread-card-12')",
       "the feed again",
     );
     await key(browser, "#thread-card-12", "1");
     await browser.waitFor(
-      "window.requests.some((one) => 'askAnswer' in one)",
-      "the answer",
+      "window.requests.some((one) => 'threadSay' in one)",
+      "the reply",
     );
     const [first] = await answers(browser);
     expect(
-      JSON.stringify(first!.askAnswer) ===
-        JSON.stringify({ id: 12, option: 0, note: null }),
+      JSON.stringify(first!.threadSay) ===
+        JSON.stringify({ id: 12, body: null, option: 0 }),
       `the picker sent ${JSON.stringify(first)}`,
     );
     await browser.waitFor(
-      "!document.querySelector('#thread-card-12') && document.querySelector('.threads-group-toggle')?.textContent.includes('2')",
-      "#12 folded into Resolved",
-    );
-    await openResolved(browser);
-    await browser.waitFor(
-      "document.querySelectorAll('.threads-row').length === 2",
-      "both resolved rows",
-    );
-    // A resolved row opens in place.
-    await clickText(browser, ".threads-row-main", "How many delivery tries");
-    await browser.waitFor(
-      "document.querySelector('#thread-card-12')?.innerText.includes('sent to main')",
-      "the resolved card, open in place",
+      "document.querySelector('#thread-card-12.replied')?.innerText.includes('> 3 tries')",
+      "#12 with the reply, waiting on the agent",
     );
     await browser.screenshot("threads-answered");
-    await clickText(browser, "#thread-card-12 .threads-quiet", "Fold");
+    await openResolved(browser);
     await browser.waitFor(
-      "!document.querySelector('#thread-card-12')",
-      "#12 folded again",
+      "document.querySelectorAll('.threads-row').length === 1",
+      "the resolved row",
+    );
+    // A resolved row opens in place, with its whole conversation.
+    await clickText(browser, ".threads-row-main", "Branch name");
+    await browser.waitFor(
+      "document.querySelector('#thread-card-11')?.innerText.includes('resolved by')",
+      "the resolved card, open in place",
+    );
+    await clickText(browser, "#thread-card-11 .threads-quiet", "Fold");
+    await browser.waitFor(
+      "!document.querySelector('#thread-card-11')",
+      "#11 folded again",
     );
 
-    // ctrl+f on a question forks that question: no second thread.
+    // ctrl+f on a thread forks that thread: no second thread.
     await clickText(browser, "#thread-card-13 .threads-foot-link", "fork");
     await browser.waitFor(
       "document.querySelector('.threads-fork-terminal .fake-terminal')",
@@ -213,7 +215,7 @@ await withBrowser(
       ),
       "the fork does not show the question it works on",
     );
-    await clickText(browser, ".threads-send-bar", "Answer with");
+    await clickText(browser, ".threads-send-bar", "Reply with");
     await browser.waitFor(
       "document.querySelector('#threads-draft')?.value.includes('Keep custom backoff')",
       "the draft, filled from the fork's last reply",
@@ -230,12 +232,12 @@ await withBrowser(
     expect(
       (await browser.evaluate<number>(
         "document.querySelectorAll('.threads-card').length",
-      )) === 2,
-      "forking a question added a thread",
+      )) === 3,
+      "forking a thread added a thread",
     );
     await browser.screenshot("threads-question-forked");
 
-    // Shift+enter is a new line; enter sends what was typed, as the note.
+    // Shift+enter is a new line; enter sends what was typed.
     await type(
       browser,
       "#thread-card-13 .threads-prompt textarea",
@@ -247,27 +249,24 @@ await withBrowser(
       "Enter",
       true,
     );
-    expect(
-      (await answers(browser)).length === 1,
-      "shift+enter sent the answer",
-    );
+    expect((await answers(browser)).length === 1, "shift+enter sent the reply");
     await key(browser, "#thread-card-13 .threads-prompt textarea", "Enter");
     await browser.waitFor(
-      "window.requests.filter((one) => 'askAnswer' in one).length === 2",
-      "the typed answer",
+      "window.requests.filter((one) => 'threadSay' in one).length === 2",
+      "the typed reply",
     );
     const typed = (await answers(browser))[1]!;
     expect(
-      JSON.stringify(typed.askAnswer) ===
-        JSON.stringify({ id: 13, option: null, note: "#webhook-alerts" }),
-      `the typed answer sent ${JSON.stringify(typed)}`,
+      JSON.stringify(typed.threadSay) ===
+        JSON.stringify({ id: 13, body: "#webhook-alerts", option: null }),
+      `the typed reply sent ${JSON.stringify(typed)}`,
     );
 
-    // Close dismisses a question.
+    // Resolve ends a thread.
     await clickText(browser, "#thread-card-14 .threads-quiet", "Resolve");
     await browser.waitFor(
-      "window.requests.some((one) => one.threadClose?.id === 14)",
-      "#14 closed",
+      "window.requests.some((one) => one.threadResolve?.id === 14)",
+      "#14 resolved",
     );
     // A resolved thread reopens from its row.
     await openResolved(browser);
@@ -326,21 +325,21 @@ await withBrowser(
     );
     await browser.screenshot("threads-fork");
     await browser.evaluate("document.querySelector('.threads-back').click()");
-    // The thread is a card in the feed, not a row in a list.
+    // The thread is a card in the feed, with what was sent in it.
     await browser.waitFor(
-      "document.querySelector('#thread-card-20 .threads-fork-open')",
+      "document.querySelector('#thread-card-20 .threads-fork-line') && document.querySelector('#thread-card-20').innerText.includes('Keep custom backoff')",
       "the new thread's card",
     );
     await browser.screenshot("threads-feed-fork");
     await clickText(browser, "#thread-card-20 .threads-quiet", "Resolve");
     await browser.waitFor(
-      "window.requests.some((one) => one.threadClose?.id === 20)",
-      "the thread closed",
+      "window.requests.some((one) => one.threadResolve?.id === 20)",
+      "the thread resolved",
     );
   },
 );
 
-// Home: every session's open questions as cards; answer, snooze and show in
+// Home: every session's open threads as cards; reply, snooze and show in
 // place; "show in main" asks for main beside the session at that message.
 await withBrowser(
   {
@@ -391,10 +390,10 @@ await withBrowser(
       "#13 folded into Snoozed",
     );
     const snoozed = (await browser.requests()).find(
-      (one) => "askSnooze" in one,
+      (one) => "threadSnooze" in one,
     )!;
     expect(
-      (snoozed.askSnooze as { id: number }).id === 13,
+      (snoozed.threadSnooze as { id: number }).id === 13,
       `snoozed ${JSON.stringify(snoozed)}`,
     );
     await browser.evaluate(
@@ -406,20 +405,20 @@ await withBrowser(
     );
     await key(browser, "#thread-card-12", "2");
     await browser.waitFor(
-      "window.requests.some((one) => 'askAnswer' in one)",
-      "the answer from Home",
+      "window.requests.some((one) => 'threadSay' in one)",
+      "the reply from Home",
     );
     const [home] = await answers(browser);
     expect(
-      JSON.stringify(home!.askAnswer) ===
-        JSON.stringify({ id: 12, option: 1, note: null }),
+      JSON.stringify(home!.threadSay) ===
+        JSON.stringify({ id: 12, body: null, option: 1 }),
       `Home sent ${JSON.stringify(home)}`,
     );
     await browser.screenshot("threads-home-answered");
   },
 );
 
-// A thread in its own tab opens on its fork, with the question it works on.
+// A thread in its own tab opens on its fork, with the thread it works on.
 await withBrowser(
   {
     port: 41838,

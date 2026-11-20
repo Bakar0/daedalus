@@ -1053,7 +1053,7 @@ describe("daedal team", () => {
 
         // A member posts as its handle.
         const said = await json(
-          ["team", "say", "@docs", "the API is in TEAM.md"],
+          ["channel", "say", "@docs", "the API is in TEAM.md"],
           server.workingDirectory,
         );
         expect(said.message).toMatchObject({
@@ -1064,7 +1064,7 @@ describe("daedal team", () => {
 
         const unknown = await cli(
           home,
-          ["team", "say", "@nobody hi"],
+          ["channel", "say", "@nobody hi"],
           env,
           undefined,
           server.workingDirectory,
@@ -1072,21 +1072,65 @@ describe("daedal team", () => {
         expect(unknown.exitCode).not.toBe(0);
         expect(unknown.stderr).toContain("is called @nobody");
 
-        const untagged = await cli(home, ["team", "say", "status?"], env);
+        const untagged = await cli(home, ["channel", "say", "status?"], env);
         expect(untagged.exitCode).toBe(0);
         expect(untagged.stdout).toContain(
           "Warning: The message tags no session",
         );
 
-        const chat = await json(["team", "chat"], docs.workingDirectory);
+        const chat = await json(["channel", "read"], docs.workingDirectory);
         expect(chat.messages.map((m: { author: string }) => m.author)).toEqual([
           "daedalus",
           "server",
           "user",
         ]);
         expect(
-          (await json(["team", "chat"], docs.workingDirectory)).messages,
+          (await json(["channel", "read"], docs.workingDirectory)).messages,
         ).toEqual([]);
+
+        // Search reaches back over what was read.
+        const found = await json(
+          ["channel", "find", "TEAM.md", "--since", "1d"],
+          docs.workingDirectory,
+        );
+        expect(found.hits).toHaveLength(1);
+        expect(found.hits[0]).toMatchObject({
+          channel: "checkout-api",
+          message: { author: "server" },
+        });
+        const channels = await json(["channel", "list"]);
+        expect(channels.channels).toMatchObject([
+          { channel: "checkout-api", as: "user", members: 2 },
+        ]);
+
+        // An agent taught the old commands is told what to run instead,
+        // and nothing is written.
+        const oldSay = await cli(
+          home,
+          ["team", "say", "@lead done with the parser"],
+          env,
+          undefined,
+          docs.workingDirectory,
+        );
+        expect(oldSay.exitCode).toBe(2);
+        expect(oldSay.stderr).toContain(
+          "moved team chat to channels; your instructions are older. Nothing was written. Run instead:\n  daedal channel say \"@lead done with the parser\"\nRun 'daedal channel --help'",
+        );
+        const oldChat = await cli(
+          home,
+          ["team", "chat", "--tagged", "--limit", "5"],
+          env,
+          undefined,
+          docs.workingDirectory,
+        );
+        expect(oldChat.exitCode).toBe(2);
+        expect(oldChat.stderr).toContain(
+          "  daedal channel read --tagged --limit 5\n",
+        );
+        expect(
+          (await json(["channel", "read", "--all"], docs.workingDirectory))
+            .messages.length,
+        ).toBe(3);
 
         const list = await json(["team", "list"]);
         expect(
@@ -1150,23 +1194,45 @@ describe("daedal team", () => {
           ["server", ["schema"]],
           ["docs", []],
         ]);
-        // From the middle, @lead goes up to its own lead's team; any other
-        // tag goes to the team it leads.
-        const up = await json(
+        // In the middle, a session is in two channels and names the one it
+        // posts to.
+        const unnamed = await cli(
+          home,
+          ["channel", "say", "@lead schema is next"],
+          env,
+          undefined,
+          server.workingDirectory,
+        );
+        expect(unnamed.exitCode).toBe(2);
+        expect(unnamed.stderr).toContain(
+          'in 2 channels; name one: "#server", "#checkout-api"',
+        );
+        // The old command names the channel it would have posted to.
+        const oldUp = await cli(
+          home,
           ["team", "say", "@lead schema is next"],
+          env,
+          undefined,
+          server.workingDirectory,
+        );
+        expect(oldUp.stderr).toContain(
+          'daedal channel say "#checkout-api" "@lead schema is next"',
+        );
+        const up = await json(
+          ["channel", "say", "#checkout-api", "@lead schema is next"],
           server.workingDirectory,
         );
         expect(up.message).toMatchObject({ author: "server", tags: ["lead"] });
         const down = await json(
-          ["team", "say", "@schema use UUIDs"],
+          ["channel", "say", "#server", "@schema use UUIDs"],
           server.workingDirectory,
         );
         expect(down.message).toMatchObject({
           author: "lead",
           tags: ["schema"],
         });
-        const both = await json(["team", "chat"], server.workingDirectory);
-        expect(both.teams).toHaveLength(2);
+        const both = await json(["channel", "read"], server.workingDirectory);
+        expect(both.channels).toHaveLength(2);
         const listed = await json(["team", "list", "--team", "Checkout API"]);
         expect(
           listed.members.find((m: { handle: string }) => m.handle === "server")
@@ -1191,7 +1257,12 @@ describe("daedal team", () => {
         expect(resumed.teams).toHaveLength(1);
 
         const help = await cli(home, ["team", "--help"], env);
-        expect(help.stdout).toContain("daedal team say");
+        expect(help.stdout).not.toContain("daedal team say");
+        expect(help.stdout).toContain("daedal channel --help");
+        const channelHelp = await cli(home, ["channel", "--help"], env);
+        expect(channelHelp.stdout).toContain(
+          'daedal channel say ["#<name>"] "<text>"',
+        );
       } finally {
         await cli(home, ["shutdown", "--json"], env);
       }

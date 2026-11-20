@@ -108,9 +108,9 @@ import { InstructionsEditor } from "./InstructionsEditor";
 import { PlansPage, PlansPane, usePlanList } from "./PlansPane";
 import {
   handleSession,
-  paneAskCount,
+  paneThreadCount,
   THREADS_ICON_PATH,
-  useOpenAskCounts,
+  useThreadCounts,
 } from "./threads-shared";
 import { createPlan } from "./files/plan-actions";
 import { accountModelKey } from "./account-models";
@@ -4016,7 +4016,7 @@ export function WorkspaceApp({
   const workspaceById = new Map(
     (snapshot?.workspaces ?? []).map((item) => [item.id, item]),
   );
-  const askCounts = useOpenAskCounts(client);
+  const threadCounts = useThreadCounts(client);
   const allAgents = (snapshot?.agents ?? []).map((session) =>
     archivingSessionIds.has(session.id) && !session.archivedAt
       ? { ...session, archivedAt: archivingStartedAt.current }
@@ -4117,7 +4117,7 @@ export function WorkspaceApp({
   }, [client, resumeNowId]);
   // The side panel's Plans, read only while the dock that shows them is.
   // A cloud workspace's files are in its pod.
-  const openAsks = askCounts.total;
+  const waitingThreads = threadCounts.total;
   const planList = usePlanList(
     client,
     !workspacePanelCollapsed &&
@@ -5212,7 +5212,7 @@ export function WorkspaceApp({
       !(await askConfirm({
         title: `Stop ${sessionName(session)} leading its team?`,
         message:
-          "The team ends. Its members keep running as ordinary sessions, and the chat is kept.",
+          "The team ends. Its members keep running as ordinary sessions, and its channel is kept.",
         confirmLabel: "End team",
       }))
     )
@@ -8039,7 +8039,7 @@ export function WorkspaceApp({
           : []),
       ]
     : [];
-  const paneAsks = paneAskCount(askCounts, paneSessionIds);
+  const paneThreads = paneThreadCount(threadCounts, paneSessionIds);
   /** The Routines page, in its own tab or as Home's page. */
   const renderRoutinesHome = () => (
     <RoutinesHome
@@ -8485,12 +8485,12 @@ export function WorkspaceApp({
                 <path d={THREADS_ICON_PATH} />
               </svg>
               <span>Threads</span>
-              {openAsks > 0 && (
+              {waitingThreads > 0 && (
                 <span
-                  aria-label={`${openAsks} open`}
+                  aria-label={`${waitingThreads} open`}
                   className="sidebar-routines-count sidebar-needs-count"
                 >
-                  {openAsks}
+                  {waitingThreads}
                 </span>
               )}
             </button>
@@ -9307,8 +9307,8 @@ export function WorkspaceApp({
                 {sidePanelTabs.map(([tab, label], index) => (
                   <button
                     aria-label={
-                      tab === "activity" && paneAsks > 0
-                        ? `${label}, ${paneAsks} waiting on you`
+                      tab === "activity" && paneThreads > 0
+                        ? `${label}, ${paneThreads} waiting on you`
                         : label
                     }
                     aria-selected={
@@ -9340,7 +9340,7 @@ export function WorkspaceApp({
                     {tab === "tasks" && taskAttentionCount > 0 && (
                       <i aria-hidden="true" className="side-panel-tab-badge" />
                     )}
-                    {tab === "activity" && paneAsks > 0 && (
+                    {tab === "activity" && paneThreads > 0 && (
                       <i
                         aria-hidden="true"
                         className="side-panel-tab-badge activity-tab-badge"

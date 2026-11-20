@@ -204,9 +204,9 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
   },
   {
     id: "daedalus-team",
-    title: "Team chat",
+    title: "Team channel",
     summary:
-      "How a team's lead and members post to the team chat, read it, and tell teammates' messages from the user's.",
+      "How a team's lead and members post to the team's channel, read it, and tell teammates' messages from the user's.",
     supportsAlways: false,
     defaultEnabled: true,
     defaultMode: "on-demand",

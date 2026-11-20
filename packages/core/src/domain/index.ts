@@ -180,7 +180,7 @@ export interface AgentSession {
    * team, and for the lead itself.
    */
   teamId: UUID | null;
-  /** Its name in the team chat (`@client-worker`), unique among members. */
+  /** Its name in its team's channel (`@client-worker`), unique among members. */
   teamHandle: string | null;
   /**
    * The session that started this one from inside itself with `agent
@@ -193,63 +193,6 @@ export interface AgentSession {
    * workspace root there.
    */
   hostId: string | null;
-}
-
-/** Where an ask is: waiting on the user, or finished one of three ways. */
-export type AskState = "open" | "answered" | "dismissed" | "closed";
-
-/**
- * A question for the user, kept until it is answered, dismissed or closed.
- * One session owns it; it may be pinned to a task of a plan in the same
- * workspace. The app shows open ones under Activity.
- */
-export interface Ask {
-  id: number;
-  workspaceId: string;
-  sessionId: UUID;
-  title: string;
-  /** What it is about, in markdown; null when the title says it all. */
-  context: string | null;
-  /** What waits on the answer. */
-  why: string | null;
-  /** Choices to pick from; empty for a question answered in words. */
-  options: string[];
-  /** The index of the option the asker recommends. */
-  recommended: number | null;
-  /** The plan it is pinned to, relative to the workspace folder. */
-  planPath: string | null;
-  /** The task's `^id` in that plan, without the caret. */
-  taskKey: string | null;
-  state: AskState;
-  /** The option the user picked. */
-  answer: string | null;
-  /** What the user wrote, alone or beside an option. */
-  note: string | null;
-  /** Why it closed, when it closed without the user answering here. */
-  closedReason: string | null;
-  createdAt: string;
-  updatedAt: string;
-  closedAt: string | null;
-  /** When the owner was told how it ended; null while that waits. */
-  noticeDeliveredAt: string | null;
-  /** Put off by the user until then: out of Activity's count till it passes. */
-  snoozedUntil: string | null;
-  /**
-   * The message in its session's main conversation the thread hangs off:
-   * the id in the agent's transcript, and a copy of its text. Null when the
-   * transcript had no agent message to hang it off.
-   */
-  anchorId: string | null;
-  anchorText: string | null;
-  /** When the agent said it is blocked on it; null while it is not. */
-  bumpedAt: string | null;
-  /**
-   * `question`: the agent asked it; the user's answer goes to the agent.
-   * `fork`: the user opened it, to talk it through with a read-only fork
-   * of the session (`forkSessionId`) while the session works on.
-   */
-  kind: "question" | "fork";
-  forkSessionId: string | null;
 }
 
 export interface IntegratedTerminal {
@@ -643,6 +586,7 @@ export interface PresenceState {
 }
 
 export * from "./abilities";
+export * from "./conversations";
 export * from "./workflows";
 export * from "./routines";
 

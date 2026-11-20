@@ -75,19 +75,21 @@ daedal session color <session> <red|orange|gold|green|teal|blue|purple|pink|none
 daedal session rebirth-at <session> <percent>|off|default
 daedal session abilities <session>
 daedal session grant|revoke <session> <ability>
-daedal team say "<text>" [--team <lead>] [--user]
-daedal team chat [--tagged | --all] [--limit <n>] [--team <lead>] [--user]
 daedal team list [--team <lead>]
 daedal team tree [--team <lead>]
 daedal team goal [<text>] [--team <lead>]
 daedal team pause|resume [--team <lead>]
 daedal team move <session> --to <lead> | --out [--user]
+daedal channel say ["#<name>"] "<text>" [--team <lead>] [--user]
+daedal channel read ["#<name>"] [--tagged | --all] [--limit <n>] [--team <lead>] [--user]
+daedal channel find "<words>" [--since <time>] [--team <lead>] [--user]
+daedal channel list [--user]
 ```
 
 `<session>` is a session id, or its name when only one live session has it.
 Any session can lead a team: the first `agent spawn --team` run inside it
-adds a member and makes it the lead, and it talks to members with
-`daedal team`. A member can lead a team of its own, up to 3 levels below the
+adds a member and makes it the lead, and it talks to members in the team's
+channel with `daedal channel`. A member can lead a team of its own, up to 3 levels below the
 top lead and 5 members a lead that are not archived; a lead frees a place by
 archiving a member whose work is checked (`agent archive <member>`). Stopping
 or archiving a lead does the same to the members below it. `team move
@@ -145,7 +147,7 @@ dropped; markdown indented under a task is its details, and a `> ? ...` line
 there is a question for the user. `<plan>` is the slug, a path, or the
 absolute path an agent was given. `start` marks the task `[/]` with you as
 its owner; `ask` adds the question under the task and starts a thread for
-it, as `daedal thread start --plan` does. An `@owner` is a session's team handle or its name as a
+it, as `daedal thread new --plan` does. An `@owner` is a session's team handle or its name as a
 handle (`Cart endpoints` is `@cart-endpoints`). The app opens a plan as an
 interactive document: Start agent on a task, Open its owner, and Ask (⌘L) on
 any selected text, which sends the owner the question, then `path:lines:` and
@@ -154,25 +156,29 @@ the quote. Edit the file directly for anything else.
 ## Threads
 
 ```text
-daedal thread start "<question>" [--context "<text>" | --context-file <path|->] [--why "<text>"] [--option "<text>"]... [--recommend <n>] [--plan <plan> ^<id>] [--session <session>]
+daedal thread new "<message>" [--option "<text>"]... [--details "<text>" | --details-file <path|->] [--plan <plan> ^<id>] [--session <session>]
+daedal thread say <n> "<message>" [--option "<text>"]... [--details ...]
+daedal thread read <n>
+daedal thread find "<words>" [--since <14d|48h|time>] [--all]
 daedal thread list [--team | --all] [--session <session>]
-daedal thread show <n>
-daedal thread update <n> [--title "<question>"] [--context ...] [--why ...] [--option ...]... [--recommend <n>] [--plan <plan> ^<id>]
 daedal thread bump <n>
-daedal thread resolve <n> [--answer "<what the user said>"]
-daedal thread close <n> ["<why>"]
+daedal thread resolve <n> ["<why>"]
 ```
 
-`thread start` asks the user once. Write one line in your reply first that
-says what you asked: the thread hangs off your last message, and the user
-answers it in the app's Threads tab. The answer comes back to you as a
-message. Say "Thread #<n>" and do not repeat the question. When you run out
-of other work and are blocked on it, run `thread bump <n>` once. When the
-user answers in your session instead, `thread resolve <n> --answer "..."`
-closes the thread; `thread close` ends one no longer needed. `thread show
-<n>` prints a thread, with the conversation of its fork if it has one. See
-`daedal thread --help` for every flag. `daedal activity` and `daedal ask`
-still work as aliases.
+A thread is a conversation with the user. Before opening one, `thread find`
+it: if a thread (open or resolved) is about the same thing, `thread say` in
+it, which reopens a resolved one. Otherwise write one line in your reply
+saying what you are asking, then `thread new`: the thread hangs off your
+last message, and the user replies in the app's Threads tab. What the user
+writes comes back to you as a message. Talk about a thread only in the
+thread: status, corrections and follow-ups go there with `thread say`, not
+in main. Say "Thread #<n>" and do not repeat it. When you run out of other
+work and are blocked on it, run `thread bump <n>` once. `thread resolve`
+ends a settled thread, with what the user said if they answered in your
+session. `thread read <n>` prints a thread, with the conversation of its
+fork if it has one. See `daedal thread --help` for every flag. The old
+`thread start/update/show/close`, `daedal activity` and `daedal ask` fail
+and print the command to run instead.
 
 ## Accounts
 

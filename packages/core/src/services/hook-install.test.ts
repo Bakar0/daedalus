@@ -368,3 +368,38 @@ describe("codexActivityTier", () => {
     ).toMatchObject({ tier: "transcript", trusted: false });
   });
 });
+
+describe("Daedalus's messaging commands in auto mode", () => {
+  test("are allowed by narrow rules, on the PATH and by full path", () => {
+    expect(
+      daedalusClaudeSettings("/home/.daedalus/bin/daedal").permissions,
+    ).toEqual({
+      allow: [
+        "Bash(daedal thread:*)",
+        "Bash(daedal channel:*)",
+        "Bash(/home/.daedalus/bin/daedal thread:*)",
+        "Bash(/home/.daedalus/bin/daedal channel:*)",
+      ],
+    });
+  });
+
+  test("join the user's own permissions without replacing them", () => {
+    const merged = mergeClaudeSettings(
+      {
+        permissions: {
+          allow: ["Bash(npm test)", "Bash(daedal thread:*)"],
+          deny: ["Bash(rm -rf:*)"],
+        },
+      },
+      daedalusClaudeSettings("daedal"),
+    );
+    expect(merged.permissions).toEqual({
+      allow: [
+        "Bash(npm test)",
+        "Bash(daedal thread:*)",
+        "Bash(daedal channel:*)",
+      ],
+      deny: ["Bash(rm -rf:*)"],
+    });
+  });
+});

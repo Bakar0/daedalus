@@ -147,7 +147,7 @@ export interface AgentSessionDto {
   account: string | null;
   /** The team it is a member of (the lead's orchestration ability id). */
   teamId: string | null;
-  /** Its handle in the team chat, such as `server`. */
+  /** Its handle in its team's channel, such as `server`. */
   teamHandle: string | null;
   /** The session that started this one with `agent spawn`, as a handoff does. */
   spawnedBy: string | null;
@@ -155,40 +155,61 @@ export interface AgentSessionDto {
   hostId?: string | null;
 }
 
-/** A question a session asked the user, as Activity shows it. */
-export interface AskDto {
+/** One message in a thread. */
+export interface ThreadMessageDto {
+  id: number;
+  /** `agent` (the owner), `user`, `lead` (the owner's lead) or `daedalus`. */
+  author: string;
+  /**
+   * `message` is what someone wrote; `notice` an event: its body is
+   * `blocked`, `resolved` or `reopened`, then `: reason` when it has one.
+   */
+  kind: "message" | "notice";
+  body: string;
+  /** Folded under the body. */
+  details: string | null;
+  /** Choices offered; the user picks one by its index. */
+  options: string[];
+  /** On a reply that picked an option: its index. */
+  picked: number | null;
+  createdAt: string;
+}
+
+/** A thread between a session and the user, as the Threads pane shows it. */
+export interface ThreadDto {
+  /** The thread's number, `#n`. */
   id: number;
   workspaceId: string;
   workspaceName: string | null;
+  /** The owner: the session the thread is with. */
   sessionId: string;
   sessionName: string | null;
+  /** The subject: its first message, shortened, or the anchor's first line. */
   title: string;
-  context: string | null;
-  why: string | null;
-  options: string[];
-  recommended: number | null;
   /** The plan it is pinned to, an absolute path. */
   planPath: string | null;
   taskKey: string | null;
-  state: "open" | "answered" | "dismissed" | "closed";
-  answer: string | null;
-  note: string | null;
-  closedReason: string | null;
-  createdAt: string;
-  closedAt: string | null;
-  /** Undo can open it again: its answer has not reached the session yet. */
-  undoable: boolean;
-  /** Put off until then; out of the count while it is in the future. */
-  snoozedUntil: string | null;
   /** The main message the thread hangs off: its transcript id and text. */
   anchorId: string | null;
   anchorText: string | null;
-  /** When the agent said it is blocked on it. */
-  bumpedAt: string | null;
-  /** `question` the agent asked; `fork` the user opened on a fork. */
-  kind: "question" | "fork";
-  /** A fork thread's session: the read-only fork the user talks to. */
+  /** The read-only fork the user talks the thread through with. */
   forkSessionId: string | null;
+  /** When the owner said it is blocked on it; cleared by the user's reply. */
+  blockedAt: string | null;
+  /** Put off until then; out of the count while it is in the future. */
+  snoozedUntil: string | null;
+  resolvedAt: string | null;
+  /** `user`, `agent`, `lead` or `daedalus`. */
+  resolvedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  messages: ThreadMessageDto[];
+  /** The user has not read its latest message from someone else. */
+  unread: boolean;
+  /** Who is to reply; null when resolved or nothing was written yet. */
+  turn: "user" | "agent" | null;
+  /** The owner is blocked on it and the user has not replied since. */
+  blocking: boolean;
 }
 
 /** A plan's tasks, for the map beside Activity. */
@@ -200,7 +221,7 @@ export interface MainMessageDto {
   at: string;
 }
 
-export interface AskPlanDto {
+export interface ThreadPlanDto {
   path: string;
   title: string;
   owner: string | null;
@@ -1002,7 +1023,8 @@ export interface TeamMemberDto {
   lastError: string | null;
 }
 
-export interface TeamMessageDto {
+/** One message in a team's channel. */
+export interface ChannelMessageDto {
   id: number;
   /** `lead`, `user`, `daedalus` or a member's handle. */
   author: string;
@@ -1013,15 +1035,19 @@ export interface TeamMessageDto {
   createdAt: string;
 }
 
-/** What the Team panel reads: the members and the newest messages. */
+/**
+ * What the Team panel reads: the members, the team's channel name (without
+ * the `#`) and its newest messages.
+ */
 export interface TeamDetailDto {
   team: TeamDto;
   members: TeamMemberDto[];
-  messages: TeamMessageDto[];
+  channel: string;
+  messages: ChannelMessageDto[];
 }
 
-export interface TeamSayResultDto {
-  message: TeamMessageDto;
+export interface ChannelSayResultDto {
+  message: ChannelMessageDto;
   warnings: string[];
 }
 
@@ -1773,25 +1799,27 @@ export interface DesktopRpcSchema {
        */
       sessionResumeNow: Request<{ id: string }, AgentSessionDto | null>;
       /**
-       * Activity: open asks and those ended in the last day, newest first,
-       * in every workspace. Asks whose plan task is done close first.
+       * Threads: open ones and those resolved in the last day, newest first,
+       * in every workspace. Threads whose plan task is done resolve first.
        */
-      askList: Request<
+      threadList: Request<
         { plan?: { workspaceId: string; path: string } },
-        AskDto[]
+        ThreadDto[]
       >;
-      /** The user answers an ask: an option's index, words, or both. */
-      askAnswer: Request<
-        { id: number; option: number | null; note: string | null },
-        AskDto
+      /**
+       * The user writes in a thread: words, an option of the latest message
+       * that offers some (its index), or both. Reopens a resolved thread.
+       */
+      threadSay: Request<
+        { id: number; body: string | null; option: number | null },
+        ThreadDto
       >;
-      askDismiss: Request<{ id: number }, AskDto>;
-      /** Undo: an answered, dismissed or closed ask is open again. */
-      askReopen: Request<{ id: number }, AskDto>;
+      /** The user has read a thread up to its latest message. */
+      threadRead: Request<{ id: number }, ThreadDto>;
       /** `until` an ISO time; null brings it back now. */
-      askSnooze: Request<{ id: number; until: string | null }, AskDto>;
-      /** The tasks of the plan an ask is pinned to; null when unreadable. */
-      askPlan: Request<{ path: string }, AskPlanDto | null>;
+      threadSnooze: Request<{ id: number; until: string | null }, ThreadDto>;
+      /** The tasks of the plan a thread is pinned to; null when unreadable. */
+      threadPlan: Request<{ path: string }, ThreadPlanDto | null>;
       /** A session's main messages from its transcript, oldest first. */
       sessionMessages: Request<{ sessionId: string }, MainMessageDto[]>;
       /**
@@ -1801,23 +1829,23 @@ export interface DesktopRpcSchema {
        */
       threadOpenFork: Request<
         { sessionId: string; anchorId: string | null; threadId?: number },
-        AskDto
+        ThreadDto
       >;
       /** The fork's last reply: where a message to main starts. */
       threadForkDraft: Request<{ id: number }, { text: string }>;
       /** Sends the user's message from a fork thread to its main. */
       threadSendToMain: Request<{ id: number; text: string }, { text: string }>;
-      /**
-       * Closes a thread: a question is dismissed, and its owner told; a fork
-       * is archived either way.
-       */
-      threadClose: Request<{ id: number }, AskDto>;
-      /** Reopens a resolved thread; its owner is told if it heard it ended. */
-      threadReopen: Request<{ id: number }, AskDto>;
-      /** Sends what is waiting, then reads the team as the user. */
+      /** The user resolves a thread; its owner is told, its fork archived. */
+      threadResolve: Request<{ id: number }, ThreadDto>;
+      /** The user reopens a resolved thread; its owner is told. */
+      threadReopen: Request<{ id: number }, ThreadDto>;
+      /** Sends what is waiting, then reads the team and its channel as the user. */
       teamDetail: Request<{ teamId: string }, TeamDetailDto>;
-      /** Posts to the team chat as the user. */
-      teamSay: Request<{ teamId: string; body: string }, TeamSayResultDto>;
+      /** Posts to a team's channel as the user. */
+      channelSay: Request<
+        { teamId: string; body: string },
+        ChannelSayResultDto
+      >;
       teamGoal: Request<{ teamId: string; goal: string }, TeamDto>;
       /**
        * The loopback WebSocket the renderer attaches terminals to. It carries

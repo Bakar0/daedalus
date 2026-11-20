@@ -1,11 +1,11 @@
 /**
- * Threads. A question thread is something a session's agent asked the user
- * and moved on from; the user answers it at a prompt that works like the
- * terminal's, and the answer goes to the agent as a message. A fork thread is
- * one the user opened: a read-only fork of the session, shown as a terminal,
- * to talk a message through while the session works on. Every thread hangs
- * off a message in main by its transcript id; "show" opens main's messages,
- * read from the transcript, at that message.
+ * Threads. A thread is a conversation between a session's agent and the
+ * user, hanging off a message in the agent's main by its transcript id. The
+ * agent opens one and moves on; the user replies at a prompt that works like
+ * the terminal's, and the reply goes to the agent as a message. The user may
+ * also open one on a message, talked through with a read-only fork of the
+ * session, shown as a terminal, while the session works on. "show" opens
+ * main's messages, read from the transcript, at that message.
  *
  * `ThreadsPane` is one session's threads, in the side panel beside it.
  * `ThreadsHome` is every session's, at Home; opening one there opens its
@@ -24,10 +24,11 @@ import type React from "react";
 import type { ReactNode } from "react";
 import type {
   AgentSessionDto,
-  AskDto,
   MainMessageDto,
+  ThreadDto,
+  ThreadMessageDto,
 } from "@daedalus/protocol";
-import { isSnoozed, snoozeChoices } from "./threads-shared";
+import { isSnoozed, snoozeChoices, waitsOnUser } from "./threads-shared";
 import type { DesktopClient } from "./client-types";
 import { MarkdownPreview } from "./markdown-preview";
 
@@ -44,25 +45,33 @@ type View =
       back: View;
     };
 
-type ThreadState = "blocking" | "waiting" | "fork" | "snoozed" | "ended";
+type ThreadState =
+  "blocking" | "waiting" | "replied" | "fork" | "snoozed" | "ended";
+
+/** A thread the user opened on a fork, where nobody has written yet. */
+const isForkOnly = (thread: ThreadDto): boolean =>
+  !thread.messages.some((message) => message.kind === "message");
 
 export const threadState = (
-  ask: AskDto,
+  thread: ThreadDto,
   now: number = Date.now(),
 ): ThreadState =>
-  ask.state !== "open"
+  thread.resolvedAt
     ? "ended"
-    : ask.kind === "fork"
-      ? "fork"
-      : isSnoozed(ask, now)
-        ? "snoozed"
-        : ask.bumpedAt
-          ? "blocking"
-          : "waiting";
+    : isSnoozed(thread, now)
+      ? "snoozed"
+      : thread.blocking
+        ? "blocking"
+        : thread.turn === "user"
+          ? "waiting"
+          : thread.turn === "agent"
+            ? "replied"
+            : "fork";
 
 const STATE_LABEL: Record<ThreadState, string> = {
   blocking: "Blocking agent",
   waiting: "Waiting on you",
+  replied: "With the agent",
   fork: "Your thread",
   snoozed: "Snoozed",
   ended: "Resolved today",
@@ -96,19 +105,19 @@ const firstLine = (text: string) => text.split("\n")[0] ?? "";
 function useThreads(
   client: DesktopClient,
   sessionIds: readonly string[] | undefined | null,
-): { threads: AskDto[]; reload: () => void } {
-  const [threads, setThreads] = useState<AskDto[]>([]);
+): { threads: ThreadDto[]; reload: () => void } {
+  const [threads, setThreads] = useState<ThreadDto[]>([]);
   const key = sessionIds === null ? null : sessionIds?.join(",");
   const reload = useCallback(() => {
     if (key === undefined) return;
     const ids = key === null ? null : new Set(key.split(","));
-    void client.request.askList({}).then(
+    void client.request.threadList({}).then(
       (response) => {
         if (response.ok)
           setThreads(
             ids === null
               ? response.data
-              : response.data.filter((ask) => ids.has(ask.sessionId)),
+              : response.data.filter((thread) => ids.has(thread.sessionId)),
           );
       },
       () => undefined,
@@ -218,7 +227,7 @@ function AnchorQuote({
   label,
   onShow,
 }: {
-  thread: AskDto;
+  thread: ThreadDto;
   label: string;
   onShow: (focus: string | null) => void;
 }) {
@@ -251,11 +260,11 @@ function ReopenButton({
   onError,
 }: {
   client: DesktopClient;
-  thread: AskDto;
+  thread: ThreadDto;
   onDone: () => void;
   onError: (message: string) => void;
 }) {
-  if (thread.state === "open") return null;
+  if (!thread.resolvedAt) return null;
   return (
     <button
       className="threads-quiet"
@@ -267,9 +276,9 @@ function ReopenButton({
         });
       }}
       title={
-        thread.kind === "question"
-          ? `Open it again; ${thread.sessionName ?? "the agent"} is told to wait for a new answer`
-          : "Open it again, with its fork"
+        isForkOnly(thread)
+          ? "Open it again, with its fork"
+          : `Open it again; ${thread.sessionName ?? "the agent"} is told`
       }
       type="button"
     >
@@ -286,7 +295,7 @@ function SnoozeButton({
   onError,
 }: {
   client: DesktopClient;
-  thread: AskDto;
+  thread: ThreadDto;
   onDone: () => void;
   onError: (message: string) => void;
 }) {
@@ -308,10 +317,10 @@ function SnoozeButton({
       document.removeEventListener("keydown", escape);
     };
   }, [open]);
-  if (thread.kind !== "question" || thread.state !== "open") return null;
+  if (thread.resolvedAt || isForkOnly(thread)) return null;
   const snooze = async (time: string | null) => {
     setOpen(false);
-    const response = await client.request.askSnooze({
+    const response = await client.request.threadSnooze({
       id: thread.id,
       until: time,
     });
@@ -371,7 +380,7 @@ function ThreadRow({
   onOpen,
   action,
 }: {
-  thread: AskDto;
+  thread: ThreadDto;
   showSession: boolean;
   onOpen: () => void;
   action?: ReactNode;
@@ -384,10 +393,10 @@ function ThreadRow({
     showSession ? thread.workspaceName : null,
     state === "snoozed" && thread.snoozedUntil
       ? `until ${until(thread.snoozedUntil)}`
-      : ago(thread.closedAt ?? thread.createdAt, now),
+      : ago(thread.resolvedAt ?? thread.updatedAt, now),
   ].filter(Boolean);
   return (
-    <div className={`threads-row ${state}`}>
+    <div className={`threads-row ${state}${thread.unread ? " unread" : ""}`}>
       <button className="threads-row-main" onClick={onOpen} type="button">
         <span aria-hidden="true" className="threads-dot" />
         <span className="threads-row-text">
@@ -400,9 +409,80 @@ function ThreadRow({
   );
 }
 
+/** One message or notice of a thread, as the card prints it. */
+function ThreadMessageLine({
+  thread,
+  message,
+  now,
+}: {
+  thread: ThreadDto;
+  message: ThreadMessageDto;
+  now: number;
+}) {
+  const owner = thread.sessionName ?? "the agent";
+  if (message.kind === "notice") {
+    const at = message.body.indexOf(":");
+    const event = (at < 0 ? message.body : message.body.slice(0, at)).trim();
+    const reason = at < 0 ? "" : message.body.slice(at + 1).trim();
+    const who =
+      message.author === "user"
+        ? "you"
+        : message.author === "agent"
+          ? owner
+          : message.author === "lead"
+            ? "the lead"
+            : "Daedalus";
+    const what =
+      event === "blocked"
+        ? `${owner} is blocked on this`
+        : event === "reopened"
+          ? `reopened by ${who}`
+          : event === "resolved"
+            ? `resolved by ${who}`
+            : event;
+    return (
+      <div className="threads-line hint">
+        ⎿ {what}
+        {reason ? `: ${reason}` : ""} · {ago(message.createdAt, now)}
+      </div>
+    );
+  }
+  const mine = message.author === "user";
+  return (
+    <>
+      <div className={`threads-line${mine ? " you" : ""}`}>
+        {mine ? ">" : "●"}
+        {message.author === "lead" ? " lead:" : ""}{" "}
+        <LinkedText ownerId={thread.sessionId} text={message.body} />
+      </div>
+      {message.details && (
+        <details className="threads-details">
+          <summary>Details</summary>
+          <div className="threads-line dim">
+            <LinkedText ownerId={thread.sessionId} text={message.details} />
+          </div>
+        </details>
+      )}
+    </>
+  );
+}
+
 /**
- * A question thread, open in place: the message it hangs off, the question,
- * the picker and a prompt. Keys typed anywhere in the card drive its picker.
+ * The options the user can pick from now: the latest message from the
+ * other side that offers some, with nothing from the user after it.
+ */
+const openOffer = (thread: ThreadDto): ThreadMessageDto | undefined => {
+  const said = thread.messages.filter((message) => message.kind === "message");
+  const last = said.at(-1);
+  return last && last.author !== "user" && last.options.length
+    ? last
+    : undefined;
+};
+
+/**
+ * A thread, open in place: the message it hangs off, its conversation, the
+ * picker for the latest options and a prompt. Keys typed anywhere in the
+ * card drive its picker. Writing in a resolved thread reopens it.
  */
 function ThreadCard({
   client,
@@ -417,7 +497,7 @@ function ThreadCard({
   onCollapse,
 }: {
   client: DesktopClient;
-  thread: AskDto;
+  thread: ThreadDto;
   showSession: boolean;
   /** "lead" or "member", in a lead's pane. */
   ownerTag?: string | null;
@@ -431,22 +511,31 @@ function ThreadCard({
 }) {
   const now = Date.now();
   const state = threadState(thread, now);
-  const open = thread.state === "open";
-  const isFork = thread.kind === "fork";
-  const options = thread.options.length;
-  const [selected, setSelected] = useState(thread.recommended ?? 0);
+  const open = !thread.resolvedAt;
+  const forkOnly = isForkOnly(thread);
+  const offer = openOffer(thread);
+  const options = offer?.options.length ?? 0;
+  const [selected, setSelected] = useState(0);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
 
-  const send = async (option: number | null, note: string | null) => {
-    if (sending || !open || isFork) return;
+  const markRead = () => {
+    if (thread.unread)
+      void client.request.threadRead({ id: thread.id }).then(
+        () => onChanged(),
+        () => undefined,
+      );
+  };
+
+  const send = async (option: number | null, body: string | null) => {
+    if (sending || forkOnly) return;
     setSending(true);
     try {
-      const response = await client.request.askAnswer({
+      const response = await client.request.threadSay({
         id: thread.id,
+        body,
         option,
-        note,
       });
       if (!response.ok) onError(response.error.message);
       else setDraft("");
@@ -466,7 +555,6 @@ function ThreadCard({
       event.preventDefault();
       onFork();
     } else if (
-      open &&
       options &&
       !typing &&
       (event.key === "ArrowDown" || event.key === "ArrowUp")
@@ -477,7 +565,6 @@ function ThreadCard({
           (current + (event.key === "ArrowDown" ? 1 : options - 1)) % options,
       );
     } else if (
-      open &&
       !typing &&
       /^[1-9]$/.test(event.key) &&
       Number(event.key) <= options
@@ -486,7 +573,6 @@ function ThreadCard({
       setSelected(Number(event.key) - 1);
       void send(Number(event.key) - 1, null);
     } else if (
-      open &&
       event.key === "Enter" &&
       !event.shiftKey &&
       !event.nativeEvent.isComposing
@@ -504,15 +590,14 @@ function ThreadCard({
     ago(thread.createdAt, now),
     `#${thread.id}`,
   ].filter(Boolean);
-  const answer = [thread.answer, thread.note ? `"${thread.note}"` : null]
-    .filter(Boolean)
-    .join(", ");
   return (
     <article
-      className={`threads-card ${state}`}
+      className={`threads-card ${state}${thread.unread ? " unread" : ""}`}
       id={`thread-card-${thread.id}`}
+      onFocus={markRead}
       onKeyDown={onKeyDown}
       onMouseDown={(event) => {
+        markRead();
         // A click on the card, not on a control, sends the keys here.
         if (
           (event.target as HTMLElement).closest(
@@ -566,16 +651,16 @@ function ThreadCard({
               className="threads-quiet"
               onClick={() =>
                 void client.request
-                  .threadClose({ id: thread.id })
+                  .threadResolve({ id: thread.id })
                   .then((response) => {
                     if (!response.ok) onError(response.error.message);
                     onChanged();
                   })
               }
               title={
-                isFork
+                forkOnly
                   ? "Done with this thread; its fork ends. You can reopen it."
-                  : `Done without answering; ${owner} is told. You can reopen it.`
+                  : `Done with this thread; ${owner} is told. You can reopen it.`
               }
               type="button"
             >
@@ -600,142 +685,102 @@ function ThreadCard({
         </span>
       </header>
       <AnchorQuote
-        label={isFork ? "Your thread is on" : "Asked on"}
+        label={forkOnly ? "Your thread is on" : "On"}
         onShow={onShow}
         thread={thread}
       />
-      {isFork ? (
-        <div className="threads-term">
+      <div className="threads-term">
+        {thread.messages.map((message) => (
+          <ThreadMessageLine
+            key={message.id}
+            message={message}
+            now={now}
+            thread={thread}
+          />
+        ))}
+        {forkOnly && (
           <div className="threads-line hint">
             ⎿ a read-only fork of {owner}; {owner} sees nothing until you send
           </div>
-          {open && (
-            <button
-              className="threads-foot-link threads-fork-open"
-              onClick={onFork}
-              type="button"
-            >
-              Open the fork ↗
-            </button>
-          )}
-          {!open && (
-            <div className="threads-line hint">
-              ⎿ {thread.closedReason ?? thread.state}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="threads-term">
-          <div className="threads-line">
-            ● <LinkedText ownerId={thread.sessionId} text={thread.title} />
+        )}
+        {open && thread.forkSessionId && (
+          <button
+            className="threads-line hint threads-fork-line"
+            onClick={onFork}
+            type="button"
+          >
+            ⎿ talking it through in a fork · <span>open the fork ↗</span>
+          </button>
+        )}
+        {offer && (
+          <div className="threads-picker" role="listbox">
+            {offer.options.map((option, index) => (
+              <div
+                aria-selected={index === selected}
+                className={`threads-option${index === selected ? " on" : ""}`}
+                key={option}
+                onClick={() => void send(index, draft.trim() || null)}
+                onMouseEnter={() => setSelected(index)}
+                role="option"
+              >
+                <span className="threads-caret">
+                  {index === selected ? "❯" : ""}
+                </span>
+                <span className="threads-option-text">
+                  {index + 1}. {option}
+                </span>
+              </div>
+            ))}
           </div>
-          {thread.why && (
-            <div className="threads-line dim">
-              {" "}
-              <LinkedText ownerId={thread.sessionId} text={thread.why} />
+        )}
+        {!forkOnly && (
+          <>
+            <div className="threads-prompt">
+              <span className="you">&gt;</span>
+              <textarea
+                aria-label={`Reply in thread ${thread.id}`}
+                autoCapitalize="off"
+                autoComplete="off"
+                autoCorrect="off"
+                disabled={sending}
+                onChange={(event) => {
+                  setDraft(event.target.value);
+                  // Grows with each line, as the terminal's prompt does.
+                  event.target.style.height = "auto";
+                  event.target.style.height = `${event.target.scrollHeight}px`;
+                }}
+                ref={input}
+                rows={1}
+                spellCheck={false}
+                value={draft}
+              />
             </div>
-          )}
-          {thread.context && (
-            <details className="threads-details">
-              <summary>Details</summary>
-              <div className="threads-line dim">
-                <LinkedText ownerId={thread.sessionId} text={thread.context} />
-              </div>
-            </details>
-          )}
-          {open && thread.forkSessionId && (
-            <button
-              className="threads-line hint threads-fork-line"
-              onClick={onFork}
-              type="button"
-            >
-              ⎿ talking it through in a fork · <span>open the fork ↗</span>
-            </button>
-          )}
-          {open && thread.bumpedAt && (
-            <div className="threads-line hint">
-              ⎿ blocked on this since {ago(thread.bumpedAt, now)} ago
+            <div className="threads-foot">
+              {options
+                ? `↑↓ or 1-${options} pick · enter sends · ⇧enter new line · `
+                : open
+                  ? "enter sends · ⇧enter new line · "
+                  : "writing here reopens it · "}
+              <button
+                className="threads-foot-link"
+                onClick={onFork}
+                type="button"
+              >
+                {thread.forkSessionId ? "ctrl+f open the fork" : "ctrl+f fork"}
+              </button>
             </div>
-          )}
-          {open && options > 0 && (
-            <div className="threads-picker" role="listbox">
-              {thread.options.map((option, index) => (
-                <div
-                  aria-selected={index === selected}
-                  className={`threads-option${index === selected ? " on" : ""}`}
-                  key={option}
-                  onClick={() => void send(index, draft.trim() || null)}
-                  onMouseEnter={() => setSelected(index)}
-                  role="option"
-                >
-                  <span className="threads-caret">
-                    {index === selected ? "❯" : ""}
-                  </span>
-                  <span className="threads-option-text">
-                    {index + 1}. {option}
-                    {index === thread.recommended && (
-                      <span className="dim"> (recommended)</span>
-                    )}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {!open && (
-            <>
-              {answer && (
-                <div className="threads-line you">
-                  &gt; <LinkedText ownerId={thread.sessionId} text={answer} />
-                </div>
-              )}
-              <div className="threads-line hint">
-                ⎿{" "}
-                {thread.state === "answered" && !thread.closedReason
-                  ? "sent to main"
-                  : (thread.closedReason ?? thread.state)}
-              </div>
-            </>
-          )}
-          {open && (
-            <>
-              <div className="threads-prompt">
-                <span className="you">&gt;</span>
-                <textarea
-                  aria-label={`Answer thread ${thread.id}`}
-                  autoCapitalize="off"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  disabled={sending}
-                  onChange={(event) => {
-                    setDraft(event.target.value);
-                    // Grows with each line, as the terminal's prompt does.
-                    event.target.style.height = "auto";
-                    event.target.style.height = `${event.target.scrollHeight}px`;
-                  }}
-                  ref={input}
-                  rows={1}
-                  spellCheck={false}
-                  value={draft}
-                />
-              </div>
-              <div className="threads-foot">
-                {options
-                  ? `↑↓ or 1-${options} pick · enter sends · ⇧enter new line · `
-                  : "enter sends · ⇧enter new line · "}
-                <button
-                  className="threads-foot-link"
-                  onClick={onFork}
-                  type="button"
-                >
-                  {thread.forkSessionId
-                    ? "ctrl+f open the fork"
-                    : "ctrl+f fork"}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
+          </>
+        )}
+        {forkOnly && open && (
+          <button
+            className="threads-foot-link threads-fork-open"
+            onClick={onFork}
+            type="button"
+          >
+            Open the fork ↗
+          </button>
+        )}
+      </div>
     </article>
   );
 }
@@ -758,13 +803,13 @@ function ThreadFeed({
   onError,
 }: {
   client: DesktopClient;
-  threads: AskDto[];
+  threads: ThreadDto[];
   showSession: boolean;
-  ownerTag?: (thread: AskDto) => string | null;
-  onShow: (thread: AskDto, focus: string | null) => void;
-  onFork: (thread: AskDto) => void;
-  onOpenFork?: (thread: AskDto) => void;
-  onOpenSession?: (thread: AskDto) => void;
+  ownerTag?: (thread: ThreadDto) => string | null;
+  onShow: (thread: ThreadDto, focus: string | null) => void;
+  onFork: (thread: ThreadDto) => void;
+  onOpenFork?: (thread: ThreadDto) => void;
+  onOpenSession?: (thread: ThreadDto) => void;
   onChanged: () => void;
   onError: (message: string) => void;
 }) {
@@ -778,16 +823,14 @@ function ThreadFeed({
       return next;
     });
   const now = Date.now();
-  const card = (thread: AskDto, collapsible: boolean) => (
+  const card = (thread: ThreadDto, collapsible: boolean) => (
     <ThreadCard
       client={client}
       key={thread.id}
       onChanged={onChanged}
       onError={onError}
       onFork={() =>
-        thread.kind === "fork" && onOpenFork
-          ? onOpenFork(thread)
-          : onFork(thread)
+        isForkOnly(thread) && onOpenFork ? onOpenFork(thread) : onFork(thread)
       }
       onShow={(focus) => onShow(thread, focus)}
       ownerTag={ownerTag?.(thread) ?? null}
@@ -799,7 +842,12 @@ function ThreadFeed({
   );
   const live = threads.filter((thread) => {
     const state = threadState(thread, now);
-    return state === "blocking" || state === "waiting" || state === "fork";
+    return (
+      state === "blocking" ||
+      state === "waiting" ||
+      state === "replied" ||
+      state === "fork"
+    );
   });
   const folded = (state: ThreadState) =>
     threads.filter((thread) => threadState(thread, now) === state);
@@ -815,7 +863,7 @@ function ThreadFeed({
         ["snoozed", snoozed],
         ["ended", ended],
       ].map(([state, items]) =>
-        (items as AskDto[]).length ? (
+        (items as ThreadDto[]).length ? (
           <section className="threads-folded" key={state as string}>
             {state === "ended" ? (
               <h3 className="threads-group">
@@ -826,48 +874,50 @@ function ThreadFeed({
                   type="button"
                 >
                   <span aria-hidden="true">{showResolved ? "▾" : "▸"}</span>{" "}
-                  {STATE_LABEL.ended} · {(items as AskDto[]).length}
+                  {STATE_LABEL.ended} · {(items as ThreadDto[]).length}
                 </button>
               </h3>
             ) : (
               <h3 className="threads-group">
                 {STATE_LABEL[state as ThreadState]} ·{" "}
-                {(items as AskDto[]).length}
+                {(items as ThreadDto[]).length}
               </h3>
             )}
-            {(state !== "ended" || showResolved ? (items as AskDto[]) : []).map(
-              (thread) =>
-                expanded.has(thread.id) ? (
-                  card(thread, true)
-                ) : (
-                  <ThreadRow
-                    action={
-                      state === "ended" ? (
-                        <ReopenButton
-                          client={client}
-                          onDone={onChanged}
-                          onError={onError}
-                          thread={thread}
-                        />
-                      ) : state === "snoozed" ? (
-                        <SnoozeButton
-                          client={client}
-                          onDone={onChanged}
-                          onError={onError}
-                          thread={thread}
-                        />
-                      ) : undefined
-                    }
-                    key={thread.id}
-                    onOpen={() =>
-                      thread.kind === "fork" && onOpenFork
-                        ? onOpenFork(thread)
-                        : toggle(thread.id)
-                    }
-                    showSession={showSession}
-                    thread={thread}
-                  />
-                ),
+            {(state !== "ended" || showResolved
+              ? (items as ThreadDto[])
+              : []
+            ).map((thread) =>
+              expanded.has(thread.id) ? (
+                card(thread, true)
+              ) : (
+                <ThreadRow
+                  action={
+                    state === "ended" ? (
+                      <ReopenButton
+                        client={client}
+                        onDone={onChanged}
+                        onError={onError}
+                        thread={thread}
+                      />
+                    ) : state === "snoozed" ? (
+                      <SnoozeButton
+                        client={client}
+                        onDone={onChanged}
+                        onError={onError}
+                        thread={thread}
+                      />
+                    ) : undefined
+                  }
+                  key={thread.id}
+                  onOpen={() =>
+                    isForkOnly(thread) && onOpenFork
+                      ? onOpenFork(thread)
+                      : toggle(thread.id)
+                  }
+                  showSession={showSession}
+                  thread={thread}
+                />
+              ),
             )}
           </section>
         ) : null,
@@ -884,16 +934,14 @@ export function ThreadsHome({
 }: {
   client: DesktopClient;
   /** Opens the thread's session, with the thread (or main at `focus`) beside it. */
-  onOpenThread: (thread: AskDto, focus?: string | null) => void;
+  onOpenThread: (thread: ThreadDto, focus?: string | null) => void;
   onError: (message: string) => void;
 }) {
   const { threads, reload } = useThreads(client, null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const questions = threads.filter((thread) => thread.kind === "question");
-  const waitsOnYou = (thread: AskDto) => {
-    const state = threadState(thread);
-    return state === "blocking" || state === "waiting";
-  };
+  // A thread the user opened on a fork lives beside its session only.
+  const questions = threads.filter((thread) => !isForkOnly(thread));
+  const waitsOnYou = (thread: ThreadDto) => waitsOnUser(thread, Date.now());
   // Every workspace with a thread, those waiting on you first.
   const workspaces = [
     ...new Map(
@@ -926,7 +974,7 @@ export function ThreadsHome({
           Threads{" "}
           {waiting > 0 && <span className="threads-count">{waiting}</span>}
         </h1>
-        <p>What the agents asked you and kept working on. Answer here.</p>
+        <p>Your conversations with agents that kept working. Reply here.</p>
         {workspaces.length > 1 && (
           <div
             aria-label="Show threads from"
@@ -1420,7 +1468,7 @@ function ForkView({
   onOpenInTab,
 }: {
   client: DesktopClient;
-  thread: AskDto;
+  thread: ThreadDto;
   onBack: () => void;
   onShow: (focus: string | null) => void;
   /** Moves this thread to a tab of its own. */
@@ -1432,9 +1480,9 @@ function ForkView({
   /** The message to main being written; null while the box is closed. */
   const [draft, setDraft] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const open = thread.state === "open";
-  /** A question's fork answers the question; a fork thread talks to main. */
-  const question = thread.kind === "question";
+  const open = !thread.resolvedAt;
+  /** A thread's fork replies in the thread; a fork thread talks to main. */
+  const question = !isForkOnly(thread);
   const run = async (operation: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -1477,13 +1525,7 @@ function ForkView({
         <h2>
           #{thread.id}{" "}
           <span className={`threads-state ${threadState(thread)}`}>
-            {!open
-              ? thread.state === "answered"
-                ? "Answered"
-                : "Resolved"
-              : question
-                ? "Fork of a question"
-                : "Your thread"}
+            {!open ? "Resolved" : question ? "Fork of a thread" : "Your thread"}
           </span>
         </h2>
         {onOpenInTab && (
@@ -1512,7 +1554,9 @@ function ForkView({
       {draft !== null && (
         <div className="threads-draft">
           <label className="threads-draft-label" htmlFor="threads-draft">
-            {question ? "Your answer" : "Message to the main agent"}
+            {question
+              ? "Your reply in the thread"
+              : "Message to the main agent"}
           </label>
           <textarea
             autoFocus
@@ -1530,7 +1574,7 @@ function ForkView({
           />
           <p className="threads-draft-note">
             {question
-              ? "This answers the question. The agent gets it with a pointer to the fork's whole conversation, and the fork closes."
+              ? "This is your reply in the thread. The agent gets it with a pointer to the fork's whole conversation."
               : "The main agent gets this at its next turn, with the message this thread is on and a pointer to the fork's whole conversation."}
           </p>
           <div className="threads-draft-actions">
@@ -1547,7 +1591,7 @@ function ForkView({
               onClick={() => void sendToMain(draft)}
               type="button"
             >
-              {question ? "Answer" : "Send to main agent"}
+              {question ? "Reply" : "Send to main agent"}
             </button>
           </div>
         </div>
@@ -1559,7 +1603,7 @@ function ForkView({
           onClick={() => void startDraft()}
           type="button"
         >
-          {question ? "Answer with what you worked out…" : "Send to main…"}
+          {question ? "Reply with what you worked out…" : "Send to main…"}
           <span>
             starts from the fork&apos;s &quot;For main&quot; lines, or its last
             reply; you edit it first
@@ -1569,7 +1613,7 @@ function ForkView({
       {sent && draft === null && (
         <div className="threads-sent">
           <span>
-            {question ? "Answered" : "Sent to main"} at {sent.at}:
+            {question ? "Replied" : "Sent to main"} at {sent.at}:
           </span>{" "}
           {firstLine(sent.text)}
         </div>

@@ -3,7 +3,11 @@ import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "vitest";
-import { runMigrations, withoutExistingColumns } from "./migrations";
+import {
+  runMigrations,
+  sqlStatements,
+  withoutExistingColumns,
+} from "./migrations";
 
 const cleanup: string[] = [];
 afterEach(async () =>
@@ -11,6 +15,28 @@ afterEach(async () =>
     cleanup.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   ),
 );
+
+describe("sqlStatements", () => {
+  test("ends a statement only at a semicolon outside strings, comments and trigger bodies", () => {
+    expect(
+      sqlStatements(`
+        -- a comment; not a statement
+        CREATE TABLE t (x TEXT DEFAULT 'a;b', "odd;name" INTEGER);
+        /* block; comment */
+        CREATE TRIGGER tr AFTER INSERT ON t BEGIN
+          UPDATE t SET x = CASE WHEN new.x = 'y' THEN 'z' END;
+          DELETE FROM t WHERE x = 'it''s;';
+        END;
+        INSERT INTO t (x) VALUES ('done');
+        -- trailing comment
+      `).map((statement) => statement.replace(/\s+/g, " ")),
+    ).toEqual([
+      `-- a comment; not a statement CREATE TABLE t (x TEXT DEFAULT 'a;b', "odd;name" INTEGER);`,
+      "/* block; comment */ CREATE TRIGGER tr AFTER INSERT ON t BEGIN UPDATE t SET x = CASE WHEN new.x = 'y' THEN 'z' END; DELETE FROM t WHERE x = 'it''s;'; END;",
+      "INSERT INTO t (x) VALUES ('done');",
+    ]);
+  });
+});
 
 describe("runMigrations", () => {
   test("skips a column an unshipped build already added, and adds the rest", async () => {
@@ -291,6 +317,31 @@ describe("runMigrations", () => {
     ).toEqual({ position: 1 });
     ordered.close();
   });
+  test("a statement that fails after the first rolls the whole migration back", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-migrations-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    await mkdir(migrations);
+    await Bun.write(
+      join(migrations, "001_table.sql"),
+      "CREATE TABLE items (x INTEGER CHECK (x > 0));",
+    );
+    await Bun.write(
+      join(migrations, "002_rows.sql"),
+      "INSERT INTO items VALUES (1);\nINSERT INTO items VALUES (-1);\nDROP TABLE items;",
+    );
+    const databasePath = join(home, "state.db");
+    await expect(runMigrations(databasePath, migrations)).rejects.toThrow(
+      "CHECK constraint failed",
+    );
+    const database = new Database(databasePath);
+    expect(database.query("SELECT x FROM items").all()).toEqual([]);
+    expect(
+      database.query("SELECT version FROM schema_migrations").all(),
+    ).toEqual([{ version: "001_table.sql" }]);
+    database.close();
+  });
+
   test("a foreign-keys-off migration rolls back when it breaks a key", async () => {
     const home = await mkdtemp(join(tmpdir(), "daedalus-fk-off-"));
     cleanup.push(home);
@@ -314,6 +365,166 @@ describe("runMigrations", () => {
     ).toEqual([{ version: "001_parent.sql" }]);
     expect(database.query("SELECT * FROM child").all()).toEqual([]);
     database.close();
+  });
+
+  test("team chat and asks move to conversations with their ids, history and cursors", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-conversations-"));
+    cleanup.push(home);
+    const migrations = join(home, "migrations");
+    const source = join(import.meta.dir, "../../../../migrations");
+    await mkdir(migrations);
+    for (const file of (await readdir(source))
+      .filter((file) => file.endsWith(".sql") && file < "052_")
+      .sort())
+      await Bun.write(join(migrations, file), Bun.file(join(source, file)));
+    const databasePath = join(home, "state.db");
+    await runMigrations(databasePath, migrations);
+
+    const database = new Database(databasePath);
+    database.exec(`
+      INSERT INTO workspaces (id, slug, name, path, created_at, updated_at, task_id_prefix)
+      VALUES ('w1', 'demo', 'Demo', '/tmp/demo', 't0', 't0', 'demo');
+      INSERT INTO agent_sessions (id, workspace_id, name, provider, kind, tmux_session, command, args, working_directory, status, started_at)
+      VALUES ('s1', 'w1', 'Lead', 'claude', 'agent', 'tmux-s1', 'claude', '[]', '/tmp/demo', 'running', 't0'),
+             ('s2', 'w1', 'Old', 'claude', 'agent', 'tmux-s2', 'claude', '[]', '/tmp/demo', 'exited', 't0');
+      UPDATE agent_sessions SET archived_at = 't1' WHERE id = 's2';
+      INSERT INTO session_abilities (id, session_id, ability, config, granted_at)
+      VALUES ('team1', 's1', 'orchestration', '{}', 't0');
+      INSERT INTO team_messages (id, team_id, author, body, tags, created_at, kind)
+      VALUES (5, 'team1', 'lead', '@api start', '["api"]', 't1', 'message'),
+             (9, 'team1', 'api', 'done', '[]', 't2', 'handback');
+      INSERT INTO team_cursors (team_id, handle, read_through, tagged_read_through, delivered_through, delivered_at)
+      VALUES ('team1', 'api', 5, 5, 5, 't1');
+      INSERT INTO asks (id, workspace_id, session_id, title, context, why, options, state, answer, note, closed_reason, created_at, updated_at, closed_at, notice_delivered_at, notified_at, bumped_at, kind)
+      VALUES
+        (3, 'w1', 's1', 'Retries?', 'ids here', 'blocks deploy', '["3","5"]', 'answered', '5', 'and log it', NULL, 't1', 't3', 't3', NULL, 't1', NULL, 'question'),
+        (4, 'w1', 's1', 'Which bucket?', NULL, NULL, '[]', 'open', NULL, NULL, NULL, 't1', 't2', NULL, NULL, NULL, 't2', 'question'),
+        (6, 'w1', 's1', 'Merge?', NULL, NULL, '[]', 'answered', NULL, 'yes', 'Answered in its session', 't1', 't2', 't2', NULL, 't1', NULL, 'question'),
+        (7, 'w1', 's1', 'A line in main', NULL, NULL, '[]', 'open', NULL, NULL, NULL, 't1', 't1', NULL, NULL, 't1', NULL, 'fork');
+    `);
+    database.close();
+
+    await Bun.write(
+      join(migrations, "052_conversations.sql"),
+      Bun.file(join(source, "052_conversations.sql")),
+    );
+    await runMigrations(databasePath, migrations);
+
+    const migrated = new Database(databasePath);
+    const rows = (sql: string) => migrated.query(sql).all();
+    expect(
+      rows(
+        "SELECT m.id, m.author, m.kind, m.body, m.tags FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.team_id = 'team1' ORDER BY m.id",
+      ),
+    ).toEqual([
+      {
+        id: 5,
+        author: "lead",
+        kind: "message",
+        body: "@api start",
+        tags: '["api"]',
+      },
+      { id: 9, author: "api", kind: "handback", body: "done", tags: "[]" },
+    ]);
+    expect(
+      rows(
+        "SELECT k.participant, k.read_through, k.tagged_read_through, k.delivered_through, k.delivered_at FROM cursors k JOIN conversations c ON c.id = k.conversation_id WHERE c.team_id = 'team1'",
+      ),
+    ).toEqual([
+      {
+        participant: "api",
+        read_through: 5,
+        tagged_read_through: 5,
+        delivered_through: 5,
+        delivered_at: "t1",
+      },
+    ]);
+    const thread = (number: number) =>
+      migrated
+        .query<{ author: string; kind: string; body: string }, []>(
+          `SELECT m.author, m.kind, m.body, m.details, m.options, m.picked FROM messages m JOIN conversations c ON c.id = m.conversation_id WHERE c.number = ${number} ORDER BY m.id`,
+        )
+        .all();
+    expect(thread(3)).toEqual([
+      {
+        author: "agent",
+        kind: "message",
+        body: "Retries?\n\nblocks deploy",
+        details: "ids here",
+        options: '["3","5"]',
+        picked: null,
+      },
+      {
+        author: "user",
+        kind: "message",
+        body: "5\nand log it",
+        details: null,
+        options: "[]",
+        picked: 1,
+      },
+      {
+        author: "user",
+        kind: "notice",
+        body: "resolved",
+        details: null,
+        options: "[]",
+        picked: null,
+      },
+    ]);
+    expect(
+      thread(4).map((message) => [message.author, message.kind, message.body]),
+    ).toEqual([
+      ["agent", "message", "Which bucket?"],
+      ["agent", "notice", "blocked"],
+    ]);
+    expect(
+      thread(6).map((message) => [message.author, message.kind, message.body]),
+    ).toEqual([
+      ["agent", "message", "Merge?"],
+      ["agent", "notice", "resolved: answered in main (yes)"],
+    ]);
+    expect(thread(7)).toEqual([]);
+    expect(
+      rows(
+        "SELECT number, resolved_by, blocked_at, title FROM conversations WHERE kind = 'thread' ORDER BY number",
+      ),
+    ).toEqual([
+      { number: 3, resolved_by: "user", blocked_at: null, title: "Retries?" },
+      {
+        number: 4,
+        resolved_by: null,
+        blocked_at: "t2",
+        title: "Which bucket?",
+      },
+      { number: 6, resolved_by: "agent", blocked_at: null, title: "Merge?" },
+      {
+        number: 7,
+        resolved_by: null,
+        blocked_at: null,
+        title: "A line in main",
+      },
+    ]);
+    // #3's answer was not told to its owner yet; #4 was never notified to the user.
+    const pending = (participant: string, author: string) =>
+      rows(
+        `SELECT c.number FROM conversations c LEFT JOIN cursors k ON k.conversation_id = c.id AND k.participant = '${participant}' WHERE c.kind = 'thread' AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.author = '${author}' AND m.id > coalesce(k.delivered_through, 0)) ORDER BY c.number`,
+      );
+    expect(pending("agent", "user")).toEqual([{ number: 3 }]);
+    expect(pending("user", "agent")).toEqual([{ number: 4 }]);
+    expect(
+      rows(
+        "SELECT rowid FROM messages_search WHERE messages_search MATCH 'buck'",
+      ),
+    ).toHaveLength(1);
+    expect(rows("SELECT session_id FROM session_notes")).toEqual([
+      { session_id: "s1" },
+    ]);
+    expect(
+      rows(
+        "SELECT name FROM sqlite_master WHERE name IN ('asks', 'team_messages', 'team_cursors')",
+      ),
+    ).toEqual([]);
+    migrated.close();
   });
 
   test("teams keep every routine, run and report through the abilities rebuild", async () => {
