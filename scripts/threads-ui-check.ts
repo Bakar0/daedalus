@@ -162,7 +162,26 @@ await withBrowser(
       "document.querySelector('#thread-card-12')",
       "the feed again",
     );
-    await key(browser, "#thread-card-12", "1");
+    // A number or a click only picks an option; Enter sends it.
+    await key(browser, "#thread-card-12", "2");
+    await browser.evaluate(
+      "document.querySelectorAll('#thread-card-12 .threads-option')[0].click()",
+    );
+    expect(
+      !(await browser.evaluate<boolean>(
+        "window.requests.some((one) => 'threadSay' in one)",
+      )),
+      "picking an option sent it before Enter",
+    );
+    expect(
+      (
+        await browser.evaluate<string>(
+          "document.querySelector('#thread-card-12 .threads-option.on').textContent",
+        )
+      ).includes("3 tries"),
+      "a click did not pick the option",
+    );
+    await key(browser, "#thread-card-12", "Enter");
     await browser.waitFor(
       "window.requests.some((one) => 'threadSay' in one)",
       "the reply",
@@ -427,6 +446,7 @@ await withBrowser(
       "main at #12's message, beside its session",
     );
     await key(browser, "#thread-card-12", "2");
+    await key(browser, "#thread-card-12", "Enter");
     await browser.waitFor(
       "window.requests.some((one) => 'threadSay' in one)",
       "the reply from Home",
