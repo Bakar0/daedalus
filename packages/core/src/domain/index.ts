@@ -643,6 +643,7 @@ export interface PresenceState {
 }
 
 export * from "./abilities";
+export * from "./conversations";
 export * from "./workflows";
 export * from "./routines";
 
