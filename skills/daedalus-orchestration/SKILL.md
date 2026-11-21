@@ -208,8 +208,9 @@ team notices have woken you. Write for that:
   your workspace's threads, open and resolved, from the last two weeks. If
   one is about the same thing, write in it with `daedal thread say <n>
 "<message>"`; that reopens a resolved one. Otherwise write one line in
-  your reply saying what you ask, then open a thread; it hangs off that
-  line:
+  your reply that asks the user directly ("Re-onboard the two stage orgs,
+  or skip them? Details in the thread.", never "I'm asking the user in a
+  thread..."), then open a thread; it hangs off that line:
 
       daedal thread new "Re-onboard the two stage orgs, or skip them? Batch 2 reconcile waits on this." \
         --details "zenity-management and PE-4472 on stg-s02 never got account.created" \

@@ -168,7 +168,9 @@ daedal thread resolve <n> ["<why>"]
 A thread is a conversation with the user. Before opening one, `thread find`
 it: if a thread (open or resolved) is about the same thing, `thread say` in
 it, which reopens a resolved one. Otherwise write one line in your reply
-saying what you are asking, then `thread new`: the thread hangs off your
+that asks the user the question directly ("Which retry budget should
+webhooks get? The options are in the thread.", never "I'm asking the user
+in a thread..."), then `thread new`: the thread hangs off your
 last message, and the user replies in the app's Threads tab. What the user
 writes comes back to you as a message. Talk about a thread only in the
 thread: status, corrections and follow-ups go there with `thread say`, not
