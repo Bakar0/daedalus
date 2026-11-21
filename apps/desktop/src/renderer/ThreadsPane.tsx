@@ -578,9 +578,9 @@ function ThreadCard({
       /^[1-9]$/.test(event.key) &&
       Number(event.key) <= options
     ) {
+      // Picks it; only Enter sends, so a stray key or click sends nothing.
       event.preventDefault();
       setSelected(Number(event.key) - 1);
-      void send(Number(event.key) - 1, null);
     } else if (
       event.key === "Enter" &&
       !event.shiftKey &&
@@ -728,8 +728,10 @@ function ThreadCard({
                 aria-selected={index === selected}
                 className={`threads-option${index === selected ? " on" : ""}`}
                 key={option}
-                onClick={() => void send(index, draft.trim() || null)}
-                onMouseEnter={() => setSelected(index)}
+                onClick={() => {
+                  setSelected(index);
+                  input.current?.focus();
+                }}
                 role="option"
               >
                 <span className="threads-caret">
