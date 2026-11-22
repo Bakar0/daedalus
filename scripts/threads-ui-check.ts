@@ -151,6 +151,19 @@ await withBrowser(
       "document.querySelector('.threads-message.focus')",
       "the focused message in main",
     );
+    // A link in main's messages opens in the browser, not in the app's window.
+    const at = await browser.evaluate<string>("location.href");
+    await browser.evaluate(
+      "document.querySelector('.threads-message a[href=\"https://github.com/example/gateway/pull/41\"]').click()",
+    );
+    await browser.waitFor(
+      "window.requests.some((one) => one.openExternal === 'https://github.com/example/gateway/pull/41')",
+      "the link opened in the browser",
+    );
+    expect(
+      (await browser.evaluate<string>("location.href")) === at,
+      "the link replaced the app's page",
+    );
     expect(
       (
         await browser.evaluate<string>(

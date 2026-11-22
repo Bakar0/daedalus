@@ -7,6 +7,7 @@
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { OpenLinkContext } from "./markdown-preview";
 import type {
   AgentSessionDto,
   MainMessageDto,
@@ -209,7 +210,7 @@ const messages: MainMessageDto[] = [
   {
     id: "a-4",
     role: "agent",
-    text: "Dead-letter table is in. Asked where alerts should go.",
+    text: "Dead-letter table is in ([PR 41](https://github.com/example/gateway/pull/41)). Asked where alerts should go.",
     at: ago(11),
   },
   {
@@ -404,39 +405,45 @@ else
             borderRight: "1px solid var(--line)",
           }}
         >
-          <ThreadLinksContext.Provider value={links}>
-            <ThreadsPane
-              client={client}
-              onError={(message) => console.error(message)}
-              renderTerminal={(id) => (
-                <div className="fake-terminal" data-session={id}>
-                  <div>&gt; why not the queue&apos;s built-in retry?</div>
-                  <div>
-                    ● The queue retries every 30s and drops the job after 3
-                    tries, with no record. Keep custom backoff.
+          <OpenLinkContext.Provider
+            value={(url) => window.requests.push({ openExternal: url })}
+          >
+            <ThreadLinksContext.Provider value={links}>
+              <ThreadsPane
+                client={client}
+                onError={(message) => console.error(message)}
+                renderTerminal={(id) => (
+                  <div className="fake-terminal" data-session={id}>
+                    <div>&gt; why not the queue&apos;s built-in retry?</div>
+                    <div>
+                      ● The queue retries every 30s and drops the job after 3
+                      tries, with no record. Keep custom backoff.
+                    </div>
+                    <div style={{ color: "var(--muted)" }}>
+                      ⏸ plan mode on (shift+tab to cycle)
+                    </div>
                   </div>
-                  <div style={{ color: "var(--muted)" }}>
-                    ⏸ plan mode on (shift+tab to cycle)
-                  </div>
-                </div>
-              )}
-              members={[{ id: "s-tests", name: "tests" }]}
-              {...(tabThread === undefined ? {} : { startThreadId: tabThread })}
-              openRequest={
-                forkRequest
-                  ? {
-                      threadId: forkRequest.id,
-                      fork: {
-                        sessionId: forkRequest.sessionId,
-                        anchorId: forkRequest.anchorId,
-                      },
-                      nonce: 1,
-                    }
-                  : null
-              }
-              session={session}
-            />
-          </ThreadLinksContext.Provider>
+                )}
+                members={[{ id: "s-tests", name: "tests" }]}
+                {...(tabThread === undefined
+                  ? {}
+                  : { startThreadId: tabThread })}
+                openRequest={
+                  forkRequest
+                    ? {
+                        threadId: forkRequest.id,
+                        fork: {
+                          sessionId: forkRequest.sessionId,
+                          anchorId: forkRequest.anchorId,
+                        },
+                        nonce: 1,
+                      }
+                    : null
+                }
+                session={session}
+              />
+            </ThreadLinksContext.Provider>
+          </OpenLinkContext.Provider>
         </div>
       </div>
     </StrictMode>,
