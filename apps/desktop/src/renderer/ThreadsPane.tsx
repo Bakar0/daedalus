@@ -937,11 +937,14 @@ function ThreadFeed({
 export function ThreadsHome({
   client,
   onOpenThread,
+  onForkThread,
   onError,
 }: {
   client: DesktopClient;
   /** Opens the thread's session, with the thread (or main at `focus`) beside it. */
   onOpenThread: (thread: ThreadDto, focus?: string | null) => void;
+  /** Opens the thread's session, with the thread's fork open beside it. */
+  onForkThread: (thread: ThreadDto) => void;
   onError: (message: string) => void;
 }) {
   const { threads, reload } = useThreads(client, null);
@@ -1010,7 +1013,7 @@ export function ThreadsHome({
         client={client}
         onChanged={reload}
         onError={onError}
-        onFork={(thread) => onOpenThread(thread)}
+        onFork={onForkThread}
         onOpenSession={(thread) => onOpenThread(thread)}
         onShow={(thread, focus) => onOpenThread(thread, focus)}
         key={filter ?? "all"}
@@ -1050,6 +1053,8 @@ export function ThreadsPane({
   openRequest?: {
     threadId: number;
     focus?: string | null;
+    /** Open the thread's fork, starting one if it has none. */
+    fork?: { sessionId: string; anchorId: string | null };
     nonce: number;
   } | null;
 }) {
@@ -1078,6 +1083,14 @@ export function ThreadsPane({
   );
   useEffect(() => {
     if (!openRequest) return;
+    if (openRequest.fork) {
+      void openFork(
+        openRequest.fork.sessionId,
+        openRequest.fork.anchorId,
+        openRequest.threadId,
+      );
+      return;
+    }
     if (openRequest.focus !== undefined && session)
       setView({
         kind: "messages",
