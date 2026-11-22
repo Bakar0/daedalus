@@ -210,6 +210,7 @@ const threadDto = (thread: ThreadView): ThreadDto => ({
   unread: thread.status.unread,
   turn: thread.status.turn,
   blocking: thread.status.blocking,
+  forkOpen: thread.status.forkOpen,
 });
 const agentDto = (agent: AgentSession): AgentSessionDto => ({
   ...agent,
@@ -853,6 +854,8 @@ export function createDesktopRequestHandlers(
           }),
         ),
       ),
+    threadCloseFork: ({ id }) =>
+      mutate(async () => threadDto(await context.threads.closeFork(id))),
     threadForkDraft: ({ id }) =>
       result(async () => ({ text: await context.threads.forkDraft(id) })),
     threadSendToMain: ({ id, text }) =>

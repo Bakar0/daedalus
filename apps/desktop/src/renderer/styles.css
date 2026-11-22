@@ -12526,22 +12526,25 @@ button.routine-tick:hover {
   background-color: rgb(249 115 22 / 0.75);
   color: #fff;
 }
-.threads-fork-line,
+.threads-fork-line button,
 .threads-fork-open {
   background: none;
   border: 0;
+  color: #3fb2a5;
   cursor: pointer;
-  display: block;
   font: inherit;
   padding: 0;
   text-align: left;
 }
+.threads-fork-open {
+  display: block;
+}
 .threads-fork-line {
   color: var(--muted);
 }
-.threads-fork-line span,
-.threads-fork-open {
-  color: #3fb2a5;
+.threads-fork-line button:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 .threads-fork-open {
   margin-top: 6px;

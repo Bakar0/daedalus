@@ -46,6 +46,8 @@ export interface ThreadStatus {
   turn: typeof USER | typeof AGENT | null;
   /** The owner said it is blocked on it, and the user has not replied since. */
   blocking: boolean;
+  /** Its fork is running: not closed, and the thread not resolved. */
+  forkOpen: boolean;
 }
 
 /** A thread with its conversation and what the app shows beside it. */
@@ -255,6 +257,7 @@ export class ThreadService {
       turn:
         thread.resolvedAt || !last ? null : last.author === USER ? AGENT : USER,
       blocking: Boolean(thread.blockedAt && !thread.resolvedAt),
+      forkOpen: !thread.resolvedAt && this.liveFork(thread),
     };
   }
 
@@ -784,6 +787,14 @@ export class ThreadService {
           `Thread #${thread.number} is resolved; reopen it first`,
         );
       if (this.liveFork(thread)) return this.view(thread);
+      // A fork the user closed comes back with what was said in it.
+      if (
+        thread.forkSessionId &&
+        this.repositories.findAgent(thread.forkSessionId)
+      ) {
+        await this.agents.restore(thread.forkSessionId);
+        return this.changed(this.get(thread.number));
+      }
       const fork = await this.spawnFork(thread.ownerSessionId);
       const at = this.at();
       const attached = this.repositories.conversations.updateThread(
@@ -959,7 +970,20 @@ export class ThreadService {
     );
   }
 
-  /** A reopened thread gets its archived fork back. */
+  /**
+   * The user closes an open thread's fork: it is archived, and the thread
+   * stays open. Its conversation stays readable, and forking the thread
+   * again brings the same fork back.
+   */
+  async closeFork(number: number): Promise<ThreadView> {
+    const thread = this.thread(number);
+    if (thread.resolvedAt || !this.liveFork(thread))
+      throw new DaedalusError("CONFLICT", `Thread #${number} has no open fork`);
+    await this.agents.archive(thread.forkSessionId!, true);
+    return this.changed(this.get(number));
+  }
+
+  /** A reopened thread or a closed fork gets its archived fork back. */
   private async restoreFork(thread: Thread): Promise<void> {
     const fork = thread.forkSessionId
       ? this.repositories.findAgent(thread.forkSessionId)

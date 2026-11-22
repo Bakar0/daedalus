@@ -652,6 +652,40 @@ describe("Threads", () => {
     });
   });
 
+  test("closing a thread's fork archives it, and forking again brings it back", async () => {
+    await withHome(async ({ context }) => {
+      const main = await spawn(context, "webhooks");
+      const { thread } = await context.threads.new({
+        session: main.id,
+        body: "How many tries?",
+      });
+      const forked = await context.threads.openFork({
+        sessionId: main.id,
+        threadNumber: thread.number,
+      });
+      expect(forked.status.forkOpen).toBe(true);
+      const closed = await context.threads.closeFork(thread.number);
+      expect(closed.status.forkOpen).toBe(false);
+      expect(closed.forkSessionId).toBe(forked.forkSessionId);
+      expect(closed.resolvedAt).toBeNull();
+      expect(
+        (await context.agents.get(forked.forkSessionId!)).archivedAt,
+      ).not.toBeNull();
+      expect(context.threads.closeFork(thread.number)).rejects.toThrow(
+        "no open fork",
+      );
+      const again = await context.threads.openFork({
+        sessionId: main.id,
+        threadNumber: thread.number,
+      });
+      expect(again.forkSessionId).toBe(forked.forkSessionId);
+      expect(again.status.forkOpen).toBe(true);
+      expect(
+        (await context.agents.get(forked.forkSessionId!)).archivedAt,
+      ).toBeNull();
+    });
+  });
+
   test("archiving a session archives its threads' forks", async () => {
     await withHome(async ({ context }) => {
       const main = await spawn(context, "webhooks");
