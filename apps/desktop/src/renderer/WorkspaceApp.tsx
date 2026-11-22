@@ -5492,6 +5492,7 @@ export function WorkspaceApp({
   const [threadRequest, setThreadRequest] = useState<{
     threadId: number;
     focus?: string | null;
+    fork?: { sessionId: string; anchorId: string | null };
     nonce: number;
   } | null>(null);
   const [homePage, setHomePage] = useState<
@@ -7889,6 +7890,18 @@ export function WorkspaceApp({
   const sessionsById = new Map(
     allAgents.map((session) => [session.id, session]),
   );
+  /** Shows a thread from Home beside its session, with what Home asked for. */
+  function openHomeThread(
+    thread: { id: number; sessionId: string },
+    request: Pick<NonNullable<typeof threadRequest>, "focus" | "fork">,
+  ) {
+    const target = sessionsById.get(thread.sessionId);
+    if (!target) return;
+    showSession(target.id, target.workspaceId);
+    setPanelTab("activity");
+    if (workspacePanelCollapsed) toggleBoardDetailPanel();
+    setThreadRequest({ threadId: thread.id, ...request, nonce: Date.now() });
+  }
   // Links in thread text: URLs open in the browser, and `@handle` opens the
   // session of that name in the thread owner's team (`@lead` its lead).
   const threadLinks: ThreadLinks = {
@@ -9047,18 +9060,17 @@ export function WorkspaceApp({
                     <ThreadsHome
                       client={client}
                       onError={setError}
-                      onOpenThread={(thread, focus) => {
-                        const target = sessionsById.get(thread.sessionId);
-                        if (!target) return;
-                        showSession(target.id, target.workspaceId);
-                        setPanelTab("activity");
-                        if (workspacePanelCollapsed) toggleBoardDetailPanel();
-                        setThreadRequest({
-                          threadId: thread.id,
-                          focus,
-                          nonce: Date.now(),
-                        });
-                      }}
+                      onOpenThread={(thread, focus) =>
+                        openHomeThread(thread, { focus })
+                      }
+                      onForkThread={(thread) =>
+                        openHomeThread(thread, {
+                          fork: {
+                            sessionId: thread.sessionId,
+                            anchorId: thread.anchorId,
+                          },
+                        })
+                      }
                     />
                   </ThreadLinksContext.Provider>
                 ) : homePage === "instructions" ? (

@@ -500,6 +500,38 @@ await withBrowser(
       `Home sent ${JSON.stringify(home)}`,
     );
     await browser.screenshot("threads-home-answered");
+    // ctrl+f on Home forks the thread beside its session, not just opens it.
+    await clickText(browser, "#thread-card-12 .threads-foot-link", "fork");
+    await browser.waitFor(
+      "window.requests.some((one) => one.forkThread === 12)",
+      "Home asked for #12's fork",
+    );
+  },
+);
+
+// Home's ctrl+f leaves the session's pane on the thread's fork.
+await withBrowser(
+  {
+    port: 41839,
+    page: "threads-test.html",
+    query: "fork=13",
+    width: 1100,
+    height: 700,
+  },
+  async (browser) => {
+    await browser.waitFor(
+      "document.querySelector('.threads-fork-terminal .fake-terminal')",
+      "the fork's terminal, from Home",
+    );
+    const opened = (await browser.requests()).find(
+      (one) => "threadOpenFork" in one,
+    )!;
+    expect(
+      JSON.stringify(opened.threadOpenFork) ===
+        JSON.stringify({ sessionId: "s-lead", anchorId: "a-4", threadId: 13 }),
+      `Home's fork opened on ${JSON.stringify(opened)}`,
+    );
+    await browser.screenshot("threads-home-fork");
   },
 );
 

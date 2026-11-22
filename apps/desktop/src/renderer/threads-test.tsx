@@ -369,6 +369,9 @@ const query = new URLSearchParams(window.location.search);
 const home = query.has("home");
 // `?thread=<id>`: the pane as a thread's own tab, with that thread's fork.
 const tabThread = query.get("thread") ? Number(query.get("thread")) : undefined;
+// `?fork=<id>`: the pane as Home leaves it after ctrl+f on that thread.
+const forkThread = query.get("fork") ? Number(query.get("fork")) : undefined;
+const forkRequest = threads.find((thread) => thread.id === forkThread);
 if (tabThread !== undefined)
   threads = threads.map((thread) =>
     thread.id === tabThread ? { ...thread, forkSessionId: "s-fork" } : thread,
@@ -382,6 +385,9 @@ if (home)
           onError={(message) => console.error(message)}
           onOpenThread={(thread, focus) =>
             window.requests.push({ openThread: thread.id, focus })
+          }
+          onForkThread={(thread) =>
+            window.requests.push({ forkThread: thread.id })
           }
         />
       </div>
@@ -422,6 +428,18 @@ else
                 {...(tabThread === undefined
                   ? {}
                   : { startThreadId: tabThread })}
+                openRequest={
+                  forkRequest
+                    ? {
+                        threadId: forkRequest.id,
+                        fork: {
+                          sessionId: forkRequest.sessionId,
+                          anchorId: forkRequest.anchorId,
+                        },
+                        nonce: 1,
+                      }
+                    : null
+                }
                 session={session}
               />
             </ThreadLinksContext.Provider>
