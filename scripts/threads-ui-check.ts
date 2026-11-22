@@ -3,7 +3,8 @@
  * threads are cards, blocking first, replied to in place with the picker or
  * typed words (shift+enter is a new line), and stay open with the reply in
  * them; resolved threads fold to rows; the quoted message opens main's
- * messages at the thread's message; ctrl+f forks a thread in place; a
+ * messages at the thread's message; ctrl+f forks a thread in place, and
+ * closing the fork leaves the thread open; a
  * conversation is searched and a thread opened on a match; Resolve ends a
  * thread and Reopen brings it back. Screenshots land in artifacts/threads-*.png.
  *
@@ -298,6 +299,29 @@ await withBrowser(
     );
     await browser.screenshot("threads-question-forked");
 
+    // Close the fork on the card: the thread stays, with its reply box.
+    await clickText(
+      browser,
+      "#thread-card-13 .threads-fork-line button",
+      "close the fork",
+    );
+    await browser.waitFor(
+      "window.requests.some((one) => one.threadCloseFork?.id === 13) && !document.querySelector('#thread-card-13 .threads-fork-line') && document.querySelector('#thread-card-13 .threads-foot-link').textContent === 'ctrl+f fork'",
+      "#13's fork closed from its card",
+    );
+    // ctrl+f forks it again; the fork's own header closes it too.
+    await clickText(browser, "#thread-card-13 .threads-foot-link", "fork");
+    await browser.waitFor(
+      "document.querySelector('.threads-fork-terminal .fake-terminal')",
+      "#13's fork again",
+    );
+    await clickText(browser, ".threads-head .threads-link", "Close the fork");
+    await browser.waitFor(
+      "window.requests.filter((one) => one.threadCloseFork?.id === 13).length === 2 && document.querySelector('#thread-card-13 .threads-prompt textarea') && !document.querySelector('#thread-card-13 .threads-fork-line')",
+      "#13's fork closed from the fork, back on its card",
+    );
+    await browser.screenshot("threads-fork-closed");
+
     // Shift+enter is a new line; enter sends what was typed.
     await type(
       browser,
@@ -385,9 +409,9 @@ await withBrowser(
       "document.querySelector('.threads-fork-terminal .fake-terminal')",
       "the new thread's fork",
     );
-    const fromMessage = (await browser.requests()).filter(
-      (one) => "threadOpenFork" in one,
-    )[1]!;
+    const fromMessage = (await browser.requests())
+      .filter((one) => "threadOpenFork" in one)
+      .at(-1)!;
     expect(
       JSON.stringify(fromMessage.threadOpenFork) ===
         JSON.stringify({ sessionId: "s-lead", anchorId: "a-5" }),

@@ -519,6 +519,7 @@ function ThreadCard({
   const [selected, setSelected] = useState(0);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [closing, setClosing] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   // Fits its text, as the terminal's prompt does: it grows with each line
   // and shrinks back when the text goes, sent or deleted.
@@ -535,6 +536,18 @@ function ThreadCard({
         () => onChanged(),
         () => undefined,
       );
+  };
+
+  const closeFork = async () => {
+    if (closing) return;
+    setClosing(true);
+    try {
+      const response = await client.request.threadCloseFork({ id: thread.id });
+      if (!response.ok) onError(response.error.message);
+      onChanged();
+    } finally {
+      setClosing(false);
+    }
   };
 
   const send = async (option: number | null, body: string | null) => {
@@ -713,14 +726,25 @@ function ThreadCard({
             ⎿ a read-only fork of {owner}; {owner} sees nothing until you send
           </div>
         )}
-        {open && thread.forkSessionId && (
-          <button
-            className="threads-line hint threads-fork-line"
-            onClick={onFork}
-            type="button"
-          >
-            ⎿ talking it through in a fork · <span>open the fork ↗</span>
-          </button>
+        {thread.forkOpen && (
+          <div className="threads-line hint threads-fork-line">
+            ⎿ talking it through in a fork ·{" "}
+            <button onClick={onFork} type="button">
+              open the fork ↗
+            </button>
+            {!forkOnly && (
+              <>
+                {" · "}
+                <button
+                  disabled={closing}
+                  onClick={() => void closeFork()}
+                  type="button"
+                >
+                  close the fork
+                </button>
+              </>
+            )}
+          </div>
         )}
         {offer && (
           <div className="threads-picker" role="listbox">
@@ -773,7 +797,7 @@ function ThreadCard({
                 onClick={onFork}
                 type="button"
               >
-                {thread.forkSessionId ? "ctrl+f open the fork" : "ctrl+f fork"}
+                {thread.forkOpen ? "ctrl+f open the fork" : "ctrl+f fork"}
               </button>
             </div>
           </>
@@ -1178,6 +1202,10 @@ export function ThreadsPane({
             : undefined
         }
         onError={onError}
+        onClosed={() => {
+          reload();
+          setView({ kind: "list" });
+        }}
         onShow={(focus) => showMain(fork.sessionId, focus)}
         renderTerminal={renderTerminal}
         thread={fork}
@@ -1227,7 +1255,7 @@ export function ThreadsPane({
           onChanged={reload}
           onError={onError}
           onFork={(thread) =>
-            thread.forkSessionId
+            thread.forkOpen
               ? setView({ kind: "thread", id: thread.id })
               : void openFork(thread.sessionId, thread.anchorId, thread.id)
           }
@@ -1486,10 +1514,13 @@ function ForkView({
   onError,
   renderTerminal,
   onOpenInTab,
+  onClosed,
 }: {
   client: DesktopClient;
   thread: ThreadDto;
   onBack: () => void;
+  /** The user closed a thread's fork: back to the thread's card. */
+  onClosed: () => void;
   onShow: (focus: string | null) => void;
   /** Moves this thread to a tab of its own. */
   onOpenInTab?: (() => void) | undefined;
@@ -1517,6 +1548,12 @@ function ForkView({
       const response = await client.request.threadForkDraft({ id: thread.id });
       if (!response.ok) onError(response.error.message);
       else setDraft(response.data.text);
+    });
+  const closeFork = () =>
+    run(async () => {
+      const response = await client.request.threadCloseFork({ id: thread.id });
+      if (!response.ok) onError(response.error.message);
+      else onClosed();
     });
   const sendToMain = (text: string) =>
     run(async () => {
@@ -1548,6 +1585,17 @@ function ForkView({
             {!open ? "Resolved" : question ? "Fork of a thread" : "Your thread"}
           </span>
         </h2>
+        {question && thread.forkOpen && (
+          <button
+            className="threads-link"
+            disabled={busy}
+            onClick={() => void closeFork()}
+            title="Archive this fork; the thread stays open, and ctrl+f brings the fork back"
+            type="button"
+          >
+            Close the fork
+          </button>
+        )}
         {onOpenInTab && (
           <button
             className="threads-link"
@@ -1643,7 +1691,7 @@ function ForkView({
         until you send to main.
       </div>
       <div className="threads-fork-terminal">
-        {open && thread.forkSessionId && renderTerminal ? (
+        {thread.forkOpen && thread.forkSessionId && renderTerminal ? (
           renderTerminal(thread.forkSessionId)
         ) : (
           <p className="threads-empty">

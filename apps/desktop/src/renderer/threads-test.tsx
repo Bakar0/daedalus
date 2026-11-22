@@ -77,6 +77,7 @@ const base = {
   unread: false,
   turn: "user" as const,
   blocking: false,
+  forkOpen: false,
 } satisfies Partial<ThreadDto>;
 
 let threads: ThreadDto[] = [
@@ -274,12 +275,14 @@ const client = {
         return change(params.threadId, (thread) => ({
           ...thread,
           forkSessionId: "s-fork",
+          forkOpen: true,
         }));
       const anchor = messages.find((item) => item.id === params.anchorId);
       const fork: ThreadDto = {
         ...base,
         id: 20,
         forkSessionId: "s-fork",
+        forkOpen: true,
         title: anchor?.text.split("\n")[0] ?? "Thread",
         messages: [],
         turn: null,
@@ -290,6 +293,10 @@ const client = {
       };
       threads = [...threads, fork];
       return ok(fork);
+    },
+    threadCloseFork: (params: { id: number }) => {
+      window.requests.push({ threadCloseFork: params });
+      return change(params.id, (thread) => ({ ...thread, forkOpen: false }));
     },
     threadForkDraft: (params: { id: number }) => {
       window.requests.push({ threadForkDraft: params });
@@ -304,6 +311,7 @@ const client = {
         resolvedAt: new Date().toISOString(),
         resolvedBy: "user",
         turn: null,
+        forkOpen: false,
         messages: [
           ...thread.messages,
           message("user", "resolved", new Date().toISOString(), {
@@ -374,7 +382,9 @@ const forkThread = query.get("fork") ? Number(query.get("fork")) : undefined;
 const forkRequest = threads.find((thread) => thread.id === forkThread);
 if (tabThread !== undefined)
   threads = threads.map((thread) =>
-    thread.id === tabThread ? { ...thread, forkSessionId: "s-fork" } : thread,
+    thread.id === tabThread
+      ? { ...thread, forkSessionId: "s-fork", forkOpen: true }
+      : thread,
   );
 if (home)
   createRoot(document.getElementById("root")!).render(

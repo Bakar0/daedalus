@@ -210,6 +210,8 @@ export interface ThreadDto {
   turn: "user" | "agent" | null;
   /** The owner is blocked on it and the user has not replied since. */
   blocking: boolean;
+  /** Its fork is running; false once closed or the thread is resolved. */
+  forkOpen: boolean;
 }
 
 /** A plan's tasks, for the map beside Activity. */
@@ -1825,12 +1827,14 @@ export interface DesktopRpcSchema {
       /**
        * Opens a fork: on an open thread (`threadId`), the thread's own fork;
        * otherwise a new thread on a message in a session's main. A fork that
-       * is open already comes back as it is.
+       * is open already comes back as it is; a closed one is brought back.
        */
       threadOpenFork: Request<
         { sessionId: string; anchorId: string | null; threadId?: number },
         ThreadDto
       >;
+      /** Archives an open thread's fork; the thread stays open. */
+      threadCloseFork: Request<{ id: number }, ThreadDto>;
       /** The fork's last reply: where a message to main starts. */
       threadForkDraft: Request<{ id: number }, { text: string }>;
       /** Sends the user's message from a fork thread to its main. */
