@@ -166,7 +166,7 @@ import {
   worktreeKey,
 } from "./files/ChangesView";
 import type { DiffTarget } from "./files/EditorArea";
-import { MarkdownPreview } from "./markdown-preview";
+import { MarkdownPreview, OpenLinkContext } from "./markdown-preview";
 import { buildWorldModel, worldInputFromSnapshot } from "./world/world-model";
 import {
   TASK_STATUS_LABEL,
@@ -1382,12 +1382,15 @@ const SaveTerminalImageContext = createContext<
 function AppContexts({
   children,
   dialogError,
+  openLink,
   saveTerminalImage,
   terminalFontSize,
   theme,
 }: {
   children: React.ReactNode;
   dialogError: { message: string; dismiss: () => void } | undefined;
+  /** Opens a link from rendered markdown in the default browser. */
+  openLink: (url: string) => void;
   saveTerminalImage: (file: File) => Promise<string | undefined>;
   terminalFontSize: number;
   theme: AppTheme;
@@ -1397,7 +1400,9 @@ function AppContexts({
       <TerminalFontSizeContext.Provider value={terminalFontSize}>
         <DialogErrorContext.Provider value={dialogError}>
           <SaveTerminalImageContext.Provider value={saveTerminalImage}>
-            {children}
+            <OpenLinkContext.Provider value={openLink}>
+              {children}
+            </OpenLinkContext.Provider>
           </SaveTerminalImageContext.Provider>
         </DialogErrorContext.Provider>
       </TerminalFontSizeContext.Provider>
@@ -8362,6 +8367,7 @@ export function WorkspaceApp({
   return (
     <AppContexts
       dialogError={dialogError}
+      openLink={openExternalLink}
       saveTerminalImage={saveTerminalImage}
       terminalFontSize={terminalFontSize}
       theme={theme}
