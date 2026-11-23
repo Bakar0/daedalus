@@ -21,11 +21,56 @@ An agent **can** launch it with `open build/dev-macos-arm64/Daedalus-dev.app`.
 session, so this works from an agent's `Background` launchd session
 (`launchctl managername`) and opens no terminal window.
 
-What an agent **cannot** do is see or drive the result: screen capture needs a
-Screen Recording grant the agent does not have, and there is no way to click.
-So a change that has to be _looked at_ still ends with a handoff — say plainly
-that visual confirmation is outstanding rather than implying the build proved
-it. Never drive Terminal.app through `osascript` to get a GUI session; it opens
+That app renders in WKWebView, which an agent cannot see or click: screen
+capture needs a Screen Recording grant the agent does not have. To **see and
+drive** the app, run the dev build on Chromium and attach Playwright over the
+Chrome DevTools Protocol:
+
+```
+bun scripts/dev-app.ts start                      # build, start, wait for the window
+bun scripts/dev-app.ts shot out.png [--size 1288x801]   # then Read the PNG
+bun scripts/dev-app.ts text                       # visible text, cheaper than a shot
+bun scripts/dev-app.ts click "Custom instructions"     # exact text or accessible name
+bun scripts/dev-app.ts key Enter
+bun scripts/dev-app.ts eval "document.title"
+bun scripts/dev-app.ts run flow.ts                # a Playwright script, for longer flows
+bun scripts/dev-app.ts restart                    # after a code change
+bun scripts/dev-app.ts stop
+```
+
+`start` sets `DAEDALUS_CDP=1`, which builds the window on Chromium (CEF) with
+remote debugging on port 9333 (`rendererSettings` in electrobun.config.ts). Any
+channel but dev refuses that variable, so Chromium and the port never ship. The
+first start downloads Chromium and takes a few minutes; the log is
+`build/dev-app/dev-app.log`.
+
+`start` opens the bundle with `open`, never by running it from the shell. An
+app an agent starts directly (`bun run dev:cdp` included) lives in the agent's
+`Background` launchd session: CDP screenshots look right, but the window on
+the user's screen stays blank. Through `open` it runs in the user's GUI
+session with the user's own environment, so it also never inherits the
+session's `DAEDALUS_*` variables and uses `~/.daedalus-dev`; drive that home
+from the shell with `~/.daedalus-dev/bin/daedal`, not plain `daedal`.
+
+A `run` script default-exports a function that gets the connected app
+(`DevApp` in scripts/lib/dev-app.ts): `page` is a Playwright page on the real
+window, `shot` screenshots at device scale, and `cdp` is a raw CDP session.
+Disconnecting leaves the app running.
+
+- Only one dev app runs at a time, because every checkout's dev build shares
+  `~/.daedalus-dev` and one Chromium profile. `start` refuses while another
+  checkout's dev app runs and names it, the driving commands refuse another
+  checkout's window, and `stop` only stops processes run from this checkout.
+- The app runs without `--watch`, so a rebuild never relaunches the window
+  under a connected script. After changing code, `restart`.
+- Never press Escape while a terminal pane has focus: it interrupts the agent
+  running there.
+- Check every result by reading a screenshot or the text, not only the exit
+  code.
+- The renderer is Chromium, not the WKWebView users get. A WebKit-only bug
+  still needs the user's eyes; say so when that matters.
+
+Never drive Terminal.app through `osascript` to get a GUI session; it opens
 windows on the user's machine and `open` already does the job.
 
 ## Channels

@@ -7,12 +7,44 @@ import packageJson from "./package.json";
 // a preview build is not a second app — it is the same app twice, and whichever
 // launched last wins. The channel is read from the same `--env` flag Electrobun
 // itself parses, so `electrobun build --env=stable` needs no second switch.
-const channel = (() => {
+type Channel = "dev" | "stable" | "canary";
+
+const channel = ((): Channel => {
   const flag = process.argv
     .find((argument) => argument.startsWith("--env="))
     ?.slice("--env=".length);
   return flag === "stable" || flag === "canary" ? flag : "dev";
 })();
+
+// The port Chrome DevTools Protocol listens on when the dev app is built with
+// DAEDALUS_CDP=1 (`bun run dev:cdp`). scripts/dev-app.ts attaches Playwright
+// to it.
+export const DEV_CDP_PORT = 9333;
+
+/**
+ * The renderer settings for a build. With `DAEDALUS_CDP=1` the dev window
+ * renders on Chromium (CEF) with remote debugging on DEV_CDP_PORT, so an agent
+ * can see and drive the real app. That adds about 300 MB of Chromium and an
+ * unauthenticated debugging port, so any channel but dev refuses it rather
+ * than quietly shipping it.
+ */
+export function rendererSettings(
+  env: Record<string, string | undefined>,
+  buildChannel: Channel,
+) {
+  if (env["DAEDALUS_CDP"] !== "1") return { bundleCEF: false };
+  if (buildChannel !== "dev")
+    throw new Error(
+      `DAEDALUS_CDP=1 is for dev builds only; unset it to build ${buildChannel}.`,
+    );
+  return {
+    bundleCEF: true,
+    defaultRenderer: "cef" as const,
+    chromiumFlags: { "remote-debugging-port": String(DEV_CDP_PORT) },
+  };
+}
+
+const renderer = rendererSettings(process.env, channel);
 
 export const STABLE_IDENTIFIER = "dev.daedalus.app";
 
@@ -84,7 +116,7 @@ export default {
     },
     watchIgnore: ["apps/desktop/dist/**"],
     mac: {
-      bundleCEF: false,
+      ...renderer,
       icons: "assets/icon.iconset",
       codesign: signing,
       notarize: notarizing,
