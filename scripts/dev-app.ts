@@ -3,7 +3,7 @@
  * the real window. See scripts/lib/dev-app.ts for how it works.
  *
  *   bun scripts/dev-app.ts start                build and start it, wait for the window
- *   bun scripts/dev-app.ts stop                 stop the app this checkout started
+ *   bun scripts/dev-app.ts stop                 stop this checkout's dev app
  *   bun scripts/dev-app.ts restart              stop, rebuild and start, after a code change
  *   bun scripts/dev-app.ts status
  *   bun scripts/dev-app.ts shot <file.png> [--size 1288x801]
@@ -33,7 +33,7 @@ import {
 
 const usage = `usage: bun scripts/dev-app.ts <command>
   start                          build and start the dev app, wait for the window
-  stop                           stop the dev app this checkout started
+  stop                           stop this checkout's dev app
   restart                        stop, rebuild and start, after a code change
   status                         whether a dev app runs, and whose
   shot <file.png> [--size WxH]   screenshot the window

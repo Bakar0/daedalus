@@ -42,9 +42,15 @@ bun scripts/dev-app.ts stop
 remote debugging on port 9333 (`rendererSettings` in electrobun.config.ts). Any
 channel but dev refuses that variable, so Chromium and the port never ship. The
 first start downloads Chromium and takes a few minutes; the log is
-`build/dev-app/dev-app.log`. `start` also drops the session's `DAEDALUS_*`
-variables, so the app uses `~/.daedalus-dev`; drive that home from the shell
-with `~/.daedalus-dev/bin/daedal`, not plain `daedal`.
+`build/dev-app/dev-app.log`.
+
+`start` opens the bundle with `open`, never by running it from the shell. An
+app an agent starts directly (`bun run dev:cdp` included) lives in the agent's
+`Background` launchd session: CDP screenshots look right, but the window on
+the user's screen stays blank. Through `open` it runs in the user's GUI
+session with the user's own environment, so it also never inherits the
+session's `DAEDALUS_*` variables and uses `~/.daedalus-dev`; drive that home
+from the shell with `~/.daedalus-dev/bin/daedal`, not plain `daedal`.
 
 A `run` script default-exports a function that gets the connected app
 (`DevApp` in scripts/lib/dev-app.ts): `page` is a Playwright page on the real
