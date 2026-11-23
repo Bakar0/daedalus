@@ -7,7 +7,9 @@ import packageJson from "./package.json";
 // a preview build is not a second app — it is the same app twice, and whichever
 // launched last wins. The channel is read from the same `--env` flag Electrobun
 // itself parses, so `electrobun build --env=stable` needs no second switch.
-const channel = (() => {
+type Channel = "dev" | "stable" | "canary";
+
+const channel = ((): Channel => {
   const flag = process.argv
     .find((argument) => argument.startsWith("--env="))
     ?.slice("--env=".length);
@@ -28,7 +30,7 @@ export const DEV_CDP_PORT = 9333;
  */
 export function rendererSettings(
   env: Record<string, string | undefined>,
-  buildChannel: string,
+  buildChannel: Channel,
 ) {
   if (env["DAEDALUS_CDP"] !== "1") return { bundleCEF: false };
   if (buildChannel !== "dev")

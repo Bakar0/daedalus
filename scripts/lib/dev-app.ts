@@ -1,13 +1,17 @@
 /**
- * Starts, finds and drives the dev app built with `bun run dev:cdp`, which
- * renders on Chromium with remote debugging on DEV_CDP_PORT. Agents use it to
- * see and operate the real window: Playwright attaches over CDP, so no Screen
- * Recording grant or mouse is needed.
+ * Starts, finds and drives this checkout's dev app on Chromium, with remote
+ * debugging on DEV_CDP_PORT. Agents use it to see and operate the real window:
+ * Playwright attaches over CDP, so no Screen Recording grant or mouse is
+ * needed.
  *
- * Only one dev app can run at a time on a Mac: every worktree's dev build
- * shares the `~/.daedalus-dev` home and the Chromium profile keyed by the dev
+ * Only one dev app can run at a time on a Mac: every checkout's dev build
+ * shares the `~/.daedalus-dev` home and one Chromium profile, keyed by the dev
  * bundle identifier. So `start` refuses while a dev app from another checkout
- * runs, and `stop` only ever stops the app this checkout started.
+ * runs, `connect` refuses to drive one, and `stop` only stops processes that
+ * run from this checkout.
+ *
+ * The app runs without `--watch`: a rebuild would relaunch the window under a
+ * connected script. After changing code, `restart`.
  */
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
@@ -21,7 +25,8 @@ import {
 import { DEV_CDP_PORT } from "../../electrobun.config";
 
 export const projectRoot = resolve(import.meta.dir, "../..");
-export const cdpUrl = `http://127.0.0.1:${DEV_CDP_PORT}`;
+const cdpUrl = `http://127.0.0.1:${DEV_CDP_PORT}`;
+const mainWindowUrl = "views://mainview";
 const stateDirectory = join(projectRoot, "build", "dev-app");
 export const logFile = join(stateDirectory, "dev-app.log");
 const pidFile = join(stateDirectory, "dev-app.pid");
@@ -34,67 +39,122 @@ const bundlePath = join(
 );
 /** The first build downloads and bundles Chromium, which can take minutes. */
 const startTimeoutMs = 10 * 60_000;
+const stopTimeoutMs = 15_000;
 
-async function run(command: string[]): Promise<string> {
-  const child = Bun.spawn(command, { stdout: "pipe", stderr: "ignore" });
-  const out = await new Response(child.stdout).text();
-  await child.exited;
-  return out.trim();
+export interface Size {
+  width: number;
+  height: number;
 }
 
-/** Every running dev app, by the path of the bundle it runs from. */
+/** Runs a command and returns its standard output, trimmed. */
+async function output(command: string[]): Promise<string> {
+  const child = Bun.spawn(command, { stdout: "pipe", stderr: "ignore" });
+  const text = await new Response(child.stdout).text();
+  await child.exited;
+  return text.trim();
+}
+
+/** Polls until `done` holds or the time runs out; returns whether it held. */
+async function waitUntil(
+  done: () => boolean | Promise<boolean>,
+  timeoutMs: number,
+  intervalMs = 250,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await done()) return true;
+    if (Date.now() >= deadline) return false;
+    await Bun.sleep(intervalMs);
+  }
+}
+
+/** The bundle paths of every dev app running on this Mac. */
 async function runningDevApps(): Promise<string[]> {
   const lines = (
-    await run(["pgrep", "-fl", "Daedalus-dev.app/Contents/MacOS/launcher"])
+    await output(["pgrep", "-fl", "Daedalus-dev.app/Contents/MacOS/launcher"])
   )
     .split("\n")
     .filter(Boolean);
-  return lines.map((line) =>
-    line.replace(/^\d+\s+/, "").replace(/\/Contents\/MacOS\/launcher.*$/, ""),
-  );
+  return [
+    ...new Set(
+      lines.map((line) =>
+        line
+          .replace(/^\d+\s+/, "")
+          .replace(/\/Contents\/MacOS\/launcher.*$/, ""),
+      ),
+    ),
+  ];
+}
+
+/** The pids of every process that runs from this checkout's bundle. */
+async function ownAppPids(): Promise<number[]> {
+  return (await output(["pgrep", "-f", bundlePath]))
+    .split("\n")
+    .filter(Boolean)
+    .map(Number);
 }
 
 /** The command of the process that listens on the CDP port, if any. */
 async function portOwner(): Promise<string | undefined> {
   const pid = (
-    await run(["lsof", "-nP", `-iTCP:${DEV_CDP_PORT}`, "-sTCP:LISTEN", "-t"])
+    await output(["lsof", "-nP", `-iTCP:${DEV_CDP_PORT}`, "-sTCP:LISTEN", "-t"])
   ).split("\n")[0];
   if (!pid) return undefined;
-  return run(["ps", "-o", "command=", "-p", pid]);
+  return (await output(["ps", "-o", "command=", "-p", pid])) || undefined;
 }
 
-/** The app window's DevTools target once its page has loaded, else undefined. */
-async function mainWindowReady(): Promise<boolean> {
+/** True when a dev app window answers on the CDP port, whoever runs it. */
+async function windowAnswers(): Promise<boolean> {
   try {
-    const targets = (await (
-      await fetch(`${cdpUrl}/json/list`, { signal: AbortSignal.timeout(2000) })
-    ).json()) as Array<{
+    const response = await fetch(`${cdpUrl}/json/list`, {
+      signal: AbortSignal.timeout(2000),
+    });
+    const targets = (await response.json()) as Array<{
       type: string;
       url: string;
     }>;
     return targets.some(
       (target) =>
-        target.type === "page" && target.url.startsWith("views://mainview"),
+        target.type === "page" && target.url.startsWith(mainWindowUrl),
     );
   } catch {
     return false;
   }
 }
 
-function ownPid(): number | undefined {
+/**
+ * The process group `start` launched, when it still runs `electrobun dev`
+ * from this checkout. A pid file can outlive its process (a reboot, a crash),
+ * and macOS reuses pids, so a pid only counts when its process leads its own
+ * group, is the launcher's bun, and has this checkout as its directory.
+ * Anything else is stale and the file is removed.
+ */
+async function ownGroup(): Promise<number | undefined> {
   if (!existsSync(pidFile)) return undefined;
   const pid = Number(readFileSync(pidFile, "utf8"));
-  if (!Number.isInteger(pid) || pid <= 0) return undefined;
-  try {
-    process.kill(pid, 0);
-    return pid;
-  } catch {
+  const stale = () => {
+    rmSync(pidFile, { force: true });
     return undefined;
-  }
+  };
+  if (!Number.isInteger(pid) || pid <= 0) return stale();
+  const [group, ...command] = (
+    await output(["ps", "-o", "pgid=,command=", "-p", String(pid)])
+  )
+    .trim()
+    .split(/\s+/);
+  if (Number(group) !== pid || !command.join(" ").includes("electrobun"))
+    return stale();
+  const directory = (
+    await output(["lsof", "-a", "-p", String(pid), "-d", "cwd", "-Fn"])
+  )
+    .split("\n")
+    .find((line) => line.startsWith("n"))
+    ?.slice(1);
+  return directory === projectRoot ? pid : stale();
 }
 
 export interface DevAppStatus {
-  /** The window answers on the CDP port. */
+  /** This checkout's app runs and its window answers over CDP. */
   ready: boolean;
   /** The bundle paths of every dev app running on this Mac. */
   running: string[];
@@ -107,15 +167,19 @@ export interface DevAppStatus {
 export async function status(): Promise<DevAppStatus> {
   const running = await runningDevApps();
   const owner = await portOwner();
+  const ownsPort = owner?.includes(bundlePath) ?? false;
   return {
-    ready: await mainWindowReady(),
+    ready: ownsPort && (await windowAnswers()),
     running,
     ours: running.includes(bundlePath),
     ...(owner ? { portOwner: owner } : {}),
   };
 }
 
-/** The dev app's environment: this checkout's, minus whatever ties it to the agent session that starts it. */
+/**
+ * The dev app's environment: this process's, minus what ties it to the agent
+ * session that starts it.
+ */
 function appEnvironment(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) {
@@ -130,85 +194,120 @@ function appEnvironment(): Record<string, string> {
   return env;
 }
 
-/**
- * Builds and starts this checkout's dev app on Chromium, detached, and waits
- * until its window answers over CDP. Returns at once when it already runs.
- */
-export async function start(
-  log: (line: string) => void = () => {},
-): Promise<void> {
-  const now = await status();
-  if (now.ours && now.ready) return;
-  const others = now.running.filter((path) => path !== bundlePath);
-  if (others.length)
-    throw new Error(
-      `another dev app is running from ${others.join(", ")}. Only one dev app can run at a time, since they share ~/.daedalus-dev. Quit it, or run \`bun scripts/dev-app.ts stop\` in that checkout.`,
-    );
-  if (now.portOwner && !now.ours)
-    throw new Error(`port ${DEV_CDP_PORT} is held by: ${now.portOwner}`);
-
-  if (!now.ours) {
-    mkdirSync(stateDirectory, { recursive: true });
-    const out = openSync(logFile, "w");
-    // A process group of its own, so `stop` ends the watcher and the app
-    // together, and the app outlives the command that started it.
-    const child = spawn(process.execPath, ["run", "dev"], {
-      cwd: projectRoot,
-      env: appEnvironment(),
-      detached: true,
-      stdio: ["ignore", out, out],
-    });
-    if (!child.pid) throw new Error("could not start `bun run dev`");
-    await Bun.write(pidFile, String(child.pid));
-    child.unref();
-    log(`building and starting the dev app; log: ${logFile}`);
-  }
-
-  const deadline = Date.now() + startTimeoutMs;
-  while (Date.now() < deadline) {
-    if (await mainWindowReady()) return;
-    if (!ownPid())
-      throw new Error(
-        `the dev app exited while starting. The end of ${logFile}:\n${tail()}`,
-      );
-    await Bun.sleep(1000);
-  }
-  throw new Error(
-    `the window did not answer on ${cdpUrl} within ${startTimeoutMs / 60_000} minutes. The end of ${logFile}:\n${tail()}`,
-  );
-}
-
 function tail(lines = 30): string {
   if (!existsSync(logFile)) return "(no log)";
   return readFileSync(logFile, "utf8").split("\n").slice(-lines).join("\n");
 }
 
-/** Stops the dev app this checkout started, and nothing else. */
-export async function stop(): Promise<boolean> {
-  const pid = ownPid();
-  if (!pid) {
-    rmSync(pidFile, { force: true });
-    return false;
+/**
+ * Builds and starts this checkout's dev app on Chromium, detached, and waits
+ * until its window answers over CDP. Returns at once when it already does.
+ */
+export async function start(log: (line: string) => void): Promise<void> {
+  const current = await status();
+  if (current.ready) return;
+  const others = current.running.filter((path) => path !== bundlePath);
+  if (others.length)
+    throw new Error(
+      `another dev app is running from ${others.join(", ")}. Only one dev app can run at a time, since they share ~/.daedalus-dev. Quit it first.`,
+    );
+  if (current.portOwner && !current.portOwner.includes(bundlePath))
+    throw new Error(`port ${DEV_CDP_PORT} is held by: ${current.portOwner}`);
+  // This checkout's app or launcher without a window that answers: quit with
+  // Cmd+Q, still starting from an earlier `start`, or started by plain
+  // `bun run dev` without the debugging port. Start clean.
+  if (current.ours || (await ownGroup())) {
+    log("stopping this checkout's dev app, which does not answer over CDP");
+    await stop();
   }
-  const group = (signal: NodeJS.Signals) => {
+
+  mkdirSync(stateDirectory, { recursive: true });
+  const out = openSync(logFile, "w");
+  log(`building the renderer; log: ${logFile}`);
+  const build = Bun.spawn(
+    [process.execPath, "run", "--cwd", "apps/desktop", "build"],
+    { cwd: projectRoot, env: appEnvironment(), stdout: out, stderr: out },
+  );
+  if ((await build.exited) !== 0)
+    throw new Error(
+      `the renderer build failed. The end of ${logFile}:\n${tail()}`,
+    );
+
+  // node:child_process rather than Bun.spawn for `detached`: the app gets a
+  // process group of its own, so it outlives this command and `stop` can end
+  // it with its launcher in one signal.
+  const child = spawn(
+    process.execPath,
+    ["node_modules/.bin/electrobun", "dev"],
+    {
+      cwd: projectRoot,
+      env: appEnvironment(),
+      detached: true,
+      stdio: ["ignore", out, out],
+    },
+  );
+  if (!child.pid) throw new Error("could not start `electrobun dev`");
+  await Bun.write(pidFile, String(child.pid));
+  child.unref();
+  log("starting the dev app");
+
+  let exited = false;
+  const ready = await waitUntil(
+    async () => {
+      if ((await status()).ready) return true;
+      exited = !(await ownGroup());
+      return exited;
+    },
+    startTimeoutMs,
+    1000,
+  );
+  if (ready && !exited) return;
+  throw new Error(
+    exited
+      ? `the dev app exited while starting. The end of ${logFile}:\n${tail()}`
+      : `the window did not answer on ${cdpUrl} within ${startTimeoutMs / 60_000} minutes. The end of ${logFile}:\n${tail()}`,
+  );
+}
+
+/**
+ * Stops this checkout's dev app: the process group `start` launched, then any
+ * process still running from this checkout's bundle. Touches nothing else.
+ * Returns false when nothing was running; throws when something survives.
+ */
+export async function stop(): Promise<boolean> {
+  const group = await ownGroup();
+  const signalGroup = (signal: NodeJS.Signals) => {
+    if (group === undefined) return;
     try {
-      process.kill(-pid, signal);
+      process.kill(-group, signal);
     } catch {
       // Already gone.
     }
   };
-  group("SIGTERM");
-  for (let waited = 0; waited < 15_000 && ownPid(); waited += 250)
-    await Bun.sleep(250);
-  if (ownPid()) group("SIGKILL");
-  // The app can outlive the watcher's group by a moment; wait for its window
-  // to go so the next start does not find it.
-  for (
-    let waited = 0;
-    waited < 15_000 && (await runningDevApps()).includes(bundlePath);
-    waited += 250
-  )
-    await Bun.sleep(250);
+  const signalApp = async (signal: NodeJS.Signals) => {
+    for (const pid of await ownAppPids()) {
+      try {
+        process.kill(pid, signal);
+      } catch {
+        // Already gone.
+      }
+    }
+  };
+  const wasRunning = group !== undefined || (await ownAppPids()).length > 0;
+  if (!wasRunning) return false;
+
+  const gone = async () =>
+    (await ownGroup()) === undefined && (await ownAppPids()).length === 0;
+  signalGroup("SIGTERM");
+  await signalApp("SIGTERM");
+  if (!(await waitUntil(gone, stopTimeoutMs))) {
+    signalGroup("SIGKILL");
+    await signalApp("SIGKILL");
+    if (!(await waitUntil(gone, stopTimeoutMs)))
+      throw new Error(
+        `this checkout's dev app is still running after SIGKILL: ${(await ownAppPids()).join(", ")}`,
+      );
+  }
   rmSync(pidFile, { force: true });
   return true;
 }
@@ -224,22 +323,25 @@ export interface DevApp {
    * page out at that CSS size for the shot only, then gives the window its
    * own size back.
    */
-  shot(file: string, size?: { width: number; height: number }): Promise<string>;
+  shot(file: string, size?: Size): Promise<string>;
   /** Disconnects Playwright; the app keeps running. */
   close(): Promise<void>;
 }
 
-/** Attaches Playwright to the running dev app's window. */
+/** Attaches Playwright to this checkout's running dev app. */
 export async function connect(): Promise<DevApp> {
-  if (!(await mainWindowReady()))
+  const current = await status();
+  if (!current.ready)
     throw new Error(
-      `no dev app window answers on ${cdpUrl}; run \`bun scripts/dev-app.ts start\``,
+      current.portOwner
+        ? `port ${DEV_CDP_PORT} belongs to another app, not this checkout's: ${current.portOwner}`
+        : `this checkout's dev app is not running; run \`bun scripts/dev-app.ts start\``,
     );
   const browser = await chromium.connectOverCDP(cdpUrl);
   const page = browser
     .contexts()
     .flatMap((context) => context.pages())
-    .find((candidate) => candidate.url().startsWith("views://mainview"));
+    .find((candidate) => candidate.url().startsWith(mainWindowUrl));
   if (!page) {
     await browser.close();
     throw new Error("the Daedalus main window is not open");

@@ -34,6 +34,7 @@ bun scripts/dev-app.ts click "Custom instructions"     # exact text or accessibl
 bun scripts/dev-app.ts key Enter
 bun scripts/dev-app.ts eval "document.title"
 bun scripts/dev-app.ts run flow.ts                # a Playwright script, for longer flows
+bun scripts/dev-app.ts restart                    # after a code change
 bun scripts/dev-app.ts stop
 ```
 
@@ -52,7 +53,10 @@ Disconnecting leaves the app running.
 
 - Only one dev app runs at a time, because every checkout's dev build shares
   `~/.daedalus-dev` and one Chromium profile. `start` refuses while another
-  checkout's dev app runs and names it; `stop` only stops this checkout's.
+  checkout's dev app runs and names it, the driving commands refuse another
+  checkout's window, and `stop` only stops processes run from this checkout.
+- The app runs without `--watch`, so a rebuild never relaunches the window
+  under a connected script. After changing code, `restart`.
 - Never press Escape while a terminal pane has focus: it interrupts the agent
   running there.
 - Check every result by reading a screenshot or the text, not only the exit

@@ -32,7 +32,7 @@ describe("desktop build configuration", () => {
   });
 
   test("DAEDALUS_CDP=1 refuses every channel but dev", () => {
-    for (const channel of ["stable", "canary"])
+    for (const channel of ["stable", "canary"] as const)
       expect(() => rendererSettings({ DAEDALUS_CDP: "1" }, channel)).toThrow(
         /dev builds only/,
       );

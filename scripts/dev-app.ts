@@ -4,6 +4,7 @@
  *
  *   bun scripts/dev-app.ts start                build and start it, wait for the window
  *   bun scripts/dev-app.ts stop                 stop the app this checkout started
+ *   bun scripts/dev-app.ts restart              stop, rebuild and start, after a code change
  *   bun scripts/dev-app.ts status
  *   bun scripts/dev-app.ts shot <file.png> [--size 1288x801]
  *   bun scripts/dev-app.ts text                 the window's visible text
@@ -27,11 +28,13 @@ import {
   status,
   stop,
   type DevApp,
+  type Size,
 } from "./lib/dev-app";
 
 const usage = `usage: bun scripts/dev-app.ts <command>
   start                          build and start the dev app, wait for the window
   stop                           stop the dev app this checkout started
+  restart                        stop, rebuild and start, after a code change
   status                         whether a dev app runs, and whose
   shot <file.png> [--size WxH]   screenshot the window
   text                           print the window's visible text
@@ -63,7 +66,12 @@ async function main() {
   const command = args.shift();
   switch (command) {
     case "start":
-      await start((line) => console.log(line));
+      await start(console.log);
+      console.log("the dev app is ready");
+      return;
+    case "restart":
+      await stop();
+      await start(console.log);
       console.log("the dev app is ready");
       return;
     case "stop":
@@ -72,19 +80,19 @@ async function main() {
       );
       return;
     case "status": {
-      const now = await status();
+      const current = await status();
       console.log(
-        now.running.length
-          ? `running: ${now.running.join(", ")}${now.ours ? " (this checkout)" : ""}`
+        current.running.length
+          ? `running: ${current.running.join(", ")}${current.ours ? " (this checkout)" : ""}`
           : "no dev app is running",
       );
       console.log(
-        now.ready
-          ? "window: answers over CDP"
-          : "window: not reachable over CDP",
+        current.ready
+          ? "window: this checkout's, answers over CDP"
+          : "window: this checkout's is not reachable over CDP",
       );
-      if (now.portOwner && !now.ready)
-        console.log(`port held by: ${now.portOwner}`);
+      if (current.portOwner && !current.ready)
+        console.log(`port held by: ${current.portOwner}`);
       console.log(`log: ${logFile}`);
       return;
     }
@@ -92,12 +100,11 @@ async function main() {
       const size = option(args, "--size");
       const file = args[0];
       if (!file) throw new Error("shot needs a file path");
-      let dimensions: { width: number; height: number } | undefined;
+      let dimensions: Size | undefined;
       if (size) {
-        const [width, height] = size.split("x").map(Number);
-        if (!width || !height)
-          throw new Error("--size is WxH, such as 1288x801");
-        dimensions = { width, height };
+        const match = /^(\d+)x(\d+)$/.exec(size);
+        if (!match) throw new Error("--size is WxH, such as 1288x801");
+        dimensions = { width: Number(match[1]), height: Number(match[2]) };
       }
       await withApp(async (app) =>
         console.log(await app.shot(file, dimensions)),
@@ -111,6 +118,8 @@ async function main() {
       return;
     case "click": {
       const nth = Number(option(args, "--nth") ?? "0");
+      if (!Number.isInteger(nth) || nth < 0)
+        throw new Error("--nth is a whole number from 0");
       const text = args[0];
       if (!text) throw new Error("click needs the element's text");
       await withApp(async ({ page }) => {
