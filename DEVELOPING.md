@@ -44,6 +44,11 @@ DAEDALUS_HOME=/tmp/daedalus-test bun run daedal doctor
 
 CI runs the first six, and `bun run build`, on every push.
 
+`bun run dev:cdp` runs the dev app on Chromium with remote debugging on port
+9333, so Playwright can attach to the real window. `bun scripts/dev-app.ts`
+starts it detached and drives it (screenshots, clicks, Playwright scripts); see
+CLAUDE.md. `bun run test:app` checks that the whole path works.
+
 ## Releasing
 
 Set `version` in `package.json`, merge it, and push a matching `v<version>` tag. The release workflow builds the Apple silicon app, publishes the GitHub release and updates the Homebrew cask. A version with a `-beta.N` suffix publishes a prerelease that only users with "Get beta updates" on are offered; promote it by releasing the same version without the suffix. See [docs/releasing.md](docs/releasing.md).
