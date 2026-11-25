@@ -9696,6 +9696,8 @@ export function WorkspaceApp({
                       }
                     >
                       <FactoryPage
+                        // Its open chat windows belong to one workspace.
+                        key={workspace.id}
                         onFrontChat={setFrontChatId}
                         boxRequest={
                           boxRequest &&

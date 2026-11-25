@@ -6,7 +6,12 @@ import type { WorkflowRun, WorkflowRunStep } from "../domain";
 import { replayJobs, type Job } from "../domain/jobs";
 import { runMigrations } from "../repositories/migrations";
 import { SqliteRepositories } from "../repositories/sqlite";
-import { convertedJobs, convertOldWork, type OldSession } from "./job-convert";
+import {
+  abandonedJobEvents,
+  convertedJobs,
+  convertOldWork,
+  type OldSession,
+} from "./job-convert";
 
 const step = (
   name: string,
@@ -187,6 +192,69 @@ test("a lead's run, its worker's task and a finished loop become one tree", () =
       ["worker", named("api").id],
     ]),
   );
+});
+
+test("an agent that is gone leaves nothing running under its failed job", () => {
+  let ids = 0;
+  const trees = convertedJobs({
+    sessions: [session("lead", { over: true })],
+    runs: [
+      run({
+        steps: [
+          step("plan", "done"),
+          step("build", "active"),
+          step("ship", "pending"),
+        ],
+      }),
+    ],
+    links: [],
+    results: [],
+    taskTitle: () => null,
+    newId: () => `j${++ids}`,
+  });
+  const events = trees[0]!.events.map((item) => item.event);
+  const before = replayJobs(events);
+  const states = (tree: typeof before) =>
+    [...tree.jobs.values()].map((job) => `${job.name}:${job.state}`);
+  expect(states(before)).toContain("build:running");
+  const after = replayJobs([...events, ...abandonedJobEvents(before)]);
+  expect(states(after)).toEqual([
+    "work:failed",
+    "feature:failed",
+    "plan:done",
+    "build:failed",
+    "ship:skipped",
+  ]);
+  // Nothing is left to close a second time.
+  expect(abandonedJobEvents(after)).toEqual([]);
+});
+
+test("a task started again in another session is not done by the first one's result", () => {
+  let ids = 0;
+  const link = {
+    planPath: "/w/plans/a.md",
+    taskId: "t1",
+    sessionId: "second",
+    createdAt: "2026-11-24T11:00:00Z",
+  };
+  const trees = convertedJobs({
+    sessions: [session("second")],
+    runs: [],
+    links: [link],
+    results: [
+      {
+        planPath: link.planPath,
+        taskId: link.taskId,
+        sessionId: "first",
+        result: "what the first session handed in",
+        submittedAt: "2026-11-24T10:30:00Z",
+      },
+    ],
+    taskTitle: () => "Task one",
+    newId: () => `j${++ids}`,
+  });
+  const tree = replayJobs(trees[0]!.events.map((item) => item.event));
+  expect([...tree.jobs.values()].map((job) => job.state)).toEqual(["running"]);
 });
 
 test("the old tables are converted once, backed up first, and dropped", async () => {

@@ -107,6 +107,7 @@ Usage:
   daedal team <list|tree|goal|pause|resume|move> ... [--json]
   daedal channel <say|read|find|list> ... [--json]
   daedal workflow <list|show|start|save|remember|memory> ... [--json]
+  daedal tool <list|show> ... [--json]
   daedal job <next|done|hold|add|skip|redo|retry|tree|approve|release> ... [--json]
   daedal plan <new|list|show|ask> ... [--json]
   daedal thread <new|say|read|find|list|bump|resolve> ... [--json]

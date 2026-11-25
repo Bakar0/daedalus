@@ -204,10 +204,31 @@ export async function moveTopicsToTools(
   workflowsRoot: string,
 ): Promise<string[]> {
   const { index, topics } = await readInstructionFiles(root);
-  if (!topics.length) return [];
   const tools = workflowToolsPath(workflowsRoot);
-  const moved: string[] = [];
+  const movedFolder = join(root, MOVED_TOPICS_FOLDER);
+  /** The index without the topic's line, naming the tool where it named the file. */
+  const unlist = (text: string, name: string): string => {
+    const tool = `the \`${name}\` tool (\`daedal tool show ${name}\`)`;
+    return text
+      .split("\n")
+      .filter((item) => !item.includes(linkTo(name)))
+      .join("\n")
+      .replaceAll(`\`${name}.md\` in this folder`, tool)
+      .replaceAll(`\`${name}.md\``, tool);
+  };
   let text = index.text;
+  // A move that stopped before the index was written left lines for topics
+  // that are tools already. They go first, so the index never names a file
+  // that is not there.
+  const finished = (await pathExists(movedFolder))
+    ? (await readdir(movedFolder))
+        .filter((file) => file.endsWith(".md"))
+        .map((file) => file.slice(0, -3))
+        .filter((name) => !topics.some((topic) => topic.name === name))
+    : [];
+  for (const name of finished)
+    if (await pathExists(join(tools, `${name}.md`))) text = unlist(text, name);
+  const moved: string[] = [];
   for (const topic of topics) {
     const target = join(tools, `${topic.name}.md`);
     if (await pathExists(target)) continue;
@@ -215,7 +236,9 @@ export async function moveTopicsToTools(
       .split("\n")
       .find((item) => item.includes(linkTo(topic.name)));
     const covers = line && /\]\([^)]+\):\s*(.+)$/.exec(line)?.[1]?.trim();
-    const body = topic.text.replace(/^#\s+.+\n?/m, "").trim();
+    // Only a heading that opens the file is its title. A later line that
+    // starts with `#` is part of the rules.
+    const body = topic.text.replace(/^\s*#\s+.+\n?/, "").trim();
     let file: string;
     try {
       file = renderToolFile({
@@ -231,23 +254,18 @@ export async function moveTopicsToTools(
     }
     await ensureDirectory(tools);
     await writeFileAtomic(target, file);
-    await ensureDirectory(join(root, MOVED_TOPICS_FOLDER));
-    await rename(
-      topic.path,
-      join(root, MOVED_TOPICS_FOLDER, `${topic.name}.md`),
+    await ensureDirectory(movedFolder);
+    // Another process doing the same move may have taken the file already.
+    await rename(topic.path, join(movedFolder, `${topic.name}.md`)).catch(
+      (error) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      },
     );
     moved.push(topic.name);
-    const tool = `the \`${topic.name}\` tool (\`daedal tool show ${topic.name}\`)`;
-    text = text
-      .split("\n")
-      .filter((item) => !item.includes(linkTo(topic.name)))
-      .join("\n")
-      .replaceAll(`\`${topic.name}.md\` in this folder`, tool)
-      .replaceAll(`\`${topic.name}.md\``, tool);
+    text = unlist(text, topic.name);
   }
-  if (!moved.length) return [];
   // With every topic gone, the section that listed them says where they went.
-  if (moved.length === topics.length)
+  if (moved.length === topics.length && (moved.length || finished.length))
     text = text.replace(
       /^##\s+Topics\s*\n[\s\S]*?(?=^#{1,2}\s|(?![\s\S]))/m,
       TOOLS_SECTION,

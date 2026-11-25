@@ -109,10 +109,14 @@ export function createJobPorts(sources: JobPortSources): JobPorts {
     },
     alive: (sessionId) => {
       const session = sources.session(sessionId);
+      // A session the app starts again when it opens still has its agent:
+      // its jobs must not fail in the seconds before it is back.
       return (
         !!session &&
         !session.archivedAt &&
-        (session.status === "running" || session.status === "starting")
+        (session.status === "running" ||
+          session.status === "starting" ||
+          session.resumeOnStart)
       );
     },
     retire: async (sessionId) => {

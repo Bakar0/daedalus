@@ -95,7 +95,7 @@ export async function workflowCommand(
     console.log(workflowHelp);
     return 0;
   }
-  if (action in REPLACED_WORKFLOW_COMMANDS)
+  if (Object.hasOwn(REPLACED_WORKFLOW_COMMANDS, action))
     throw new DaedalusError(
       "VALIDATION",
       `'daedal workflow ${action}' is gone. ${REPLACED_WORKFLOW_COMMANDS[action]}`,

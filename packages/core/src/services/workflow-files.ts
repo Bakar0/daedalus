@@ -867,8 +867,21 @@ export async function saveWorkflowFile(
     throw new DaedalusError("CONFLICT", `A ${noun} named '${name}' exists`);
   await ensureDirectory(folder);
   await writeFileAtomic(path, input.text);
-  if (previous && previous !== name)
+  if (previous && previous !== name) {
     await unlink(join(folder, `${previous}.md`)).catch(() => undefined);
+    // What the step learned goes with it to its new name.
+    if (input.kind === "step") {
+      const memory = stepMemoryPath(root, previous);
+      if (
+        (await pathExists(memory)) &&
+        !(await pathExists(stepMemoryPath(root, name)))
+      ) {
+        const kept = await readStepMemory(root, previous);
+        await writeStepMemory(root, { ...kept, step: name });
+        await unlink(memory).catch(() => undefined);
+      }
+    }
+  }
 }
 
 /**
@@ -959,6 +972,9 @@ export async function deleteWorkflowFile(
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     },
   );
+  // A step's memory has nothing to belong to once the step is gone.
+  if (input.kind === "step")
+    await unlink(stepMemoryPath(root, name)).catch(() => undefined);
 }
 
 /* -------------------------------------------------------------------------- */

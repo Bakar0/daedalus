@@ -171,6 +171,51 @@ describe("custom instruction files", () => {
     });
   });
 
+  test("a move that stopped before the index was written is finished next time", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const root = join(home, "instructions");
+      const tools = join(home, "workflows", "tools");
+      await mkdir(join(root, "moved-to-tools"), { recursive: true });
+      await mkdir(tools, { recursive: true });
+      // The tool is written and the topic file is moved, but the index
+      // still lists the topic.
+      await writeFile(join(root, "INDEX.md"), INDEX);
+      await writeFile(
+        join(root, "moved-to-tools", "git.md"),
+        "# Git\n\n- Short branches.\n",
+      );
+      await writeFile(
+        join(tools, "git.md"),
+        "---\nname: git\ndescription: branch names\n---\n\n- Short branches.\n",
+      );
+      expect(await moveTopicsToTools(root, join(home, "workflows"))).toEqual(
+        [],
+      );
+      const index = await readFile(join(root, "INDEX.md"), "utf8");
+      expect(index).not.toContain("git.md");
+      expect(index).toContain("## Tools");
+    });
+  });
+
+  test("only a heading that opens the topic is taken off its rules", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const root = join(home, "instructions");
+      await mkdir(root, { recursive: true });
+      await writeFile(join(root, "INDEX.md"), INDEX);
+      await writeFile(
+        join(root, "git.md"),
+        "# Git\n\n- Run this:\n\n```sh\n# fetch first\ngit fetch\n```\n",
+      );
+      await moveTopicsToTools(root, join(home, "workflows"));
+      const tool = await readFile(
+        join(home, "workflows", "tools", "git.md"),
+        "utf8",
+      );
+      expect(tool).not.toContain("# Git");
+      expect(tool).toContain("# fetch first");
+    });
+  });
+
   test("with every topic moved, the index's Topics section becomes Tools", async () => {
     await withTemporaryDaedalusHome(async (home) => {
       const root = join(home, "instructions");

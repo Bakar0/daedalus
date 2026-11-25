@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import {
   parseGate,
   type WorkflowRun,
@@ -9,9 +9,12 @@ import {
 } from "../domain";
 import {
   emptyJobTree,
+  jobChildren,
   settleJobs,
+  type Job,
   type JobEvent,
   type JobSpec,
+  type JobTree,
 } from "../domain/jobs";
 import { findPlanTask, parsePlan } from "../domain/plans";
 import type { SqliteRepositories } from "../repositories/sqlite";
@@ -88,11 +91,15 @@ export function convertedJobs(input: {
   const attach = new Map<string, string>();
   const names = new Map<string, Set<string>>();
   const sessions = new Map(input.sessions.map((item) => [item.id, item]));
-  const result = (link: Pick<OldLink, "planPath" | "taskId">) =>
+  // A result belongs to the session that handed it in. A task started again
+  // in another session is still open there, whatever the earlier one said.
+  const result = (link: OldLink) =>
     input.results.find(
-      (item) => item.planPath === link.planPath && item.taskId === link.taskId,
+      (item) =>
+        item.planPath === link.planPath &&
+        item.taskId === link.taskId &&
+        item.sessionId === link.sessionId,
     );
-  const taken = new Set<OldResult>();
 
   const unique = (parentId: string, wanted: string): string => {
     const used = names.get(parentId) ?? new Set<string>();
@@ -420,7 +427,6 @@ export function convertedJobs(input: {
       });
       const handed = result(other);
       if (!handed) continue;
-      taken.add(handed);
       tree.events.push({
         event: { jobId: job.id, type: "done", result: handed.result },
         at: handed.submittedAt,
@@ -429,7 +435,6 @@ export function convertedJobs(input: {
     }
     for (const run of runs) convertRun(tree, top.id, run, sessionId);
     const handed = link ? result(link) : undefined;
-    if (handed) taken.add(handed);
     const lastAt =
       [...runs.map((run) => run.endedAt ?? run.updatedAt), startedAt]
         .sort()
@@ -449,8 +454,8 @@ export function convertedJobs(input: {
         sessionId: null,
       });
   }
-  // A run whose session was deleted, and a result with no session's link,
-  // each stand alone and are over.
+  // A run whose session was deleted stands alone and is over. A result with
+  // no session's link has no workspace to go to: it stays in the backup.
   for (const run of input.runs.filter((item) => !item.sessionId)) {
     const top = spec(null, {
       name: "work",
@@ -544,7 +549,7 @@ function readOld(database: Database): {
     sessions: (
       database
         .query(
-          "SELECT id, workspace_id, name, started_at, spawned_by, status, archived_at FROM agent_sessions",
+          "SELECT id, workspace_id, name, started_at, spawned_by, status, archived_at, resume_on_start FROM agent_sessions",
         )
         .all() as {
         id: string;
@@ -554,6 +559,7 @@ function readOld(database: Database): {
         spawned_by: string | null;
         status: string;
         archived_at: string | null;
+        resume_on_start: number;
       }[]
     ).map((row) => ({
       id: row.id,
@@ -561,9 +567,13 @@ function readOld(database: Database): {
       name: row.name,
       startedAt: row.started_at,
       spawnedBy: row.spawned_by,
+      // One the app starts again when it opens is not over: converting
+      // while the app is closed would otherwise fail everything open.
       over:
         !!row.archived_at ||
-        (row.status !== "running" && row.status !== "starting"),
+        (row.status !== "running" &&
+          row.status !== "starting" &&
+          !row.resume_on_start),
     })),
     runs: all<RunRow>("workflow_runs", "SELECT * FROM workflow_runs").map(
       (row) => ({
@@ -620,6 +630,31 @@ function readOld(database: Database): {
   };
 }
 
+/**
+ * What closes the jobs left open under a failed one. An agent that is gone
+ * fails its own job; the workflow and the step it was in would otherwise
+ * read as running for good.
+ */
+export function abandonedJobEvents(tree: JobTree): JobEvent[] {
+  const events: JobEvent[] = [];
+  const under = (job: Job, why: string): void => {
+    for (const child of jobChildren(tree, job.id)) {
+      if (child.state === "running" || child.state === "held")
+        events.push({ jobId: child.id, type: "failed", why });
+      else if (child.state === "pending" || child.state === "ready")
+        events.push({ jobId: child.id, type: "skipped", why });
+      under(child, why);
+    }
+  };
+  for (const job of tree.jobs.values()) {
+    const parent = job.parentId ? tree.jobs.get(job.parentId) : undefined;
+    // Start at the topmost failed job, so nothing is closed twice.
+    if (job.state === "failed" && parent?.state !== "failed")
+      under(job, job.why ?? "The job above it failed.");
+  }
+  return events;
+}
+
 export interface JobConversion {
   /** False when there was nothing from before the engine. */
   ran: boolean;
@@ -669,7 +704,9 @@ export async function convertOldWork(
         titles.get(`${planPath}#${taskId}`) ?? null,
       newId: () => crypto.randomUUID(),
     });
-    if (trees.length) {
+    // The copy is made whenever a row from before is about to go, converted
+    // into a job or not.
+    if (trees.length || old.links.length || old.results.length) {
       backup = `${databasePath}.before-jobs-${now().toISOString().slice(0, 10)}`;
       for (let n = 2; await Bun.file(backup).exists(); n += 1)
         backup = `${databasePath}.before-jobs-${now().toISOString().slice(0, 10)}-${n}`;
@@ -684,6 +721,12 @@ export async function convertOldWork(
           repositories.jobs.append(converted.workspaceId, tree, [item.event], {
             sessionId: item.sessionId,
             at: item.at,
+          });
+        const left = abandonedJobEvents(tree);
+        if (left.length)
+          repositories.jobs.append(converted.workspaceId, tree, left, {
+            sessionId: null,
+            at: now().toISOString(),
           });
         // What the engine's rules say follows: the step after a finished
         // one starts, a workflow whose steps are done is done.
@@ -701,6 +744,10 @@ export async function convertOldWork(
     });
     return { ran: true, trees: trees.length, backup, error: null };
   } catch (error) {
+    // Nothing changed, so the copy is of no use, and every start would
+    // otherwise leave another one.
+    if (backup) await rm(backup, { force: true });
+    backup = null;
     return {
       ran: true,
       trees: 0,

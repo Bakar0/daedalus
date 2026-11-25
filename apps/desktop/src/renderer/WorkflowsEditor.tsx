@@ -455,10 +455,7 @@ export function FlowLine({
                     type="button"
                   >
                     <span className="wf-node-text">
-                      <b>
-                        <WorkflowIcon />
-                        {name}
-                      </b>
+                      <b>{name}</b>
                       <span className="wf-node-sub">
                         {included
                           ? included.dynamic
