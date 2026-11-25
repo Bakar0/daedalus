@@ -1,5 +1,5 @@
 /**
- * What the Threads pane, the sidebar and a plan's view share about threads:
+ * What the Threads page, the sidebar and a plan's view share about threads:
  * the mark, snoozing, the open counts, and which plan tasks wait on one.
  */
 import { useEffect, useState } from "react";
@@ -85,16 +85,6 @@ export function handleSession(
   return undefined;
 }
 
-/**
- * The threads waiting on the user that a session's Threads pane shows: its
- * own and, for a lead, its members'. The pane's tab dot counts these.
- */
-export const paneThreadCount = (
-  counts: Pick<ThreadCounts, "bySession">,
-  sessionIds: readonly string[],
-): number =>
-  sessionIds.reduce((sum, id) => sum + (counts.bySession.get(id) ?? 0), 0);
-
 const NO_THREADS: ThreadCounts = {
   total: 0,
   byWorkspace: new Map(),
@@ -103,7 +93,7 @@ const NO_THREADS: ThreadCounts = {
 
 /**
  * Threads waiting on the user, counted for the sidebar's Threads and each
- * session's Threads tab. Polls while mounted.
+ * session's card. Polls while mounted.
  */
 export function useThreadCounts(client: DesktopClient): ThreadCounts {
   const [count, setCount] = useState(NO_THREADS);

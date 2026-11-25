@@ -1,0 +1,630 @@
+/* The Workflows page (WorkflowsEditor.tsx): workflows drawn as lines of
+   steps, steps and tools as cards, and the picked file on the right. */
+.wf-page {
+  /* Amber is a step that waits for the user; green is a tool. */
+  --wf-gate: #e8b25a;
+  --wf-gate-wash: rgb(232 178 90 / 0.14);
+  --wf-gate-line: rgb(232 178 90 / 0.5);
+  --wf-tool: #58c79a;
+  --wf-tool-wash: rgb(88 199 154 / 0.13);
+  --wf-tool-line: rgb(88 199 154 / 0.4);
+  color: var(--text);
+  font-size: 13px;
+}
+.app[data-theme="light"] .wf-page {
+  --wf-gate: #96600a;
+  --wf-gate-wash: rgb(180 116 11 / 0.12);
+  --wf-gate-line: rgb(180 116 11 / 0.5);
+  --wf-tool: #16815b;
+  --wf-tool-wash: rgb(22 129 91 / 0.11);
+  --wf-tool-line: rgb(22 129 91 / 0.4);
+}
+.wf-head {
+  align-items: center;
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 16px 22px 12px;
+}
+.wf-head h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 6px 0 0;
+}
+.wf-grow {
+  flex: 1;
+}
+.wf-seg {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  display: flex;
+  padding: 3px;
+}
+.wf-page .wf-head .wf-seg button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 12px;
+}
+.wf-page .wf-head .wf-seg button.on,
+.wf-page .wf-head .wf-seg button.on:hover:not(:disabled) {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.wf-page .wf-head .wf-seg button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--text);
+}
+.wf-seg small {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: 6px;
+}
+/* Under the heading, at the left: it narrows the list below it. */
+.wf-search {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  flex: none;
+  font-size: 13px;
+  margin-right: calc(100% - 280px);
+  order: 5;
+  padding: 6px 11px;
+  width: 280px;
+}
+/* The page's own buttons: an outline, never the accent fill. */
+.wf-page .wf-head .wf-btn {
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 13px;
+}
+.wf-page .wf-head .wf-btn:hover {
+  background: var(--raised-hover);
+}
+.wf-page .wf-head .wf-btn[aria-current="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.wf-main {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 22px 22px;
+}
+/* What is open, in place: under the line or the card it was picked from. */
+.wf-detail {
+  background: var(--elevated);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
+  scroll-margin: 14px;
+}
+.wf-main > .wf-detail {
+  margin-top: 16px;
+}
+.wf-row > .wf-detail {
+  margin-top: 4px;
+}
+.wf-cards-detail {
+  grid-column: 1 / -1;
+}
+.wf-detail > .workflows-detail {
+  gap: 14px;
+  padding: 18px 20px 14px;
+}
+.wf-none,
+.wf-dynamic,
+.wf-foot {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+.wf-none {
+  padding: 18px 0;
+}
+.wf-foot {
+  margin-top: auto;
+  padding-top: 18px;
+}
+
+/* A workflow: its name and when it fits, then its steps on a wire. */
+.wf-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+}
+/* A workflow is one card: its name and when it fits, then its line. */
+.wf-row {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 18px;
+  scroll-margin: 12px;
+}
+/* The picked workflow: a wash over its row, which pulses once on arrival. */
+.wf-row.selected {
+  animation: wf-arrive 900ms ease-out;
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+@keyframes wf-arrive {
+  from {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  to {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wf-row.selected {
+    animation: none;
+  }
+}
+.wf-row-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+.wf-row-meta {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+.wf-row-meta span {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+.wf-row-meta span.gate {
+  background: var(--wf-gate-wash);
+  border-color: transparent;
+  color: var(--wf-gate);
+}
+.wf-page .wf-main button.wf-row-title {
+  align-items: baseline;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+.wf-page .wf-main button.wf-row-title b {
+  align-items: center;
+  display: inline-flex;
+  font-size: 15px;
+  font-weight: 600;
+  gap: 6px;
+}
+.wf-page .wf-main button.wf-row-title span {
+  color: var(--muted);
+}
+.wf-page .wf-main button.wf-row-title:hover b,
+.wf-page .wf-main .wf-row.selected button.wf-row-title b {
+  color: var(--accent);
+}
+.wf-line {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0 14px 0 0;
+  position: relative;
+  padding-top: 6px;
+  row-gap: 30px;
+}
+/* The wires that join a broken line, drawn over the list. */
+.wf-wraps {
+  height: 100%;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+  width: 100%;
+}
+.wf-wraps path {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+.wf-line li.wraps .wf-wire {
+  visibility: hidden;
+}
+.wf-line li {
+  display: flex;
+}
+/* The wire into a box from the one before, ending in a port. */
+.wf-wire {
+  align-self: flex-start;
+  border-top: 1.5px solid var(--line-strong);
+  flex: none;
+  margin-top: 31px;
+  width: 20px;
+}
+.wf-line li:first-of-type .wf-wire {
+  display: none;
+}
+/* A step on the line: a numbered tile, its name and a caption, with a
+   port on each side where the wires meet it. */
+.wf-page .wf-main button.wf-box {
+  align-items: center;
+  background: linear-gradient(180deg, var(--raised-hover), var(--raised));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.05),
+    0 1px 2px rgb(0 0 0 / 0.22);
+  color: inherit;
+  display: flex;
+  gap: 9px;
+  height: 64px;
+  padding: 0 13px;
+  position: relative;
+  text-align: left;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+  width: 152px;
+}
+.wf-page .wf-main button.wf-box::before,
+.wf-page .wf-main button.wf-box::after {
+  background: var(--elevated);
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  content: "";
+  height: 7px;
+  position: absolute;
+  top: 27px;
+  width: 7px;
+}
+.wf-page .wf-main button.wf-box::before {
+  left: -5px;
+}
+.wf-page .wf-main button.wf-box::after {
+  right: -5px;
+}
+.wf-line li:first-of-type button.wf-box::before,
+.wf-line li:last-of-type button.wf-box::after {
+  display: none;
+}
+.wf-page .wf-main button.wf-box:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--raised-hover), var(--raised-hover));
+  border-color: var(--line-strong);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    0 6px 14px rgb(0 0 0 / 0.28);
+  transform: translateY(-1px);
+}
+.wf-page .wf-main button.wf-box.gated {
+  border-color: var(--wf-gate-line);
+}
+.wf-page .wf-main button.wf-box[aria-current="true"],
+.wf-page .wf-main button.wf-box[aria-current="true"]:hover:not(:disabled) {
+  background:
+    linear-gradient(180deg, var(--accent-wash), var(--accent-wash)),
+    var(--elevated);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+.wf-page .wf-main button.wf-box.included {
+  border-style: dashed;
+}
+.wf-page .wf-main button.wf-box.missing {
+  border-color: var(--danger);
+  border-style: dashed;
+}
+.wf-node-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.wf-node-text b {
+  align-items: center;
+  display: flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-node-sub {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-box.gated .wf-node-sub {
+  color: var(--wf-gate);
+}
+.wf-box.missing .wf-node-sub {
+  color: var(--danger);
+}
+.wf-chips {
+  align-items: center;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+.wf-page .wf-main button.wf-card .wf-chips {
+  flex-wrap: wrap;
+}
+.wf-chip {
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.wf-chip.gate {
+  background: var(--wf-gate-wash);
+  color: var(--wf-gate);
+}
+.wf-chip.tool {
+  background: var(--wf-tool-wash);
+  color: var(--wf-tool);
+  font-family: var(--mono, ui-monospace, Menlo, monospace);
+}
+
+/* Steps and tools: one card each. */
+.wf-cards {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  padding-top: 16px;
+}
+.wf-page .wf-main button.wf-card {
+  align-items: flex-start;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  text-align: left;
+}
+.wf-page .wf-main button.wf-card:hover {
+  background: var(--raised-hover);
+  border-color: var(--line-strong);
+}
+.wf-page .wf-main button.wf-card[aria-current="true"] {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+.wf-page .wf-main button.wf-card b {
+  align-items: center;
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 600;
+  gap: 6px;
+}
+.wf-page .wf-main button.wf-card > span {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.wf-page .wf-main button.wf-card small {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: auto;
+}
+.wf-page .wf-main button.wf-row-title:hover:not(:disabled) {
+  background: transparent;
+}
+
+/* The picked file, on the right: what it is, its facts in one card, then
+   what the agent reads. */
+.wf-detail > .workflows-detail {
+  gap: 14px;
+  padding: 20px 22px 16px;
+}
+.wf-detail .workflows-detail-eyebrow {
+  color: var(--muted);
+  display: block;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+.wf-detail .workflows-detail-heading {
+  align-items: flex-end;
+}
+.wf-detail .workflows-detail-heading h2 {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0;
+}
+.wf-detail .workflows-detail-actions {
+  align-items: center;
+  gap: 4px;
+}
+.wf-detail .workflows-detail-actions .quiet {
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 12px;
+}
+.wf-detail .workflows-detail-actions .quiet:hover {
+  background: var(--raised-hover);
+}
+.wf-detail .workflows-detail-actions .danger-link {
+  font-size: 12px;
+  padding: 5px 8px;
+}
+.wf-detail .workflows-detail-path {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  flex: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  margin: 0;
+  overflow: hidden;
+  padding-top: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-detail .file-view {
+  padding: 0 2px 12px 0;
+}
+.wf-detail .file-view-lede {
+  color: var(--secondary);
+  font-size: 13.5px;
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+/* The facts: one card, a row each, a hairline between rows. */
+.wf-detail .file-view-fields {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  gap: 0;
+  margin: 0;
+}
+.wf-detail .file-view-fields:empty {
+  display: none;
+}
+.wf-detail .file-view-field {
+  align-items: baseline;
+  font-size: 12.5px;
+  gap: 10px;
+  grid-template-columns: 62px minmax(0, 1fr);
+  padding: 9px 12px;
+}
+.wf-detail .file-view-field + .file-view-field {
+  border-top: 1px solid var(--line);
+}
+.wf-detail .file-view-label {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  padding: 0;
+  text-transform: none;
+}
+.wf-detail .file-view-chips {
+  gap: 5px;
+}
+.wf-detail .workflows-chip.tool {
+  background: var(--wf-tool-wash) !important;
+  border-color: transparent;
+  color: var(--wf-tool);
+}
+.wf-detail .file-view-heading {
+  margin: 20px 0 8px;
+}
+/* What the agent reads, as running text, with no box around it. */
+.wf-detail .file-view-notes {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 0;
+}
+.wf-detail .file-view-empty {
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.wf-node-text b svg {
+  flex: none;
+  height: 13px;
+  width: 13px;
+}
+.wf-detail .workflows-detail-close {
+  font-size: 17px;
+  line-height: 1;
+  padding: 3px 9px;
+}
+.wf-detail .file-view {
+  max-height: min(56vh, 520px);
+  overflow: auto;
+}
+.wf-detail .file-view > * {
+  max-width: none;
+}
+/* A step or a tool has room for two columns: its facts, then what the
+   agent reads. */
+@media (min-width: 900px) {
+  .wf-detail.kind-step .file-view,
+  .wf-detail.kind-tool .file-view {
+    align-items: start;
+    column-gap: 26px;
+    display: grid;
+    grid-template-columns: minmax(240px, 34%) minmax(0, 1fr);
+  }
+  .wf-detail.kind-step .file-view,
+  .wf-detail.kind-tool .file-view {
+    grid-template-rows: auto auto 1fr;
+  }
+  /* The description runs the full width, so its height never pads the
+     heading beside the facts. */
+  .wf-detail.kind-step .file-view-lede,
+  .wf-detail.kind-tool .file-view-lede {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  /* The facts span the heading's row and the stretching row under it. The
+     stretching row takes any height the facts need beyond the notes. */
+  .wf-detail.kind-step .file-view-fields,
+  .wf-detail.kind-tool .file-view-fields {
+    grid-column: 1;
+    grid-row: 2 / span 2;
+  }
+  .wf-detail.kind-step .file-view-heading,
+  .wf-detail.kind-step .file-view-notes,
+  .wf-detail.kind-step .file-view-empty,
+  .wf-detail.kind-step .step-memory,
+  .wf-detail.kind-tool .file-view-heading,
+  .wf-detail.kind-tool .file-view-notes,
+  .wf-detail.kind-tool .file-view-empty {
+    grid-column: 2;
+  }
+  .wf-detail.kind-step .file-view > .file-view-heading:first-of-type,
+  .wf-detail.kind-tool .file-view > .file-view-heading:first-of-type {
+    grid-row: 2;
+    margin-top: 2px;
+  }
+}
+.wf-detail .workflows-text {
+  min-height: 260px;
+}

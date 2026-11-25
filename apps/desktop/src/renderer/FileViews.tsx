@@ -6,7 +6,11 @@
  * request and one card per topic.
  */
 import type { ReactNode } from "react";
-import type { InstructionFilesDto, WorkflowFileDto } from "@daedalus/protocol";
+import type {
+  InstructionFilesDto,
+  StepMemoryDto,
+  WorkflowFileDto,
+} from "@daedalus/protocol";
 import { MarkdownPreview } from "./markdown-preview";
 import { GATE_LABELS } from "./workflow-gates";
 import { WorkflowIcon } from "./WorkflowPane";
@@ -88,12 +92,15 @@ export function WorkflowView({
   flows,
   onFlow,
   onStep,
+  showSteps = true,
   steps,
 }: {
   flow: WorkflowFileDto;
   flows: WorkflowFileDto[];
   onFlow: (name: string) => void;
   onStep: (name: string) => void;
+  /** False where the steps are drawn beside it, as on the Workflows page. */
+  showSteps?: boolean;
   steps: WorkflowFileDto[];
 }) {
   return (
@@ -113,8 +120,8 @@ export function WorkflowView({
           <MarkdownPreview source={flow.body} />
         </div>
       )}
-      <h3 className="file-view-heading">Steps</h3>
-      {flow.dynamic ? (
+      {showSteps && <h3 className="file-view-heading">Steps</h3>}
+      {!showSteps ? null : flow.dynamic ? (
         <Empty>
           The agent names its steps each run, for the work in front of it.
         </Empty>
@@ -219,14 +226,127 @@ export function WorkflowView({
 }
 
 /** A step: its instructions, whether it waits for you, and who uses it. */
+export type StepMemoryAction = "accept" | "forget" | "promote";
+
+const runsText = (memory: StepMemoryDto) =>
+  `Seen in ${memory.runs} ${memory.runs === 1 ? "run" : "runs"}, last ${memory.lastSeen}${memory.workflow ? ` in ${memory.workflow}` : ""}`;
+
+/**
+ * What a step learned from runs. A proposed memory waits here for the user:
+ * agents starting the step see it only after Accept. Promote writes it into
+ * the step's instructions and takes it out of the memory.
+ */
+export function StepMemoryList({
+  busy,
+  memories,
+  onChange,
+  problem,
+}: {
+  /** The text of the memory a change is being saved for. */
+  busy?: string | undefined;
+  memories: StepMemoryDto[];
+  onChange: (text: string, action: StepMemoryAction) => void;
+  problem?: string | undefined;
+}) {
+  const proposed = memories.filter((memory) => memory.status === "proposed");
+  // Proposals first: they are what the user is here to decide.
+  const sorted = [
+    ...proposed,
+    ...memories.filter((memory) => memory.status === "accepted"),
+  ];
+  return (
+    <section aria-label="Step memory" className="step-memory">
+      <h3 className="file-view-heading">
+        Memory
+        <small>
+          {proposed.length
+            ? `${proposed.length} to review`
+            : "What this step learned from earlier runs"}
+        </small>
+      </h3>
+      {problem && <p className="workflows-refusal">{problem}</p>}
+      {!problem && sorted.length === 0 && (
+        <Empty>
+          Nothing yet. An agent proposes a memory when a run teaches this step
+          something, and it applies after you accept it.
+        </Empty>
+      )}
+      <ul className="step-memory-list">
+        {sorted.map((memory) => (
+          <li
+            className={`step-memory-item status-${memory.status}`}
+            key={memory.text}
+          >
+            <div className="step-memory-text">
+              <span className={`step-memory-status status-${memory.status}`}>
+                {memory.status === "proposed" ? "Proposed" : "Accepted"}
+              </span>
+              {memory.text}
+            </div>
+            <p className="step-memory-why">{memory.why}</p>
+            <div className="step-memory-foot">
+              <span className="step-memory-seen">
+                {runsText(memory)}
+                {memory.only ? ` · only in ${memory.only}` : ""}
+                {memory.acceptedOn ? ` · accepted ${memory.acceptedOn}` : ""}
+              </span>
+              <span className="step-memory-actions">
+                {memory.status === "proposed" ? (
+                  <button
+                    className="primary"
+                    disabled={busy === memory.text}
+                    onClick={() => onChange(memory.text, "accept")}
+                    type="button"
+                  >
+                    Accept
+                  </button>
+                ) : (
+                  <button
+                    className="quiet"
+                    disabled={busy === memory.text}
+                    onClick={() => onChange(memory.text, "promote")}
+                    title="Write it into the step's instructions and remove it from the memory"
+                    type="button"
+                  >
+                    Promote to instructions
+                  </button>
+                )}
+                <button
+                  className="quiet"
+                  disabled={busy === memory.text}
+                  onClick={() => onChange(memory.text, "forget")}
+                  type="button"
+                >
+                  Forget
+                </button>
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function StepView({
   flows,
+  memoryBusy,
   onFlow,
+  onMemory,
+  onTool,
   step,
+  tools,
 }: {
   flows: WorkflowFileDto[];
+  memoryBusy?: string | undefined;
   onFlow: (name: string) => void;
+  /** Absent where the memory is not shown, such as a file preview. */
+  onMemory?: (text: string, action: StepMemoryAction) => void;
+  /** Opens a tool the step suggests. */
+  onTool?: (name: string) => void;
   step: WorkflowFileDto;
+  /** Every tool file, to say what each suggested tool is for. */
+  tools?: WorkflowFileDto[];
 }) {
   const usedBy = flows.filter((flow) => flow.steps?.includes(step.name));
   return (
@@ -254,11 +374,96 @@ export function StepView({
             "No workflow yet"
           )}
         </Field>
+        {step.tools?.length ? (
+          <Field label="Tools">
+            <span className="file-view-chips">
+              {step.tools.map((name) => {
+                const tool = tools?.find((item) => item.name === name);
+                return tool || !tools ? (
+                  <button
+                    className="workflows-chip tool"
+                    key={name}
+                    onClick={() => onTool?.(name)}
+                    title={tool?.description || name}
+                    type="button"
+                  >
+                    {name}
+                  </button>
+                ) : (
+                  <span
+                    className="workflows-chip missing"
+                    key={name}
+                    title="No tool file with this name. The step still runs; the agent is told nothing about it."
+                  >
+                    {name} · no file
+                  </span>
+                );
+              })}
+            </span>
+          </Field>
+        ) : null}
       </div>
       <h3 className="file-view-heading">What the agent does</h3>
       {step.body?.trim() ? (
         <div className="file-view-notes">
           <MarkdownPreview source={step.body} />
+        </div>
+      ) : (
+        <Empty>No instructions yet.</Empty>
+      )}
+      {onMemory && (
+        <StepMemoryList
+          busy={memoryBusy}
+          memories={step.memories ?? []}
+          onChange={onMemory}
+          problem={step.memoryProblem}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * A tool: what it is for, the steps that suggest it, and the instructions an
+ * agent reads before using it. A step's suggestion is a push, never a limit.
+ */
+export function ToolView({
+  onStep,
+  steps,
+  tool,
+}: {
+  onStep: (name: string) => void;
+  steps: WorkflowFileDto[];
+  tool: WorkflowFileDto;
+}) {
+  const suggestedBy = steps.filter((step) => step.tools?.includes(tool.name));
+  return (
+    <>
+      {tool.description && <p className="file-view-lede">{tool.description}</p>}
+      <div className="file-view-fields">
+        <Field label="Steps">
+          {suggestedBy.length ? (
+            <span className="file-view-chips">
+              {suggestedBy.map((step) => (
+                <button
+                  className="workflows-chip"
+                  key={step.name}
+                  onClick={() => onStep(step.name)}
+                  type="button"
+                >
+                  {step.name}
+                </button>
+              ))}
+            </span>
+          ) : (
+            "No step yet. An agent can still find it with daedal tool list."
+          )}
+        </Field>
+      </div>
+      <h3 className="file-view-heading">How to use it</h3>
+      {tool.body?.trim() ? (
+        <div className="file-view-notes">
+          <MarkdownPreview source={tool.body} />
         </div>
       ) : (
         <Empty>No instructions yet.</Empty>
@@ -278,7 +483,10 @@ export function MarkdownView({ empty, text }: { empty: string; text: string }) {
   );
 }
 
-/** The index: rules for every request, then one card per topic. */
+/**
+ * The index: rules for every request. A topic file that did not become a tool
+ * shows as a card under them.
+ */
 export function InstructionsIndexView({
   instructions,
   onTopic,
@@ -312,33 +520,30 @@ export function InstructionsIndexView({
           one here.
         </Empty>
       )}
-      <h3 className="file-view-heading">
-        Topics <small>{plural(topics.length, "topic")}</small>
-      </h3>
-      {topics.length ? (
-        <div className="topic-cards">
-          {topics.map((topic) => (
-            <button
-              className="topic-card"
-              key={topic.name}
-              onClick={() => onTopic(topic.name)}
-              type="button"
-            >
-              <span className="topic-card-name">{topic.heading}</span>
-              <span className="topic-card-covers">
-                {topic.covers ?? "Not listed in the index yet"}
-              </span>
-              <span className="topic-card-count">
-                {plural(topic.rules, "rule")}
-              </span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <Empty>
-          No topics yet. Rules about one subject, such as git or code review, go
-          in a topic of their own; agents open it only when it applies.
-        </Empty>
+      {topics.length > 0 && (
+        <>
+          <h3 className="file-view-heading">
+            Not moved to tools <small>{plural(topics.length, "topic")}</small>
+          </h3>
+          <div className="topic-cards">
+            {topics.map((topic) => (
+              <button
+                className="topic-card"
+                key={topic.name}
+                onClick={() => onTopic(topic.name)}
+                type="button"
+              >
+                <span className="topic-card-name">{topic.heading}</span>
+                <span className="topic-card-covers">
+                  {topic.covers ?? "Not listed in the index yet"}
+                </span>
+                <span className="topic-card-count">
+                  {plural(topic.rules, "rule")}
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </>
   );

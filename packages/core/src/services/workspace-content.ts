@@ -30,6 +30,7 @@ import {
   workflowsEnabled,
 } from "./skills";
 import { ensureWorkflowsFolder, workflowsHomePath } from "./workflow-files";
+import { moveTopicsToTools, TOOLS_SECTION } from "./instruction-files";
 import type { SqliteRepositories } from "../repositories";
 import {
   GitStatusMonitor,
@@ -186,13 +187,16 @@ How the user likes things done, in every workspace. Agents read this file at
 the start of a session.
 
 ${ALWAYS_SECTION}
-## Topics
-
-Each line names a topic file in this folder and what it covers. Open the
-files that apply to the task.
-`;
+${TOOLS_SECTION}`;
 
 function customInstructionsStep(daedalusHome: string): string {
+  const folder = customInstructionsPath(daedalusHome);
+  return `\`${join(folder, "INDEX.md")}\` holds the user's own instructions for every workspace. Read it at the start of a session and follow the rules under "Always" on every request, before its first command. The user's rules about one subject, such as getting access or reading logs, are tools: \`daedal tool list\` names each with what it covers, and \`daedal tool show <name>\` prints one; open the ones that apply to the task. When the user asks you to remember how they like something done, add it with the daedalus-instructions skill.`;
+}
+
+// Step 7 while rules about one subject were topic files beside the index.
+// Instruction files that still hold it are upgraded like the older templates.
+function topicFilesInstructionsStep(daedalusHome: string): string {
   const folder = customInstructionsPath(daedalusHome);
   return `\`${join(folder, "INDEX.md")}\` holds the user's own instructions for every workspace. Read it at the start of a session. Follow the rules under "Always" on every request, before its first command. Under "Topics" each line names a topic file in \`${folder}/\`; open the ones that apply to the task. When the user asks you to remember how they like something done, add it there with the daedalus-instructions skill.`;
 }
@@ -218,6 +222,8 @@ async function ensureCustomInstructions(daedalusHome: string): Promise<void> {
   const folder = customInstructionsPath(daedalusHome);
   await ensureDirectory(folder);
   await createIfMissing(join(folder, "INDEX.md"), CUSTOM_INSTRUCTIONS_INDEX);
+  // Topic files from before tools become tools, once: none are left after.
+  await moveTopicsToTools(folder, workflowsHomePath(daedalusHome));
 }
 
 export function agentsTemplate(
@@ -226,6 +232,12 @@ export function agentsTemplate(
 ): string {
   return `${UNINDEXED_AGENTS_TEMPLATE}7. ${customInstructionsStep(daedalusHome)}\n${workflowsStep(workflows)}`;
 }
+
+const topicFilesAgentsTemplates = (daedalusHome: string): string[] =>
+  [true, false].map(
+    (workflows) =>
+      `${UNINDEXED_AGENTS_TEMPLATE}7. ${topicFilesInstructionsStep(daedalusHome)}\n${workflowsStep(workflows)}`,
+  );
 
 const topicsOnlyAgentsTemplate = (daedalusHome: string): string =>
   `${UNINDEXED_AGENTS_TEMPLATE}7. ${topicsOnlyInstructionsStep(daedalusHome)}\n`;
@@ -421,6 +433,7 @@ export async function syncWorkspaceInstructionFiles(
       removeIfGenerated(agentsPath, [
         current,
         switched,
+        ...topicFilesAgentsTemplates(daedalusHome),
         topicsOnlyAgentsTemplate(daedalusHome),
         UNINDEXED_AGENTS_TEMPLATE,
         BRANCH_AGENTS_TEMPLATE,
@@ -440,6 +453,7 @@ export async function syncWorkspaceInstructionFiles(
     (await generatedFileMatchesAny(agentsPath, [
       current,
       switched,
+      ...topicFilesAgentsTemplates(daedalusHome),
       topicsOnlyAgentsTemplate(daedalusHome),
       UNINDEXED_AGENTS_TEMPLATE,
       BRANCH_AGENTS_TEMPLATE,
@@ -471,6 +485,10 @@ export async function ensureSessionInstructionFiles(
   const oldJournal = UNSIZED_JOURNAL_STEP(join(workspacePath, "JOURNAL.md"));
   const previous = [
     sessionInstructionsTemplate(workspacePath, daedalusHome, !workflows),
+    ...[true, false].map(
+      (on) =>
+        `${sessionInstructionsTemplate(workspacePath)}7. ${topicFilesInstructionsStep(daedalusHome)}\n${workflowsStep(on)}`,
+    ),
     `${sessionInstructionsTemplate(workspacePath)}7. ${topicsOnlyInstructionsStep(daedalusHome)}\n`,
     sessionInstructionsTemplate(workspacePath),
     sessionInstructions(workspacePath, WORKTREE_STEP, oldJournal),

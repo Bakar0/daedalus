@@ -30,6 +30,8 @@ import { routineCommand, routineHelp } from "./routines";
 import { sessionCommand, sessionHelp } from "./sessions";
 import { workflowCommand, workflowHelp } from "./workflows";
 import { planCommand, planHelp } from "./plans";
+import { jobCommand, jobHelp } from "./job";
+import { toolCommand, toolHelp } from "./tools";
 import { oldThreadAlias, threadCommand, threadHelp } from "./thread";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { channelCommand, channelHelp } from "./channel";
@@ -104,8 +106,9 @@ Usage:
   daedal routine <add|list|get|edit|pause|resume|run|remove|runs|log|when> ... [--json]
   daedal team <list|tree|goal|pause|resume|move> ... [--json]
   daedal channel <say|read|find|list> ... [--json]
-  daedal workflow <list|show|start|step|approve|status> ... [--json]
-  daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
+  daedal workflow <list|show|start|save|remember|memory> ... [--json]
+  daedal job <next|done|hold|add|skip|redo|retry|tree|approve|release> ... [--json]
+  daedal plan <new|list|show|ask> ... [--json]
   daedal thread <new|say|read|find|list|bump|resolve> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
@@ -125,6 +128,8 @@ const commandHelp: Record<string, string> = {
   team: teamHelp,
   channel: channelHelp,
   workflow: workflowHelp,
+  job: jobHelp,
+  tool: toolHelp,
   plan: planHelp,
   thread: threadHelp,
   account: accountHelp,
@@ -1128,7 +1133,7 @@ async function agentCommand(
       });
     const result = parsed.values.workflow
       ? (
-          await context.workflows.spawnWith({
+          await context.jobIntake.spawnWith({
             workflow: parsed.values.workflow,
             ...(parsed.values.message
               ? { message: parsed.values.message }
@@ -2600,6 +2605,8 @@ export async function runCli(
       "keys",
       "cloud",
       "workflow",
+      "job",
+      "tool",
       "plan",
       "thread",
     ].includes(args[0]!)
@@ -2646,6 +2653,12 @@ export async function runCli(
       return await workflowCommand(context, args.slice(1), json, (explicit) =>
         currentSessionId(context, explicit),
       );
+    if (args[0] === "job")
+      return await jobCommand(context, args.slice(1), json, (explicit) =>
+        currentSessionId(context, explicit),
+      );
+    if (args[0] === "tool")
+      return await toolCommand(context, args.slice(1), json);
     if (args[0] === "routine")
       return await routineCommand(context, args.slice(1), json);
     if (args[0] === "plan")

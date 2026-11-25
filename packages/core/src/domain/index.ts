@@ -587,7 +587,9 @@ export interface PresenceState {
 
 export * from "./abilities";
 export * from "./conversations";
+export * from "./step-memory";
 export * from "./workflows";
+export * from "./jobs";
 export * from "./routines";
 
 /**

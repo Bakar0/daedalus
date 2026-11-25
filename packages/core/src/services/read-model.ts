@@ -1,3 +1,4 @@
+import { workflowRunsOfJobs } from "./workflow-runs";
 import type { ApplicationContext } from "./context";
 import { largeFiles } from "./context-files";
 
@@ -143,16 +144,27 @@ function sources(context: ApplicationContext) {
     ),
     // A thread's fork runs in its thread, not as a session of its own.
     threadForks: rows(
-      () => repositories.conversations.forkSessionIds(),
-      () => repositories.conversations.forkSessionIds(),
+      () => [
+        ...repositories.conversations.forkSessionIds(),
+        ...context.threads.startingForkIds(),
+      ],
+      () => [
+        ...repositories.conversations.forkSessionIds(),
+        ...context.threads.startingForkIds(),
+      ],
+    ),
+    // A plan's workers: listed under the agent that started them.
+    planWorkers: rows(
+      () => repositories.jobs.agentSessionIds(),
+      () => repositories.jobs.agentSessionIds(),
     ),
     unseenRoutineRuns: rows(
       () => repositories.routines.unseenRunIds(),
       () => repositories.routines.unseenRunIds(),
     ),
     workflowRuns: rows(
-      () => context.workflows.list(),
-      () => repositories.workflows.versions(),
+      () => workflowRunsOfJobs(repositories.jobs.all()),
+      () => [repositories.jobs.version()],
     ),
     // A journal or team file crossing its compact size changes a header. To
     // the kilobyte, so each line a session appends does not reload the window.

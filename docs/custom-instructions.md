@@ -10,26 +10,23 @@ instructions" pane, "Open ↗"), or ask an agent to add, change or remove one.
 
 ## Where they live
 
-Everything is markdown in the `instructions` folder of the Daedalus home
-(`~/.daedalus/instructions`):
+`INDEX.md` in the `instructions` folder of the Daedalus home
+(`~/.daedalus/instructions`) holds the rules for every request. Every session
+reads it when it starts. Each rule under `## Always` is written out in full
+as one bullet, so a session follows it without opening another file.
 
-| File         | What it holds                                                   |
-| ------------ | --------------------------------------------------------------- |
-| `INDEX.md`   | rules for every request, and one line per topic file            |
-| `<topic>.md` | the rules for one subject, such as `git.md` or `code-review.md` |
+Rules about one subject, such as git or code review, are
+[tools](workflows.md#a-tool-file): one file per subject in
+`~/.daedalus/workflows/tools`. A session sees each tool's one-line
+description with `daedal tool list` and opens a tool only when it fits the
+task, so a long set of rules costs a session nothing until it needs them. A
+workflow step can also suggest a tool to the agent that runs it. You read and
+edit tools on the Workflows page.
 
-Every session reads `INDEX.md` when it starts:
-
-- Rules under `## Always` hold for every request. Each is written out in full
-  as one bullet, so a session follows it without opening another file.
-- Each line under `## Topics` names a topic file and what its rules cover. A
-  session opens a topic file only when its line fits the task, so a long set
-  of rules costs a session nothing until it needs them.
-
-A topic file starts with a `# Heading`, which names the file (`# Code review`
-is `code-review.md`), and holds one rule per bullet. Adding, renaming or
-deleting a topic in the Custom instructions tab keeps its line in `INDEX.md`
-in step.
+Until this change these subject rules were topic files beside `INDEX.md`.
+Daedalus turns each one into a tool the first time it runs, keeps the old
+file in `instructions/moved-to-tools`, and rewrites any rule in `INDEX.md`
+that named the file to name the tool.
 
 A rule for one repository belongs in that repository's `AGENTS.md` or
 `CLAUDE.md`, and a decision for one workspace in its `BRIEF.md`. Custom
@@ -67,20 +64,20 @@ command of each request.
 - Answer in plain sentences; no headings or tables for an answer under ten lines.
 - Ask before deleting anything you did not create in this session.
 
-## Topics
+## Tools
 
-Each line names a topic file in this folder and what it covers. Open the
-files that apply to the task.
-
-- [git.md](git.md): branch names, commit messages, when to push and open PRs
-- [code-review.md](code-review.md): what to check before calling a change done
-- [writing.md](writing.md): docs, READMEs and PR descriptions
+Rules about one subject, such as getting access or reading logs, are tools.
+`daedal tool list` names each with what it covers; open the ones that apply
+to the task with `daedal tool show <name>`.
 ```
 
-### git.md
+### tools/git.md
 
 ```markdown
-# Git
+---
+name: git
+description: branch names, commit messages, when to push and open PRs
+---
 
 - Name branches `<type>/<short-description>`, such as `fix/login-timeout`.
 - Write commit subjects in the imperative, under 60 characters.
@@ -88,10 +85,13 @@ files that apply to the task.
 - Never force-push a branch someone else has pushed to.
 ```
 
-### code-review.md
+### tools/code-review.md
 
 ```markdown
-# Code review
+---
+name: code-review
+description: what to check before calling a change done
+---
 
 - Run the full test suite and the type check before saying a change is done,
   and paste the summary line.
@@ -100,10 +100,13 @@ files that apply to the task.
 - A change to a public API needs a line in the changelog.
 ```
 
-### writing.md
+### tools/writing.md
 
 ```markdown
-# Writing
+---
+name: writing
+description: docs, READMEs and PR descriptions
+---
 
 - Use sentence case for headings.
 - Lead with what changed and why; leave out how long it took.

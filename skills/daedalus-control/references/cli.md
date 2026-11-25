@@ -134,24 +134,53 @@ lists fails the spawn with exit code 2; fix it with `workspace update
 daedal plan new "<title>" [--workspace <workspace> | --home] [--owner <handle>] [--body-file <path|->]
 daedal plan list [--workspace <workspace> | --home]
 daedal plan show <plan>
-daedal plan start <plan> ^<id> [--owner <handle>]
-daedal plan done|block|drop <plan> ^<id>
 daedal plan ask <plan> ^<id> "<question>"
 ```
 
 A plan is `plans/<slug>.plan.md` in a workspace (or at Home with `--home`):
 frontmatter `plan:` and `owner:`, free markdown sections, and a nested
 checklist under `## Tasks`, one task per line as `- [ ] Title @owner ^id`.
-States are `[ ]` todo, `[/]` doing, `[x]` done, `[!]` blocked and `[-]`
+States are `[~]` draft, `[ ]` todo, `[/]` doing, `[x]` done, `[!]` blocked and `[-]`
 dropped; markdown indented under a task is its details, and a `> ? ...` line
 there is a question for the user. `<plan>` is the slug, a path, or the
-absolute path an agent was given. `start` marks the task `[/]` with you as
-its owner; `ask` adds the question under the task and starts a thread for
+absolute path an agent was given. `ask` adds the question under the task and starts a thread for
 it, as `daedal thread new --plan` does. An `@owner` is a session's team handle or its name as a
 handle (`Cart endpoints` is `@cart-endpoints`). The app opens a plan as an
 interactive document: Start agent on a task, Open its owner, and Ask (⌘L) on
 any selected text, which sends the owner the question, then `path:lines:` and
-the quote. Edit the file directly for anything else.
+the quote. Edit the file directly for anything else, except the marks:
+Daedalus writes them from the jobs' states.
+
+## Jobs
+
+```text
+daedal job next
+daedal job done --result "<what came out>" [--out <name>=<value> ...] [--job <name>]
+daedal job hold --why "<what you need decided>"
+daedal job add "<title>" [--name <name>] [--needs <a,b>] [--gives <x:kind,y>] [--instructions "<text>" | --file <path>] [--gate start|result] [--me | --to <session>] [--under <job>]
+daedal job add --plan <plan>
+daedal job skip|redo <job> --why "<why>"
+daedal job retry <job>
+daedal job fail --why "<why>"
+daedal job tree
+daedal job approve
+daedal job release [<job>] [--answer "<the user's answer>"]
+```
+
+A job is one piece of work with an owner: a workflow step, a plan task, or
+work one session handed another. Jobs form a tree and Daedalus hands a
+session one at a time. `next` prints the current job's brief: what to do,
+what the jobs before it handed over, and which outputs to hand on. `done`
+finishes it and prints the next brief; a job with a result gate is held
+(exit code 4) until `approve`, run only on the user's word. `add` puts a
+job under the one you are on and starts a new agent for it, unless `--me`
+keeps it in this session or `--to` gives it to a running one; `--needs`
+names jobs beside it that must finish first. `add --plan` adds every task
+of a plan, ordered by its `## Flow`. `hold` stops a job until the user
+decides and `release` passes on their answer. `skip` closes a job with
+everything under it, `redo` puts finished work back with what needed it,
+and `retry` runs a failed job again. `<job>` is a name from `job tree` or
+an id. Every command takes `--session <id>`, as a lead uses for a member.
 
 ## Threads
 
@@ -171,7 +200,7 @@ it, which reopens a resolved one. Otherwise write one line in your reply
 that asks the user the question directly ("Which retry budget should
 webhooks get? The options are in the thread.", never "I'm asking the user
 in a thread..."), then `thread new`: the thread hangs off your
-last message, and the user replies in the app's Threads tab. What the user
+last message, and the user replies in the thread, in the app. What the user
 writes comes back to you as a message. Talk about a thread only in the
 thread: status, corrections and follow-ups go there with `thread say`, not
 in main. Say "Thread #<n>" and do not repeat it. When you run out of other

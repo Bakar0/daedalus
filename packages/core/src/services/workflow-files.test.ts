@@ -281,6 +281,51 @@ describe("step and workflow files", () => {
     });
   });
 
+  test("the editor saves a tool, lists it on the step that suggests it, and keeps a suggested tool from being renamed or deleted", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const folder = join(home, "workflows");
+      await saveWorkflowFile(folder, {
+        kind: "tool",
+        text: "---\nname: logs\ndescription: Query the logs\n---\nRun cx.\n",
+      });
+      await expect(
+        saveWorkflowFile(folder, {
+          kind: "tool",
+          text: "---\nname: empty\ndescription: Nothing\n---\n",
+        }),
+      ).rejects.toThrow("no instructions");
+      await saveWorkflowFile(folder, {
+        kind: "step",
+        text: "---\nname: look\ndescription: Look\ntools: [logs, gone]\n---\nLook.\n",
+      });
+      const files = await readWorkflowFiles(folder);
+      expect(files.tools).toMatchObject([
+        { name: "logs", description: "Query the logs", body: "Run cx." },
+      ]);
+      expect(files.steps.find((step) => step.name === "look")).toMatchObject({
+        tools: ["logs", "gone"],
+        problem: null,
+      });
+      await expect(
+        saveWorkflowFile(folder, {
+          kind: "tool",
+          previousName: "logs",
+          text: "---\nname: cx\ndescription: Query the logs\n---\nRun cx.\n",
+        }),
+      ).rejects.toThrow("suggested by look");
+      await expect(
+        deleteWorkflowFile(folder, { kind: "tool", name: "logs" }),
+      ).rejects.toThrow("suggested by look");
+      await saveWorkflowFile(folder, {
+        kind: "step",
+        previousName: "look",
+        text: "---\nname: look\ndescription: Look\n---\nLook.\n",
+      });
+      await deleteWorkflowFile(folder, { kind: "tool", name: "logs" });
+      expect((await readWorkflowFiles(folder)).tools).toEqual([]);
+    });
+  });
+
   test("@name in steps includes a workflow, written bare in YAML", () => {
     const flow = parseWorkflowFile(
       "---\nname: feature\ndescription: Ping @lead, then go\nsteps: [plan, @release, feedback]\nloop: @release\n---\n",

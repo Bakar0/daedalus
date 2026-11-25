@@ -11,10 +11,17 @@ import {
   includedWorkflow,
   MAX_WORKFLOW_NESTING,
   parseGate,
+  parseStepMemory,
+  renderStepMemory,
+  STEP_MEMORY_SUFFIX,
+  type StepMemory,
+  type StepMemoryFile,
   type WorkflowDefinition,
   type WorkflowGate,
+  type ToolDefinition,
   type WorkflowStepDefinition,
 } from "../domain";
+import { JOB_OUTPUT_KINDS, type JobGive } from "../domain/jobs";
 import { DaedalusError } from "../errors";
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
@@ -50,6 +57,7 @@ export const workflowsHomePath = (daedalusHome: string): string =>
   join(daedalusHome, "workflows");
 export const workflowStepsPath = (root: string): string => join(root, "steps");
 export const workflowsPath = (root: string): string => join(root, "flows");
+export const workflowToolsPath = (root: string): string => join(root, "tools");
 export const workflowChoosingPath = (root: string): string =>
   join(root, "CHOOSING.md");
 
@@ -113,6 +121,87 @@ function frontmatter(
   return { fields: data as Record<string, unknown>, body: match[2]!.trim() };
 }
 
+const GIVES_HELP =
+  "'gives' must be a list of outputs, each a name or 'name: kind', such as [branch: commit, tests: number]. The kinds are " +
+  JOB_OUTPUT_KINDS.join(", ");
+
+/** A step's `gives`: `[branch: commit, tests: number]`, or names alone. */
+function parseGives(value: unknown): JobGive[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new DaedalusError("VALIDATION", GIVES_HELP);
+  return value.map((entry: unknown) => {
+    const pair: [string, string] | undefined =
+      typeof entry === "string"
+        ? [entry.split(":")[0]!.trim(), entry.split(":")[1]?.trim() || "text"]
+        : entry && typeof entry === "object" && !Array.isArray(entry)
+          ? Object.entries(entry as Record<string, unknown>).map(
+              ([name, kind]): [string, string] => [
+                name.trim(),
+                stringValue(kind)?.trim() || "text",
+              ],
+            )[0]
+          : undefined;
+    const kind = JOB_OUTPUT_KINDS.find((item) => item === pair?.[1]);
+    if (!pair || !/^[a-z0-9][a-z0-9_-]*$/i.test(pair[0]) || !kind)
+      throw new DaedalusError("VALIDATION", GIVES_HELP);
+    return { name: pair[0], kind };
+  });
+}
+
+/** A step's `needs`: step names, or undefined for "the step before". */
+function parseNeeds(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
+    throw new DaedalusError(
+      "VALIDATION",
+      "'needs' must be a list of step names, such as [design]. Left out, a step needs the step before it",
+    );
+  return (value as string[]).map((item) => workflowName(item, "step"));
+}
+
+function parseTools(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
+    throw new DaedalusError(
+      "VALIDATION",
+      "'tools' must be a list of tool names, such as [aws-access, logs]",
+    );
+  return (value as string[]).map((item) => workflowName(item, "tool"));
+}
+
+/** `fallbackName` is the file's name, used when the frontmatter has none. */
+export function parseToolFile(
+  text: string,
+  fallbackName?: string,
+): ToolDefinition {
+  const { fields, body } = frontmatter(text, "tool");
+  const nameText = stringValue(fields.name) ?? fallbackName;
+  if (!nameText)
+    throw new DaedalusError("VALIDATION", "The 'name' field is required");
+  if (!body)
+    throw new DaedalusError(
+      "VALIDATION",
+      "The tool has no instructions below its frontmatter",
+    );
+  return {
+    name: workflowName(nameText, "tool"),
+    description: stringValue(fields.description) ?? "",
+    body,
+  };
+}
+
+export function renderToolFile(tool: ToolDefinition): string {
+  return [
+    "---",
+    `name: ${tool.name}`,
+    `description: ${JSON.stringify(tool.description)}`,
+    "---",
+    "",
+    tool.body.trim(),
+    "",
+  ].join("\n");
+}
+
 /** `fallbackName` is the file's name, used when the frontmatter has none. */
 export function parseStepFile(
   text: string,
@@ -133,11 +222,17 @@ export function parseStepFile(
       "VALIDATION",
       "The step has no instructions below its frontmatter",
     );
+  const needs = parseNeeds(fields.needs);
+  const gives = parseGives(fields.gives);
+  const tools = parseTools(fields.tools);
   return {
     name: workflowName(nameText, "step"),
     description: stringValue(fields.description) ?? "",
     gate,
     body,
+    ...(needs ? { needs } : {}),
+    ...(gives.length ? { gives } : {}),
+    ...(tools?.length ? { tools } : {}),
   };
 }
 
@@ -213,6 +308,13 @@ export function renderStepFile(step: WorkflowStepDefinition): string {
     `name: ${step.name}`,
     `description: ${scalar(step.description)}`,
     ...(step.gate ? [`gate: ${step.gate}`] : []),
+    ...(step.needs ? [`needs: [${step.needs.join(", ")}]`] : []),
+    ...(step.gives?.length
+      ? [
+          `gives: [${step.gives.map((give) => `${give.name}: ${give.kind}`).join(", ")}]`,
+        ]
+      : []),
+    ...(step.tools?.length ? [`tools: [${step.tools.join(", ")}]`] : []),
     "---",
     "",
     step.body.trim(),
@@ -246,9 +348,45 @@ export interface WorkflowFileProblem {
 export interface WorkflowCatalog {
   workflows: WorkflowDefinition[];
   steps: WorkflowStepDefinition[];
+  tools: ToolDefinition[];
   problems: WorkflowFileProblem[];
   /** `CHOOSING.md` as written, or empty when there is none. */
   choosing: string;
+  /** Each step's memory file that reads; a step without one has none. */
+  memories: StepMemoryFile[];
+}
+
+export const stepMemoryPath = (root: string, step: string): string =>
+  join(workflowStepsPath(root), `${step}${STEP_MEMORY_SUFFIX}`);
+
+/** The steps that have a memory file, in name order. */
+async function stepMemoryNames(root: string): Promise<string[]> {
+  const folder = workflowStepsPath(root);
+  if (!(await pathExists(folder))) return [];
+  return (await readdir(folder))
+    .filter((file) => file.endsWith(STEP_MEMORY_SUFFIX))
+    .map((file) => file.slice(0, -STEP_MEMORY_SUFFIX.length))
+    .sort();
+}
+
+/** A step's memory; empty when it has no file yet. Throws on a bad file. */
+export async function readStepMemory(
+  root: string,
+  step: string,
+): Promise<StepMemoryFile> {
+  const path = stepMemoryPath(root, step);
+  if (!(await pathExists(path))) return { step, memories: [] };
+  return parseStepMemory(await readTextFile(path), step);
+}
+
+/** Writes a step's memory, or removes the file when nothing is left. */
+export async function writeStepMemory(
+  root: string,
+  file: StepMemoryFile,
+): Promise<void> {
+  const path = stepMemoryPath(root, file.step);
+  if (file.memories.length) await writeFileAtomic(path, renderStepMemory(file));
+  else if (await pathExists(path)) await unlink(path);
 }
 
 /** The markdown files in a folder, in name order, each named after its file. */
@@ -257,7 +395,10 @@ async function markdownFiles(
 ): Promise<{ name: string; path: string; text: string }[]> {
   if (!(await pathExists(folder))) return [];
   const files = (await readdir(folder))
-    .filter((file) => file.endsWith(".md"))
+    // A step's memory sits beside its file and is not a step itself.
+    .filter(
+      (file) => file.endsWith(".md") && !file.endsWith(STEP_MEMORY_SUFFIX),
+    )
     .sort();
   return Promise.all(
     files.map(async (file) => {
@@ -309,6 +450,21 @@ export async function readWorkflowCatalog(
     parseWorkflowFile,
     problems,
   );
+  const tools = await readFolder(
+    workflowToolsPath(root),
+    parseToolFile,
+    problems,
+  );
+  // A step that suggests a tool with no file still runs: it only says less.
+  const toolNames = new Set(tools.map((tool) => tool.name));
+  for (const step of steps) {
+    const missing = (step.tools ?? []).filter((name) => !toolNames.has(name));
+    if (missing.length)
+      problems.push({
+        path: join(workflowStepsPath(root), `${step.name}.md`),
+        message: `No tool file for ${missing.map((name) => `'${name}'`).join(", ")} in ${workflowToolsPath(root)}`,
+      });
+  }
   const known = new Set(steps.map((step) => step.name));
   const byName = new Map(workflows.map((item) => [item.name, item]));
   for (const workflow of workflows) {
@@ -332,7 +488,20 @@ export async function readWorkflowCatalog(
   const choosing = (await pathExists(choosingPath))
     ? await readTextFile(choosingPath)
     : "";
-  return { workflows, steps, problems, choosing };
+  const memories: StepMemoryFile[] = [];
+  for (const name of await stepMemoryNames(root)) {
+    const path = stepMemoryPath(root, name);
+    try {
+      if (!known.has(name))
+        throw new Error(
+          `No step '${name}' to remember this for; a memory belongs to a step file`,
+        );
+      memories.push(parseStepMemory(await readTextFile(path), name));
+    } catch (error) {
+      problems.push({ path, message: message(error) });
+    }
+  }
+  return { workflows, steps, tools, problems, choosing, memories };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -490,7 +659,23 @@ export function expandWorkflow(
 /* Editing the files                                                          */
 /* -------------------------------------------------------------------------- */
 
-export type WorkflowFileKind = "flow" | "step" | "choosing";
+export type WorkflowFileKind = "flow" | "step" | "tool" | "choosing";
+
+/** A kind of file that has a folder and a name of its own. */
+type NamedFileKind = Exclude<WorkflowFileKind, "choosing">;
+
+const KIND_NOUN: Record<NamedFileKind, string> = {
+  flow: "workflow",
+  step: "step",
+  tool: "tool",
+};
+
+const kindFolder = (root: string, kind: NamedFileKind): string =>
+  kind === "flow"
+    ? workflowsPath(root)
+    : kind === "step"
+      ? workflowStepsPath(root)
+      : workflowToolsPath(root);
 
 /** One file as written, with what Daedalus reads from it or why it cannot. */
 export interface WorkflowFile {
@@ -507,6 +692,12 @@ export interface WorkflowFile {
   dynamic?: boolean;
   loop?: string | null;
   gate?: WorkflowGate | null;
+  /** For a step: the tools it suggests, by name. */
+  tools?: string[];
+  /** For a step: what it learned, proposed ones included. */
+  memories?: StepMemory[];
+  /** Why the step's memory file cannot be read, when it cannot. */
+  memoryProblem?: string;
   problem: string | null;
 }
 
@@ -514,6 +705,7 @@ export interface WorkflowFiles {
   root: string;
   flows: WorkflowFile[];
   steps: WorkflowFile[];
+  tools: WorkflowFile[];
   choosing: { path: string; text: string };
 }
 
@@ -548,7 +740,7 @@ const includeShapes = (flows: WorkflowFile[]) =>
       ]),
   );
 
-/** Every workflow and step file as written, for the editor. */
+/** Every workflow, step and tool file as written, for the editor. */
 export async function readWorkflowFiles(root: string): Promise<WorkflowFiles> {
   const steps = await readFiles(workflowStepsPath(root), (text, name) => {
     const step = parseStepFile(text, name);
@@ -557,8 +749,21 @@ export async function readWorkflowFiles(root: string): Promise<WorkflowFiles> {
       description: step.description,
       gate: step.gate,
       body: step.body,
+      ...(step.tools?.length ? { tools: step.tools } : {}),
     };
   });
+  const tools = await readFiles(workflowToolsPath(root), (text, name) => {
+    const tool = parseToolFile(text, name);
+    return { name: tool.name, description: tool.description, body: tool.body };
+  });
+  for (const step of steps) {
+    if (step.problem) continue;
+    try {
+      step.memories = (await readStepMemory(root, step.name)).memories;
+    } catch (error) {
+      step.memoryProblem = message(error);
+    }
+  }
   const known = new Set(
     steps.filter((step) => !step.problem).map((step) => step.name),
   );
@@ -594,6 +799,7 @@ export async function readWorkflowFiles(root: string): Promise<WorkflowFiles> {
     root,
     flows,
     steps,
+    tools,
     choosing: {
       path: choosingPath,
       text: (await pathExists(choosingPath))
@@ -618,19 +824,29 @@ export async function saveWorkflowFile(
     await writeFileAtomic(workflowChoosingPath(root), input.text);
     return;
   }
-  const folder =
-    input.kind === "flow" ? workflowsPath(root) : workflowStepsPath(root);
+  const noun = KIND_NOUN[input.kind];
+  const folder = kindFolder(root, input.kind);
   // Checked before anything is written, so a bad name changes no file.
   const previous = input.previousName
-    ? workflowName(
-        input.previousName,
-        input.kind === "flow" ? "workflow" : "step",
-      )
+    ? workflowName(input.previousName, noun)
     : undefined;
   const flow =
     input.kind === "flow" ? parseWorkflowFile(input.text, previous) : null;
-  const name = flow ? flow.name : parseStepFile(input.text, previous).name;
+  const name = flow
+    ? flow.name
+    : input.kind === "tool"
+      ? parseToolFile(input.text, previous).name
+      : parseStepFile(input.text, previous).name;
   if (flow) await refuseIncludeShape(root, flow, previous);
+  // Renaming a tool would leave the steps that suggest it naming nothing.
+  if (input.kind === "tool" && previous && previous !== name) {
+    const users = await toolUsers(root, previous);
+    if (users.length)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Tool '${previous}' is suggested by ${users.join(", ")}; take it out of their 'tools' before renaming it`,
+      );
+  }
   // Renaming an included workflow would leave `@previous` naming nothing,
   // which deleting it refuses for the same reason.
   if (flow && previous && previous !== name) {
@@ -648,10 +864,7 @@ export async function saveWorkflowFile(
   }
   const path = join(folder, `${name}.md`);
   if (previous !== name && (await pathExists(path)))
-    throw new DaedalusError(
-      "CONFLICT",
-      `A ${input.kind === "flow" ? "workflow" : "step"} named '${name}' exists`,
-    );
+    throw new DaedalusError("CONFLICT", `A ${noun} named '${name}' exists`);
   await ensureDirectory(folder);
   await writeFileAtomic(path, input.text);
   if (previous && previous !== name)
@@ -700,15 +913,36 @@ async function refuseIncludeShape(
   }
 }
 
-/** Deletes a workflow no other workflow includes, or a step no workflow uses. */
+/** The steps whose `tools` name this tool. */
+async function toolUsers(root: string, tool: string): Promise<string[]> {
+  return (await readWorkflowFiles(root)).steps
+    .filter((step) => step.tools?.includes(tool))
+    .map((step) => step.name);
+}
+
+/**
+ * Deletes a workflow no other workflow includes, a step no workflow uses, or
+ * a tool no step suggests.
+ */
 export async function deleteWorkflowFile(
   root: string,
-  input: { kind: "flow" | "step"; name: string },
+  input: { kind: NamedFileKind; name: string },
 ): Promise<void> {
-  const name = workflowName(
-    input.name,
-    input.kind === "flow" ? "workflow" : "step",
-  );
+  const name = workflowName(input.name, KIND_NOUN[input.kind]);
+  if (input.kind === "tool") {
+    const users = await toolUsers(root, name);
+    if (users.length)
+      throw new DaedalusError(
+        "CONFLICT",
+        `Tool '${name}' is suggested by ${users.join(", ")}; take it out of their 'tools' first`,
+      );
+    await unlink(join(workflowToolsPath(root), `${name}.md`)).catch(
+      (error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      },
+    );
+    return;
+  }
   const entry = input.kind === "step" ? name : `@${name}`;
   const users = (await readWorkflowFiles(root)).flows
     .filter((flow) => flow.steps?.includes(entry))
@@ -720,11 +954,11 @@ export async function deleteWorkflowFile(
         ? `Step '${name}' is used by ${users.join(", ")}; take it out of them first`
         : `Workflow '${name}' is included by ${users.join(", ")}; take @${name} out of them first`,
     );
-  const folder =
-    input.kind === "flow" ? workflowsPath(root) : workflowStepsPath(root);
-  await unlink(join(folder, `${name}.md`)).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  });
+  await unlink(join(kindFolder(root, input.kind), `${name}.md`)).catch(
+    (error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    },
+  );
 }
 
 /* -------------------------------------------------------------------------- */

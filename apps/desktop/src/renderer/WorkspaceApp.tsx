@@ -1,15 +1,26 @@
+import { ThreadsHome } from "./ThreadsPane";
 import {
-  ThreadLinksContext,
-  ThreadsHome,
-  ThreadsPane,
-  type ThreadLinks,
-} from "./ThreadsPane";
+  openThreads,
+  closedThreads,
+  isAgentThread,
+  threadMark,
+  threadName,
+  type ThreadMark,
+  useAllThreads,
+  useConversationNames,
+  type AgentLive,
+  type ChatTabId,
+  noteSent,
+} from "./FactoryChats";
+import { conversationMark, copyState, isStale, useSeen } from "./chat-unread";
+import type { ChatRequest, StartChoice } from "./FactoryPage";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
   createContext,
+  Fragment,
   lazy,
   Suspense,
   useCallback,
@@ -103,15 +114,10 @@ import { TaskCostLine, TaskTimeline } from "./TaskTimeline";
 import { WorkflowPane } from "./WorkflowPane";
 import { SidePanelDock } from "./SidePanelDock";
 import { WORKFLOWS_SKILL } from "./SkillsPanel";
-import { WorkflowsEditor } from "./WorkflowsEditor";
+import { METHODS_TITLE, WorkflowsEditor } from "./WorkflowsEditor";
 import { InstructionsEditor } from "./InstructionsEditor";
 import { PlansPage, PlansPane, usePlanList } from "./PlansPane";
-import {
-  handleSession,
-  paneThreadCount,
-  THREADS_ICON_PATH,
-  useThreadCounts,
-} from "./threads-shared";
+import { THREADS_ICON_PATH, useThreadCounts } from "./threads-shared";
 import { createPlan } from "./files/plan-actions";
 import { accountModelKey } from "./account-models";
 import {
@@ -252,12 +258,41 @@ import {
 import {
   sessionDisplayOrder,
   sessionDisplayRows,
+  foldMemberRows,
+  membersSummary,
+  type MemberMark,
   teamLookup,
 } from "./session-order";
 
 // Pixi is about 290 kB (87 kB gzipped) that the app only needs once someone
 // opens the World, so the view and everything under it load on first open.
 const WorldView = lazy(() => import("./world/WorldView"));
+const FOLDED_CHATS_KEY = "daedalus.sidebar.folded-chats";
+const OPEN_TEAMS_KEY = "daedalus.sidebar.open-teams";
+
+function readFlag(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeFlag(key: string, on: boolean): void {
+  try {
+    if (on) window.localStorage.setItem(key, "1");
+    else window.localStorage.removeItem(key);
+  } catch {
+    // Without storage it holds until the page reloads.
+  }
+}
+
+const ChatTab = lazy(() =>
+  import("./FactoryChats").then((module) => ({ default: module.ChatTab })),
+);
+const FactoryPage = lazy(() =>
+  import("./FactoryPage").then((module) => ({ default: module.FactoryPage })),
+);
 
 export { MarkdownPreview };
 
@@ -369,7 +404,6 @@ const SIDE_PANEL_TABS = [
   ["files", "Files"],
   ["git", "Repositories"],
   ["tasks", "Tasks"],
-  ["activity", "Threads"],
 ] as const;
 
 /** The handle a member name becomes, as the core makes it. */
@@ -683,6 +717,44 @@ function ContextPill({
   );
 }
 
+/** A person and a plus: one more member for a lead's team. */
+function AddMemberIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.3"
+      viewBox="0 0 16 16"
+    >
+      <circle cx="6" cy="5" r="2.3" />
+      <path d="M1.8 13.2c.4-2.3 2-3.7 4.2-3.7s3.8 1.4 4.2 3.7M12.5 4.5v4M10.5 6.5h4" />
+    </svg>
+  );
+}
+
+/** One line of work and a second that branches off it: a fork is asked. */
+function AskForkIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.3"
+      viewBox="0 0 16 16"
+    >
+      <circle cx="4.5" cy="3.5" r="1.6" />
+      <circle cx="4.5" cy="12.5" r="1.6" />
+      <circle cx="11.5" cy="6" r="1.6" />
+      <path d="M4.5 5.1v5.8M11.5 7.6c0 2.2-2.4 2.6-7 2.6" />
+    </svg>
+  );
+}
+
 function RebirthIcon() {
   return (
     <svg
@@ -743,17 +815,14 @@ export const isLocalWebUrl = (url: string) => {
 
 /**
  * What the side panel can show, each a tab in its strip. At Home only the
- * file tree; elsewhere Threads shows the shown session's.
+ * file tree.
  */
-export type SidePanelTab = "files" | "git" | "tasks" | "activity";
+export type SidePanelTab = "files" | "git" | "tasks";
 const SIDE_PANEL_TAB_KEY = "daedalus.panel.tab";
 const storedSidePanelTab = (): SidePanelTab => {
   try {
     const stored = window.localStorage.getItem(SIDE_PANEL_TAB_KEY);
-    return stored === "files" ||
-      stored === "git" ||
-      stored === "tasks" ||
-      stored === "activity"
+    return stored === "files" || stored === "git" || stored === "tasks"
       ? stored
       : "tasks";
   } catch {
@@ -782,8 +851,6 @@ function SidePanelTabIcon({ tab }: { tab: SidePanelTab }) {
           <circle cx="11.5" cy="4.5" r="1.6" />
           <path d="M4.5 5.1v5.8M11.5 6.1c0 3-7 2.1-7 4.8" />
         </>
-      ) : tab === "activity" ? (
-        <path d={THREADS_ICON_PATH} />
       ) : (
         <path d="M2.5 3.5l1 1 2-2M2.5 8l1 1 2-2M2.5 12.5l1 1 2-2M7.5 3.5h6M7.5 8h6M7.5 12.5h6" />
       )}
@@ -2604,6 +2671,26 @@ export function WorkspaceApp({
   const noteMoveError = (workspaceId: string, message: string) =>
     setMoveErrors((current) => ({ ...current, [workspaceId]: message }));
   const [theme, setTheme] = useState<AppTheme>("dark");
+  /** The agents whose terminal a thread window draws: one place at a time. */
+  const [windowTerminals, setWindowTerminals] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const noteWindowTerminal = useCallback(
+    (sessionId: string, shown: boolean) =>
+      setWindowTerminals((current) => {
+        if (current.has(sessionId) === shown) return current;
+        const next = new Set(current);
+        if (shown) next.add(sessionId);
+        else next.delete(sessionId);
+        return next;
+      }),
+    [],
+  );
+  /** Asks an agent's window to give its terminal back to the session tab. */
+  const [terminalRelease, setTerminalRelease] = useState<{
+    sessionId: string;
+    nonce: number;
+  }>();
   // Read as the state is made, so the terminals are built at the stored size
   // rather than refitting to it; a shell rendered outside a window has no
   // storage and gets the default.
@@ -2763,6 +2850,9 @@ export function WorkspaceApp({
     workspaceId: string;
     id: string;
   }>();
+  /** What the tab in front holds, and the agent whose window is over it. */
+  const [centerKind, setCenterKind] = useState<CenterPanelKind>();
+  const [frontChatId, setFrontChatId] = useState<string>();
   const followCenterTab = useCallback(
     (
       kind?: CenterPanelKind,
@@ -2775,6 +2865,7 @@ export function WorkspaceApp({
           ? { workspaceId: tabWorkspaceId, id: panelId }
           : undefined,
       );
+      setCenterKind(kind);
       // A session tab the user picks takes the caret, as a sidebar pick does;
       // one Daedalus brings forward on its own leaves focus alone.
       if (kind === "session" && picked && activeSessionIdRef.current)
@@ -2851,6 +2942,74 @@ export function WorkspaceApp({
       { at: number; target: Promise<FileLinkTargetDto | null> }
     >(),
   );
+  // An agent's conversations with its copies are listed under it in the
+  // sidebar, and one opens as a chat where the terminal shows.
+  const { threads: allThreads, reload: reloadAllThreads } =
+    useAllThreads(client);
+  const seenConversations = useSeen();
+  /** Puts conversations untouched for a day into history; set further down. */
+  const tidy = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    const timer = window.setInterval(() => tidy.current(), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  // The leads whose member lists are open in the sidebar; closed by default.
+  const [openTeams, setOpenTeams] = useState<ReadonlySet<string>>(() => {
+    try {
+      const stored: unknown = JSON.parse(
+        window.localStorage.getItem(OPEN_TEAMS_KEY) ?? "[]",
+      );
+      return new Set(Array.isArray(stored) ? (stored as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggleTeam = (leadId: string) =>
+    setOpenTeams((before) => {
+      const next = new Set(before);
+      if (!next.delete(leadId)) next.add(leadId);
+      try {
+        window.localStorage.setItem(OPEN_TEAMS_KEY, JSON.stringify([...next]));
+      } catch {
+        // Without storage it holds until the page reloads.
+      }
+      return next;
+    });
+  // The agents whose conversation lists are folded in the sidebar.
+  const [foldedChats, setFoldedChats] = useState<ReadonlySet<string>>(() => {
+    try {
+      const stored: unknown = JSON.parse(
+        window.localStorage.getItem(FOLDED_CHATS_KEY) ?? "[]",
+      );
+      return new Set(Array.isArray(stored) ? (stored as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggleChats = (sessionId: string) =>
+    setFoldedChats((before) => {
+      const next = new Set(before);
+      if (!next.delete(sessionId)) next.add(sessionId);
+      try {
+        window.localStorage.setItem(
+          FOLDED_CHATS_KEY,
+          JSON.stringify([...next]),
+        );
+      } catch {
+        // Without storage it holds until the page reloads.
+      }
+      return next;
+    });
+  const { names: conversationNames } = useConversationNames();
+  /** A chat the sidebar asked the Factory to open as a popup. */
+  const [chatRequest, setChatRequest] = useState<ChatRequest | undefined>(
+    undefined,
+  );
+  /** A session whose box the Factory is asked to show, from its tab. */
+  const [boxRequest, setBoxRequest] = useState<
+    { sessionId: string; nonce: number } | undefined
+  >(undefined);
+
   const resolveFileLink = useCallback(
     (path: string, baseDirectories: readonly string[]) => {
       const key = `${baseDirectories.join("\0")}\0\0${path}`;
@@ -3849,8 +4008,23 @@ export function WorkspaceApp({
         ? [
             {
               id: "add-member",
+              icon: <AddMemberIcon />,
               label: "Add a member…",
+              pinned: pins.session.has("add-member"),
+              onPin: (on: boolean) => pin("session", "add-member", on),
               run: () => openAddMember(session),
+            },
+          ]
+        : []),
+      ...(agent && !session.archivedAt
+        ? [
+            {
+              id: "ask-copy",
+              icon: <AskForkIcon />,
+              label: "Ask without interrupting…",
+              pinned: pins.session.has("ask"),
+              onPin: (on: boolean) => pin("session", "ask", on),
+              run: () => openChatPopup(session, "new"),
             },
           ]
         : []),
@@ -4027,9 +4201,11 @@ export function WorkspaceApp({
       ? { ...session, archivedAt: archivingStartedAt.current }
       : session,
   );
-  // A fork thread's fork runs in the Threads pane, not as a session of its
-  // own in the sidebar or the board.
+  // A thread's fork answers in the thread, not as a session of its own in
+  // the sidebar or the board.
   const threadForkIds = new Set(snapshot?.threadForkIds ?? []);
+  // A plan's workers sit under the agent that started them.
+  const planWorkerIds = new Set(snapshot?.planWorkerIds ?? []);
   const agents = allAgents.filter((session) => !threadForkIds.has(session.id));
   const inScope = (id: string) => id === workspaceId;
   const allTasks = (snapshot?.tasks ?? []).filter((item) =>
@@ -4838,8 +5014,14 @@ export function WorkspaceApp({
         );
         // Only if the user is still waiting on it: a session they opened in
         // the meantime keeps the column and the caret.
-        if (openingLaunchKeyRef.current === launch.key)
-          showSession(response.data.id, launch.workspaceId);
+        if (openingLaunchKeyRef.current === launch.key) {
+          // An agent opens in its window, a plain terminal as a session.
+          if (isTerminal) showSession(response.data.id, launch.workspaceId);
+          else {
+            setOpeningLaunchKey(undefined);
+            openChatPopup(response.data, "agent");
+          }
+        }
         return;
       }
       const sessionId =
@@ -5488,17 +5670,17 @@ export function WorkspaceApp({
   // from Home's file tree shows in the editor instead, until a page is
   // picked again.
   const [homeOpening, setHomeOpening] = useState(false);
-  /** A thread Home asked the session's Threads pane to open. */
-  const [threadRequest, setThreadRequest] = useState<{
-    threadId: number;
-    focus?: string | null;
-    fork?: { sessionId: string; anchorId: string | null };
-    nonce: number;
-  } | null>(null);
   const [homePage, setHomePage] = useState<
-    "activity" | "routines" | "instructions" | "files"
+    "activity" | "routines" | "methods" | "instructions" | "files"
   >("activity");
-  async function openAtHome(page: "activity" | "routines" | "instructions") {
+  // A step the Factory page asked to see on the Workflows page.
+  const [stepRequest, setStepRequest] = useState<{
+    step: string;
+    nonce: number;
+  }>();
+  async function openAtHome(
+    page: "activity" | "routines" | "methods" | "instructions",
+  ) {
     setHomeOpening(true);
     try {
       const home =
@@ -6037,7 +6219,17 @@ export function WorkspaceApp({
                   (session.provider === "claude" ||
                     session.provider === "codex"),
               ) +
-              Number(pins.session.has("archive")),
+              Number(pins.session.has("archive")) +
+              Number(
+                pins.session.has("add-member") &&
+                  team?.role === "lead" &&
+                  session.status === "running",
+              ) +
+              Number(
+                pins.session.has("ask") &&
+                  session.kind === "agent" &&
+                  !session.archivedAt,
+              ),
           } as React.CSSProperties
         }
         data-pinned={session.pinnedAt ? "true" : undefined}
@@ -6059,6 +6251,17 @@ export function WorkspaceApp({
           data-tree-label={sessionName(session)}
           data-tree-parent={`w:${session.workspaceId}`}
           onClick={() => {
+            // A live agent opens in its window over the Factory: its thread,
+            // with its terminal one switch away. One that must be woken or
+            // restored first opens as a session.
+            if (
+              session.kind === "agent" &&
+              !session.archivedAt &&
+              session.status === "running"
+            ) {
+              openChatPopup(session, "agent");
+              return;
+            }
             showSession(session.id, session.workspaceId);
             if (resumesOnOpen(session)) void wakeCloudSession(session);
           }}
@@ -6110,6 +6313,18 @@ export function WorkspaceApp({
                   title="The account this session runs on"
                 >
                   {accountName(session.provider, session.account)}
+                </span>
+              )}
+              {!team && planWorkerIds.has(session.id) && session.spawnedBy && (
+                <span
+                  className="session-team-badge"
+                  title={`Works on one task of a plan of ${
+                    sessionsById.get(session.spawnedBy)
+                      ? sessionName(sessionsById.get(session.spawnedBy)!)
+                      : "another agent"
+                  }`}
+                >
+                  Worker
                 </span>
               )}
               {team && (
@@ -6214,18 +6429,34 @@ export function WorkspaceApp({
                 ↻
               </button>
             )}
-          {team?.role === "lead" && session.status === "running" && (
-            <button
-              aria-label={`Add a member to ${team.team.name}`}
-              className="session-card-action session-card-hover-action"
-              onClick={() => openAddMember(session)}
-              tabIndex={-1}
-              title="Add a member to this session's team"
-              type="button"
-            >
-              +
-            </button>
-          )}
+          {pins.session.has("add-member") &&
+            team?.role === "lead" &&
+            session.status === "running" && (
+              <button
+                aria-label={`Add a member to ${sessionName(session)}'s team`}
+                className="session-card-action session-card-hover-action"
+                onClick={() => openAddMember(session)}
+                tabIndex={-1}
+                title="Add a member"
+                type="button"
+              >
+                <AddMemberIcon />
+              </button>
+            )}
+          {pins.session.has("ask") &&
+            session.kind === "agent" &&
+            !session.archivedAt && (
+              <button
+                aria-label={`Ask ${sessionName(session)} without interrupting it`}
+                className="session-card-action session-card-hover-action"
+                onClick={() => openChatPopup(session, "new")}
+                tabIndex={-1}
+                title="Ask without interrupting"
+                type="button"
+              >
+                <AskForkIcon />
+              </button>
+            )}
           {pins.session.has("rebirth") &&
             session.kind === "agent" &&
             (session.provider === "claude" || session.provider === "codex") && (
@@ -6242,8 +6473,8 @@ export function WorkspaceApp({
                   session.rebirthRequestedAt
                     ? "Rebirth requested; the agent is writing its note. Click to ask again."
                     : session.status === "running"
-                      ? "Rebirth: this agent writes a note, then a fresh agent with an empty context takes over in the same working directory and state, waiting on you if this one was"
-                      : "Rebirth: a fresh agent takes over in the same working directory, working from the brief, the journal and git"
+                      ? "Rebirth: a fresh agent with an empty context takes over from this one's note"
+                      : "Rebirth: a fresh agent takes over from the brief, the journal and git"
                 }
                 type="button"
               >
@@ -6274,6 +6505,198 @@ export function WorkspaceApp({
             triggerTabIndex={-1}
           />
         </span>
+      </div>
+    );
+  };
+  /** Shows the Factory with an agent's chat open over it. */
+  const openChatPopup = (session: AgentSessionDto, tab: ChatTabId) => {
+    // The session stays as it is: showing it would bring its terminal's tab
+    // to the front, over the Factory.
+    if (session.workspaceId !== workspaceId)
+      enterWorkspace(session.workspaceId, "workspace");
+    files.withEditor((handle) => {
+      // An agent's window lives in one place: the tab the user moved it
+      // to, or over the Factory.
+      const docked = handle.focusChat(session.id);
+      if (!docked) handle.openFactory();
+      setChatRequest({
+        sessionId: session.id,
+        handle: session.teamHandle ?? sessionName(session),
+        tab,
+        docked,
+        nonce: Date.now(),
+      });
+    });
+  };
+  const agentLive = (sessionId: string): AgentLive | undefined => {
+    const activity = activityById.get(sessionId);
+    if (!activity) return undefined;
+    const run = workflowRunsBySession.get(sessionId);
+    const at = run
+      ? run.steps.findIndex((step) => step.state === "active")
+      : -1;
+    return {
+      state: activity.activity,
+      detail: activity.detail,
+      since: activity.since,
+      step:
+        run && at >= 0
+          ? `${run.steps[at]!.name} · step ${at + 1} of ${run.steps.length}`
+          : undefined,
+    };
+  };
+  // An agent's conversations with copies of it, listed under its card.
+  // A conversation nobody asked in, answered in or looked at for a day goes
+  // to its agent's history, so the list holds what is in use.
+  tidy.current = () => {
+    const now = Date.now();
+    for (const thread of allThreads) {
+      if (thread.resolvedAt || thread.closedAt || !thread.forkSessionId)
+        continue;
+      if (thread.messages.some((message) => message.kind === "message"))
+        continue;
+      const mark = conversationMark(
+        thread.id,
+        copyState(thread, agentLive),
+        seenConversations,
+      );
+      if (isStale(thread, mark, seenConversations, now))
+        void client.request
+          .threadCloseConversation({ id: thread.id })
+          .then(reloadAllThreads, () => undefined);
+    }
+  };
+  /** What a folded member's dot says, from what its hooks last reported. */
+  const memberMark = (session: AgentSessionDto): MemberMark => {
+    const state = activityById.get(session.id)?.activity;
+    return state === "working"
+      ? "working"
+      : state === "needs_input" ||
+          state === "needs_permission" ||
+          state === "error"
+        ? "waits"
+        : "quiet";
+  };
+  const renderConversations = (session: AgentSessionDto, depth = 0) => {
+    if (session.kind !== "agent" || session.archivedAt) return null;
+    const open = openThreads(allThreads, session.id);
+    const closed = closedThreads(allThreads, session.id);
+    if (open.length === 0 && closed.length === 0) return null;
+    const show = (next: ChatTabId) => openChatPopup(session, next);
+    const folded = foldedChats.has(session.id);
+    const marks = new Map(
+      open.map((thread) => [
+        thread.id,
+        threadMark(thread, agentLive, seenConversations),
+      ]),
+    );
+    const count = (mark: ThreadMark) =>
+      [...marks.values()].filter((one) => one === mark).length;
+    const summary = [
+      open.length
+        ? `${open.length} ${open.length === 1 ? "thread" : "threads"}`
+        : "No open threads",
+      count("asks")
+        ? `${count("asks")} ${count("asks") === 1 ? "asks" : "ask"} you`
+        : "",
+      count("unread") ? `${count("unread")} new` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return (
+      <div
+        aria-label={`Threads with ${sessionName(session)}`}
+        className="session-conversations"
+        role="group"
+        style={{ "--depth": depth } as React.CSSProperties}
+      >
+        <button
+          aria-expanded={!folded}
+          className="session-conversation-new session-conversations-fold"
+          onClick={() => toggleChats(session.id)}
+          title={folded ? "Show the threads" : "Hide the threads"}
+          type="button"
+        >
+          <svg aria-hidden="true" viewBox="0 0 16 16">
+            <path d="M6 4.5l3.5 3.5L6 11.5" />
+          </svg>
+          {summary}
+        </button>
+        {open.map((thread) => {
+          const name = threadName(thread, conversationNames);
+          const mark = marks.get(thread.id) ?? "read";
+          const mine = isAgentThread(thread);
+          // Folded, only what has something new for the user keeps its row.
+          if (folded && mark === "read") return null;
+          return (
+            <div className={`session-conversation is-${mark}`} key={thread.id}>
+              <button
+                className="session-conversation-main"
+                onClick={() => show(thread.id)}
+                type="button"
+              >
+                <span aria-hidden="true" className="session-conversation-mark">
+                  {mark === "asks" ? "?" : mine ? "●" : "↳"}
+                </span>
+                <span className="session-conversation-name">{name}</span>
+                {mark === "asks" && (
+                  <span className="session-conversation-asks">asks you</span>
+                )}
+                {mark === "unread" && (
+                  <span
+                    aria-label="New answer"
+                    className="session-conversation-unread"
+                    role="img"
+                  />
+                )}
+                {mark === "answering" && (
+                  <span
+                    aria-label="Answering"
+                    className="session-conversation-answering"
+                    role="img"
+                  />
+                )}
+              </button>
+              <button
+                aria-label={`${mine ? "Resolve" : "Close"} the thread ${name}`}
+                className="session-conversation-close"
+                onClick={() =>
+                  void (
+                    mine
+                      ? client.request.threadResolve({ id: thread.id })
+                      : client.request.threadCloseConversation({
+                          id: thread.id,
+                        })
+                  ).then((response) => {
+                    if (!response.ok) setError(response.error.message);
+                    reloadAllThreads();
+                  })
+                }
+                title={
+                  mine
+                    ? `Resolve this thread. It goes to History and ${sessionName(session)} is told.`
+                    : "Close this thread. It goes to History."
+                }
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+        {closed.length > 0 && !folded && (
+          <button
+            className="session-conversation-new"
+            onClick={() => show("history")}
+            title={`Threads with ${sessionName(session)} that were closed or resolved`}
+            type="button"
+          >
+            <span aria-hidden="true" className="session-conversation-mark">
+              ◷
+            </span>
+            History ({closed.length})
+          </button>
+        )}
       </div>
     );
   };
@@ -6461,7 +6884,26 @@ export function WorkspaceApp({
           const ordered = reorder.order.flatMap(
             (id) => liveSessions.find((session) => session.id === id) ?? [],
           );
-          const grouped = sessionDisplayRows(ordered, snapshot?.teams ?? []);
+          // Leads keep their rows; a team's members fold into dots on its
+          // lead, so a list of many teams reads as its leads.
+          const grouped = foldMemberRows(
+            sessionDisplayRows(ordered, snapshot?.teams ?? [], planWorkerIds),
+            snapshot?.teams ?? [],
+            {
+              markOf: memberMark,
+              open: openTeams,
+              workers: planWorkerIds,
+              shown: view === "session" ? highlightedSessionId : undefined,
+            },
+          );
+          // A plan's workers are called workers; a team's, members.
+          const nounOf = (members: readonly { session: AgentSessionDto }[]) =>
+            members.every(
+              (member) =>
+                !member.session.teamId && planWorkerIds.has(member.session.id),
+            )
+              ? "worker"
+              : "member";
           return (
             <div
               aria-label={`Sessions in ${item.name}`}
@@ -6474,9 +6916,45 @@ export function WorkspaceApp({
                 data-reordering={reorder.draggingId ? "true" : undefined}
               >
                 {launches.map(renderLaunchCard)}
-                {grouped.map(({ session, depth }) =>
-                  renderSessionCard(session, reorder, depth),
-                )}
+                {grouped.map(({ session, depth, members }) => (
+                  <Fragment key={session.id}>
+                    {renderSessionCard(session, reorder, depth)}
+                    {renderConversations(session, depth)}
+                    {members.length > 0 && (
+                      <button
+                        aria-expanded={openTeams.has(session.id)}
+                        aria-label={`${sessionName(session)}'s ${nounOf(members) === "worker" ? "workers" : "team"}: ${membersSummary(members, nounOf(members))}`}
+                        className="session-members"
+                        onClick={() => toggleTeam(session.id)}
+                        style={{ "--depth": depth } as React.CSSProperties}
+                        title={`${openTeams.has(session.id) ? "Hide" : "Show"} the ${nounOf(members)}s`}
+                        type="button"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="session-member-dots"
+                        >
+                          {members.map((member) => (
+                            <span
+                              className={`session-member-dot is-${member.mark}`}
+                              key={member.session.id}
+                              title={`${sessionName(member.session)}: ${
+                                member.mark === "waits"
+                                  ? "waits for you"
+                                  : member.mark === "working"
+                                    ? "working"
+                                    : "idle or done"
+                              }`}
+                            />
+                          ))}
+                        </span>
+                        <span className="session-members-text">
+                          {membersSummary(members, nounOf(members))}
+                        </span>
+                      </button>
+                    )}
+                  </Fragment>
+                ))}
               </div>
               {archived.length > 0 && (
                 <details
@@ -6735,12 +7213,21 @@ export function WorkspaceApp({
     return new Map(
       [...byWorkspace].map(([id, list]) => [
         id,
-        sessionDisplayOrder(list, teams),
+        sessionDisplayOrder(
+          list,
+          teams,
+          new Set(snapshot?.planWorkerIds ?? []),
+        ),
       ]),
     );
     // `agents` is derived from these on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot?.agents, snapshot?.teams, archivingSessionIds]);
+  }, [
+    snapshot?.agents,
+    snapshot?.teams,
+    snapshot?.planWorkerIds,
+    archivingSessionIds,
+  ]);
   const sidebarSessionsOf = (item: WorkspaceDto) =>
     sidebarSessionsByWorkspace.get(item.id) ?? [];
   // Every live session in sidebar order, across workspaces, folded or not.
@@ -7104,7 +7591,9 @@ export function WorkspaceApp({
     if (place.kind === "session") goToSession(place.id);
     else if (place.kind === "home")
       void openAtHome(
-        place.id === "routines" || place.id === "instructions"
+        place.id === "routines" ||
+          place.id === "methods" ||
+          place.id === "instructions"
           ? place.id
           : "activity",
       );
@@ -7890,34 +8379,6 @@ export function WorkspaceApp({
   const sessionsById = new Map(
     allAgents.map((session) => [session.id, session]),
   );
-  /** Shows a thread from Home beside its session, with what Home asked for. */
-  function openHomeThread(
-    thread: { id: number; sessionId: string },
-    request: Pick<NonNullable<typeof threadRequest>, "focus" | "fork">,
-  ) {
-    const target = sessionsById.get(thread.sessionId);
-    if (!target) return;
-    showSession(target.id, target.workspaceId);
-    setPanelTab("activity");
-    if (workspacePanelCollapsed) toggleBoardDetailPanel();
-    setThreadRequest({ threadId: thread.id, ...request, nonce: Date.now() });
-  }
-  // Links in thread text: URLs open in the browser, and `@handle` opens the
-  // session of that name in the thread owner's team (`@lead` its lead).
-  const threadLinks: ThreadLinks = {
-    openUrl: openExternalLink,
-    sessionForHandle: (ownerId, handle) =>
-      handleSession(
-        ownerId,
-        handle,
-        snapshot?.teams ?? [],
-        allAgents.filter((one) => !one.archivedAt),
-      ),
-    openSession: (sessionId) => {
-      const target = sessionsById.get(sessionId);
-      if (target) showSession(target.id, target.workspaceId);
-    },
-  };
   const boardView = workspace ? (
     <BoardView
       accounts={snapshot?.settings.accounts}
@@ -8036,28 +8497,21 @@ export function WorkspaceApp({
     knownTerminalIds.current = current;
   }, [files, terminalIds]);
 
+  // The workflow docked in the side panel is the shown session's, or, with
+  // the Factory in front, that of the agent whose thread window is on top.
+  const frontChatSession =
+    centerKind === "factory" && frontChatId
+      ? sessionsById.get(frontChatId)
+      : undefined;
+  const dockSession =
+    frontChatSession?.workspaceId === workspace?.id && frontChatSession
+      ? frontChatSession
+      : activeSession;
   // Home's side panel is its file tree alone: the Daedalus home folder.
   const shownPanelTab: SidePanelTab = atHome ? "files" : panelTab;
   const sidePanelTabs = SIDE_PANEL_TABS.filter(
     ([tab]) => !atHome || tab === "files",
   );
-  // The Threads tab's dot counts what its pane shows: the session's own
-  // open questions and, for a lead, its members'. A question elsewhere in
-  // the workspace shows at Home and on its own session, not here.
-  const paneTeam = activeSession
-    ? snapshot?.teams.find((one) => one.leadId === activeSession.id)
-    : undefined;
-  const paneSessionIds = activeSession
-    ? [
-        activeSession.id,
-        ...(paneTeam
-          ? allAgents
-              .filter((one) => one.teamId === paneTeam.id && !one.archivedAt)
-              .map((one) => one.id)
-          : []),
-      ]
-    : [];
-  const paneThreads = paneThreadCount(threadCounts, paneSessionIds);
   /** The Routines page, in its own tab or as Home's page. */
   const renderRoutinesHome = () => (
     <RoutinesHome
@@ -8085,78 +8539,77 @@ export function WorkspaceApp({
       }))}
     />
   );
-  /** A session's Threads: in the side panel, or in a tab of its own. */
-  const renderThreadsPane = (
-    target: AgentSessionDto | undefined,
-    {
-      openRequest,
-      inTab,
-      threadId,
-    }: {
-      openRequest?: typeof threadRequest;
-      inTab: boolean;
-      threadId?: number;
-    },
-  ) => {
-    const team = target
-      ? snapshot?.teams.find((one) => one.leadId === target.id)
-      : undefined;
-    const members = team
-      ? allAgents
-          .filter((one) => one.teamId === team.id && !one.archivedAt)
-          .map((one) => ({ id: one.id, name: sessionName(one) }))
-      : [];
+  // The session tab shows whichever session the left column has open.
+  /** An agent's terminal, for its window: the same one its session tab draws. */
+  const renderAgentTerminal = (sessionId: string) => {
+    const target = sessionsById.get(sessionId);
+    if (!target) return null;
     return (
-      <ThreadLinksContext.Provider value={threadLinks}>
-        <ThreadsPane
-          client={client}
-          members={members}
-          onError={setError}
-          {...(!inTab && target
-            ? {
-                onOpenInTab: () =>
-                  files.withEditor((handle) =>
-                    handle.openThreads(target.id, sessionName(target)),
-                  ),
-                onOpenThreadInTab: (id: number) =>
-                  files.withEditor((handle) =>
-                    handle.openThreads(target.id, sessionName(target), id),
-                  ),
-              }
-            : {})}
-          {...(threadId === undefined ? {} : { startThreadId: threadId })}
-          openRequest={openRequest ?? null}
-          renderTerminal={(forkId) => {
-            const fork = sessionsById.get(forkId);
-            if (!fork) return null;
-            return (
-              <TerminalSurface
-                activity={activityById.get(fork.id)}
-                attention={attentionById.get(fork.id)}
-                fileLinks={fileLinksFrom([fork.workingDirectory])}
-                fitRevision={terminalFitRevision}
-                focused={false}
-                id={fork.id}
-                key={fork.id}
-                label={sessionName(fork)}
-                locationLabel={workspace?.name ?? ""}
-                onClearAttention={() => void clearAttention(fork.id)}
-                onCopy={copyTerminalText}
-                onFocused={() => undefined}
-                onOpenLink={openTerminalLink}
-                session={fork}
-                status={fork.status}
-                target="agent"
-                terminalEndpoint={terminalEndpoint}
-              />
-            );
-          }}
-          session={target}
-        />
-      </ThreadLinksContext.Provider>
+      <TerminalSurface
+        activity={activityById.get(target.id)}
+        attention={attentionById.get(target.id)}
+        fileLinks={fileLinksFrom([
+          target.workingDirectory,
+          ...(snapshot?.worktrees ?? [])
+            .filter((item) => item.sessionId === target.id)
+            .map((item) => item.path),
+        ])}
+        fitRevision={terminalFitRevision}
+        focused={shouldFocusSession(focusedSessionId, target.id)}
+        id={target.id}
+        key={`${target.id}:${terminalMountRevision}`}
+        label={sessionName(target)}
+        locationLabel={workspace?.name ?? ""}
+        onClearAttention={() => void clearAttention(target.id)}
+        onCopy={copyTerminalText}
+        onFocused={clearSessionFocusRequest}
+        onOpenLink={openTerminalLink}
+        session={target}
+        status={target.status}
+        target="agent"
+        terminalEndpoint={terminalEndpoint}
+      />
     );
   };
-  // The session tab shows whichever session the left column has open.
+  /**
+   * Starts an agent on what the user typed on the empty Factory, with those
+   * words as its first message, and opens its window.
+   */
+  const startFromFactory = async (
+    target: WorkspaceDto,
+    text: string,
+    choice?: StartChoice,
+  ): Promise<boolean> => {
+    const name = text.split("\n")[0]!.trim().split(/\s+/).slice(0, 5).join(" ");
+    try {
+      const response = await client.request.agentSpawn({
+        workspace: target.id,
+        name: name.slice(0, 48),
+        // The agent the workspace starts by default, as the board's Start does.
+        provider: choice?.provider ?? target.defaultProvider ?? "claude",
+        ...(choice?.model ? { model: choice.model } : {}),
+        message: text,
+      });
+      if (!response.ok) {
+        setError(response.error.message);
+        return false;
+      }
+      // The window shows these words at once; the agent's session has them
+      // a few seconds later.
+      noteSent({
+        id: `sent:${Date.now()}`,
+        sessionId: response.data.id,
+        text,
+        at: new Date().toISOString(),
+      });
+      openChatPopup(response.data, "agent");
+      void refresh();
+      return true;
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return false;
+    }
+  };
   const sessionPane = workspace ? (
     <section className="terminal-column">
       {activeSessionTeam && activeSession && (
@@ -8208,6 +8661,26 @@ export function WorkspaceApp({
             Quit and stop sessions stopped it; it comes back with its
             conversation, and the terminal opens here as soon as it is ready.
           </span>
+        </div>
+      ) : activeSession && windowTerminals.has(activeSession.id) ? (
+        // A terminal is drawn in one place: two sizes at once would make
+        // the agent's screen reflow to the smaller.
+        <div className="terminal-empty">
+          <strong>
+            {sessionName(activeSession)}&apos;s terminal is open in its window
+          </strong>
+          <span>It shows in one place at a time.</span>
+          <button
+            onClick={() =>
+              setTerminalRelease({
+                sessionId: activeSession.id,
+                nonce: Date.now(),
+              })
+            }
+            type="button"
+          >
+            Show it here
+          </button>
         </div>
       ) : activeSession ? (
         // The drawer sits over the terminal, below the bars above it, so
@@ -8534,6 +9007,24 @@ export function WorkspaceApp({
                   {snapshot?.unseenRoutineRuns}
                 </span>
               )}
+            </button>
+            <button
+              aria-current={
+                atHome && homePage === "methods" ? "page" : undefined
+              }
+              className="sidebar-routines-link"
+              disabled={homeOpening}
+              onClick={() => {
+                setStepRequest(undefined);
+                void openAtHome("methods");
+              }}
+              title="Your workflows, their steps and the tools a step can suggest"
+              type="button"
+            >
+              <svg aria-hidden="true" viewBox="0 0 16 16">
+                <path d="M2 3.5h4v3H2zM10 9.5h4v3h-4zM6 5h2.5v6H10" />
+              </svg>
+              <span>{METHODS_TITLE}</span>
             </button>
             <button
               aria-current={
@@ -9056,25 +9547,33 @@ export function WorkspaceApp({
             ) : atHome && homePage !== "files" ? (
               <div className="home-page">
                 {homePage === "activity" ? (
-                  <ThreadLinksContext.Provider value={threadLinks}>
-                    <ThreadsHome
-                      client={client}
-                      onError={setError}
-                      onOpenThread={(thread, focus) =>
-                        openHomeThread(thread, { focus })
+                  <ThreadsHome
+                    client={client}
+                    onError={setError}
+                    onOpenThread={(thread) => {
+                      const target = sessionsById.get(thread.sessionId);
+                      if (!target) {
+                        setError(
+                          `The session of thread #${thread.id} is gone.`,
+                        );
+                        return;
                       }
-                      onForkThread={(thread) =>
-                        openHomeThread(thread, {
-                          fork: {
-                            sessionId: thread.sessionId,
-                            anchorId: thread.anchorId,
-                          },
-                        })
-                      }
-                    />
-                  </ThreadLinksContext.Provider>
+                      // A resolved thread is in its agent's History, and a
+                      // thread of a fork-only kind shows as itself.
+                      openChatPopup(
+                        target,
+                        thread.resolvedAt ? "history" : thread.id,
+                      );
+                    }}
+                  />
                 ) : homePage === "instructions" ? (
                   <InstructionsEditor client={client} onError={setError} />
+                ) : homePage === "methods" ? (
+                  <WorkflowsEditor
+                    client={client}
+                    onError={setError}
+                    open={stepRequest}
+                  />
                 ) : (
                   renderRoutinesHome()
                 )}
@@ -9135,6 +9634,148 @@ export function WorkspaceApp({
                 renderWorkflows={() => (
                   <WorkflowsEditor client={client} onError={setError} />
                 )}
+                renderChat={(sessionId, handle) => {
+                  const target = sessionsById.get(sessionId);
+                  if (!target) return null;
+                  return (
+                    <Suspense fallback={null}>
+                      <ChatTab
+                        client={client}
+                        handle={handle}
+                        onError={setError}
+                        live={agentLive(sessionId)}
+                        liveOf={agentLive}
+                        onOpenLink={openTerminalLink}
+                        onOpenSession={(id) =>
+                          showSession(id, target.workspaceId)
+                        }
+                        onShowBox={() =>
+                          files.withEditor((editor) => {
+                            editor.openFactory();
+                            setBoxRequest({ sessionId, nonce: Date.now() });
+                          })
+                        }
+                        onMoveBack={(tab, view) =>
+                          files.withEditor((editor) => {
+                            editor.closeChat(sessionId);
+                            editor.openFactory();
+                            setChatRequest({
+                              sessionId,
+                              handle,
+                              tab,
+                              view,
+                              docked: false,
+                              nonce: Date.now(),
+                            });
+                          })
+                        }
+                        request={
+                          chatRequest?.docked &&
+                          chatRequest.sessionId === sessionId
+                            ? chatRequest
+                            : undefined
+                        }
+                        onTerminal={noteWindowTerminal}
+                        renderTerminal={renderAgentTerminal}
+                        terminalRelease={
+                          terminalRelease?.sessionId === sessionId
+                            ? terminalRelease.nonce
+                            : undefined
+                        }
+                        sessionId={sessionId}
+                        workspaceId={target.workspaceId}
+                      />
+                    </Suspense>
+                  );
+                }}
+                renderFactory={() =>
+                  workspace && !atHome ? (
+                    <Suspense
+                      fallback={
+                        <div className="empty large">Opening the factory…</div>
+                      }
+                    >
+                      <FactoryPage
+                        onFrontChat={setFrontChatId}
+                        boxRequest={
+                          boxRequest &&
+                          sessionsById.get(boxRequest.sessionId)
+                            ?.workspaceId === workspace.id
+                            ? boxRequest
+                            : undefined
+                        }
+                        chatRequest={
+                          chatRequest &&
+                          !chatRequest.docked &&
+                          sessionsById.get(chatRequest.sessionId)
+                            ?.workspaceId === workspace.id
+                            ? chatRequest
+                            : undefined
+                        }
+                        client={client}
+                        onStart={(text, choice) =>
+                          startFromFactory(workspace, text, choice)
+                        }
+                        startOptions={{
+                          providers: (["claude", "codex"] as const).map(
+                            (id) => ({
+                              id,
+                              // The pod has its own Claude and Codex.
+                              available:
+                                workspace.place === "cloud" ||
+                                Boolean(
+                                  snapshot?.settings.providers.find(
+                                    (item) => item.name === id,
+                                  )?.available,
+                                ),
+                            }),
+                          ),
+                          defaultProvider:
+                            workspace.defaultProvider ?? "claude",
+                          accounts: {
+                            claude: workspace.defaultClaudeAccount ?? "default",
+                            codex: workspace.defaultCodexAccount ?? "default",
+                          },
+                          accountModels: workspace.accountModels,
+                        }}
+                        onStartTerminal={() =>
+                          openSessionModal(undefined, workspace)
+                        }
+                        onTerminal={noteWindowTerminal}
+                        renderTerminal={renderAgentTerminal}
+                        terminalRelease={terminalRelease}
+                        live={agentLive}
+                        onError={setError}
+                        onOpenChatTab={(sessionId, handle, tab, view) =>
+                          files.withEditor((editor) => {
+                            editor.openChat(sessionId, handle);
+                            setChatRequest({
+                              sessionId,
+                              handle,
+                              tab,
+                              view,
+                              docked: true,
+                              nonce: Date.now(),
+                            });
+                          })
+                        }
+                        onOpenLink={openTerminalLink}
+                        onOpenPlan={(path) =>
+                          openFileTarget({ workspaceId: workspace.id, path })
+                        }
+                        onOpenSession={(sessionId) =>
+                          showSession(sessionId, workspace.id)
+                        }
+                        onOpenStep={(step) => {
+                          setStepRequest({ step, nonce: Date.now() });
+                          void openAtHome("methods");
+                        }}
+                        workspaceId={workspace.id}
+                        workspaceName={workspace.name}
+                      />
+                    </Suspense>
+                  ) : null
+                }
                 renderPlans={() => (
                   <PlansPage
                     client={client}
@@ -9162,19 +9803,6 @@ export function WorkspaceApp({
                 abilityTabName={(_kind, id) =>
                   snapshot?.teams.find((team) => team.id === id)?.name
                 }
-                renderThreads={(sessionId, threadId) => {
-                  const target = sessionsById.get(sessionId);
-                  return target?.kind === "agent" ? (
-                    <div className="threads-tab">
-                      {renderThreadsPane(target, {
-                        inTab: true,
-                        ...(threadId === undefined ? {} : { threadId }),
-                      })}
-                    </div>
-                  ) : (
-                    <div className="empty">That session is gone.</div>
-                  );
-                }}
                 renderTeam={(teamId, visible) => (
                   <TeamPage
                     busy={busy}
@@ -9324,11 +9952,7 @@ export function WorkspaceApp({
               >
                 {sidePanelTabs.map(([tab, label], index) => (
                   <button
-                    aria-label={
-                      tab === "activity" && paneThreads > 0
-                        ? `${label}, ${paneThreads} waiting on you`
-                        : label
-                    }
+                    aria-label={label}
                     aria-selected={
                       !workspacePanelCollapsed && shownPanelTab === tab
                     }
@@ -9358,23 +9982,35 @@ export function WorkspaceApp({
                     {tab === "tasks" && taskAttentionCount > 0 && (
                       <i aria-hidden="true" className="side-panel-tab-badge" />
                     )}
-                    {tab === "activity" && paneThreads > 0 && (
-                      <i
-                        aria-hidden="true"
-                        className="side-panel-tab-badge activity-tab-badge"
-                      />
-                    )}
                   </button>
                 ))}
+                {/* Not a tab of the panel: it opens the Factory tab in the
+                  middle, and stays in reach while the panel is folded. */}
+                {!atHome && (
+                  <button
+                    aria-label="Open the Factory"
+                    className="side-panel-tab side-panel-open"
+                    onClick={() =>
+                      files.withEditor((handle) => handle.openFactory())
+                    }
+                    title="Factory: this workspace's plans as boxes of work"
+                    type="button"
+                  >
+                    <svg
+                      aria-hidden="true"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="1.3"
+                      viewBox="0 0 16 16"
+                    >
+                      <path d="M1.5 5.5h4v5h-4zM10.5 5.5h4v5h-4zM5.5 8h5" />
+                    </svg>
+                  </button>
+                )}
               </div>
-              {workspacePanelCollapsed ? null : shownPanelTab === "activity" ? (
-                <div className="side-panel-activity">
-                  {renderThreadsPane(activeSession, {
-                    openRequest: threadRequest,
-                    inTab: false,
-                  })}
-                </div>
-              ) : shownPanelTab === "files" ? (
+              {workspacePanelCollapsed ? null : shownPanelTab === "files" ? (
                 !workspaceContent ||
                 workspaceContent.workspaceId !== workspace.id ? (
                   <div className="empty">Loading files…</div>
@@ -9478,6 +10114,9 @@ export function WorkspaceApp({
                       onOpen={() =>
                         files.withEditor((handle) => handle.openPlans())
                       }
+                      onOpenFactory={() =>
+                        files.withEditor((handle) => handle.openFactory())
+                      }
                       onOpenPlan={(path) => {
                         if (workspace)
                           openFileTarget({ workspaceId: workspace.id, path });
@@ -9488,11 +10127,17 @@ export function WorkspaceApp({
               )}
               {/* The shown session's workflow, docked at the bottom under
                   whichever tab is open. */}
-              {!workspacePanelCollapsed && activeSession?.kind === "agent" && (
+              {!workspacePanelCollapsed && dockSession?.kind === "agent" && (
                 <SidePanelDock>
                   <WorkflowPane
                     enabled={workflowsOn}
-                    key={activeSession.id}
+                    key={dockSession.id}
+                    owner={
+                      dockSession.id === activeSession?.id &&
+                      centerKind !== "factory"
+                        ? undefined
+                        : (dockSession.teamHandle ?? sessionName(dockSession))
+                    }
                     onOpenSettings={() => {
                       setSettingsSection("sessions");
                       setModal("settings");
@@ -9500,11 +10145,11 @@ export function WorkspaceApp({
                     onOpenEditor={() =>
                       files.withEditor((handle) => handle.openWorkflows())
                     }
-                    run={workflowRunsBySession.get(activeSession.id)}
+                    run={workflowRunsBySession.get(dockSession.id)}
                     task={
-                      activeSession.taskId
+                      dockSession.taskId
                         ? snapshot?.tasks.find(
-                            (task) => task.id === activeSession.taskId,
+                            (task) => task.id === dockSession.taskId,
                           )
                         : undefined
                     }

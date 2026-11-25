@@ -36,7 +36,7 @@ async function cli(home: string, args: string[], stdin?: string) {
   return { exitCode, stdout, stderr };
 }
 
-test("plan new, start, ask, done and show through the CLI", async () => {
+test("plan new, ask, show and list through the CLI", async () => {
   await withTemporaryDaedalusHome(async (home) => {
     expect((await cli(home, ["workspace", "create", "Demo"])).exitCode).toBe(0);
     const created = await cli(
@@ -65,19 +65,6 @@ test("plan new, start, ask, done and show through the CLI", async () => {
     expect(created.stdout).toContain(path);
 
     const scope = ["--workspace", "demo"];
-    expect(
-      (
-        await cli(home, [
-          "plan",
-          "start",
-          "cart-api-v2",
-          "^endpoints",
-          "--owner",
-          "api",
-          ...scope,
-        ])
-      ).stdout,
-    ).toContain("[/] Endpoints @api");
     // An ask needs the session that waits on it; outside one it is refused.
     const asked = await cli(home, [
       "plan",
@@ -89,7 +76,6 @@ test("plan new, start, ask, done and show through the CLI", async () => {
     ]);
     expect(asked.exitCode).not.toBe(0);
     expect(asked.stderr).toContain("--session <session>");
-    await cli(home, ["plan", "done", path, "^endpoints"]);
     expect(await readFile(path, "utf8")).toBe(
       [
         "---",
@@ -101,31 +87,21 @@ test("plan new, start, ask, done and show through the CLI", async () => {
         "",
         "## Tasks",
         "",
-        "- [x] Endpoints @api ^endpoints",
+        "- [ ] Endpoints ^endpoints",
         "- [ ] Storage ^storage",
         "",
       ].join("\n"),
     );
 
     const shown = await cli(home, ["plan", "show", "cart-api-v2", ...scope]);
-    expect(shown.stdout).toContain("1 of 2 tasks done");
+    expect(shown.stdout).toContain("0 of 2 tasks done");
     const listed = await cli(home, ["plan", "list", "--json", ...scope]);
     expect(JSON.parse(listed.stdout).data[0]).toMatchObject({
       path: "plans/cart-api-v2.plan.md",
-      done: 1,
+      done: 0,
       total: 2,
       questions: 0,
     });
-
-    const missing = await cli(home, [
-      "plan",
-      "drop",
-      "cart-api-v2",
-      "^nope",
-      ...scope,
-    ]);
-    expect(missing.exitCode).not.toBe(0);
-    expect(missing.stderr).toContain("plan show");
   });
 }, 30_000);
 

@@ -45,6 +45,8 @@ interface Spec {
   values?: readonly string[];
   /** Flags that take none. */
   flags?: readonly string[];
+  /** Value flags that may be given more than once. */
+  repeat?: readonly string[];
   positionals: { min: number; max: number };
 }
 
@@ -136,37 +138,60 @@ const ALLOWED: Record<string, Spec> = {
   "workflow show": { positionals: { min: 1, max: 1 } },
   "workflow start": {
     values: [SESSION_FLAG, "steps", "name", "loop", "until"],
-    flags: ["replace"],
+    flags: ["replace", "inside"],
     positionals: { min: 0, max: 1 },
-  },
-  "workflow step": {
-    values: [SESSION_FLAG, "note"],
-    positionals: { min: 2, max: 2 },
-  },
-  "workflow add": {
-    values: [SESSION_FLAG, "after", "description"],
-    flags: ["gate"],
-    positionals: { min: 1, max: 1 },
-  },
-  "workflow remove": {
-    values: [SESSION_FLAG],
-    positionals: { min: 1, max: 1 },
-  },
-  "workflow end": {
-    values: [SESSION_FLAG, "note"],
-    positionals: { min: 0, max: 0 },
   },
   "workflow save": {
     values: [SESSION_FLAG, "when", "description"],
     positionals: { min: 1, max: 1 },
   },
-  "workflow approve": {
-    values: [SESSION_FLAG],
+  // Its jobs: what it is on, what it hands over, what it adds.
+  "job next": { values: [SESSION_FLAG], positionals: { min: 0, max: 0 } },
+  "job done": {
+    values: [SESSION_FLAG, "result", "out", "job"],
+    repeat: ["out"],
     positionals: { min: 0, max: 0 },
   },
-  "workflow status": {
-    values: [SESSION_FLAG],
+  "job hold": {
+    values: [SESSION_FLAG, "why"],
     positionals: { min: 0, max: 0 },
+  },
+  "job fail": {
+    values: [SESSION_FLAG, "why"],
+    positionals: { min: 0, max: 0 },
+  },
+  "job add": {
+    values: [
+      SESSION_FLAG,
+      "name",
+      "needs",
+      "gives",
+      "instructions",
+      "gate",
+      "to",
+      "under",
+      "plan",
+    ],
+    flags: ["me"],
+    positionals: { min: 0, max: 1 },
+  },
+  "job skip": {
+    values: [SESSION_FLAG, "why"],
+    positionals: { min: 1, max: 1 },
+  },
+  "job redo": {
+    values: [SESSION_FLAG, "why"],
+    positionals: { min: 1, max: 1 },
+  },
+  "job retry": {
+    values: [SESSION_FLAG, "why"],
+    positionals: { min: 1, max: 1 },
+  },
+  "job tree": { values: [SESSION_FLAG], positionals: { min: 0, max: 0 } },
+  "job approve": { values: [SESSION_FLAG], positionals: { min: 0, max: 0 } },
+  "job release": {
+    values: [SESSION_FLAG, "answer"],
+    positionals: { min: 0, max: 1 },
   },
   // The pod's BROWSER. Never run as a command: see `CloudCallOptions.openUrl`.
   "open-url": { positionals: { min: 1, max: 1 } },
@@ -212,7 +237,8 @@ function parse(args: string[], spec: Spec): Parsed | string {
       // A value that looks like an option could be read as one.
       if (value.startsWith("-") && value !== "-")
         return `option --${name} with the value ${value}`;
-      if (values.has(name)) return `option --${name} twice`;
+      if (values.has(name) && !spec.repeat?.includes(name))
+        return `option --${name} twice`;
       values.set(name, value);
     } else if (spec.flags?.includes(name) && equals === -1) flags.add(name);
     else return `option --${name}`;

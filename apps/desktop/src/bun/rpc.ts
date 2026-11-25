@@ -8,7 +8,6 @@ import {
   accountDirectory,
   autoRebirthPercent,
   buildChannel,
-  cloudHostWorkspace,
   cloudMcpChoices,
   setCloudMcpServer,
   DaedalusError,
@@ -49,6 +48,7 @@ import {
   type RoutineView,
   describeSchedule,
   parseWhen,
+  turnsFromSteps,
 } from "@daedalus/core";
 import type {
   DesktopSnapshotPart,
@@ -184,6 +184,8 @@ const threadDto = (thread: ThreadView): ThreadDto => ({
   anchorId: thread.anchorId,
   anchorText: thread.anchorText,
   forkSessionId: thread.forkSessionId,
+  forkAnsweredAt: thread.forkAnsweredAt,
+  closedAt: thread.closedAt,
   blockedAt: thread.blockedAt,
   snoozedUntil: thread.snoozedUntil,
   resolvedAt: thread.resolvedAt,
@@ -374,6 +376,7 @@ export async function desktopSnapshot(
     workflowRuns: view.workflowRuns.map(workflowRunDto),
     unseenRoutineRuns: view.unseenRoutineRuns.length,
     threadForkIds: view.threadForks,
+    planWorkerIds: view.planWorkers,
     settings: {
       version: packageJson.version,
       channel: buildChannel(config.home),
@@ -854,6 +857,25 @@ export function createDesktopRequestHandlers(
           }),
         ),
       ),
+    threadAsk: ({ sessionId, question, threadId, anchorId }) =>
+      mutate(async () =>
+        threadDto(
+          await context.threads.ask({
+            sessionId,
+            question,
+            ...(anchorId === undefined ? {} : { anchorId }),
+            ...(threadId === undefined ? {} : { threadNumber: threadId }),
+          }),
+        ),
+      ),
+    threadStopAsk: ({ id }) =>
+      result(async () => ({ stopped: await context.threads.stopAsk(id) })),
+    threadConversation: ({ id }) =>
+      result(() => context.threads.forkConversation(id)),
+    threadCloseConversation: ({ id }) =>
+      mutate(() => threadDto(context.threads.closeConversation(id))),
+    threadReopenConversation: ({ id }) =>
+      mutate(() => threadDto(context.threads.reopenConversation(id))),
     threadCloseFork: ({ id }) =>
       mutate(async () => threadDto(await context.threads.closeFork(id))),
     threadForkDraft: ({ id }) =>
@@ -864,6 +886,10 @@ export function createDesktopRequestHandlers(
       })),
     sessionMessages: ({ sessionId }) =>
       result(() => context.threads.mainMessages(sessionId)),
+    sessionTurns: ({ sessionId }) =>
+      result(async () =>
+        turnsFromSteps(context.repositories.sessionSteps.forSession(sessionId)),
+      ),
     threadPlan: ({ path }) =>
       result(async () => {
         try {
@@ -1536,6 +1562,8 @@ export function createDesktopRequestHandlers(
           owners: await context.plans.owners(file, plan),
         };
       }),
+    factoryView: ({ workspace }) =>
+      result(() => context.factory.page(workspace)),
     planList: ({ workspace }) =>
       result(async () => {
         const item = (entry: PlanBoardEntry, path: string) => ({
@@ -1596,7 +1624,15 @@ export function createDesktopRequestHandlers(
     planTaskStart: ({ workspace, path, task }) =>
       mutate(async () => {
         const file = await planFile(workspace, path);
-        const { session } = await context.plans.startTask(file, task);
+        const job = await context.jobIntake.startPlanTask(file, task);
+        const session = job.sessionId
+          ? context.repositories.findAgent(job.sessionId)
+          : undefined;
+        if (!session)
+          throw new DaedalusError(
+            "CONFLICT",
+            job.why ?? "No agent started for the task.",
+          );
         return {
           session: agentDto(session),
           content: (await context.plans.read(file)).source,
@@ -1632,6 +1668,8 @@ export function createDesktopRequestHandlers(
       mutate(() => context.workflows.saveFile(input)),
     workflowFileDelete: (input) =>
       mutate(() => context.workflows.deleteFile(input)),
+    stepMemoryChange: (input) =>
+      mutate(() => context.workflows.changeStepMemory(input)),
     taskTimeline: ({ id }) =>
       result(async () => {
         const report = await context.taskHistory.report(id);
@@ -1758,7 +1796,7 @@ export function createDesktopRequestHandlers(
         return agentDto(
           workflow
             ? (
-                await context.workflows.spawnWith({
+                await context.jobIntake.spawnWith({
                   workflow,
                   ...(params.message ? { message: params.message } : {}),
                   spawn,
@@ -1769,6 +1807,8 @@ export function createDesktopRequestHandlers(
       }),
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
+    agentInterrupt: ({ id }) =>
+      mutate(async () => agentDto(await context.agents.interrupt(id))),
     // A lead's members below it stop with it.
     agentStop: ({ id, force }) =>
       mutate(async () => agentDto(await context.agents.stopTree(id, force))),

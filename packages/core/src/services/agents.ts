@@ -466,6 +466,9 @@ async function inBatches<T, R>(
   return results;
 }
 
+/** How long an agent takes to put a stopped message back in its input box. */
+const INTERRUPT_SETTLE_MS = 400;
+
 export class AgentService {
   constructor(
     private readonly repositories: SqliteRepositories,
@@ -1341,6 +1344,18 @@ export class AgentService {
      * working directory: a thread the user talks through beside it.
      */
     forkOf?: AgentSession;
+    /** With `forkOf`: the user's question, which the fork answers first. */
+    forkPrompt?: string;
+    /**
+     * The id the session gets, for a caller that must know it before the
+     * session exists. A new one when left out.
+     */
+    id?: string;
+    /**
+     * The job engine starts this session for a job it holds already, so the
+     * message is that job's brief and opens no job of its own.
+     */
+    forJob?: boolean;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     // A workspace in the cloud runs every session there.
@@ -1436,7 +1451,7 @@ export class AgentService {
     const model = provider
       ? await this.launchModel(workspace, provider.name, input.model, account)
       : undefined;
-    const id = crypto.randomUUID();
+    const id = input.id ?? crypto.randomUUID();
     const defaultName = input.terminal
       ? "Terminal"
       : `${provider!.name.slice(0, 1).toUpperCase()}${provider!.name.slice(1)} session`;
@@ -1490,10 +1505,12 @@ export class AgentService {
           taskId: task?.id,
           sessionId: id,
           sessionName: name,
-          // A fork carries on the conversation it forks; no new prompt.
+          // A fork carries on the conversation it forks: no launch prompt,
+          // only the question it was opened to answer, when there is one.
           ...(input.forkOf
             ? {
                 fork: input.forkOf.providerSessionId ?? input.forkOf.id,
+                ...(input.forkPrompt ? { prompt: input.forkPrompt } : {}),
               }
             : { prompt: launchPrompt }),
           model,
@@ -1596,6 +1613,14 @@ export class AgentService {
       if (startup === "question") this.askedAtStartup(running);
       else if (!input.terminal) await this.readyAtStartup(running);
       await this.sessionRunning(running);
+      if (
+        !input.continueFrom &&
+        !input.forkOf &&
+        !input.terminal &&
+        !input.draftBrief
+      )
+        // A session that runs is not undone because its job was not opened.
+        await this.onSpawned(running, input).catch(() => undefined);
       return running;
     } catch (error) {
       if (input.continueFrom)
@@ -1783,6 +1808,18 @@ export class AgentService {
   /** Sessions whose stuck rebirth is already on the user's badge. */
   private readonly rebirthGivenUp = new Set<string>();
   /** Predecessors whose successor started; they only wait to be archived. */
+  /**
+   * Set by the job engine. A session started with a message is told the
+   * engine, which makes the message a job.
+   */
+  onSpawned: (
+    session: AgentSession,
+    input: { message?: string; spawnedBy?: string; forJob?: boolean },
+  ) => Promise<void> = async () => {};
+
+  /** Set by the job engine: a successor takes over its predecessor's jobs. */
+  onContinued: (fromSessionId: string, toSessionId: string) => void = () => {};
+
   private readonly continued = new Set<string>();
 
   /** A rebirth request that has had its time and left the agent idle. */
@@ -1907,14 +1944,14 @@ export class AgentService {
     // handle now names the successor alone.
     this.repositories.transaction(() => {
       this.repositories.abilities.moveToSession(predecessor.id, session.id);
-      // So is the workflow run: the successor carries on at the same step.
-      this.repositories.workflows.moveToSession(predecessor.id, session.id);
       this.repositories.routines.moveAgent(predecessor.id, session.id);
       // Its threads, and what waits in them to be brought, are the successor's.
       this.repositories.conversations.moveThreads(predecessor.id, session.id);
       if (predecessor.teamId)
         this.repositories.setAgentTeam(predecessor.id, null, null);
     });
+    // Its jobs too: the successor's `daedal job next` prints the same brief.
+    this.onContinued(predecessor.id, session.id);
     if (input.archive === "later")
       return { session, predecessor: await this.get(predecessor.id) };
     try {
@@ -2191,6 +2228,26 @@ export class AgentService {
       return agent;
     }
     await this.sessionHost(agent).send(agent.tmuxSession, text);
+    return agent;
+  }
+
+  /**
+   * Presses escape in a session's pane, which ends the turn it is on. With
+   * `clear`, Ctrl-C follows: an agent stopped before its first word puts the
+   * message back in its own input box, and the next message sent would be
+   * typed after it.
+   */
+  async interrupt(
+    id: string,
+    options: { clear?: boolean } = {},
+  ): Promise<AgentSession> {
+    const agent = await this.requireRunning(id);
+    const host = this.sessionHost(agent);
+    await host.sendKeys(agent.tmuxSession, ["Escape"]);
+    if (options.clear) {
+      await new Promise((resolve) => setTimeout(resolve, INTERRUPT_SETTLE_MS));
+      await host.sendKeys(agent.tmuxSession, ["C-c"]);
+    }
     return agent;
   }
 

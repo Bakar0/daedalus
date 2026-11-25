@@ -1,4 +1,4 @@
-import { readdir, unlink } from "node:fs/promises";
+import { readdir, rename, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
   ensureDirectory,
@@ -7,6 +7,11 @@ import {
   writeFileAtomic,
 } from "@daedalus/platform";
 import { DaedalusError } from "../errors";
+import {
+  parseToolFile,
+  renderToolFile,
+  workflowToolsPath,
+} from "./workflow-files";
 
 /**
  * The user's custom instructions as files, for the Custom instructions tab:
@@ -182,6 +187,83 @@ export async function deleteInstructionFile(
   });
   await updateIndex(root, { remove: name });
 }
+
+/** Where a topic file goes once it became a tool, so nothing is lost. */
+export const MOVED_TOPICS_FOLDER = "moved-to-tools";
+
+/**
+ * Topic files became tools: each `<topic>.md` here is written as
+ * `tools/<topic>.md` in the workflows folder, with what the index said it
+ * covers as its description, and the topic file moves into
+ * {@link MOVED_TOPICS_FOLDER}. The index loses the topic's line and names the
+ * tool wherever a rule named the file. A topic whose name a tool already has,
+ * or that makes no tool, stays where it is. Returns the names moved.
+ */
+export async function moveTopicsToTools(
+  root: string,
+  workflowsRoot: string,
+): Promise<string[]> {
+  const { index, topics } = await readInstructionFiles(root);
+  if (!topics.length) return [];
+  const tools = workflowToolsPath(workflowsRoot);
+  const moved: string[] = [];
+  let text = index.text;
+  for (const topic of topics) {
+    const target = join(tools, `${topic.name}.md`);
+    if (await pathExists(target)) continue;
+    const line = text
+      .split("\n")
+      .find((item) => item.includes(linkTo(topic.name)));
+    const covers = line && /\]\([^)]+\):\s*(.+)$/.exec(line)?.[1]?.trim();
+    const body = topic.text.replace(/^#\s+.+\n?/m, "").trim();
+    let file: string;
+    try {
+      file = renderToolFile({
+        name: topic.name,
+        description: covers || topicHeading(topic.text) || topic.name,
+        body,
+      });
+      // Read it back the way a run does: a name or body no tool can have
+      // leaves the topic where it is.
+      parseToolFile(file, topic.name);
+    } catch {
+      continue;
+    }
+    await ensureDirectory(tools);
+    await writeFileAtomic(target, file);
+    await ensureDirectory(join(root, MOVED_TOPICS_FOLDER));
+    await rename(
+      topic.path,
+      join(root, MOVED_TOPICS_FOLDER, `${topic.name}.md`),
+    );
+    moved.push(topic.name);
+    const tool = `the \`${topic.name}\` tool (\`daedal tool show ${topic.name}\`)`;
+    text = text
+      .split("\n")
+      .filter((item) => !item.includes(linkTo(topic.name)))
+      .join("\n")
+      .replaceAll(`\`${topic.name}.md\` in this folder`, tool)
+      .replaceAll(`\`${topic.name}.md\``, tool);
+  }
+  if (!moved.length) return [];
+  // With every topic gone, the section that listed them says where they went.
+  if (moved.length === topics.length)
+    text = text.replace(
+      /^##\s+Topics\s*\n[\s\S]*?(?=^#{1,2}\s|(?![\s\S]))/m,
+      TOOLS_SECTION,
+    );
+  if (text !== index.text && (await pathExists(index.path)))
+    await writeFileAtomic(index.path, text);
+  return moved;
+}
+
+/** What the index says in place of its topics. */
+export const TOOLS_SECTION = `## Tools
+
+Rules about one subject, such as getting access or reading logs, are tools.
+\`daedal tool list\` names each with what it covers; open the ones that apply
+to the task with \`daedal tool show <name>\`.
+`;
 
 /**
  * The custom instructions tab's view of the folder: read everything, save or

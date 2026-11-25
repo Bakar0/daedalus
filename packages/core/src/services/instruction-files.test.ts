@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import { withTemporaryDaedalusHome } from "@daedalus/test-utils";
 import {
   deleteInstructionFile,
+  moveTopicsToTools,
   readInstructionFiles,
   saveInstructionFile,
   topicName,
@@ -122,6 +123,65 @@ describe("custom instruction files", () => {
       });
       expect(await index()).toContain("- [style.md](style.md): Style\n");
       expect(await index()).toContain("## Notes\n\nKept as written.");
+    });
+  });
+
+  test("topic files become tools once, the index names the tools, and the old files are kept", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const root = join(home, "instructions");
+      const tools = join(home, "workflows", "tools");
+      await mkdir(root, { recursive: true });
+      await writeFile(
+        join(root, "INDEX.md"),
+        INDEX.replace(
+          "- Run every request in a workflow.",
+          "- Before git work, follow `git.md` in this folder.",
+        ),
+      );
+      await writeFile(join(root, "git.md"), "# Git\n\n- Short branches.\n");
+      // A heading alone has no instructions, so it makes no tool and stays.
+      await writeFile(join(root, "empty.md"), "# Empty\n");
+
+      expect(await moveTopicsToTools(root, join(home, "workflows"))).toEqual([
+        "git",
+      ]);
+      const tool = await readFile(join(tools, "git.md"), "utf8");
+      expect(tool).toContain("name: git");
+      expect(tool).toContain('description: "branch names, commit messages"');
+      expect(tool).toContain("- Short branches.");
+      expect(tool).not.toContain("# Git");
+      expect(await readdir(join(root, "moved-to-tools"))).toEqual(["git.md"]);
+      const index = await readFile(join(root, "INDEX.md"), "utf8");
+      expect(index).toContain(
+        "- Before git work, follow the `git` tool (`daedal tool show git`).",
+      );
+      expect(index).not.toContain("git.md");
+      // One topic is left, so the section that lists topics stays.
+      expect(index).toContain("## Topics");
+      expect(
+        (await readInstructionFiles(root)).topics.map((t) => t.name),
+      ).toEqual(["empty"]);
+
+      // Again changes nothing, and a tool that exists is never overwritten.
+      await writeFile(join(root, "git.md"), "# Git\n\n- Other.\n");
+      expect(await moveTopicsToTools(root, join(home, "workflows"))).toEqual(
+        [],
+      );
+      expect(await readFile(join(tools, "git.md"), "utf8")).toBe(tool);
+    });
+  });
+
+  test("with every topic moved, the index's Topics section becomes Tools", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const root = join(home, "instructions");
+      await mkdir(root, { recursive: true });
+      await writeFile(join(root, "INDEX.md"), INDEX);
+      await writeFile(join(root, "git.md"), "# Git\n\n- Short branches.\n");
+      await moveTopicsToTools(root, join(home, "workflows"));
+      const index = await readFile(join(root, "INDEX.md"), "utf8");
+      expect(index).not.toContain("## Topics");
+      expect(index).toContain("## Tools");
+      expect(index).toContain("- Run every request in a workflow.");
     });
   });
 });

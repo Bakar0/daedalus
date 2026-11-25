@@ -31,7 +31,8 @@ import { RoutineRepository } from "./routines";
 import { SecretRepository } from "./secrets";
 import { ConversationRepository } from "./conversations";
 import { SessionNoteRepository } from "./session-notes";
-import { WorkflowRepository } from "./workflows";
+import { SessionStepRepository } from "./session-steps";
+import { JobRepository } from "./jobs";
 
 /** A gateway account: the gateway's origin and the user's id on it. */
 export interface CloudOwner {
@@ -428,7 +429,8 @@ export class SqliteRepositories {
 
   readonly abilities: AbilityRepository;
   readonly secrets: SecretRepository;
-  readonly workflows: WorkflowRepository;
+  readonly jobs: JobRepository;
+  readonly sessionSteps: SessionStepRepository;
   readonly routines: RoutineRepository;
   readonly conversations: ConversationRepository;
   readonly sessionNotes: SessionNoteRepository;
@@ -440,7 +442,8 @@ export class SqliteRepositories {
     );
     this.abilities = new AbilityRepository(this.database);
     this.secrets = new SecretRepository(this.database);
-    this.workflows = new WorkflowRepository(this.database);
+    this.jobs = new JobRepository(this.database);
+    this.sessionSteps = new SessionStepRepository(this.database);
     this.routines = new RoutineRepository(this.database);
     this.conversations = new ConversationRepository(this.database);
     this.sessionNotes = new SessionNoteRepository(this.database);

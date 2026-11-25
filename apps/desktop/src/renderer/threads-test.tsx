@@ -1,13 +1,12 @@
 /**
- * The page `scripts/threads-ui-check.ts` drives: the Threads pane for one
- * session, over a fake host. Thread #12 is one the agent bumped (blocking),
- * #13 a free-text question, #11 one the user replied to and resolved, #14
- * one from the team member `tests`. Every call the pane makes is recorded
- * in `window.requests`.
+ * The page `scripts/threads-ui-check.ts` drives: the Threads page, every
+ * agent's threads as one list, over a fake host. Thread #12 is one the
+ * agent bumped (blocking), #13 a free-text question, #11 one the user
+ * replied to and resolved, #14 one from the team member `tests`. Every call
+ * the page makes is recorded in `window.requests`.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { OpenLinkContext } from "./markdown-preview";
 import type {
   AgentSessionDto,
   MainMessageDto,
@@ -15,12 +14,7 @@ import type {
   ThreadMessageDto,
 } from "@daedalus/protocol";
 import type { DesktopClient } from "./client-types";
-import {
-  ThreadLinksContext,
-  ThreadsHome,
-  ThreadsPane,
-  type ThreadLinks,
-} from "./ThreadsPane";
+import { ThreadsHome } from "./ThreadsPane";
 import "./styles.css";
 
 const style = document.createElement("style");
@@ -70,6 +64,8 @@ const base = {
   planPath: null,
   taskKey: null,
   forkSessionId: null,
+  forkAnsweredAt: null,
+  closedAt: null,
   blockedAt: null,
   snoozedUntil: null,
   resolvedAt: null,
@@ -275,6 +271,8 @@ const client = {
         return change(params.threadId, (thread) => ({
           ...thread,
           forkSessionId: "s-fork",
+          forkAnsweredAt: null,
+          closedAt: null,
           forkOpen: true,
         }));
       const anchor = messages.find((item) => item.id === params.anchorId);
@@ -282,6 +280,8 @@ const client = {
         ...base,
         id: 20,
         forkSessionId: "s-fork",
+        forkAnsweredAt: null,
+        closedAt: null,
         forkOpen: true,
         title: anchor?.text.split("\n")[0] ?? "Thread",
         messages: [],
@@ -365,96 +365,16 @@ const client = {
   },
 } as unknown as DesktopClient;
 
-// Links in thread text: recorded, as the app would open them.
-const links: ThreadLinks = {
-  openUrl: (url) => window.requests.push({ openUrl: url }),
-  sessionForHandle: (_owner, handle) =>
-    handle === "tests" ? "s-tests" : handle === "lead" ? "s-lead" : undefined,
-  openSession: (sessionId) => window.requests.push({ openSession: sessionId }),
-};
-
-const query = new URLSearchParams(window.location.search);
-const home = query.has("home");
-// `?thread=<id>`: the pane as a thread's own tab, with that thread's fork.
-const tabThread = query.get("thread") ? Number(query.get("thread")) : undefined;
-// `?fork=<id>`: the pane as Home leaves it after ctrl+f on that thread.
-const forkThread = query.get("fork") ? Number(query.get("fork")) : undefined;
-const forkRequest = threads.find((thread) => thread.id === forkThread);
-if (tabThread !== undefined)
-  threads = threads.map((thread) =>
-    thread.id === tabThread
-      ? { ...thread, forkSessionId: "s-fork", forkOpen: true }
-      : thread,
-  );
-if (home)
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      <div className="app" style={{ display: "block", height: "100vh" }}>
-        <ThreadsHome
-          client={client}
-          onError={(message) => console.error(message)}
-          onOpenThread={(thread, focus) =>
-            window.requests.push({ openThread: thread.id, focus })
-          }
-          onForkThread={(thread) =>
-            window.requests.push({ forkThread: thread.id })
-          }
-        />
-      </div>
-    </StrictMode>,
-  );
-else
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      <div className="app" style={{ display: "block" }}>
-        <div
-          className="side-panel-activity"
-          style={{
-            width: 380,
-            height: "100vh",
-            borderRight: "1px solid var(--line)",
-          }}
-        >
-          <OpenLinkContext.Provider
-            value={(url) => window.requests.push({ openExternal: url })}
-          >
-            <ThreadLinksContext.Provider value={links}>
-              <ThreadsPane
-                client={client}
-                onError={(message) => console.error(message)}
-                renderTerminal={(id) => (
-                  <div className="fake-terminal" data-session={id}>
-                    <div>&gt; why not the queue&apos;s built-in retry?</div>
-                    <div>
-                      ● The queue retries every 30s and drops the job after 3
-                      tries, with no record. Keep custom backoff.
-                    </div>
-                    <div style={{ color: "var(--muted)" }}>
-                      ⏸ plan mode on (shift+tab to cycle)
-                    </div>
-                  </div>
-                )}
-                members={[{ id: "s-tests", name: "tests" }]}
-                {...(tabThread === undefined
-                  ? {}
-                  : { startThreadId: tabThread })}
-                openRequest={
-                  forkRequest
-                    ? {
-                        threadId: forkRequest.id,
-                        fork: {
-                          sessionId: forkRequest.sessionId,
-                          anchorId: forkRequest.anchorId,
-                        },
-                        nonce: 1,
-                      }
-                    : null
-                }
-                session={session}
-              />
-            </ThreadLinksContext.Provider>
-          </OpenLinkContext.Provider>
-        </div>
-      </div>
-    </StrictMode>,
-  );
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <div className="app" style={{ display: "block", height: "100vh" }}>
+      <ThreadsHome
+        client={client}
+        onError={(message) => console.error(message)}
+        onOpenThread={(thread) =>
+          window.requests.push({ openThread: thread.id })
+        }
+      />
+    </div>
+  </StrictMode>,
+);

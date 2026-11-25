@@ -98,6 +98,13 @@ export interface Thread {
   taskKey: string | null;
   /** A read-only fork of the owner the user talks the thread through with. */
   forkSessionId: string | null;
+  /** When that fork last finished a turn: its latest answer. */
+  forkAnsweredAt: string | null;
+  /**
+   * When the user put the conversation away. It is then in its owner's
+   * history: out of the list, every message kept, reopened at will.
+   */
+  closedAt: string | null;
   /** When the owner said it is blocked on it; cleared by the next reply. */
   blockedAt: string | null;
   /** Put off by the user until then. */

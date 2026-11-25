@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { addToSteps } from "./workflow-steps-text";
+import { addToSteps, addToTools } from "./workflow-steps-text";
 
 describe("adding to a workflow's steps", () => {
   test("a [a, b] list gains the entry at its end", () => {
@@ -23,6 +23,19 @@ describe("adding to a workflow's steps", () => {
     );
     expect(addToSteps("---\nname: f\n---\nBody\n", "@release")).toBe(
       "---\nname: f\nsteps: [@release]\n---\nBody\n",
+    );
+  });
+
+  test("a step's tools gain the entry, as a new field when it has none", () => {
+    expect(addToTools("---\nname: s\ntools: [logs]\n---\nDo.\n", "aws")).toBe(
+      "---\nname: s\ntools: [logs, aws]\n---\nDo.\n",
+    );
+    expect(addToTools("---\nname: s\n---\nDo.\n", "aws")).toBe(
+      "---\nname: s\ntools: [aws]\n---\nDo.\n",
+    );
+    // A workflow's steps are left alone.
+    expect(addToTools("---\nsteps: [a]\ntools: []\n---\n", "aws")).toBe(
+      "---\nsteps: [a]\ntools: [aws]\n---\n",
     );
   });
 });

@@ -104,8 +104,6 @@ class FakeTmux implements TmuxClient {
 interface Setup {
   context: ApplicationContext;
   workflows: WorkflowService;
-  raised: Array<{ sessionId: string; reason: string }>;
-  cleared: string[];
   workspaceId: string;
   session(taskId?: string | null): AgentSession;
 }
@@ -122,23 +120,9 @@ const withWorkflows = (run: (setup: Setup) => Promise<void>) =>
       // starter workflows, as the app does.
       const workspace = await context.workspaces.create({ name: "Flow" });
       await writeFixtureWorkflows(home);
-      const raised: Setup["raised"] = [];
-      const cleared: string[] = [];
-      const workflows = new WorkflowService(
-        context.repositories,
-        context.config.home,
-        {
-          raise: async (input) => {
-            raised.push(input);
-            return {};
-          },
-          clear: (sessionId) => {
-            cleared.push(sessionId);
-            return { cleared: 1 };
-          },
-        },
-        () => true,
-      );
+      // Workflows are the user's switch: the skill being on.
+      await context.skills.setEnabled("daedalus-workflows", true);
+      const workflows = new WorkflowService(context.config.home);
       const session = (taskId: string | null = null): AgentSession => {
         const id = crypto.randomUUID();
         const agent: AgentSession = {
@@ -178,8 +162,6 @@ const withWorkflows = (run: (setup: Setup) => Promise<void>) =>
       await run({
         context,
         workflows,
-        raised,
-        cleared,
         workspaceId: workspace.id,
         session,
       });
@@ -188,1053 +170,280 @@ const withWorkflows = (run: (setup: Setup) => Promise<void>) =>
     }
   });
 
-const states = (run: { steps: Array<{ name: string; state: string }> }) =>
-  Object.fromEntries(run.steps.map((step) => [step.name, step.state]));
-
-describe("WorkflowService", () => {
-  test("a run is the session's own, even on a shared task; a step start finishes the one before; a rebirth carries it", async () => {
-    await withWorkflows(
-      async ({ context, workflows, session, workspaceId }) => {
-        const task = await context.tasks.create({
-          workspace: workspaceId,
-          title: "Ship search",
-        });
-        const first = session(task.id);
-        const second = session(task.id);
-
-        const run = await workflows.start({
-          sessionId: first.id,
-          workflow: "feature",
-        });
-        expect(run.sessionId).toBe(first.id);
-        expect(run.steps.map((step) => step.name)).toEqual([
-          "research",
-          "grounding",
-          "prototype",
-          "review",
-          "test",
-          "deploy",
-          "validate-on-prod",
-          "feedback",
-        ]);
-        await workflows.step({
-          note: "n",
-          sessionId: first.id,
-          step: "research",
-          action: "start",
-        });
-        const moved = await workflows.step({
-          sessionId: first.id,
-          step: "grounding",
-          action: "start",
-          note: "Plan agreed",
-        });
-        expect(states(moved.run)).toMatchObject({
-          research: "done",
-          grounding: "active",
-          prototype: "pending",
-        });
-        // The other session on the task has nothing until it starts its own.
-        expect(workflows.current(second.id)).toBeUndefined();
-        await workflows.start({
-          sessionId: second.id,
-          workflow: "quick",
-        });
-        expect(
-          workflows
-            .list()
-            .map((item) => item.sessionId)
-            .sort(),
-        ).toEqual([first.id, second.id].sort());
-        // Nothing about the task changed.
-        expect(context.tasks.get(task.id).status).toBe("todo");
-
-        await expect(
-          workflows.start({
-            sessionId: first.id,
-            workflow: "quick",
-          }),
-        ).rejects.toThrow(
-          "This session already runs workflow 'feature' at step 'grounding' (2 of 8)",
-        );
-
-        const successor = session(task.id);
-        context.repositories.workflows.moveToSession(first.id, successor.id);
-        expect(workflows.current(successor.id)?.id).toBe(run.id);
-        expect(workflows.current(first.id)).toBeUndefined();
-
-        const replaced = await workflows.start({
-          sessionId: successor.id,
-          workflow: "quick",
-          replace: true,
-        });
-        expect(context.repositories.workflows.find(run.id)?.endedAt).not.toBe(
-          null,
-        );
-        expect(workflows.current(successor.id)?.id).toBe(replaced.id);
-      },
-    );
-  });
-
-  test("a 'result' gate waits on done until the user approves what came out", async () => {
-    await withWorkflows(async ({ workflows, session, raised, cleared }) => {
+describe("workflows as jobs", () => {
+  test("a session starts a workflow, is handed each step, and a rebirth carries it on", async () => {
+    await withWorkflows(async ({ context, session }) => {
       const agent = session();
-      await workflows.start({ sessionId: agent.id, workflow: "feature" });
-      await workflows.step({
+      const started = await context.jobIntake.startWorkflow({
         sessionId: agent.id,
-        step: "deploy",
-        action: "start",
-        note: "Release 1.2",
+        workflow: "quick",
       });
-      // The agent cannot move on before the user saw the result.
-      await expect(
-        workflows.step({
-          note: "n",
-          sessionId: agent.id,
-          step: "validate-on-prod",
-          action: "start",
-        }),
-      ).rejects.toThrow("needs the user's approval when it is done");
-      const done = await workflows.step({
-        sessionId: agent.id,
-        step: "deploy",
-        action: "done",
-        note: "1.2 is on the beta feed",
-      });
-      expect(done.waiting).toBe(true);
-      expect(states(done.run).deploy).toBe("waiting");
-      expect(done.run.steps.find((step) => step.name === "deploy")?.note).toBe(
-        "1.2 is on the beta feed",
-      );
-      expect(raised).toEqual([
-        {
-          sessionId: agent.id,
-          reason:
-            "Approve the result of step 'deploy' of workflow 'feature': 1.2 is on the beta feed",
-        },
-      ]);
-      await expect(
-        workflows.step({
-          note: "n",
-          sessionId: agent.id,
-          step: "validate-on-prod",
-          action: "start",
-        }),
-      ).rejects.toThrow("waits for the user to approve what came out");
+      expect(started.brief).toContain("Do what the session was asked.");
+      const handed = await context.jobs.done(agent.id, { result: "Did it" });
+      expect(handed.next).toContain("Prove the result works.");
+      expect(handed.next).toContain("result = Did it");
 
-      const approved = workflows.approve(agent.id);
-      expect(states(approved).deploy).toBe("done");
-      expect(states(approved)["validate-on-prod"]).toBe("pending");
-      expect(cleared).toEqual([agent.id]);
-      expect(() => workflows.approve(agent.id)).toThrow(
-        "is not waiting for an approval",
+      const successor = session();
+      context.jobs.moveSession(agent.id, successor.id);
+      expect(context.jobs.brief(successor.id)).toContain(
+        "Prove the result works.",
       );
+      await context.jobs.done(successor.id, { result: "It works" });
+      expect(context.jobIntake.workflowOf(successor.id)).toBeUndefined();
     });
   });
 
-  test("going back into a step that waits on its result takes the question away", async () => {
-    await withWorkflows(async ({ workflows, session, cleared }) => {
+  test("a run is a frozen copy: editing a step file changes the next run only", async () => {
+    await withWorkflows(async ({ context, session }) => {
       const agent = session();
-      await workflows.start({ sessionId: agent.id, workflow: "feature" });
-      await workflows.step({
+      await context.jobIntake.startWorkflow({
         sessionId: agent.id,
-        step: "deploy",
-        action: "start",
-        note: "n",
+        workflow: "quick",
       });
-      await workflows.step({
-        sessionId: agent.id,
-        step: "deploy",
-        action: "done",
-        note: "n",
-      });
-      const back = await workflows.step({
-        sessionId: agent.id,
-        step: "deploy",
-        action: "start",
-        note: "Change it first",
-      });
-      expect(back.waiting).toBe(false);
-      expect(states(back.run).deploy).toBe("active");
-      expect(cleared).toEqual([agent.id]);
-    });
-  });
-
-  test("a 'start' gate waits on start; approval starts the step", async () => {
-    await withWorkflows(async ({ workflows, session, raised, cleared }) => {
-      const agent = session();
-      await workflows.start({ sessionId: agent.id, workflow: "feature" });
-      const gated = await workflows.step({
-        sessionId: agent.id,
-        step: "test",
-        action: "start",
-        note: "Run the suite",
-      });
-      expect(gated.waiting).toBe(true);
-      expect(states(gated.run).test).toBe("waiting");
-      expect(raised[0]?.reason).toBe(
-        "Approve starting step 'test' of workflow 'feature': Run the suite",
+      await writeFile(
+        join(workflowsHomePath(context.config.home), "steps", "check.md"),
+        "---\nname: check\n---\nProve it twice.\n",
       );
-      await expect(
-        workflows.step({
-          note: "n",
-          sessionId: agent.id,
-          step: "test",
-          action: "done",
-        }),
-      ).rejects.toThrow("waits for the user's approval to start");
-
-      expect(states(workflows.approve(agent.id)).test).toBe("active");
-      expect(cleared).toEqual([agent.id]);
-
-      // Going back to it needs another approval.
-      await workflows.step({
-        note: "n",
+      const handed = await context.jobs.done(agent.id, { result: "Did it" });
+      expect(handed.next).toContain("Prove the result works.");
+      await context.jobs.done(agent.id, { result: "It works" });
+      await context.jobIntake.startWorkflow({
         sessionId: agent.id,
-        step: "test",
-        action: "done",
+        workflow: "quick",
       });
-      const again = await workflows.step({
-        note: "n",
-        sessionId: agent.id,
-        step: "test",
-        action: "start",
-      });
-      expect(again.waiting).toBe(true);
+      const again = await context.jobs.done(agent.id, { result: "Did it" });
+      expect(again.next).toContain("Prove it twice.");
     });
   });
 
-  test("a run stored with the first gate names reads them as start and result", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
+  test("a result gate blocks the next step, and an approval covers one pass", async () => {
+    await withWorkflows(async ({ context, session }) => {
       const agent = session();
-      const run = await workflows.start({
+      await context.jobIntake.startWorkflow({
         sessionId: agent.id,
-        workflow: "feature",
+        steps: ["deploy", "feedback"],
       });
-      // Runs saved before the rename carry `user` and `before`.
-      context.repositories.database
-        .query("UPDATE workflow_runs SET steps = ? WHERE id = ?")
-        .run(
-          JSON.stringify(
-            run.steps.map((step) => ({
-              ...step,
-              gate:
-                step.gate === "result"
-                  ? "user"
-                  : step.gate === "start"
-                    ? "before"
-                    : null,
-            })),
-          ),
-          run.id,
-        );
+      const first = await context.jobs.done(agent.id, { result: "Shipped" });
+      expect(first.job.state).toBe("held");
+      expect(first.next).toBeNull();
       expect(
-        context.repositories.workflows
-          .find(run.id)
-          ?.steps.map((step) => step.gate),
-      ).toEqual(run.steps.map((step) => step.gate));
-      expect(run.steps.some((step) => step.gate === "result")).toBe(true);
-      expect(run.steps.some((step) => step.gate === "start")).toBe(true);
+        JSON.stringify(context.activity.attentionFor(agent.id)?.reasons),
+      ).toContain("Shipped");
+      // Nothing else of the session moves while the approval is pending.
+      await expect(
+        context.jobs.done(agent.id, { result: "Too early" }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+
+      const approved = await context.jobs.release(first.job.id, agent.id);
+      expect(approved.next).toContain("Check it in the wild.");
+      expect(context.activity.attentionFor(agent.id)).toBeUndefined();
+
+      await context.jobs.redo(first.job.id, agent.id, "The fix was wrong");
+      const second = await context.jobs.done(agent.id, { result: "Shipped 2" });
+      expect(second.job.state).toBe("held");
     });
   });
 
-  test("a skip needs a reason, and the run ends when every step is finished", async () => {
-    await withWorkflows(async ({ workflows, session }) => {
+  test("a start gate holds a step until the user gives the go-ahead", async () => {
+    await withWorkflows(async ({ context, session }) => {
       const agent = session();
-      await workflows.start({
+      await context.jobIntake.startWorkflow({
         sessionId: agent.id,
-        workflow: "quick",
+        steps: ["do", "test"],
       });
-      await expect(
-        workflows.step({ sessionId: agent.id, step: "check", action: "skip" }),
-      ).rejects.toThrow("--note");
-      await workflows.step({
-        note: "n",
-        sessionId: agent.id,
-        step: "do",
-        action: "done",
-      });
-      const last = await workflows.step({
-        sessionId: agent.id,
-        step: "check",
-        action: "skip",
-        note: "Nothing to run",
-      });
-      expect(last.run.endedAt).not.toBe(null);
-      await expect(
-        workflows.step({
-          note: "n",
-          sessionId: agent.id,
-          step: "do",
-          action: "start",
-        }),
-      ).rejects.toThrow("no open workflow run");
-      // A new run can start once the last one ended.
-      await workflows.start({
-        sessionId: agent.id,
-        workflow: "quick",
-      });
+      const handed = await context.jobs.done(agent.id, { result: "Did it" });
+      expect(handed.next).toBeNull();
+      const held = context.jobs.held(agent.id);
+      expect(held).toMatchObject({ name: "test", state: "held" });
+      const released = await context.jobs.release(held!.id, agent.id);
+      expect(released.next).toContain("Run the tests.");
     });
   });
 
-  test("an unknown workflow or step names what exists", async () => {
-    await withWorkflows(async ({ workflows, session }) => {
-      const agent = session();
-      await expect(
-        workflows.start({
-          sessionId: agent.id,
-          workflow: "nope",
-        }),
-      ).rejects.toThrow("Workflows: feature, iterate, quick");
-      await workflows.start({
-        sessionId: agent.id,
-        workflow: "quick",
-      });
-      await expect(
-        workflows.step({
-          note: "n",
-          sessionId: agent.id,
-          step: "deploy",
-          action: "start",
-        }),
-      ).rejects.toThrow("Steps: do, check");
-    });
-  });
-
-  test("the read model carries each run, and a step moves its version", async () => {
+  test("the read model carries each session's workflow, and a step moves its version", async () => {
     await withWorkflows(async ({ context, session }) => {
       const agent = session();
       const model = new ReadModel(context);
-      await context.skills.setEnabled("daedalus-workflows", true);
-      await context.workflows.start({
+      await context.jobIntake.startWorkflow({
         sessionId: agent.id,
         workflow: "quick",
       });
       const before = await model.versions();
-      await context.workflows.step({
-        note: "n",
-        sessionId: agent.id,
-        step: "do",
-        action: "start",
-      });
-      const after = await model.versions();
-      expect(after.workflowRuns).not.toBe(before.workflowRuns);
-      const view = await model.snapshot();
-      expect(view.workflowRuns.map((run) => states(run))).toEqual([
-        { do: "active", check: "pending" },
+      const steps = async () =>
+        (await model.snapshot()).workflowRuns.find(
+          (run) => run.sessionId === agent.id,
+        )?.steps;
+      expect((await steps())?.map((step) => [step.name, step.state])).toEqual([
+        ["do", "active"],
+        ["check", "pending"],
       ]);
+      await context.jobs.done(agent.id, { result: "Did it" });
+      expect((await model.versions()).workflowRuns).not.toBe(
+        before.workflowRuns,
+      );
+      expect((await steps())?.map((step) => step.state)).toEqual([
+        "done",
+        "active",
+      ]);
+      expect((await steps())?.[0]?.note).toBe("Did it");
     });
   });
 
-  test("a dynamic run is built from existing and dynamic steps and changes no file", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
-      const agent = session();
-      const catalogBefore = await workflows.catalog();
-      await expect(
-        workflows.start({
-          sessionId: agent.id,
-          steps: ["research", "research"],
-        }),
-      ).rejects.toThrow("listed twice");
-      const run = await workflows.start({
-        sessionId: agent.id,
-        steps: ["research", "check"],
-        name: "cache-spike",
-      });
-      expect(run).toMatchObject({ dynamic: true, workflow: "cache-spike" });
-      const added = await workflows.add({
-        sessionId: agent.id,
-        step: "spike",
-        after: "research",
-        description: "Try the cache in one module",
-      });
-      expect(added.steps.map((step) => [step.name, step.dynamic])).toEqual([
-        ["research", false],
-        ["spike", true],
-        ["check", false],
-      ]);
-      expect(added.modified).toBe(false);
-      expect(await workflows.catalog()).toEqual(catalogBefore);
-
+  test("saving writes the steps a session named as a workflow file", async () => {
+    await withWorkflows(async ({ context, workflows }) => {
       const saved = await workflows.saveAs({
-        sessionId: agent.id,
-        name: "spike",
-        when: "Trying one idea before committing to it",
+        name: "probe",
+        when: "A quick look",
+        steps: [
+          { entry: "do", gate: null, text: "" },
+          { entry: "measure", gate: "result", text: "Measure it." },
+          { entry: "@quick", gate: null, text: "" },
+        ],
+        loop: null,
+        until: "",
       });
-      expect(
-        saved.written.map((path) => path.split("/").slice(-2).join("/")),
-      ).toEqual(["steps/spike.md", "flows/spike.md"]);
-      const after = await workflows.catalog();
-      expect(after.problems).toEqual([]);
-      expect(
-        after.workflows.find((item) => item.name === "spike"),
-      ).toMatchObject({
-        steps: ["research", "spike", "check"],
-        when: "Trying one idea before committing to it",
-      });
-      await expect(
-        workflows.saveAs({ sessionId: agent.id, name: "spike" }),
-      ).rejects.toThrow("exists");
-      void context;
-    });
-  });
-
-  test("adding or removing a step marks a maintained workflow's run changed, not its file", async () => {
-    await withWorkflows(async ({ workflows, session }) => {
-      const agent = session();
-      await workflows.start({
-        sessionId: agent.id,
-        workflow: "quick",
-      });
-      const added = await workflows.add({
-        sessionId: agent.id,
-        step: "review",
-      });
-      expect(added.modified).toBe(true);
-      expect(added.steps.map((step) => step.name)).toEqual([
-        "do",
-        "check",
-        "review",
+      expect(saved.written.map((path) => path.split("/").at(-1))).toEqual([
+        "measure.md",
+        "probe.md",
       ]);
-      await workflows.step({
-        note: "n",
-        sessionId: agent.id,
-        step: "do",
-        action: "start",
-      });
-      expect(() =>
-        workflows.remove({ sessionId: agent.id, step: "do" }),
-      ).toThrow("only a step not yet started");
-      const removed = workflows.remove({ sessionId: agent.id, step: "review" });
-      expect(removed.steps.map((step) => step.name)).toEqual(["do", "check"]);
-      const quick = (await workflows.catalog()).workflows.find(
-        (item) => item.name === "quick",
-      );
-      expect(quick?.steps).toEqual(["do", "check"]);
-
-      // Removing a circular run's loop step, with the rest finished, ends it.
-      const looping = session();
-      await workflows.start({ sessionId: looping.id, workflow: "iterate" });
-      for (const step of ["review", "feedback"])
-        await workflows.step({
-          note: "n",
-          sessionId: looping.id,
-          step,
-          action: "done",
-        });
-      const ended = workflows.remove({
-        sessionId: looping.id,
-        step: "prototype",
-      });
-      expect(ended.loopTo).toBeNull();
-      expect(ended.endedAt).not.toBeNull();
-    });
-  });
-
-  test("a circular run goes round from its loop step, keeps each iteration, and runs until ended", async () => {
-    await withWorkflows(async ({ workflows, session }) => {
-      const agent = session();
-      const run = await workflows.start({
-        sessionId: agent.id,
-        workflow: "iterate",
-      });
-      expect(run).toMatchObject({ loopTo: "prototype", iteration: 1 });
-      for (const step of ["prototype", "review"])
-        await workflows.step({
-          note: "n",
-          sessionId: agent.id,
-          step,
-          action: "done",
-        });
-      const round = await workflows.step({
-        sessionId: agent.id,
-        step: "feedback",
-        action: "done",
-        note: "Make the header smaller",
-      });
-      expect(round.looped).toBe(true);
-      expect(round.run.endedAt).toBe(null);
-      expect(round.run.iteration).toBe(2);
-      expect(states(round.run)).toEqual({
-        prototype: "pending",
-        review: "pending",
-        feedback: "pending",
-      });
+      const catalog = await context.workflows.catalog();
       expect(
-        round.run.history.map((record) => [
-          record.iteration,
-          record.name,
-          record.note,
-        ]),
-      ).toEqual([
-        [1, "prototype", "n"],
-        [1, "review", "n"],
-        [1, "feedback", "Make the header smaller"],
-      ]);
-
-      await workflows.step({
-        note: "n",
-        sessionId: agent.id,
-        step: "prototype",
-        action: "start",
-      });
-      // Ending mid-step makes the note that step's outcome.
-      const ended = workflows.end({ sessionId: agent.id, note: "Good enough" });
-      expect(ended.endedAt).not.toBe(null);
-      expect(ended.endNote).toBe(null);
-      expect(states(ended).prototype).toBe("done");
-      expect(ended.steps[0]).toMatchObject({ plan: "n", note: "Good enough" });
-
-      // Between steps, the run keeps the note itself.
-      await workflows.start({ sessionId: agent.id, workflow: "quick" });
-      const stopped = workflows.end({
-        sessionId: agent.id,
-        note: "Not needed",
-      });
-      expect(stopped.endNote).toBe("Not needed");
-    });
-  });
-
-  test("a dynamic run can loop to one of its steps", async () => {
-    await withWorkflows(async ({ workflows, session }) => {
-      const agent = session();
-      await expect(
-        workflows.start({
-          sessionId: agent.id,
-          steps: ["do"],
-          loop: "check",
-        }),
-      ).rejects.toThrow("--loop must name one of the run's steps");
-      await workflows.start({
-        sessionId: agent.id,
-        steps: ["do", "check"],
-        loop: "do",
-        until: "All tests pass",
-      });
-      await workflows.step({
-        note: "n",
-        sessionId: agent.id,
-        step: "do",
-        action: "done",
-      });
-      const round = await workflows.step({
-        note: "n",
-        sessionId: agent.id,
-        step: "check",
-        action: "done",
-      });
-      expect(round.run).toMatchObject({
-        iteration: 2,
-        until: "All tests pass",
-      });
-    });
-  });
-
-  test("every step change takes a line: the plan on start, what came out on done", async () => {
-    await withWorkflows(async ({ workflows, session }) => {
-      const agent = session();
-      await workflows.start({ sessionId: agent.id, workflow: "quick" });
-      await expect(
-        workflows.step({ sessionId: agent.id, step: "do", action: "start" }),
-      ).rejects.toThrow("what you will do");
-      const started = await workflows.step({
-        sessionId: agent.id,
-        step: "do",
-        action: "start",
-        note: "Change the print in apps/cli/src/index.ts",
-      });
-      expect(started.run.steps[0]).toMatchObject({
-        plan: "Change the print in apps/cli/src/index.ts",
-        note: null,
-      });
-      await expect(
-        workflows.step({ sessionId: agent.id, step: "do", action: "done" }),
-      ).rejects.toThrow("what came out");
-      const done = await workflows.step({
-        sessionId: agent.id,
-        step: "do",
-        action: "done",
-        note: "Prints daedal 0.32.0-beta.6",
-      });
-      expect(done.run.steps[0]).toMatchObject({
-        plan: "Change the print in apps/cli/src/index.ts",
-        note: "Prints daedal 0.32.0-beta.6",
-      });
-    });
-  });
-
-  test("a session can start in a workflow: one launch line and the run open", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
-      await expect(
-        workflows.spawnWith({
-          workflow: "nope",
-          spawn: async () => session(),
-        }),
-      ).rejects.toThrow("Workflows: feature, iterate, quick");
-
-      // A workflow that cannot run is refused before any session exists.
-      await writeFile(
-        join(workflowsHomePath(context.config.home), "flows", "broken.md"),
-        "---\nname: broken\nwhen: Tests.\nsteps: [do, missing]\n---\n",
-      );
-      let spawned = 0;
-      await expect(
-        workflows.spawnWith({
-          workflow: "broken",
-          spawn: async () => {
-            spawned += 1;
-            return session();
-          },
-        }),
-      ).rejects.toThrow("broken");
-      expect(spawned).toBe(0);
-
-      let message = "";
-      const { session: agent, run } = await workflows.spawnWith({
-        workflow: "quick",
-        message: "Fix the typo in README\nIt says teh.",
-        spawn: async (line) => {
-          message = line;
-          return session();
-        },
-      });
-      expect(message.startsWith("Fix the typo in README")).toBe(true);
-      expect(message).toContain("started workflow 'quick'");
-      expect(run.workflow).toBe("quick");
-      expect(workflows.current(agent.id)?.workflow).toBe("quick");
-    });
-  });
-
-  test("a dynamic workflow takes the steps the agent names, with or without a file", async () => {
-    await withWorkflows(async ({ workflows, session }) => {
-      const agent = session();
-      await expect(
-        workflows.start({
-          sessionId: agent.id,
-          workflow: "quick",
-          steps: ["do"],
-        }),
-      ).rejects.toThrow("has its own steps");
-      const run = await workflows.start({
-        sessionId: agent.id,
-        workflow: "todo",
-        steps: ["find-print", "check"],
-      });
-      expect(run).toMatchObject({ workflow: "todo", dynamic: true });
-      expect(run.steps.map((step) => [step.name, step.dynamic])).toEqual([
-        ["find-print", true],
-        ["check", false],
-      ]);
-      const added = await workflows.add({ sessionId: agent.id, step: "tidy" });
-      expect(added.steps.at(-1)).toMatchObject({
-        name: "tidy",
-        dynamic: true,
-        description: "",
-      });
-
-      let message = "";
-      const { run: empty } = await workflows.spawnWith({
-        workflow: "todo",
-        spawn: async (line) => {
-          message = line;
-          return session();
-        },
-      });
-      expect(empty).toMatchObject({ workflow: "todo", steps: [] });
-      expect(message).toContain("no steps yet");
-    });
-  });
-
-  test("with workflows off, no run starts and the agent is told why", async () => {
-    await withWorkflows(async ({ context, session }) => {
-      let on = false;
-      const workflows = new WorkflowService(
-        context.repositories,
-        context.config.home,
-        { raise: async () => ({}), clear: () => ({ cleared: 0 }) },
-        () => on,
-      );
-      const agent = session();
-      await expect(
-        workflows.start({ sessionId: agent.id, workflow: "quick" }),
-      ).rejects.toThrow("Workflows are off");
-      await expect(
-        workflows.spawnWith({ workflow: "quick", spawn: async () => agent }),
-      ).rejects.toThrow("Workflows are off");
-      on = true;
+        catalog.workflows.find((item) => item.name === "probe")?.steps,
+      ).toEqual(["do", "measure", "@quick"]);
       expect(
-        (await workflows.start({ sessionId: agent.id, workflow: "quick" }))
-          .workflow,
-      ).toBe("quick");
-      // The app's own service reads the user's switch, which starts off.
-      expect(context.skills.settingFor("daedalus-workflows").enabled).toBe(
-        false,
-      );
-    });
-  });
-});
-
-/** Writes more workflow files for one test, beside the fixtures. */
-async function writeFlows(
-  home: string,
-  flows: Record<string, string>,
-): Promise<void> {
-  const root = workflowsHomePath(home);
-  for (const [name, fields] of Object.entries(flows))
-    await writeFile(
-      join(root, "flows", `${name}.md`),
-      `---\nname: ${name}\nwhen: Tests.\n${fields}\n---\n`,
-    );
-}
-
-const names = (run: { steps: Array<{ name: string }> }) =>
-  run.steps.map((step) => step.name);
-
-describe("sub-workflows", () => {
-  test("a run expands an included workflow in place, with qualified step ids", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
-      await writeFlows(context.config.home, {
-        release: "steps: [review, deploy]",
-        ship: "steps: [research, @release, feedback]",
-      });
-      const agent = session();
-      const run = await workflows.start({
-        sessionId: agent.id,
-        workflow: "ship",
-      });
-      expect(names(run)).toEqual([
-        "research",
-        "release/review",
-        "release/deploy",
-        "feedback",
-      ]);
-      expect(run.groups).toEqual([
-        {
-          id: "release",
-          workflow: "release",
-          loopTo: null,
+        catalog.steps.find((item) => item.name === "measure"),
+      ).toMatchObject({ gate: "result", body: "Measure it." });
+      await expect(
+        workflows.saveAs({
+          name: "probe",
+          steps: [{ entry: "do", gate: null, text: "" }],
+          loop: null,
           until: "",
-          iteration: 1,
-          lastRound: null,
-        },
-      ]);
-      // The gate of an included step comes with it, and its instructions.
-      expect(run.steps[2]!.gate).toBe("result");
-      const { steps } = await workflows.instructions(run);
-      expect(steps[1]).toMatchObject({
-        name: "release/review",
-        body: "Find the bugs.",
-      });
-      // A loop to an included workflow goes back to its first step.
-      await writeFlows(context.config.home, {
-        again: "steps: [@release, feedback]\nloop: '@release'",
-      });
-      const again = await workflows.start({
-        sessionId: session().id,
-        workflow: "again",
-      });
-      expect(again.loopTo).toBe("release/review");
-      // The included workflow still runs on its own.
-      const alone = await workflows.start({
-        sessionId: session().id,
-        workflow: "release",
-      });
-      expect(names(alone)).toEqual(["review", "deploy"]);
-    });
-  });
-
-  test("a step is reported by its full id, or by its name when only one step has it", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
-      await writeFlows(context.config.home, {
-        release: "steps: [review, deploy]",
-        audit: "steps: [review, check]",
-        both: "steps: [research, @release, @audit]",
-      });
-      const agent = session();
-      await workflows.start({ sessionId: agent.id, workflow: "both" });
-      const full = await workflows.step({
-        sessionId: agent.id,
-        step: "release/review",
-        action: "start",
-        note: "Reading the diff",
-      });
-      expect(states(full.run)["release/review"]).toBe("active");
-      const bare = await workflows.step({
-        sessionId: agent.id,
-        step: "check",
-        action: "start",
-        note: "Checking",
-      });
-      expect(states(bare.run)).toMatchObject({
-        "release/review": "done",
-        "audit/check": "active",
-      });
-      await expect(
-        workflows.step({
-          sessionId: agent.id,
-          step: "review",
-          action: "start",
-          note: "Which one?",
         }),
-      ).rejects.toThrow(
-        "Step 'review' is in more than one place in workflow 'both': release/review, audit/review",
-      );
+      ).rejects.toThrow("exists");
+    });
+  });
+
+  describe("step memory", () => {
+    test("a proposed memory is not shown; an accepted one comes with the step's brief", async () => {
+      await withWorkflows(async ({ workflows, context, session }) => {
+        await workflows.rememberStep({
+          step: "check",
+          text: "Run the failing case first",
+          why: "A fix passed the check and did not fix the case.",
+          workflow: "quick",
+        });
+        const memory = await workflows.stepMemory("check");
+        expect(memory.memories[0]).toMatchObject({
+          status: "proposed",
+          workflow: "quick",
+          runs: 1,
+        });
+        const checkBrief = async () => {
+          const agent = session();
+          await context.jobIntake.startWorkflow({
+            sessionId: agent.id,
+            workflow: "quick",
+          });
+          return (await context.jobs.done(agent.id, { result: "Did it" })).next;
+        };
+        expect(await checkBrief()).not.toContain("failing case");
+        await workflows.acceptStepMemory("check", "1");
+        expect(await checkBrief()).toContain(
+          "What earlier runs of this step learned:\n- Run the failing case first (A fix passed the check and did not fix the case.)",
+        );
+        // The memory file is not read as a step, and the catalog has no problem.
+        const catalog = await workflows.catalog();
+        expect(catalog.steps.map((step) => step.name)).not.toContain(
+          "check.memory",
+        );
+        expect(catalog.problems).toEqual([]);
+      });
+    });
+  });
+
+  test("a step made for one run has no memory", async () => {
+    await withWorkflows(async ({ workflows }) => {
       await expect(
-        workflows.step({
-          sessionId: agent.id,
-          step: "nope",
-          action: "start",
-          note: "n",
-        }),
-      ).rejects.toThrow("has no step 'nope'");
+        workflows.rememberStep({ step: "made-up", text: "x", why: "y" }),
+      ).rejects.toThrow("saved step");
     });
   });
 
-  test("an included step's gate waits, and approve takes its qualified id", async () => {
-    await withWorkflows(async ({ context, workflows, session, raised }) => {
-      await writeFlows(context.config.home, {
-        release: "steps: [review, deploy]",
-        ship: "steps: [@release, feedback]",
-      });
-      const agent = session();
-      await workflows.start({ sessionId: agent.id, workflow: "ship" });
-      await workflows.step({
-        sessionId: agent.id,
-        step: "deploy",
-        action: "start",
-        note: "Ship 1.2",
-      });
-      const done = await workflows.step({
-        sessionId: agent.id,
-        step: "deploy",
-        action: "done",
-        note: "1.2 is out",
-      });
-      expect(done.waiting).toBe(true);
-      expect(raised.at(-1)?.reason).toContain(
-        "Approve the result of step 'release/deploy' of workflow 'ship'",
-      );
-      await expect(
-        workflows.step({
-          sessionId: agent.id,
-          step: "feedback",
-          action: "start",
-          note: "Too soon",
-        }),
-      ).rejects.toThrow("Step 'release/deploy' waits for the user");
-      expect(() => workflows.approve(agent.id, "review")).toThrow(
-        "Step 'release/review' is not waiting for an approval; 'release/deploy' is",
-      );
-      const approved = workflows.approve(agent.id, "release/deploy");
-      expect(states(approved)["release/deploy"]).toBe("done");
-    });
-  });
-
-  test("workflows including themselves, too deep, missing or dynamic are flagged and do not start", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
-      await writeFlows(context.config.home, {
-        selfish: "steps: [do, @selfish]",
-        ping: "steps: [do, @pong]",
-        pong: "steps: [check, @ping]",
-        l1: "steps: [do, @l2]",
-        l2: "steps: [do, @l3]",
-        l3: "steps: [do, @l4]",
-        l4: "steps: [do, @l5]",
-        l5: "steps: [check]",
-        ghostly: "steps: [do, @ghost]",
-        loose: "steps: [do, @todo]",
-      });
-      const catalog = await workflows.catalog();
-      const problem = (name: string) =>
-        catalog.problems.find((item) => item.path.endsWith(`/${name}.md`))
-          ?.message;
-      expect(problem("selfish")).toBe("Workflow 'selfish' includes itself");
-      expect(problem("ping")).toBe(
-        "Workflows include each other in a loop: ping → pong → ping",
-      );
-      expect(problem("l1")).toBe(
-        "Included workflows nest more than 3 levels deep: l1 → l2 → l3 → l4 → l5",
-      );
-      expect(problem("l2")).toBeUndefined();
-      expect(problem("ghostly")).toBe(
-        "No workflow 'ghost' to include as @ghost",
-      );
-      expect(problem("loose")).toContain(
-        "steps: dynamic, so it cannot be included",
-      );
-      const agent = session();
-      for (const [name, message] of [
-        ["ping", "Workflows include each other in a loop: ping → pong → ping"],
-        ["l1", "nest more than 3 levels deep"],
-        ["ghostly", "No workflow 'ghost'"],
-        ["loose", "cannot be included"],
-      ] as const)
-        await expect(
-          workflows.start({ sessionId: agent.id, workflow: name }),
-        ).rejects.toThrow(message);
-      // Three levels is the deepest: l2 includes l3, l4 and l5.
-      const deep = await workflows.start({
-        sessionId: agent.id,
-        workflow: "l2",
-      });
-      expect(names(deep)).toEqual([
-        "do",
-        "l3/do",
-        "l3/l4/do",
-        "l3/l4/l5/check",
-      ]);
-      expect(deep.groups.map((group) => group.id)).toEqual([
-        "l3",
-        "l3/l4",
-        "l3/l4/l5",
-      ]);
-    });
-  });
-
-  test("an included workflow's loop goes round inside its group, and moving past it leaves", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
-      await writeFlows(context.config.home, {
-        rounds:
-          "steps: [review, feedback]\nloop: review\nuntil: The user is happy.",
-        outer: "steps: [research, @rounds, deploy]",
-      });
-      const agent = session();
-      const run = await workflows.start({
-        sessionId: agent.id,
-        workflow: "outer",
-      });
-      expect(run.loopTo).toBeNull();
-      expect(run.groups[0]).toMatchObject({
-        loopTo: "rounds/review",
-        until: "The user is happy.",
-      });
-      const go = (step: string, action: "start" | "done") =>
-        workflows.step({ sessionId: agent.id, step, action, note: step });
-      await go("research", "start");
-      await go("review", "start");
-      await go("feedback", "start");
-      const first = await go("feedback", "done");
-      expect(first.looped).toBe(false);
-      expect(first.loopedGroup).toMatchObject({ id: "rounds", iteration: 2 });
-      expect(first.run.endedAt).toBeNull();
-      expect(states(first.run)).toMatchObject({
-        research: "done",
-        "rounds/review": "pending",
-        "rounds/feedback": "pending",
-        deploy: "pending",
-      });
-      expect(first.run.history.map((item) => item.name)).toEqual([
-        "rounds/review",
-        "rounds/feedback",
-      ]);
-      // A second round, then moving on to the step after the group.
-      await go("review", "start");
-      await go("feedback", "start");
-      const second = await go("feedback", "done");
-      expect(second.loopedGroup?.iteration).toBe(3);
-      expect(second.run.history).toHaveLength(4);
-      const left = await go("deploy", "start");
-      expect(left.loopedGroup).toBeNull();
-      expect(states(left.run)).toMatchObject({
-        "rounds/review": "done",
-        "rounds/feedback": "done",
-        deploy: "active",
-      });
-      expect(left.run.groups[0]).toMatchObject({
-        iteration: 2,
-        lastRound: null,
-      });
-      expect(left.run.history).toHaveLength(2);
-      await go("deploy", "done");
-      const ended = workflows.approve(agent.id);
-      expect(ended.endedAt).not.toBeNull();
-    });
-  });
-
-  test("starting the step after an included loop while its last step is active moves on", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
-      await writeFlows(context.config.home, {
-        rounds:
-          "steps: [review, feedback]\nloop: review\nuntil: The user is happy.",
-        outer: "steps: [research, @rounds, deploy]",
-      });
-      const agent = session();
-      await workflows.start({ sessionId: agent.id, workflow: "outer" });
-      const go = (step: string, action: "start" | "done") =>
-        workflows.step({ sessionId: agent.id, step, action, note: step });
-      await go("research", "start");
-      await go("review", "start");
-      await go("feedback", "start");
-      // `deploy start` finishes the active `feedback` on the way.
-      const moved = await go("deploy", "start");
-      expect(moved.loopedGroup).toBeNull();
-      expect(states(moved.run)).toMatchObject({
-        "rounds/review": "done",
-        "rounds/feedback": "done",
-        deploy: "active",
-      });
-      expect(moved.run.groups[0]).toMatchObject({ iteration: 1 });
-      expect(moved.run.history).toHaveLength(0);
-    });
-  });
-
-  test("steps added after an included step join its group; save writes @name back", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
-      await writeFlows(context.config.home, {
-        release: "steps: [review, deploy]",
-        ship: "steps: [research, @release]",
-      });
-      const agent = session();
-      await workflows.start({ sessionId: agent.id, workflow: "ship" });
-      const added = await workflows.add({
-        sessionId: agent.id,
-        step: "test",
-        after: "review",
-      });
-      expect(names(added)).toEqual([
-        "research",
-        "release/review",
-        "release/test",
-        "release/deploy",
-      ]);
-      const removed = workflows.remove({
-        sessionId: agent.id,
-        step: "release/test",
-      });
-      expect(names(removed)).not.toContain("release/test");
-      const saved = await workflows.saveAs({
-        sessionId: agent.id,
-        name: "ship-copy",
-      });
-      expect(saved.written).toHaveLength(1);
-      const catalog = await workflows.catalog();
+  test("promoting moves a memory into the step's instructions; forgetting the last removes the file", async () => {
+    await withWorkflows(async ({ workflows, context }) => {
+      const remember = (text: string) =>
+        workflows.rememberStep({ step: "check", text, why: "Seen." });
+      await remember("Check the delete path");
+      await remember("Check the empty case");
+      await workflows.promoteStepMemory("check", "Check the delete path");
+      const step = (await workflows.catalog()).steps.find(
+        (item) => item.name === "check",
+      )!;
+      expect(step.body).toContain("Check the delete path.");
+      expect((await workflows.stepMemory("check")).memories).toHaveLength(1);
+      await workflows.forgetStepMemory("check", "1");
       expect(
-        catalog.workflows.find((item) => item.name === "ship-copy")?.steps,
-      ).toEqual(["research", "@release"]);
+        await Bun.file(
+          join(
+            workflowsHomePath(context.config.home),
+            "steps",
+            "check.memory.md",
+          ),
+        ).exists(),
+      ).toBe(false);
     });
   });
 
-  test("a run stored before sub-workflows reads with no groups", async () => {
-    await withWorkflows(async ({ context, workflows, session }) => {
-      const agent = session();
-      const run = await workflows.start({
-        sessionId: agent.id,
-        workflow: "quick",
+  test("the Workflows tab lists a step's memories and accepts, promotes and forgets them", async () => {
+    await withWorkflows(async ({ workflows }) => {
+      const memories = (files: Awaited<ReturnType<typeof workflows.files>>) =>
+        files.steps.find((step) => step.name === "check")!.memories ?? [];
+      await workflows.rememberStep({
+        step: "check",
+        text: "Check the delete path",
+        why: "Seen.",
       });
-      // A row written without the groups column, as before the migration.
-      const columns =
-        "workspace_id, session_id, workflow, steps, dynamic, modified, loop_to, until_text, iteration, history, end_note, updated_at, ended_at";
-      context.repositories.database
-        .query(
-          `INSERT INTO workflow_runs (id, started_at, ${columns})
-           SELECT 'old-run', '2999-01-01T00:00:00.000Z', ${columns}
-           FROM workflow_runs WHERE id = ?`,
-        )
-        .run(run.id);
-      const old = workflows.current(agent.id);
-      expect(old?.id).toBe("old-run");
-      expect(old?.groups).toEqual([]);
-      expect(names(old!)).toEqual(["do", "check"]);
+      expect(memories(await workflows.files())[0]!.status).toBe("proposed");
+      const change = (action: "accept" | "forget" | "promote") =>
+        workflows.changeStepMemory({
+          step: "check",
+          text: "Check the delete path",
+          action,
+        });
+      expect(memories(await change("accept"))[0]!.status).toBe("accepted");
+      const promoted = await change("promote");
+      expect(memories(promoted)).toHaveLength(0);
+      expect(
+        promoted.steps.find((step) => step.name === "check")!.body,
+      ).toContain("Check the delete path.");
+    });
+  });
+
+  test("a broken memory file shows on its step in the Workflows tab", async () => {
+    await withWorkflows(async ({ workflows, context }) => {
+      const steps = join(workflowsHomePath(context.config.home), "steps");
+      await writeFile(join(steps, "check.memory.md"), "## No fields\n");
+      const step = (await workflows.files()).steps.find(
+        (item) => item.name === "check",
+      )!;
+      expect(step.memoryProblem).toContain("why");
+      expect(step.problem).toBeNull();
+    });
+  });
+
+  test("a broken memory file, or one for no step, is a problem in the list", async () => {
+    await withWorkflows(async ({ workflows, context }) => {
+      const steps = join(workflowsHomePath(context.config.home), "steps");
+      await writeFile(join(steps, "check.memory.md"), "## No fields\n");
+      await writeFile(join(steps, "ghost.memory.md"), "");
+      const problems = (await workflows.catalog()).problems.map(
+        (problem) => problem.message,
+      );
+      expect(problems.some((text) => text.includes("why"))).toBe(true);
+      expect(problems.some((text) => text.includes("No step 'ghost'"))).toBe(
+        true,
+      );
     });
   });
 });

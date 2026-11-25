@@ -456,7 +456,7 @@ export async function spawnTeamMember(
   let spawned: Awaited<ReturnType<typeof spawn>> | undefined;
   const workflow = input.values.workflow;
   if (workflow)
-    await context.workflows.spawnWith({
+    await context.jobIntake.spawnWith({
       workflow,
       ...(instructions ? { message: instructions } : {}),
       spawn: async (message) => (spawned = await spawn(message)).session,

@@ -41,7 +41,10 @@ class FakeTmux implements TmuxClient {
   async capture() {
     return "❯ \n  ⏵⏵ auto mode on (shift+tab to cycle)";
   }
-  async sendKeys() {}
+  readonly keys: { session: string; keys: string[] }[] = [];
+  async sendKeys(session: string, keys: string[]) {
+    this.keys.push({ session, keys });
+  }
   async send() {}
   async stop(session: string) {
     this.sessions.delete(session);
@@ -553,6 +556,192 @@ describe("Threads", () => {
         ownerSessionId: next.id,
         resolvedAt: null,
       });
+    });
+  });
+
+  test("each question asked of a working session is its own thread with its own read-only fork", async () => {
+    await withHome(async ({ home, context }) => {
+      const main = await spawn(context, "webhooks");
+      await transcript(home, main, [
+        { uuid: "a-last", text: "Moving on to the dead-letter table." },
+      ]);
+      const first = await context.threads.ask({
+        sessionId: main.id,
+        question: "  Why a custom backoff?  ",
+      });
+      const second = await context.threads.ask({
+        sessionId: main.id,
+        question: "Is the budget per tenant?",
+      });
+      expect(second.number).not.toBe(first.number);
+      expect(second.forkSessionId).not.toBe(first.forkSessionId);
+      expect(first).toMatchObject({
+        title: "Why a custom backoff?",
+        anchorText: "Moving on to the dead-letter table.",
+        ownerSessionId: main.id,
+      });
+      // The fork starts on the question; main is told nothing.
+      const fork = await context.agents.get(first.forkSessionId!);
+      expect(fork.args).toContain("Why a custom backoff?");
+      expect(fork.args.join(" ")).toContain("--fork-session");
+      expect(first.messages).toHaveLength(0);
+      expect(context.threads.openLine(main.id)).toBeUndefined();
+      await expect(
+        context.threads.ask({ sessionId: main.id, question: " " }),
+      ).rejects.toThrow("Write the question");
+    });
+  });
+
+  test("taking a question back stops its copy and clears the copy's input box", async () => {
+    await withHome(async ({ context, tmux }) => {
+      const main = await spawn(context, "webhooks");
+      const asked = await context.threads.ask({
+        sessionId: main.id,
+        question: "Why a custom backoff?",
+      });
+      const fork = await context.agents.get(asked.forkSessionId!);
+      expect(await context.threads.stopAsk(asked.number)).toBe(true);
+      expect(tmux.keys).toEqual([
+        { session: fork.tmuxSession, keys: ["Escape"] },
+        { session: fork.tmuxSession, keys: ["C-c"] },
+      ]);
+      // The working session is never touched.
+      expect(tmux.keys.some((sent) => sent.session === main.tmuxSession)).toBe(
+        false,
+      );
+      await context.threads.closeFork(asked.number);
+      expect(await context.threads.stopAsk(asked.number)).toBe(false);
+    });
+  });
+
+  test("a question about one of the agent's messages hangs off that message", async () => {
+    await withHome(async ({ home, context }) => {
+      const main = await spawn(context, "webhooks");
+      await transcript(home, main, [
+        { uuid: "a-first", text: "The cap is 20 carts per user." },
+        { uuid: "a-last", text: "Moving on to the dead-letter table." },
+      ]);
+      const asked = await context.threads.ask({
+        sessionId: main.id,
+        question: "Why 20?",
+        anchorId: "a-first",
+      });
+      expect(asked).toMatchObject({
+        title: "Why 20?",
+        anchorId: "a-first",
+        anchorText: "The cap is 20 carts per user.",
+      });
+      // The copy is told which message, after the question itself.
+      const fork = await context.agents.get(asked.forkSessionId!);
+      expect(fork.args.join(" ")).toContain(
+        'Why 20?\n\n(About your message that begins: "The cap is 20 carts per user.")',
+      );
+      // A message that is not there falls back to the last one.
+      const other = await context.threads.ask({
+        sessionId: main.id,
+        question: "And now?",
+        anchorId: "gone",
+      });
+      expect(other.anchorId).toBe("a-last");
+    });
+  });
+
+  test("a closed conversation keeps its messages, and its copy stops by itself", async () => {
+    await withHome(async ({ context }) => {
+      const main = await spawn(context, "webhooks");
+      const asked = await context.threads.ask({
+        sessionId: main.id,
+        question: "Why a custom backoff?",
+      });
+      const forkId = asked.forkSessionId!;
+      const closed = context.threads.closeConversation(asked.number);
+      expect(closed.closedAt).not.toBeNull();
+      expect(closed.resolvedAt).toBeNull();
+      const state = (activity: string, secondsAgo: number) => () => ({
+        activity,
+        since: new Date(Date.now() - secondsAgo * 1000).toISOString(),
+      });
+      // Still answering: left alone.
+      await context.threads.tendCopies(state("working", 600));
+      expect((await context.agents.get(forkId)).archivedAt).toBeNull();
+      // It answered before the close and has settled: stopped, still closed.
+      await context.threads.tendCopies(state("done", 600));
+      expect((await context.agents.get(forkId)).archivedAt).not.toBeNull();
+      expect(context.threads.get(asked.number).closedAt).not.toBeNull();
+      // Reopening lists it again; asking wakes the same copy.
+      expect(
+        context.threads.reopenConversation(asked.number).closedAt,
+      ).toBeNull();
+      const again = await context.threads.ask({
+        sessionId: main.id,
+        question: "And the cap?",
+        threadNumber: asked.number,
+      });
+      expect(again.forkSessionId).toBe(forkId);
+      expect((await context.agents.get(forkId)).archivedAt).toBeNull();
+    });
+  });
+
+  test("an answer after the close brings the conversation back", async () => {
+    await withHome(async ({ context }) => {
+      const main = await spawn(context, "webhooks");
+      const asked = await context.threads.ask({
+        sessionId: main.id,
+        question: "Why a custom backoff?",
+      });
+      context.threads.closeConversation(asked.number);
+      const since = new Date(Date.now() + 5_000).toISOString();
+      await context.threads.tendCopies(() => ({ activity: "done", since }));
+      const back = context.threads.get(asked.number);
+      expect(back.closedAt).toBeNull();
+      expect(back.forkAnsweredAt).toBe(since);
+      expect(
+        (await context.agents.get(asked.forkSessionId!)).archivedAt,
+      ).toBeNull();
+    });
+  });
+
+  test("a listed conversation's copy stops after half an hour idle", async () => {
+    await withHome(async ({ context }) => {
+      const main = await spawn(context, "webhooks");
+      const asked = await context.threads.ask({
+        sessionId: main.id,
+        question: "Why a custom backoff?",
+      });
+      const at = (minutesAgo: number) => () => ({
+        activity: "done",
+        since: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+      });
+      await context.threads.tendCopies(at(10));
+      expect(
+        (await context.agents.get(asked.forkSessionId!)).archivedAt,
+      ).toBeNull();
+      await context.threads.tendCopies(at(31));
+      expect(
+        (await context.agents.get(asked.forkSessionId!)).archivedAt,
+      ).not.toBeNull();
+      // Still listed: only the process stopped.
+      expect(context.threads.get(asked.number).closedAt).toBeNull();
+    });
+  });
+
+  test("a question about what an agent asked opens that thread's fork on it", async () => {
+    await withHome(async ({ context }) => {
+      const main = await spawn(context, "webhooks");
+      const { thread } = await context.threads.new({
+        session: main.id,
+        body: "OK to merge #12?",
+      });
+      const asked = await context.threads.ask({
+        sessionId: main.id,
+        question: "Why is it still a draft?",
+        threadNumber: thread.number,
+      });
+      expect(asked.number).toBe(thread.number);
+      const fork = await context.agents.get(asked.forkSessionId!);
+      expect(fork.args).toContain("Why is it still a draft?");
+      // The agent's question is still the user's to answer.
+      expect(asked.messages).toHaveLength(1);
     });
   });
 

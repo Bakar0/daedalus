@@ -1,7 +1,8 @@
 /**
- * The Custom instructions tab: the index every session reads and one file per
- * topic, each edited as the markdown it is. Saving, renaming or deleting a
- * topic keeps its line in the index in step.
+ * The Custom instructions tab: the index every session reads, edited as the
+ * markdown it is. Rules about one subject are tools, on the Workflows page.
+ * A topic file from before tools that could not become one still shows here,
+ * so it can be read, edited or deleted.
  */
 import { useEffect, useRef, useState } from "react";
 import type { InstructionFilesDto } from "@daedalus/protocol";
@@ -26,24 +27,18 @@ import {
 
 type Instructions = InstructionFilesDto;
 
-/** What is open on the right. A null name is a new topic not saved yet. */
-type Selection = { kind: "index" } | { kind: "topic"; name: string | null };
-
-const NEW_TOPIC = `# New topic
-
-- One rule per line, in your words.
-`;
+/** What is open on the right. */
+type Selection = { kind: "index" } | { kind: "topic"; name: string };
 
 const HINTS: Record<Selection["kind"], string> = {
   index:
-    "Every session reads this. Rules under '## Always' hold for every request; each line under '## Topics' names a topic file the agent opens when it applies. Agents add to it when you tell them how you like things done.",
+    "Every session reads this. Rules under '## Always' hold for every request. Agents add to it when you tell them how you like things done. Rules about one subject are tools, on the Workflows page.",
   topic:
-    "Starts with a '# Heading', which names the file. One rule per bullet. Saving a new topic adds its line to the index.",
+    "A topic file from before tools. Starts with a '# Heading', which names the file. One rule per bullet.",
 };
 
 function textOf(instructions: Instructions, selection: Selection): string {
   if (selection.kind === "index") return instructions.index.text;
-  if (selection.name === null) return NEW_TOPIC;
   return (
     instructions.topics.find((topic) => topic.name === selection.name)?.text ??
     ""
@@ -99,36 +94,32 @@ export function InstructionsEditor({
     return <div className="empty">Loading custom instructions…</div>;
 
   const saved = textOf(instructions, selection);
-  const isNew = selection.kind === "topic" && selection.name === null;
-  const dirty = draft !== saved || isNew;
+  const dirty = draft !== saved;
   const path =
     selection.kind === "index"
       ? instructions.index.path
       : (instructions.topics.find((topic) => topic.name === selection.name)
-          ?.path ?? "Saved under the name its heading gives");
+          ?.path ?? "");
 
   const select = async (next: Selection) => {
     if (editing && draft !== saved && !(await confirmDiscard())) return;
     setSelection(next);
     setDraft(textOf(instructions, next));
     setRefusal(undefined);
-    setEditing(next.kind === "topic" && next.name === null);
+    setEditing(false);
   };
 
   const cancel = () => {
     setRefusal(undefined);
     setEditing(false);
-    // A new topic that was never saved has nothing to show.
-    const next: Selection = isNew ? { kind: "index" } : selection;
-    setSelection(next);
-    setDraft(textOf(instructions, next));
+    setDraft(textOf(instructions, selection));
   };
 
   const save = async () => {
     setSaving(true);
     setRefusal(undefined);
     const previousName =
-      selection.kind === "topic" && selection.name ? selection.name : undefined;
+      selection.kind === "topic" ? selection.name : undefined;
     const response = await client.request.instructionFileSave({
       kind: selection.kind,
       text: draft,
@@ -153,7 +144,7 @@ export function InstructionsEditor({
   };
 
   const remove = async () => {
-    if (selection.kind !== "topic" || !selection.name) return;
+    if (selection.kind !== "topic") return;
     if (
       !(await askConfirm({
         title: `Delete topic '${selection.name}'?`,
@@ -179,6 +170,49 @@ export function InstructionsEditor({
 
   const isTopic = (name: string) =>
     selection.kind === "topic" && selection.name === name;
+  const topics = topicFacts(instructions);
+
+  const detail = (
+    <FileDetail
+      alert={refusal}
+      dirty={dirty}
+      draft={draft}
+      editing={editing}
+      hint={HINTS[selection.kind]}
+      label="Instruction file"
+      onCancel={cancel}
+      onDraft={setDraft}
+      onEdit={() => setEditing(true)}
+      onSave={() => void save()}
+      path={path}
+      saving={saving}
+      title={
+        selection.kind === "index"
+          ? "Custom instructions"
+          : (topics.find((topic) => topic.name === selection.name)?.heading ??
+            selection.name)
+      }
+      {...(selection.kind === "topic" ? { onDelete: () => void remove() } : {})}
+      view={
+        selection.kind === "index" ? (
+          <InstructionsIndexView
+            instructions={instructions}
+            onTopic={(name) => void select({ kind: "topic", name })}
+          />
+        ) : (
+          <TopicView
+            text={saved}
+            {...(() => {
+              const covers = topics.find(
+                (topic) => topic.name === selection.name,
+              )?.covers;
+              return covers ? { covers } : {};
+            })()}
+          />
+        )
+      }
+    />
+  );
 
   return (
     <div className="workflows-tab">
@@ -190,88 +224,54 @@ export function InstructionsEditor({
         }
       >
         How you like things done, followed by every session in every workspace.
-        Tell an agent "from now on…" and it adds the rule here.
+        Tell an agent "from now on…" and it adds the rule here. Rules about one
+        subject, such as a CLI or a login, are tools on the Workflows page.
       </TabIntro>
-      <SplitList
-        id="instructions"
-        label="Instruction files"
-        list={
-          <>
-            <Group
-              onNew={() => void select({ kind: "topic", name: null })}
-              title="Custom instructions"
-            >
-              <FileRow
-                meta={plural(
-                  alwaysRules(instructions.index.text).length,
-                  "rule",
-                )}
-                name="Always"
-                onSelect={() => void select({ kind: "index" })}
-                selected={selection.kind === "index"}
-                summary="Every request, and the list of topics"
-              />
-              {topicFacts(instructions).map((topic) => (
+      {topics.length ? (
+        <SplitList
+          id="instructions"
+          label="Instruction files"
+          list={
+            <>
+              <Group title="Custom instructions">
                 <FileRow
-                  key={topic.name}
-                  meta={plural(topic.rules, "rule")}
-                  name={topic.heading}
-                  onSelect={() =>
-                    void select({ kind: "topic", name: topic.name })
-                  }
-                  selected={isTopic(topic.name)}
-                  summary={topic.covers ?? topic.name}
+                  meta={plural(
+                    alwaysRules(instructions.index.text).length,
+                    "rule",
+                  )}
+                  name="Always"
+                  onSelect={() => void select({ kind: "index" })}
+                  selected={selection.kind === "index"}
+                  summary="Every request"
                 />
-              ))}
-            </Group>
-          </>
-        }
-      >
-        <FileDetail
-          alert={refusal}
-          dirty={dirty}
-          draft={draft}
-          editing={editing}
-          hint={HINTS[selection.kind]}
-          label="Instruction file"
-          onCancel={cancel}
-          onDraft={setDraft}
-          onEdit={() => setEditing(true)}
-          onSave={() => void save()}
-          path={path}
-          saving={saving}
-          title={
-            selection.kind === "index"
-              ? "Custom instructions"
-              : selection.name === null
-                ? "New topic"
-                : (topicFacts(instructions).find(
-                    (topic) => topic.name === selection.name,
-                  )?.heading ?? selection.name)
+              </Group>
+              <Group title="Not moved to tools">
+                {topics.map((topic) => (
+                  <FileRow
+                    key={topic.name}
+                    meta={plural(topic.rules, "rule")}
+                    name={topic.heading}
+                    onSelect={() =>
+                      void select({ kind: "topic", name: topic.name })
+                    }
+                    selected={isTopic(topic.name)}
+                    summary={topic.covers ?? topic.name}
+                  />
+                ))}
+              </Group>
+            </>
           }
-          {...(selection.kind === "topic" && selection.name
-            ? { onDelete: () => void remove() }
-            : {})}
-          view={
-            selection.kind === "index" ? (
-              <InstructionsIndexView
-                instructions={instructions}
-                onTopic={(name) => void select({ kind: "topic", name })}
-              />
-            ) : selection.name === null ? undefined : (
-              <TopicView
-                text={saved}
-                {...(() => {
-                  const covers = topicFacts(instructions).find(
-                    (topic) => topic.name === selection.name,
-                  )?.covers;
-                  return covers ? { covers } : {};
-                })()}
-              />
-            )
-          }
-        />
-      </SplitList>
+        >
+          {detail}
+        </SplitList>
+      ) : (
+        <div
+          className="workflows-editor"
+          style={{ gridTemplateColumns: "minmax(0, 1fr)" }}
+        >
+          {detail}
+        </div>
+      )}
     </div>
   );
 }

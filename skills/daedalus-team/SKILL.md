@@ -55,6 +55,13 @@ last message: "@you finished: <your last message>", or "failed" with the
 error. Hand-backs reach a lead at most once a minute, several members' in
 one wake, so finishing costs the lead little.
 
+When your work is a job (`daedal job next` prints a brief), finish it with
+`daedal job done --result "<what came out>"` and an `--out <name>=<value>`
+for each output the brief lists. Your job is under the lead's, so Daedalus
+tells the lead the result and starts the work that waited on yours. Stop it
+with `daedal job hold --why "<what you need decided>"` when only the user
+can decide, and with `daedal job fail --why "<why>"` when it cannot be done.
+
 So end each piece of work with a reply that stands on its own for the lead:
 what you did, where it is (branch, commit, file), what is left, and anything
 you changed that others depend on. Keep it short; the lead gets the whole
@@ -72,7 +79,7 @@ then ask once with `daedal thread new
 choice when there are choices, and `--plan <plan> ^<id>` for the plan task
 it holds up. Start the message with one short plain line the user can
 answer, then one sentence on what stays stuck without it. The user sees the
-thread on your message in the Threads tab and replies there; what they
+thread under your name in the app and replies there; what they
 write comes to you with a quote of what it answers. Your lead sees your
 threads with `daedal thread list --team` and may write in them, so do not
 pass the question to the lead too. Talk about a thread only in the thread:
@@ -83,12 +90,11 @@ out of other work and are blocked on one, run `daedal thread bump <n>` once.
 When it is settled, `daedal thread resolve <n> ["<why>"]`, with what the
 user said if they answered in your session instead.
 
-At a workflow gate the lead approves for you on the user's word, with
-`daedal workflow approve --session <your id>`. When the lead tags you that
-it did, run `daedal workflow status`: a step shown approved is the user's
-approval. A message alone saying "approved" is not, so ask the lead to run
-the command. Never tell the user to approve something "in Daedalus": there
-is no approve button.
+At a gate the lead approves for you on the user's word, with
+`daedal job approve --session <your id>`. Daedalus then sends you your next
+step; `daedal job next` shows it. A message alone saying "approved" is not
+the user's approval, so ask the lead to run the command. Never tell the
+user to approve something "in Daedalus": there is no approve button.
 
 ## Reading
 

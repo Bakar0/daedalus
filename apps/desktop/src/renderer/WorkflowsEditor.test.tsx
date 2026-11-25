@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import type { WorkflowFileDto } from "@daedalus/protocol";
-import { StepPicker } from "./WorkflowsEditor";
+import { StepPicker, ToolPicker } from "./WorkflowsEditor";
 
 const file = (fields: Partial<WorkflowFileDto>): WorkflowFileDto => ({
   name: "x",
@@ -19,6 +19,7 @@ describe("the step picker", () => {
         files={{
           root: "/w",
           choosing: { path: "/w/CHOOSING.md", text: "" },
+          tools: [],
           steps: [file({ name: "review" }), file({ name: "ship" })],
           flows: [
             file({ name: "feature", steps: ["review", "@release"] }),
@@ -46,5 +47,25 @@ describe("the step picker", () => {
     expect(html).not.toMatch(/<\/svg>broken</);
     // Quiet buttons: the global blue button rule leaves them alone.
     expect(html).toContain('class="quiet step-picker-item');
+  });
+});
+
+describe("the tool picker", () => {
+  test("offers the tools the step does not suggest yet", () => {
+    const html = renderToStaticMarkup(
+      <ToolPicker
+        draft={"---\nname: build\ntools: [logs]\n---\nDo.\n"}
+        onAdd={() => {}}
+        tools={[
+          file({ name: "logs" }),
+          file({ name: "aws-access", description: "Get AWS access" }),
+          file({ name: "bad", problem: "No instructions" }),
+        ]}
+      />,
+    );
+    expect(html).toContain("aws-access");
+    expect(html).toContain("Get AWS access");
+    expect(html).not.toContain(">logs<");
+    expect(html).not.toContain(">bad<");
   });
 });

@@ -14,6 +14,7 @@ import {
   type StoredActivityRecord,
 } from "./activity-store";
 import { markCloudObservation } from "./cloud-mark";
+import { stepFromHook } from "../domain/session-steps";
 import type { ApplicationContext } from "./context";
 import { recordSessionCost } from "./cost-ledger";
 import {
@@ -134,6 +135,30 @@ export async function ingestHook(input: HookIngestInput): Promise<void> {
       context,
       ...(providerSessionId ? { providerSessionId } : {}),
     });
+    // A subagent's hooks are a heartbeat for its parent, not the parent's
+    // own steps.
+    const step = observation.heartbeat
+      ? undefined
+      : stepFromHook(input.event, payload);
+    if (step)
+      await context()
+        .then((opened) => {
+          const at = new Date().toISOString();
+          opened.repositories.sessionSteps.add(sessionId, { ...step, at });
+          // Escape on a running tool ends the turn, and no `Stop` follows.
+          if (step.kind === "tool" && payload.is_interrupt === true)
+            opened.repositories.sessionSteps.add(sessionId, {
+              ...step,
+              kind: "stop",
+              tool: null,
+              detail: null,
+              file: null,
+              failed: false,
+              durationMs: null,
+              at,
+            });
+        })
+        .catch(() => undefined);
     if (input.event === "SessionStart" || input.event === "Stop")
       // Channel messages that could not reach the session before: it was not
       // running yet, or a send failed. Retried on the next post, read or turn.

@@ -1,184 +1,82 @@
 import {
-  currentStepIndex,
   DaedalusError,
-  describePosition,
   includedWorkflow,
-  stepGroupId,
+  jobChildren,
+  workflowOfJobSource,
   type ApplicationContext,
-  type WorkflowRun,
-  type WorkflowStepState,
 } from "@daedalus/core";
+import { jobTreeLines } from "./job";
 import { expectPositionals, parseArguments, printResult } from "./arguments";
 
-export const workflowHelp = `Workflow commands — the agent's place in its workflow:
+export const workflowHelp = `Workflow commands. A workflow is an ordered list of steps kept as files:
   daedal workflow list
   daedal workflow show <workflow>
-  daedal workflow start <workflow> [--steps <a,b,...>] [--replace]
-  daedal workflow start --steps <a,b,...> [--name <label>] [--loop <step>] [--until "<text>"] [--replace]
-  daedal workflow step <step> start|done|skip --note "<line>"
-  daedal workflow add <step> [--after <step>] [--description "<text>"] [--gate]
-  daedal workflow remove <step>
-  daedal workflow approve [<step>]
-  daedal workflow end [--note "<text>"]
+  daedal workflow start <workflow> [--steps <a,b,...>] [--replace | --inside]
+  daedal workflow start --steps <a,b,...> [--name <label>] [--loop <step>] [--until "<text>"] [--replace | --inside]
   daedal workflow save <name> [--when "<text>"] [--description "<text>"]
-  daedal workflow status
+  daedal workflow memory <step>
+  daedal workflow remember <step> "<instruction>" --why "<what happened>" [--only <workflow>]
+  daedal workflow forget <step> <number>
+  daedal workflow promote <step> <number>
 Every command but list and show takes [--session <agent-id>].
 
 Workflows and their steps are markdown files in the workflows folder of the
 Daedalus home: flows/<name>.md lists a workflow's steps, steps/<name>.md says
 what to do in one, and CHOOSING.md holds the rules for picking a workflow.
+A step file may declare what the step hands over and what it waits for:
+  gives: [branch: commit, tests: number]
+  needs: [design]
+Left out, a step gives only its result and needs the step before it.
 'list' shows every workflow with when it fits, and any file that does not
 parse. 'show' prints a workflow with each step's instructions.
 
-A run belongs to the session doing the work, apart from any task, and a
-rebirth hands it to the successor. 'start' fails while the session has an
-open run; --replace ends it first.
+'start' adds the workflow's steps as jobs under the job this session is
+on and prints the first step's brief. From there the work is reported with
+'daedal job': 'job done' finishes a step and prints the next one's brief,
+'job next' prints the current brief again, 'job tree' shows the whole run.
+A session is in one workflow at a time. --replace skips what is left of
+the one it is in; --inside starts this one as part of the step it is on.
 
-Dynamic workflows: 'start --steps' assembles a run for this work, without
-any workflow file; --steps "" starts it empty. A workflow file with
-'steps: dynamic' has no fixed steps: start it by name and list yours with
---steps. A step with a file brings its instructions; any other name is this
-run's own step, and its start note says what it is.
-'add' puts a step into the open run only; --description gives a step with no
-file its instructions. 'remove' takes out a step not yet started. None of this changes
-a workflow file. 'save' writes the run as a maintained workflow, with a step
-file for each step that has none.
-
-Circular runs: a workflow with 'loop: <step>', or a dynamic workflow
-started with --loop, goes back to that step when its last step finishes, and counts the
-iterations. It runs until 'end'.
+Steps of your own: 'start --steps a,b,c' builds a run for this work with no
+workflow file. A workflow file with 'steps: dynamic' has no fixed steps:
+start it by name and list yours with --steps. A step with a file brings its
+instructions; any other name is this run's own step. --loop <step> makes
+the run go back to that step after its last one, until you end it with
+'daedal job done --job <label> --result "<why it stops>"'.
+'save' writes the workflow this session is in as a maintained workflow,
+with a step file for each step that has none.
 
 Sub-workflows: a workflow's steps can include another workflow as @name,
-such as steps: [plan, build, @release]. A run expands it in place, and its
-steps get ids qualified by it: release/review. Report a step by that id; a
-bare 'review' works while only one step has that name. An included
-workflow's own loop goes round inside it only; starting the step after it
-moves on.
+such as steps: [plan, build, @release]. It becomes one job among the steps,
+with its own steps under it.
 
-'step <step> start' marks the step you begin and finishes the one before.
-It prints one line, so chain it onto the command the step runs anyway:
-  daedal workflow step test start --note "Run the CLI tests" && bun test
-A step change that leaves a gate waiting exits 4, so the chained command
-does not run.
-Every step change takes --note, specific to this work: on start, what you
-will do in the step; on done, what came out; on skip, why.
-Starting a step that already ended goes back to it.
+Gates: a step with 'gate: result' needs the user to approve its result.
+'job done' holds it instead of finishing it; ask the user and stop, and run
+'daedal job approve' on their word. A step with 'gate: start' waits for the
+user's go-ahead before it starts.
 
-Gates: a step with 'gate: result' needs the user to approve its result. Do
-the step, then 'step <step> done --note "<what to approve>"': the step
-waits, attention is raised, and no other step starts. Ask the user in the
-conversation and stop. When they approve, run 'approve', which marks the
-step done; to change the result first, start the step again. A step with
-'gate: start' waits when it starts, until the user gives the go-ahead; then
-run 'approve' and do the step. 'gate: user' and 'gate: before' are the old
-names for 'result' and 'start' and still work. 'add --gate' adds a step
-with 'gate: result'.`;
-
-const STATE_MARK: Record<WorkflowStepState, string> = {
-  pending: "·",
-  waiting: "?",
-  active: "▶",
-  done: "✓",
-  skipped: "–",
-};
-
-function runTitle(run: WorkflowRun): string {
-  const tags = [
-    run.dynamic ? "dynamic" : undefined,
-    run.modified ? "changed for this run" : undefined,
-    run.loopTo
-      ? `loops to ${run.loopTo}, iteration ${run.iteration}`
-      : undefined,
-  ].filter(Boolean);
-  const where = run.endedAt
-    ? ` (ended${run.endNote ? `: ${run.endNote}` : ""})`
-    : describePosition(run);
-  return `${run.workflow}${tags.length ? ` [${tags.join("; ")}]` : ""}${where}`;
-}
+A saved step keeps a memory of what earlier runs learned about that kind
+of work, in steps/<step>.memory.md. 'remember' proposes one: an instruction
+the next agent can act on, and --why, one sentence of what happened. Only
+what is true of the step wherever it runs belongs there; something about
+one repository goes in that repository's instructions. A proposal applies
+once the user accepts it; accepted memories come with the step's brief.
+'memory' lists them by number, 'forget' removes one, 'promote' moves one
+into the step's own instructions.`;
 
 /**
- * A run as status prints it: one line per step by its full id, which is
- * what the agent reports, under a heading for each included workflow.
+ * The state commands the job engine replaced, each with what to run now. A
+ * session started before the change is told once and goes on.
  */
-export function runLines(run: WorkflowRun): string[] {
-  const lines: string[] = [];
-  const index = currentStepIndex(run);
-  lines.push(runTitle(run));
-  if (run.until && !run.endedAt) lines.push(`  until: ${run.until}`);
-  let group = "";
-  run.steps.forEach((step, position) => {
-    const stepGroup = stepGroupId(step.name);
-    if (stepGroup !== group) {
-      // A heading for each group this step enters, outermost first.
-      const parts = stepGroup ? stepGroup.split("/") : [];
-      parts.forEach((_part, at) => {
-        const id = parts.slice(0, at + 1).join("/");
-        if (group === id || group.startsWith(`${id}/`)) return;
-        const found = run.groups.find((item) => item.id === id);
-        const loop = found?.loopTo
-          ? ` [loops to ${found.loopTo}, iteration ${found.iteration}]`
-          : "";
-        lines.push(
-          `  ${"  ".repeat(at)}@${found?.workflow ?? parts[at]}${loop}`,
-        );
-      });
-      group = stepGroup;
-    }
-    const indent = "  ".repeat(stepGroup ? stepGroup.split("/").length : 0);
-    const tags = [
-      step.gate ? `gate: ${step.gate}` : "",
-      step.dynamic ? "no file" : "",
-    ]
-      .filter(Boolean)
-      .map((tag) => ` [${tag}]`)
-      .join("");
-    const said = step.note ?? step.plan;
-    const note = said ? ` — ${said}` : "";
-    const here = position === index && !run.endedAt ? "  ←" : "";
-    lines.push(
-      `  ${indent}${STATE_MARK[step.state]} ${step.name}${tags}${note}${here}`,
-    );
-    if (step.dynamic && !said && step.description)
-      lines.push(`      ${indent}${step.description}`);
-  });
-  return lines;
-}
-
-function printRun(run: WorkflowRun): void {
-  for (const line of runLines(run)) console.log(line);
-}
-
-/** The one line a step change prints, and what follows a loop. */
-export function stepOutcomeLines(outcome: {
-  run: WorkflowRun;
-  looped: boolean;
-  loopedGroup: WorkflowRun["groups"][number] | null;
-}): string[] {
-  const { run } = outcome;
-  const index = currentStepIndex(run);
-  const step = run.steps[index];
-  const lines = [
-    run.endedAt
-      ? `workflow ${run.workflow} finished`
-      : `workflow ${run.workflow}: ${STATE_MARK[step?.state ?? "pending"]} ${step?.name ?? ""} (${index + 1}/${run.steps.length})`,
-  ];
-  if (outcome.looped)
-    lines.push(
-      `Back to '${run.loopTo}' for iteration ${run.iteration}; run 'daedal workflow end' when it should stop${run.until ? `: ${run.until}` : ""}.`,
-    );
-  const group = outcome.loopedGroup;
-  if (group) {
-    const members = run.steps.filter((item) =>
-      item.name.startsWith(`${group.id}/`),
-    );
-    const last = run.steps.indexOf(members[members.length - 1]!);
-    const next = run.steps[last + 1];
-    lines.push(
-      `${group.workflow} goes round: back to '${group.loopTo}' for iteration ${group.iteration}${group.until ? `, until: ${group.until}` : ""}. ${next ? `To move on, start '${next.name}'.` : "Run 'daedal workflow end' when it should stop."}`,
-    );
-  }
-  return lines;
-}
+export const REPLACED_WORKFLOW_COMMANDS: Record<string, string> = {
+  step: 'Steps start by themselves now. Finish the one you are on with `daedal job done --result "<what came out>"`, which prints the next one. Skip one with `daedal job skip <step> --why "<why>"`, go back to one with `daedal job redo <step> --why "<why>"`, and print your current step with `daedal job next`.',
+  approve: "Run `daedal job approve` on the user's word.",
+  end: 'End a workflow that goes round with `daedal job done --job <workflow> --result "<why it stops>"`. Drop what is left of any other with `daedal job skip <workflow> --why "<why>"`.',
+  add: 'Add a step with `daedal job add "<title>" --me`.',
+  remove: 'Take a step out with `daedal job skip <step> --why "<why>"`.',
+  status:
+    "Run `daedal job tree` for the whole run, or `daedal job next` for the step you are on.",
+};
 
 const stepList = (value: string): string[] =>
   value
@@ -197,6 +95,11 @@ export async function workflowCommand(
     console.log(workflowHelp);
     return 0;
   }
+  if (action in REPLACED_WORKFLOW_COMMANDS)
+    throw new DaedalusError(
+      "VALIDATION",
+      `'daedal workflow ${action}' is gone. ${REPLACED_WORKFLOW_COMMANDS[action]}`,
+    );
   const parsed = parseArguments(
     args,
     [
@@ -206,11 +109,13 @@ export async function workflowCommand(
       "name",
       "loop",
       "until",
+      "why",
+      "only",
       "after",
       "description",
       "when",
     ],
-    ["replace", "gate"],
+    ["replace", "gate", "inside"],
   );
   const { note, description } = parsed.values;
   if (action === "list") {
@@ -227,6 +132,14 @@ export async function workflowCommand(
         );
         if (workflow.when) console.log(`  when: ${workflow.when}`);
         if (workflow.until) console.log(`  until: ${workflow.until}`);
+      }
+      if (catalog.tools.length) {
+        // A step's brief names the tools it suggests; these are all of them.
+        console.log("\nTools ('daedal tool show <name>' prints one):");
+        for (const tool of catalog.tools)
+          console.log(
+            `  ${tool.name}${tool.description ? `: ${tool.description}` : ""}`,
+          );
       }
       for (const problem of catalog.problems)
         console.log(`! ${problem.path}: ${problem.message}`);
@@ -279,127 +192,65 @@ export async function workflowCommand(
     if (!named && parsed.values.steps === undefined)
       throw new DaedalusError(
         "VALIDATION",
-        "Usage: daedal workflow start <workflow>, or start --steps <a,b,...> for a dynamic workflow",
+        "Usage: daedal workflow start <workflow>, or start --steps <a,b,...> for steps of your own",
       );
     expectPositionals(
       parsed.positionals,
       named ? 1 : 0,
       named
-        ? "daedal workflow start <workflow> [--steps <a,b,...>] [--replace]"
+        ? "daedal workflow start <workflow> [--steps <a,b,...>] [--replace | --inside]"
         : "daedal workflow start --steps <a,b,...> [--name <label>] [--loop <step>] [--until <text>]",
     );
-    const steps =
-      parsed.values.steps === undefined
-        ? {}
-        : { steps: stepList(parsed.values.steps) };
-    const run = await context.workflows.start({
-      sessionId,
-      ...steps,
-      ...(named
-        ? { workflow: parsed.positionals[0]! }
-        : {
-            ...(parsed.values.name ? { name: parsed.values.name } : {}),
-            ...(parsed.values.loop ? { loop: parsed.values.loop } : {}),
-            ...(parsed.values.until ? { until: parsed.values.until } : {}),
-          }),
-      replace: parsed.flags.has("replace"),
-    });
-    // Every step's instructions come back with the start, so no second call
-    // is needed before the first step.
-    const { notes, steps: bodies } = await context.workflows.instructions(run);
-    printResult({ run }, json, () => {
-      printRun(run);
-      if (notes.trim()) console.log(`\n${notes.trim()}`);
-      bodies.forEach((step, index) => {
-        // A step the agent named itself has no instructions to repeat.
-        if (!step.body.trim()) return;
-        console.log(
-          `\n## ${index + 1}. ${step.name}${step.gate ? ` [gate: ${step.gate}]` : ""}\n${step.body}`,
-        );
-      });
-    });
-    return 0;
-  }
-  if (action === "step") {
-    const usage = 'daedal workflow step <step> start|done|skip --note "<line>"';
-    expectPositionals(parsed.positionals, 2, usage);
-    const stepAction = parsed.positionals[1];
-    if (
-      stepAction !== "start" &&
-      stepAction !== "done" &&
-      stepAction !== "skip"
-    )
-      throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
-    const outcome = await context.workflows.step({
-      sessionId,
-      step: parsed.positionals[0]!,
-      action: stepAction,
-      ...(note ? { note } : {}),
-    });
-    // A waiting gate fails the command, so whatever was chained after it
-    // with && does not run.
-    const isMember = Boolean(context.teams.memberOf(sessionId));
-    if (outcome.waiting)
+    if (parsed.flags.has("replace") && parsed.flags.has("inside"))
       throw new DaedalusError(
-        "CONFLICT",
-        gateWaitingText(
-          outcome.run.steps.find((step) => step.state === "waiting")?.name ??
-            parsed.positionals[0]!,
-          stepAction === "done" ? "result" : "start",
-          isMember ? sessionId : undefined,
-        ),
-        { runId: outcome.run.id },
+        "VALIDATION",
+        "Pass --replace or --inside, not both",
       );
-    printResult(outcome, json, () => {
-      // One line: an update is usually chained onto another command.
-      for (const line of stepOutcomeLines(outcome)) console.log(line);
-    });
-    return 0;
-  }
-  if (action === "add") {
-    expectPositionals(
-      parsed.positionals,
-      1,
-      'daedal workflow add <step> [--after <step>] [--description "<text>"] [--gate]',
-    );
-    const run = await context.workflows.add({
+    const started = await context.jobIntake.startWorkflow({
       sessionId,
-      step: parsed.positionals[0]!,
-      ...(parsed.values.after ? { after: parsed.values.after } : {}),
-      ...(description ? { description } : {}),
-      gate: parsed.flags.has("gate"),
+      ...(parsed.values.steps === undefined
+        ? {}
+        : { steps: stepList(parsed.values.steps) }),
+      ...(named ? { workflow: parsed.positionals[0]! } : {}),
+      ...(parsed.values.name ? { name: parsed.values.name } : {}),
+      ...(parsed.values.loop ? { loop: parsed.values.loop } : {}),
+      ...(parsed.values.until ? { until: parsed.values.until } : {}),
+      replace: parsed.flags.has("replace"),
+      inside: parsed.flags.has("inside"),
     });
-    printResult({ run }, json, () => printRun(run));
-    return 0;
-  }
-  if (action === "remove") {
-    expectPositionals(parsed.positionals, 1, "daedal workflow remove <step>");
-    const run = context.workflows.remove({
-      sessionId,
-      step: parsed.positionals[0]!,
-    });
-    printResult({ run }, json, () => printRun(run));
-    return 0;
-  }
-  if (action === "approve") {
-    if (parsed.positionals.length > 1)
-      expectPositionals(
-        parsed.positionals,
-        1,
-        "daedal workflow approve [<step>]",
-      );
-    const run = context.workflows.approve(sessionId, parsed.positionals[0]);
-    printResult({ run }, json, () => printRun(run));
-    return 0;
-  }
-  if (action === "end") {
-    expectPositionals(
-      parsed.positionals,
-      0,
-      'daedal workflow end [--note "<text>"]',
+    printResult(
+      { job: started.job, brief: started.brief, notes: started.notes },
+      json,
+      () => {
+        // The workflow alone, not the whole tree it is in.
+        const under = new Map(
+          [...started.tree.jobs].filter(([, job]) => {
+            for (
+              let at: typeof job | undefined = job;
+              at;
+              at = at.parentId ? started.tree.jobs.get(at.parentId) : undefined
+            )
+              if (at.id === started.job.id) return true;
+            return false;
+          }),
+        );
+        const top = under.get(started.job.id);
+        if (top) under.set(top.id, { ...top, parentId: null });
+        const here = context.jobs.current(sessionId)?.job.id;
+        for (const line of jobTreeLines({ jobs: under }, here ? { here } : {}))
+          console.log(line);
+        if (started.job.loop)
+          console.log(
+            `It goes round${started.job.loop.until ? ` until: ${started.job.loop.until}` : ""}. End it with \`daedal job done --job ${started.job.name} --result "<why it stops>"\`.`,
+          );
+        if (started.notes) console.log(`\n${started.notes}`);
+        if (started.brief) console.log(`\n${started.brief}`);
+        else
+          console.log(
+            "\nIts first step has not started. `daedal job next` says what waits.",
+          );
+      },
     );
-    const run = context.workflows.end({ sessionId, ...(note ? { note } : {}) });
-    printResult({ run }, json, () => printRun(run));
     return 0;
   }
   if (action === "save") {
@@ -408,11 +259,24 @@ export async function workflowCommand(
       1,
       'daedal workflow save <name> [--when "<text>"] [--description "<text>"]',
     );
+    const open = context.jobIntake.workflowOf(sessionId);
+    if (!open)
+      throw new DaedalusError(
+        "NOT_FOUND",
+        "This session is in no workflow. Save one while it runs.",
+      );
+    const steps = jobChildren(open.tree, open.job.id);
     const saved = await context.workflows.saveAs({
-      sessionId,
       name: parsed.positionals[0]!,
       ...(parsed.values.when ? { when: parsed.values.when } : {}),
       ...(description ? { description } : {}),
+      steps: steps.map((step) => ({
+        entry: workflowOfJobSource(step.source) ? `@${step.name}` : step.name,
+        gate: step.gate,
+        text: step.instructions || step.result || "",
+      })),
+      loop: open.job.loop?.to ?? null,
+      until: open.job.loop?.until ?? "",
     });
     printResult(saved, json, () => {
       console.log(`Saved workflow '${saved.workflow}':`);
@@ -420,38 +284,78 @@ export async function workflowCommand(
     });
     return 0;
   }
-  if (action === "status") {
-    expectPositionals(parsed.positionals, 0, "daedal workflow status");
-    const run = context.workflows.current(sessionId) ?? null;
-    printResult({ run }, json, () => {
-      if (run) printRun(run);
-      else console.log("No workflow run yet");
+  if (action === "memory") {
+    expectPositionals(parsed.positionals, 1, "daedal workflow memory <step>");
+    const memory = await context.workflows.stepMemory(parsed.positionals[0]!);
+    printResult(memory, json, () => {
+      if (!memory.memories.length)
+        console.log(`The ${memory.step} step has no memory yet`);
+      memory.memories.forEach((item, index) =>
+        console.log(
+          `${index + 1}. [${item.status}] ${item.text}\n   why: ${item.why}\n   seen: ${item.runs} ${item.runs === 1 ? "run" : "runs"}, last ${item.lastSeen}${item.workflow ? ` (${item.workflow})` : ""}${item.only ? `\n   only: ${item.only}` : ""}`,
+        ),
+      );
     });
+    return 0;
+  }
+  if (action === "remember") {
+    const usage =
+      'daedal workflow remember <step> "<instruction>" --why "<what happened>"';
+    expectPositionals(parsed.positionals, 2, usage);
+    if (!parsed.values.why)
+      throw new DaedalusError("VALIDATION", `Usage: ${usage}`);
+    // Outside a session nothing names the run it was learned in.
+    const sessionId = await currentSessionId(parsed.values.session).catch(
+      () => undefined,
+    );
+    const memory = await context.workflows.rememberStep({
+      step: parsed.positionals[0]!,
+      text: parsed.positionals[1]!,
+      why: parsed.values.why,
+      workflow: sessionId
+        ? (workflowOfJobSource(
+            context.jobIntake.workflowOf(sessionId)?.job.source ?? null,
+          ) ?? null)
+        : null,
+      ...(parsed.values.only ? { only: parsed.values.only } : {}),
+    });
+    printResult(memory, json, () =>
+      console.log(
+        `Proposed for the ${memory.step} step. It applies once the user accepts it, in the app's Workflows tab.`,
+      ),
+    );
+    return 0;
+  }
+  if (action === "accept") {
+    // Accepting is the user's: an agent that could accept its own proposal
+    // would make the proposal step mean nothing.
+    throw new DaedalusError(
+      "VALIDATION",
+      "The user accepts a step's memory in the app's Workflows tab; agents propose with 'daedal workflow remember'",
+    );
+  }
+  if (action === "forget" || action === "promote") {
+    expectPositionals(
+      parsed.positionals,
+      2,
+      `daedal workflow ${action} <step> <number>`,
+    );
+    const [step, reference] = parsed.positionals as [string, string];
+    const memory =
+      action === "forget"
+        ? await context.workflows.forgetStepMemory(step, reference)
+        : await context.workflows.promoteStepMemory(step, reference);
+    printResult(memory, json, () =>
+      console.log(
+        action === "forget"
+          ? `Forgotten. The ${memory.step} step keeps ${memory.memories.length}.`
+          : `Moved into steps/${memory.step}.md and taken out of its memory.`,
+      ),
+    );
     return 0;
   }
   throw new DaedalusError(
     "VALIDATION",
     `Unknown workflow command '${action}'. Run 'daedal workflow help'.`,
   );
-}
-
-/**
- * What an agent is told when its step waits at a gate. The user answers in
- * words; Daedalus has no approve button, so the text never points at one. A
- * team member's user talks to the lead, so the lead may approve for it, and
- * the member learns that from its run, not from a relayed message.
- */
-export function gateWaitingText(
-  step: string,
-  gate: "start" | "result",
-  memberSessionId?: string,
-): string {
-  const waits =
-    gate === "result"
-      ? `Step '${step}' waits for the user to approve what came out.`
-      : `Step '${step}' waits for the user to agree before it starts.`;
-  const answer = memberSessionId
-    ? ` Tag @lead with what to approve and stop. The user answers in this session, or tells your lead, who runs 'daedal workflow approve --session ${memberSessionId}'; 'daedal workflow status' then shows the step approved. Daedalus has no approve button, so never ask the user to approve it there.`
-    : " Ask them in the conversation and stop. Daedalus has no approve button, so never ask the user to approve it there.";
-  return `${waits} Attention is raised.${answer}`;
 }

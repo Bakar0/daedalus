@@ -68,6 +68,54 @@ whenever something changes:
 A rebirth successor reads it first, so write it for someone who knows
 nothing about the conversation. Members can read it too.
 
+## A plan with a flow
+
+When the pieces of work have an order, write them as a plan
+(`daedal plan new`, a file in `plans/`) with a `## Flow` section: a mermaid
+flowchart of the tasks' `^id`s, which says what each task needs first.
+
+````
+## Flow
+
+```mermaid
+flowchart LR
+  design --> api & page --> proof
+```
+
+## Tasks
+
+- [x] Design the cart ^design
+- [ ] Cart API ^api
+- [ ] Cart page ^page
+- [~] Proof together ^proof
+````
+
+Then add the plan to your job:
+
+```
+daedal job add --plan cart
+```
+
+Each task becomes a job under the one you are on, and a box on the
+workspace's Factory page. You own the pipeline, not the boxes. Daedalus
+starts a new agent on every `[ ]` task with no owner once what it needs is
+done, three at a time, and hands it the results of the tasks before it. So
+do not spawn a member for a task in the flow, and do not put an `@owner` on
+one unless that session should do it: an owned task is given to its owner,
+and no agent is started for it. Mark a task `[~]` while you are still
+describing it, and `[ ]` when a worker could start it from the task's text
+alone; run `daedal job add --plan` again to pick up tasks written since. A
+worker ends its task with `daedal job done --result "<what came out>"`.
+Daedalus then writes `[x]` in the file, starts the tasks that waited on it,
+and tells you. It also tells you when a task fails or waits on the user. Do
+not tick boxes yourself: the marks come from the jobs. `daedal job tree`
+shows every task with its state and result,
+`daedal job redo <id> --why "<why>"` sends finished work back with what
+needed it, `daedal job retry <id>` runs a failed task again, and
+`daedal job skip <id> --why "<why>"` closes one that will not be done. Your
+part is the plan itself: the tasks' text, the flow, the questions workers
+raise, and checking each result when it comes back.
+
 Keep it to what is current. When it passes 20 KB your session header in Daedalus
 says so; then run `/daedalus-compact-workspace team`, which moves finished work
 and replaced decisions to `TEAM-ARCHIVE.md`.
@@ -203,8 +251,8 @@ team notices have woken you. Write for that:
   "nothing new", no "nothing for you". Your finished turns notify the user
   when they are not looking at you, with the start of your last message,
   so make its first line the news.
-- Ask the user in a thread, once, so it stays in the Threads tab until it
-  is settled. First look for one: `daedal thread find "<words>"` searches
+- Ask the user in a thread, once, so it stays in their list of threads
+  until it is settled. First look for one: `daedal thread find "<words>"` searches
   your workspace's threads, open and resolved, from the last two weeks. If
   one is about the same thing, write in it with `daedal thread say <n>
 "<message>"`; that reopens a resolved one. Otherwise write one line in
@@ -237,14 +285,17 @@ team notices have woken you. Write for that:
   questions.
 - What the user writes arrives as "[thread #14] The user: ..." with a quote
   of what it answers; act on it then. Replying does not end a thread.
-- A member's threads show in your Threads tab tagged as the member's;
-  `daedal thread list --team` shows them, and you are handed "@x is waiting
+- A member's threads show to the user under that member;
+  `daedal thread list --team` shows them to you, and you are handed "@x is waiting
   on the user" when one stops on it. Do not copy a member's thread, relay it
   or answer it yourself.
-- When the user approves a member's workflow gate in your session, run
-  `daedal workflow approve --session <member session id>`, then tag the
-  member that its gate is approved. The member checks
-  `daedal workflow status`; a relayed "approved" counts for nothing to it.
+- When the user approves a member's gate in your session, run
+  `daedal job approve --session <member session id>`. Daedalus sends the
+  member its next step, so you need not tag it. When the user answers a
+  member's hold in your session, pass it on with
+  `daedal job release --session <member session id> --answer "<their
+answer>"`. A relayed "approved" counts for nothing to a member: it goes
+  by `daedal job next`.
 
 ## When members report
 

@@ -9,7 +9,6 @@ import type { AgentActivity, AgentSession } from "../domain";
 import {
   addPlanTaskQuestion,
   ensurePlanTaskId,
-  findPlanTask,
   isPlanPath,
   parsePlan,
   PLAN_SUFFIX,
@@ -18,12 +17,9 @@ import {
   planProgress,
   planQuestions,
   planSlug,
-  planTaskBrief,
-  planTaskDetails,
   planTasks,
   renderNewPlan,
   resolvePlanOwner,
-  sessionPlanHandle,
   setPlanTaskOwner,
   setPlanTaskState,
   type PlanDocument,
@@ -59,15 +55,10 @@ export interface PlanPorts {
   workspaces(): Promise<{ id: string; name: string; path: string }[]>;
   /** Sessions owners may name: one workspace's, or all for Home. */
   sessions(workspaceId: string | undefined): Promise<AgentSession[]>;
+  /** The sessions that lead a team, for a plan whose owner is `lead`. */
+  leads?(): string[];
   activity(sessionId: string): AgentActivity | undefined;
   needsAttention(sessionId: string): boolean;
-  spawn(input: {
-    workspace: string;
-    provider: string;
-    name: string;
-    message: string;
-    spawnedBy?: string;
-  }): Promise<AgentSession>;
   send(
     sessionId: string,
     text: string,
@@ -370,8 +361,12 @@ export class PlanService {
     return [...handles].map((handle) => this.ownerView(handle, sessions));
   }
 
+  private leads(): ReadonlySet<string> {
+    return new Set(this.ports.leads?.() ?? []);
+  }
+
   private ownerView(handle: string, sessions: AgentSession[]): PlanOwnerView {
-    const session = resolvePlanOwner(handle, sessions);
+    const session = resolvePlanOwner(handle, sessions, this.leads());
     return {
       handle,
       sessionId: session?.id ?? null,
@@ -429,57 +424,6 @@ export class PlanService {
   }
 
   /**
-   * Starts an agent on a task: in the plan's workspace, on the workspace's
-   * default provider, else Claude. The task gets an id if it had none, `[/]`
-   * and the new session's handle.
-   */
-  async startTask(
-    file: PlanFile,
-    task: string,
-    options: { provider?: string; spawnedBy?: string } = {},
-  ): Promise<{ session: AgentSession; plan: PlanDocument }> {
-    if (!file.workspaceId)
-      throw new DaedalusError(
-        "VALIDATION",
-        "A Home plan's task starts in a workspace; start the agent there",
-      );
-    const workspace = await this.ports.workspace(file.workspaceId);
-    // The id goes in first, so the task is found by it whatever else
-    // changes in the file while the session starts.
-    let id = "";
-    const plan = await this.edit(file, (source) => {
-      const withId = ensurePlanTaskId(source, task);
-      id = withId.id;
-      return withId.source;
-    });
-    const target = findPlanTask(plan, `^${id}`);
-    if (target.state === "done" || target.state === "dropped")
-      throw new DaedalusError(
-        "CONFLICT",
-        `"${target.title}" is ${target.state}; reopen it in the plan first`,
-      );
-    const session = await this.ports.spawn({
-      workspace: workspace.id,
-      provider: options.provider ?? workspace.defaultProvider ?? "claude",
-      name: target.title.replace(/[`*_~]/g, "").slice(0, 80) || "Plan task",
-      message: planTaskBrief({
-        planPath: file.absolutePath,
-        planTitle: plan.title,
-        task: target,
-        details: planTaskDetails(target),
-      }),
-      ...(options.spawnedBy ? { spawnedBy: options.spawnedBy } : {}),
-    });
-    const next = await this.setState(
-      file,
-      `^${id}`,
-      "doing",
-      sessionPlanHandle(session),
-    );
-    return { session, plan: next };
-  }
-
-  /**
    * Sends the user's question about lines of the plan to whoever owns them:
    * `owner`, or the plan's owner when the part has none.
    */
@@ -506,6 +450,7 @@ export class PlanService {
     const session = resolvePlanOwner(
       handle,
       await this.ports.sessions(file.workspaceId ?? undefined),
+      this.leads(),
     );
     if (!session)
       throw new DaedalusError(

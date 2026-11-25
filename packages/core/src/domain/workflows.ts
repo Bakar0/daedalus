@@ -1,4 +1,5 @@
 import type { UUID } from "./index";
+import type { JobGive } from "./jobs";
 
 /**
  * A step is one building block of a workflow: research, review, deploy. Its
@@ -31,6 +32,30 @@ export interface WorkflowStepDefinition {
   name: string;
   description: string;
   gate: WorkflowGate | null;
+  body: string;
+  /**
+   * The steps of its workflow that must finish first. Left out, a step needs
+   * the one before it.
+   */
+  needs?: string[];
+  /** What the step must hand over before it is done. */
+  gives?: JobGive[];
+  /**
+   * The tools suggested for the step, by name. A push toward the right one:
+   * the agent may use anything else it needs.
+   */
+  tools?: string[];
+}
+
+/**
+ * How to do one recurring thing: get access, read logs, use a CLI. A step
+ * may suggest it, and an agent may open it for any work.
+ */
+export interface ToolDefinition {
+  name: string;
+  /** What it is for, in a line: what an agent reads to decide to open it. */
+  description: string;
+  /** The instructions. */
   body: string;
 }
 
