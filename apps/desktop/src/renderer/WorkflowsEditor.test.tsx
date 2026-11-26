@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 import type { WorkflowFileDto } from "@daedalus/protocol";
-import { StepPicker, ToolPicker } from "./WorkflowsEditor";
+import { StepChips, StepPicker, ToolPicker } from "./WorkflowsEditor";
 
 const file = (fields: Partial<WorkflowFileDto>): WorkflowFileDto => ({
   name: "x",
@@ -67,5 +67,26 @@ describe("the tool picker", () => {
     expect(html).toContain("Get AWS access");
     expect(html).not.toContain(">logs<");
     expect(html).not.toContain(">bad<");
+  });
+});
+
+describe("a step's card", () => {
+  const step = (tools: string[]) => file({ name: "proof", tools });
+
+  test("names two tools and says how many more there are", () => {
+    const html = renderToStaticMarkup(
+      <StepChips step={step(["aws", "cx", "gh", "kubectl", "dx"])} />,
+    );
+    expect(html).toContain(">aws<");
+    expect(html).toContain(">cx<");
+    expect(html).not.toContain(">gh<");
+    expect(html).toContain("+3 more");
+    expect(html).toContain('title="gh, kubectl, dx"');
+  });
+
+  test("with two tools or fewer says nothing more", () => {
+    const html = renderToStaticMarkup(<StepChips step={step(["aws", "cx"])} />);
+    expect(html).toContain(">cx<");
+    expect(html).not.toContain("more");
   });
 });

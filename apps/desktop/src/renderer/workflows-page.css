@@ -398,6 +398,16 @@
   color: var(--wf-tool);
   font-family: var(--mono, ui-monospace, Menlo, monospace);
 }
+/* A long tool name is cut, so the count after it always fits. */
+.wf-page .wf-main button.wf-card .wf-chip.tool {
+  max-width: 9.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wf-chip.more {
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
 
 /* Steps and tools: one card each. */
 .wf-cards {

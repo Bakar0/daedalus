@@ -277,8 +277,13 @@ function Problem({ text }: { text: string }) {
 }
 
 /** A step's gate and the tools it suggests, as chips on its card. */
-function StepChips({ step }: { step: WorkflowFileDto }) {
+/** How many tools a step's card names before it says how many more. */
+const CARD_TOOLS = 2;
+
+export function StepChips({ step }: { step: WorkflowFileDto }) {
   if (!step.gate && !step.tools?.length) return null;
+  const tools = step.tools ?? [];
+  const more = tools.slice(CARD_TOOLS);
   return (
     <span className="wf-chips">
       {step.gate && (
@@ -286,11 +291,16 @@ function StepChips({ step }: { step: WorkflowFileDto }) {
           {GATE_CHIP[step.gate]}
         </span>
       )}
-      {(step.tools ?? []).map((tool) => (
-        <span className="wf-chip tool" key={tool}>
+      {tools.slice(0, CARD_TOOLS).map((tool) => (
+        <span className="wf-chip tool" key={tool} title={tool}>
           {tool}
         </span>
       ))}
+      {more.length > 0 && (
+        <span className="wf-chip more" title={more.join(", ")}>
+          +{more.length} more
+        </span>
+      )}
     </span>
   );
 }
