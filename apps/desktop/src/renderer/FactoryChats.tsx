@@ -28,6 +28,7 @@ import {
 } from "./chat-unread";
 import type { DesktopClient } from "./client-types";
 import { MarkdownPreview, OpenLinkContext } from "./markdown-preview";
+import { type CommandContext, useCommand } from "./commands";
 import { snoozeChoices } from "./threads-shared";
 
 const REFRESH_MS = 5_000;
@@ -1360,6 +1361,20 @@ function Chat({
     setPicked(next);
     setMenu(false);
   };
+  // ⌃Tab and ⌃⇧Tab, while this window has focus, go through the agent and
+  // its open threads. Anywhere else they stay the session switcher.
+  const step = (by: 1 | -1) => {
+    const order: ChatTabId[] = ["agent", ...open.map((thread) => thread.id)];
+    const at = order.indexOf(tab);
+    show(
+      order[at < 0 ? 0 : (at + by + order.length) % order.length] ?? "agent",
+    );
+    replyBox.current?.focus();
+  };
+  const hasFocus = (context: CommandContext) =>
+    Boolean(context.target && box.current?.contains(context.target));
+  useCommand("session.switch", { enabled: hasFocus, run: () => step(1) });
+  useCommand("session.switchBack", { enabled: hasFocus, run: () => step(-1) });
   const working = tab === "agent" && live?.state === "working";
   // What the fork answering in the open conversation does now.
   const forkSessionId =
