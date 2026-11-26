@@ -1,9 +1,9 @@
-import { ThreadsHome } from "./ThreadsPane";
 import {
   openThreads,
   closedThreads,
   isAgentThread,
   threadMark,
+  waitingBySession,
   threadName,
   type ThreadMark,
   useAllThreads,
@@ -117,7 +117,6 @@ import { WORKFLOWS_SKILL } from "./SkillsPanel";
 import { METHODS_TITLE, WorkflowsEditor } from "./WorkflowsEditor";
 import { InstructionsEditor } from "./InstructionsEditor";
 import { PlansPage, PlansPane, usePlanList } from "./PlansPane";
-import { THREADS_ICON_PATH, useThreadCounts } from "./threads-shared";
 import { createPlan } from "./files/plan-actions";
 import { accountModelKey } from "./account-models";
 import {
@@ -2947,6 +2946,8 @@ export function WorkspaceApp({
   const { threads: allThreads, reload: reloadAllThreads } =
     useAllThreads(client);
   const seenConversations = useSeen();
+  // Sessions with a thread that waits on the user, for "needs you".
+  const waitingThreads = waitingBySession(allThreads);
   /** Puts conversations untouched for a day into history; set further down. */
   const tidy = useRef<() => void>(() => undefined);
   useEffect(() => {
@@ -3547,11 +3548,7 @@ export function WorkspaceApp({
     return client.subscribeKeybindings?.(take);
   }, [client]);
   useCommand("view.board", { run: () => setView("board") });
-  // Threads, Routines or Custom instructions from anywhere, by key or ⌘K, as the sidebar's do.
-  useCommand("view.home", {
-    enabled: () => !homeOpening,
-    run: () => void openAtHome("activity"),
-  });
+  // Routines or Custom instructions from anywhere, by key or ⌘K, as the sidebar's do.
   useCommand("view.routines", {
     enabled: () => !homeOpening,
     run: () => void openAtHome("routines"),
@@ -4195,7 +4192,6 @@ export function WorkspaceApp({
   const workspaceById = new Map(
     (snapshot?.workspaces ?? []).map((item) => [item.id, item]),
   );
-  const threadCounts = useThreadCounts(client);
   const allAgents = (snapshot?.agents ?? []).map((session) =>
     archivingSessionIds.has(session.id) && !session.archivedAt
       ? { ...session, archivedAt: archivingStartedAt.current }
@@ -4298,7 +4294,6 @@ export function WorkspaceApp({
   }, [client, resumeNowId]);
   // The side panel's Plans, read only while the dock that shows them is.
   // A cloud workspace's files are in its pod.
-  const waitingThreads = threadCounts.total;
   const planList = usePlanList(
     client,
     !workspacePanelCollapsed &&
@@ -5671,16 +5666,14 @@ export function WorkspaceApp({
   // picked again.
   const [homeOpening, setHomeOpening] = useState(false);
   const [homePage, setHomePage] = useState<
-    "activity" | "routines" | "methods" | "instructions" | "files"
-  >("activity");
+    "routines" | "methods" | "instructions" | "files"
+  >("routines");
   // A step the Factory page asked to see on the Workflows page.
   const [stepRequest, setStepRequest] = useState<{
     step: string;
     nonce: number;
   }>();
-  async function openAtHome(
-    page: "activity" | "routines" | "methods" | "instructions",
-  ) {
+  async function openAtHome(page: "routines" | "methods" | "instructions") {
     setHomeOpening(true);
     try {
       const home =
@@ -7480,7 +7473,9 @@ export function WorkspaceApp({
         (candidate) => {
           const session = sessionsByIdForKeys.get(candidate);
           return Boolean(
-            session && sessionNeedsAttention(statusViewFor(session)),
+            session &&
+            (sessionNeedsAttention(statusViewFor(session)) ||
+              waitingThreads.has(session.id)),
           );
         },
         shownSessionId,
@@ -7599,11 +7594,9 @@ export function WorkspaceApp({
     if (place.kind === "session") goToSession(place.id);
     else if (place.kind === "home")
       void openAtHome(
-        place.id === "routines" ||
-          place.id === "methods" ||
-          place.id === "instructions"
+        place.id === "methods" || place.id === "instructions"
           ? place.id
-          : "activity",
+          : "routines",
       );
     else if (place.kind === "task") openTask(place.id, place.workspaceId);
     else if (place.kind === "board") {
@@ -8973,29 +8966,6 @@ export function WorkspaceApp({
             </div>
             <button
               aria-current={
-                atHome && homePage === "activity" ? "page" : undefined
-              }
-              className="sidebar-routines-link sidebar-home-link"
-              disabled={homeOpening}
-              onClick={() => void openAtHome("activity")}
-              title="Open threads in every workspace"
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 16 16">
-                <path d={THREADS_ICON_PATH} />
-              </svg>
-              <span>Threads</span>
-              {waitingThreads > 0 && (
-                <span
-                  aria-label={`${waitingThreads} open`}
-                  className="sidebar-routines-count sidebar-needs-count"
-                >
-                  {waitingThreads}
-                </span>
-              )}
-            </button>
-            <button
-              aria-current={
                 atHome && homePage === "routines" ? "page" : undefined
               }
               className="sidebar-routines-link"
@@ -9167,8 +9137,12 @@ export function WorkspaceApp({
                       Number(right.view.attention) -
                       Number(left.view.attention),
                   );
-                const attentionCount = itemViews.filter((item) =>
-                  sessionNeedsAttention(item.view),
+                // A thread that waits on the user raises no attention reason,
+                // so a session whose only wait is a thread counts here too.
+                const attentionCount = itemViews.filter(
+                  (item) =>
+                    sessionNeedsAttention(item.view) ||
+                    waitingThreads.has(item.session.id),
                 ).length;
                 const sessionLabel = `${itemSessions.length} ${itemSessions.length === 1 ? "session" : "sessions"}`;
                 const insightLabel = `${sessionLabel} in ${item.name}: ${liveCount} live, ${attentionCount} need you`;
@@ -9554,27 +9528,7 @@ export function WorkspaceApp({
               </Suspense>
             ) : atHome && homePage !== "files" ? (
               <div className="home-page">
-                {homePage === "activity" ? (
-                  <ThreadsHome
-                    client={client}
-                    onError={setError}
-                    onOpenThread={(thread) => {
-                      const target = sessionsById.get(thread.sessionId);
-                      if (!target) {
-                        setError(
-                          `The session of thread #${thread.id} is gone.`,
-                        );
-                        return;
-                      }
-                      // A resolved thread is in its agent's History, and a
-                      // thread of a fork-only kind shows as itself.
-                      openChatPopup(
-                        target,
-                        thread.resolvedAt ? "history" : thread.id,
-                      );
-                    }}
-                  />
-                ) : homePage === "instructions" ? (
+                {homePage === "instructions" ? (
                   <InstructionsEditor client={client} onError={setError} />
                 ) : homePage === "methods" ? (
                   <WorkflowsEditor

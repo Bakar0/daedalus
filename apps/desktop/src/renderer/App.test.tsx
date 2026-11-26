@@ -478,8 +478,8 @@ describe("desktop application shell", () => {
       />,
     );
     expect(html).toContain("Workspaces");
-    // Threads is a sidebar link to Home, not a mode of its own.
-    expect(html.match(/>Threads</g)).toHaveLength(1);
+    // Threads has no page of its own: a thread shows under its session.
+    expect(html).not.toContain(">Threads<");
     // Custom instructions is a Home page too, beside Threads and Routines.
     expect(html.match(/>Custom instructions</g)).toHaveLength(1);
     // No mode switcher: the center shows a session, a file or a task, and
@@ -2001,8 +2001,8 @@ describe("desktop application shell", () => {
     expect(html).not.toContain(">CL<");
     expect(html).not.toContain("Opens in /tmp/demo");
     expect(html).not.toContain("Linked task");
-    // Threads is a sidebar link to Home, not a mode of its own.
-    expect(html.match(/>Threads</g)).toHaveLength(1);
+    // Threads has no page of its own: a thread shows under its session.
+    expect(html).not.toContain(">Threads<");
   });
 
   test("gives cards no drag affordance and no extra tab stops", () => {
