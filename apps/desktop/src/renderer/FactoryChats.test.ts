@@ -419,6 +419,66 @@ test("a question about a message is shown without the note the copy gets", () =>
   expect(splitAbout("Why 20?")).toEqual({ question: "Why 20?" });
 });
 
+test("a fork's handoff is one message for the agent, with no question shown", () => {
+  const sentToAgent = {
+    id: 51,
+    author: "user" as const,
+    kind: "message" as const,
+    body: "Raise it.",
+    details: null,
+    options: [],
+    picked: null,
+    createdAt: at(5),
+  };
+  const asked = thread(5, { forkSessionId: "f", messages: [] });
+  const conversations = new Map([
+    [
+      5,
+      [
+        { id: "q1", role: "user" as const, text: "Why 20?", at: at(1) },
+        {
+          id: "a1",
+          role: "agent" as const,
+          text: "Carts time out.",
+          at: at(2),
+        },
+        {
+          id: "q2",
+          role: "user" as const,
+          text: "[Threads] Handoff: the user wants to hand this to main.",
+          at: at(3),
+        },
+        {
+          id: "a2",
+          role: "agent" as const,
+          text: "Here it is.\n\nFor main:\nRaise the cap to 40.",
+          at: at(4),
+        },
+      ],
+    ],
+  ]);
+  const rows = (threads: ThreadDto[], tab: ChatTabId) =>
+    chatItems({ sessionId: "s", threads, conversations, sent: [], tab }).map(
+      (item) => [
+        item.from,
+        item.text,
+        item.handoff ?? item.fromThread ?? false,
+      ],
+    );
+  expect(rows([asked], 5)).toEqual([
+    ["you", "Why 20?", false],
+    ["copy", "Carts time out.", false],
+    ["copy", "Raise the cap to 40.", true],
+  ]);
+  // Sent: the thread is still the user's with the fork, and the agent's
+  // part shows what it was told and from which thread.
+  const sent = { ...asked, messages: [sentToAgent] };
+  expect(rows([sent], 5).at(-1)).toEqual(["you", "Raise it.", false]);
+  expect(rows([sent], "agent")).toEqual([["you", "Raise it.", 5]]);
+  expect(openThreads([sent], "s").map((one) => one.id)).toEqual([5]);
+  expect(waitingBySession([sent], NOW).size).toBe(0);
+});
+
 describe("answerPlace", () => {
   const live = (state: string, asked: boolean) => ({
     state,

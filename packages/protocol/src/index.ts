@@ -2011,6 +2011,12 @@ export interface DesktopRpcSchema {
       threadReopenConversation: Request<{ id: number }, ThreadDto>;
       /** The fork's last reply: where a message to main starts. */
       threadForkDraft: Request<{ id: number }, { text: string }>;
+      /**
+       * Asks a thread's fork to write what main should be told: what was
+       * decided, why, and what to do. The answer is the handoff the user
+       * reads and sends with `threadSendToMain`.
+       */
+      threadHandoff: Request<{ id: number }, ThreadDto>;
       /** Sends the user's message from a fork thread to its main. */
       threadSendToMain: Request<{ id: number; text: string }, { text: string }>;
       /** The user resolves a thread; its owner is told, its fork archived. */
@@ -3061,3 +3067,9 @@ export function inviteLink(relay: string, code: string): string {
   link.searchParams.set("invite", code);
   return link.toString();
 }
+
+/**
+ * How the note that asks a thread's fork for its handoff begins. The chat
+ * draws the fork's answer to it as the message to send to main.
+ */
+export const THREAD_HANDOFF_NOTE = "[Threads] Handoff:";

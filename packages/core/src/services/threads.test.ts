@@ -745,6 +745,26 @@ describe("Threads", () => {
     });
   });
 
+  test("a handoff is asked of the thread's fork, and needs one", async () => {
+    await withHome(async ({ context }) => {
+      const main = await spawn(context, "webhooks");
+      const { thread } = await context.threads.new({
+        session: main.id,
+        body: "How many tries?",
+      });
+      await expect(context.threads.askHandoff(thread.number)).rejects.toThrow(
+        "has no fork",
+      );
+      const asked = await context.threads.ask({
+        sessionId: main.id,
+        question: "Why a custom backoff?",
+      });
+      const handed = await context.threads.askHandoff(asked.number);
+      expect(handed.number).toBe(asked.number);
+      expect(handed.forkSessionId).toBe(asked.forkSessionId);
+    });
+  });
+
   test("a thread opened on a fork talks it through, and sends to main in the thread", async () => {
     await withHome(async ({ home, context, transport }) => {
       const main = await spawn(context, "webhooks");

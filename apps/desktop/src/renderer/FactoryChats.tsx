@@ -18,6 +18,7 @@ import type {
   ThreadDto,
   ThreadMessageDto,
 } from "@daedalus/protocol";
+import { THREAD_HANDOFF_NOTE } from "@daedalus/protocol";
 import {
   conversationMark,
   copyState,
@@ -75,8 +76,15 @@ export const CHAT_HEIGHT = 560;
 
 const isMessage = (message: ThreadMessageDto) => message.kind === "message";
 
-/** A thread the user opened by asking: nobody has written in it. */
-const isQuestion = (thread: ThreadDto) => !thread.messages.some(isMessage);
+/**
+ * A thread the user opened by asking a fork: nobody has written in it, or
+ * the first to write was the user, handing the agent what the fork worked
+ * out. A thread the agent began starts with the agent's message.
+ */
+const isQuestion = (thread: ThreadDto) => {
+  const first = thread.messages.find(isMessage);
+  return !first || (thread.forkSessionId !== null && first.author === "user");
+};
 
 const snoozed = (thread: ThreadDto, now: number) =>
   thread.snoozedUntil !== null && Date.parse(thread.snoozedUntil) > now;
@@ -148,6 +156,10 @@ export interface ChatItem {
   threadId?: number;
   /** On a question about one of the agent's messages: how that one begins. */
   about?: string;
+  /** A fork's message for the agent, which the user reads and sends. */
+  handoff?: boolean;
+  /** On what the user sent the agent from a thread: that thread. */
+  fromThread?: number;
 }
 
 /** What an agent is doing now, as its hooks last reported. */
@@ -424,13 +436,41 @@ export function chatItems(input: {
   for (const thread of input.threads) {
     if (thread.sessionId !== input.sessionId) continue;
     if (typeof tab === "number" ? thread.id !== tab : false) continue;
-    if (isQuestion(thread) && tab === "agent") continue;
+    if (isQuestion(thread) && tab === "agent") {
+      // What the user handed the agent from a conversation with a fork.
+      for (const message of thread.messages.filter(isMessage))
+        if (message.author === "user")
+          items.push({
+            id: `t${thread.id}:${message.id}`,
+            at: message.createdAt,
+            from: "you",
+            text: message.body ?? "",
+            to: "agent",
+            fromThread: thread.id,
+          });
+      continue;
+    }
     // What was asked of a fork: in a thread the user began, and in the
     // agent's own thread once it is the one shown.
     if (isQuestion(thread) || tab === thread.id) {
       let open: ChatItem | undefined;
       for (const message of input.conversations.get(thread.id) ?? []) {
         if (message.role === "user") {
+          // Daedalus asked the fork for its handoff: the answer is the
+          // message for the agent, not an answer to the user.
+          if (message.text.trimStart().startsWith(THREAD_HANDOFF_NOTE)) {
+            if (open && !open.pending) items.push(open);
+            open = {
+              id: `h${thread.id}:${message.id}`,
+              at: message.at,
+              from: "copy",
+              text: "",
+              pending: true,
+              threadId: thread.id,
+              handoff: true,
+            };
+            continue;
+          }
           if (message.text.trimStart().startsWith("[Threads]")) continue;
           if (INTERRUPTED.test(message.text.trimStart())) continue;
           // An answer that never came before the next question never will.
@@ -459,7 +499,7 @@ export function chatItems(input: {
           open = {
             ...open,
             at: message.at,
-            text: message.text,
+            text: open.handoff ? forAgent(message.text) : message.text,
             pending: false,
           };
       }
@@ -1017,8 +1057,14 @@ function Message({
   onAskAbout,
   onPick,
   onTell,
+  fromName,
+  handoff,
   shownActions = false,
 }: {
+  /** The thread a message to the agent was handed over from. */
+  fromName?: string | undefined;
+  /** For a fork's handoff: whether it went out, and how to send it. */
+  handoff?: { sent: boolean; send: (text: string) => void } | undefined;
   /** Its actions show without hovering: it is the agent's latest message. */
   shownActions?: boolean;
   /** Starts a conversation with a copy about this message of the agent. */
@@ -1027,7 +1073,7 @@ function Message({
   handle: string;
   item: ChatItem;
   onPick: (threadId: number, option: number) => void;
-  /** Puts a copy's answer in the typing box, to send to the agent. */
+  /** Hands what a copy worked out to the agent; the answer is the one clicked. */
   onTell: (text: string) => void;
 }) {
   const actions: MessageAction[] = [];
@@ -1047,7 +1093,7 @@ function Message({
       ),
       run: () => onAskAbout(item),
     });
-  if (item.from === "copy" && !item.pending)
+  if (item.from === "copy" && !item.pending && !item.handoff)
     actions.push({
       key: "tell",
       label: `Send this answer to @${handle}`,
@@ -1068,8 +1114,8 @@ function Message({
               about <q>{item.about}</q> ·{" "}
             </>
           )}
-          {item.to === "agent" ? `to @${handle}` : "to a fork"} ·{" "}
-          {clock(item.at)}
+          {item.to === "agent" ? `to @${handle}` : "to a fork"}
+          {fromName && ` from thread ${fromName}`} · {clock(item.at)}
         </span>
       </div>
     );
@@ -1093,6 +1139,14 @@ function Message({
           <i />
           <i />
         </span>
+      ) : item.handoff && handoff ? (
+        <Handoff
+          busy={busy}
+          handle={handle}
+          sent={handoff.sent}
+          onSend={handoff.send}
+          text={item.text}
+        />
       ) : (
         <div className="chat-text">
           <MarkdownPreview source={item.text} />
@@ -1120,6 +1174,70 @@ function Message({
         </div>
       )}
       <MessageActions actions={actions} shown={shownActions} />
+    </div>
+  );
+}
+
+/**
+ * What a fork wrote for the agent, for the user to read, change and send.
+ * Nothing reaches the agent until Send.
+ */
+function Handoff({
+  busy,
+  handle,
+  onSend,
+  sent,
+  text,
+}: {
+  busy: boolean;
+  handle: string;
+  onSend: (text: string) => void;
+  sent: boolean;
+  text: string;
+}) {
+  const [draft, setDraft] = useState<string | undefined>(undefined);
+  const value = draft ?? text;
+  return (
+    <div className={`chat-handoff ${sent ? "is-sent" : ""}`}>
+      <span className="chat-handoff-title">
+        {sent ? `Sent to @${handle}` : `For @${handle}, not sent yet`}
+      </span>
+      {sent ? null : draft !== undefined ? (
+        <textarea
+          aria-label={`Message for @${handle}`}
+          autoCapitalize="off"
+          autoComplete="off"
+          autoCorrect="off"
+          onChange={(event) => setDraft(event.target.value)}
+          rows={Math.min(14, Math.max(4, value.split("\n").length + 1))}
+          spellCheck={false}
+          value={draft}
+        />
+      ) : (
+        <div className="chat-text">
+          <MarkdownPreview source={value} />
+        </div>
+      )}
+      {!sent && (
+        <div className="chat-options">
+          <button
+            className="chat-option"
+            disabled={busy || !value.trim()}
+            onClick={() => onSend(value)}
+            type="button"
+          >
+            Send to @{handle}
+          </button>
+          <button
+            className="chat-option"
+            disabled={busy}
+            onClick={() => setDraft(draft === undefined ? text : undefined)}
+            type="button"
+          >
+            {draft === undefined ? "Edit" : "Undo edit"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1174,6 +1292,10 @@ function FoldBody({ row }: { row: FoldRow }) {
     </>
   );
 }
+
+/** A thread's name cut to fit under a message. */
+const shortName = (name: string) =>
+  name.length > 48 ? `${name.slice(0, 47)}…` : name;
 
 /** The part of a copy's answer meant for the agent, when it wrote one. */
 function forAgent(answer: string): string {
@@ -1330,7 +1452,6 @@ function Chat({
   const to: "agent" | "copy" =
     tab === "agent" || (own && !viaFork) ? "agent" : "copy";
   /** The conversation an instruction being written came out of. */
-  const [toldFrom, setToldFrom] = useState<number | undefined>(undefined);
   const [menu, setMenu] = useState(false);
   // The menu closes on Escape and on a press anywhere outside it.
   useEffect(() => {
@@ -1607,10 +1728,26 @@ function Chat({
         sessionId: chat.sessionId,
         text: value,
         at: new Date().toISOString(),
-        ...(toldFrom === undefined ? {} : { threadId: toldFrom }),
       });
     setText("");
-    setToldFrom(undefined);
+  };
+
+  /** A handoff went out once the user wrote in its thread after it. */
+  const handoffSent = (item: ChatItem) =>
+    Boolean(
+      threads
+        .find((thread) => thread.id === item.threadId)
+        ?.messages.some(
+          (message) =>
+            message.author === "user" &&
+            Date.parse(message.createdAt) >= Date.parse(item.at),
+        ),
+    );
+  /** Sends a fork's handoff to the agent, through the thread it is from. */
+  const sendHandoff = async (threadId: number, body: string) => {
+    await run(() =>
+      client.request.threadSendToMain({ id: threadId, text: body }),
+    );
   };
 
   const drag = useRef<
@@ -2098,15 +2235,31 @@ function Chat({
                       }
                     : undefined
                 }
+                fromName={
+                  row.item.fromThread === undefined
+                    ? undefined
+                    : shortName(tabName(row.item.fromThread))
+                }
+                handoff={
+                  row.item.handoff && row.item.threadId !== undefined
+                    ? {
+                        sent: handoffSent(row.item),
+                        send: (body) =>
+                          void sendHandoff(row.item.threadId!, body),
+                      }
+                    : undefined
+                }
                 onTell={(answer) => {
-                  setText(forAgent(answer));
                   // In the agent's thread the answer goes back to that thread.
                   if (own) {
+                    setText(forAgent(answer));
                     setForkIn(undefined);
                     return;
                   }
-                  setToldFrom(typeof tab === "number" ? tab : undefined);
-                  setPicked("agent");
+                  // The fork writes what the agent should be told, with the
+                  // context the agent lacks. The user sends it from there.
+                  if (typeof tab === "number")
+                    void run(() => client.request.threadHandoff({ id: tab }));
                 }}
               />
             ),

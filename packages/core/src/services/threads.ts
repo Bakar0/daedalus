@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { THREAD_HANDOFF_NOTE } from "@daedalus/protocol";
 import {
   AGENT,
   DAEDALUS,
@@ -1066,6 +1067,22 @@ export class ThreadService {
       ? reply.slice(marker.index + marker[0].length).trim()
       : "";
     return forMain || reply;
+  }
+
+  /**
+   * Asks a thread's fork to write the handoff to its owner. The owner has
+   * not read the thread, so the fork writes the context too. The user reads
+   * the answer and sends it with `sendForkToMain`.
+   */
+  async askHandoff(number: number): Promise<ThreadView> {
+    const thread = this.thread(number);
+    if (!thread.forkSessionId)
+      throw new DaedalusError("VALIDATION", `Thread #${number} has no fork`);
+    return this.ask({
+      sessionId: thread.ownerSessionId,
+      threadNumber: number,
+      question: `${THREAD_HANDOFF_NOTE} the user wants to hand what you worked out in this thread to main. Reply with only the message for main, under "For main:". Main has not read this thread, so say what was decided, the reasons main needs, and what main should do now. Name the files, commands and values. Write to main, not to the user. The user reads it before it is sent.`,
+    });
   }
 
   /**

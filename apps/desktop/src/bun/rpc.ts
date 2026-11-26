@@ -880,6 +880,8 @@ export function createDesktopRequestHandlers(
       mutate(async () => threadDto(await context.threads.closeFork(id))),
     threadForkDraft: ({ id }) =>
       result(async () => ({ text: await context.threads.forkDraft(id) })),
+    threadHandoff: ({ id }) =>
+      mutate(async () => threadDto(await context.threads.askHandoff(id))),
     threadSendToMain: ({ id, text }) =>
       mutate(async () => ({
         text: await context.threads.sendForkToMain(id, text),
