@@ -353,7 +353,8 @@ button:not(
       .plan-scroll button,
       .plans-pane button,
       .palette button,
-      .factory-shell button
+      .factory-shell button,
+      .agent-page button
     )
   ) {
   background: var(--accent);
@@ -376,7 +377,8 @@ button:not(
       .plan-scroll button,
       .plans-pane button,
       .palette button,
-      .factory-shell button
+      .factory-shell button,
+      .agent-page button
     )
   ):hover:not(:disabled) {
   background: var(--accent-hover);

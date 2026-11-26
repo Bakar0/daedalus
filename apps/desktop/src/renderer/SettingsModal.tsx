@@ -295,6 +295,17 @@ export function SettingsModal({
               }
               title="Create workspace agent guidance"
             />
+
+            <h3>Preview</h3>
+            <SettingRow
+              checked={settings.agentPage}
+              disabled={busy}
+              description="Show a workspace as one agent per page: the agents you started on the left, the conversation in the middle, and the agents it created with their workflow steps on the right. Still being built."
+              onChange={(enabled) =>
+                void perform(client.request.agentPageSet({ enabled }))
+              }
+              title="Agent page"
+            />
           </section>
         ) : undefined}
 

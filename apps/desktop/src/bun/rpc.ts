@@ -389,6 +389,7 @@ export async function desktopSnapshot(
       trustSessionFoldersEnabled: config.trustSessionFoldersEnabled,
       autoRebirthPercent: config.autoRebirthPercent,
       focusMode: config.focusMode,
+      agentPage: config.agentPage,
       betaUpdatesEnabled: config.betaUpdatesEnabled,
       ...view.capabilities,
       accounts: accounts.map((item) => ({ ...item })),
@@ -1346,6 +1347,11 @@ export function createDesktopRequestHandlers(
       mutate(async () => ({
         enabled: await context.presence.setFocusMode(enabled),
       })),
+    agentPageSet: ({ enabled }) =>
+      mutate(async () => {
+        await updateSettings(context.config, () => ({ agentPage: enabled }));
+        return { enabled };
+      }),
     betaUpdatesSet: ({ enabled }) =>
       mutate(async () => {
         await context.appUpdates.setBetaUpdates(enabled);

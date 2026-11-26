@@ -292,6 +292,9 @@ const ChatTab = lazy(() =>
 const FactoryPage = lazy(() =>
   import("./FactoryPage").then((module) => ({ default: module.FactoryPage })),
 );
+const AgentPage = lazy(() =>
+  import("./AgentPage").then((module) => ({ default: module.AgentPage })),
+);
 
 export { MarkdownPreview };
 
@@ -5665,6 +5668,8 @@ export function WorkspaceApp({
   // from Home's file tree shows in the editor instead, until a page is
   // picked again.
   const [homeOpening, setHomeOpening] = useState(false);
+  // The older layout shows over the agent page, for what has not moved yet.
+  const [agentPageAway, setAgentPageAway] = useState(false);
   const [homePage, setHomePage] = useState<
     "routines" | "methods" | "instructions" | "files"
   >("routines");
@@ -8576,6 +8581,32 @@ export function WorkspaceApp({
    * Starts an agent on what the user typed on the empty Factory, with those
    * words as its first message, and opens its window.
    */
+  /** What the start box offers in a workspace. */
+  const startOptionsOf = (target: WorkspaceDto) => ({
+    providers: (["claude", "codex"] as const).map((id) => ({
+      id,
+      // The pod has its own Claude and Codex.
+      available:
+        target.place === "cloud" ||
+        Boolean(
+          snapshot?.settings.providers.find((item) => item.name === id)
+            ?.available,
+        ),
+    })),
+    defaultProvider: target.defaultProvider ?? ("claude" as const),
+    accounts: {
+      claude: target.defaultClaudeAccount ?? "default",
+      codex: target.defaultCodexAccount ?? "default",
+    },
+    accountModels: target.accountModels,
+  });
+  // The agent page takes the whole window; Home's pages and the Factory
+  // still show in the older layout until they move into it.
+  const agentPageShown =
+    Boolean(snapshot?.settings.agentPage) &&
+    view !== "world" &&
+    !atHome &&
+    !agentPageAway;
   const startFromFactory = async (
     target: WorkspaceDto,
     text: string,
@@ -8907,8 +8938,94 @@ export function WorkspaceApp({
           )}
         </div>
 
+        {agentPageShown && (
+          <div className="workspace-shell">
+            <Suspense fallback={null}>
+              <AgentPage
+                agents={agents.filter(
+                  (item) => !item.archivedAt && item.kind === "agent",
+                )}
+                client={client}
+                metaOf={(session) => {
+                  const telemetry = telemetryById.get(session.id);
+                  const used = telemetry?.context?.usedPercent;
+                  return [
+                    providerLabel(session.provider),
+                    telemetry?.model,
+                    used === undefined
+                      ? undefined
+                      : `${Math.round(used)}% of context used`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ");
+                }}
+                onFactory={(session) => {
+                  // Prototype: the Factory opens in the older layout.
+                  setAgentPageAway(true);
+                  enterWorkspace(session.workspaceId, "workspace");
+                  files.withEditor((editor) => {
+                    editor.openFactory();
+                    setBoxRequest({
+                      sessionId: session.id,
+                      nonce: Date.now(),
+                    });
+                  });
+                }}
+                onHome={(page) => void openAtHome(page)}
+                onSettings={() => {
+                  setSettingsSection("general");
+                  setModal("settings");
+                }}
+                onStart={startFromFactory}
+                onWorkspace={(id) => {
+                  if (id !== workspaceId) setWorkspaceId(id);
+                }}
+                renderChat={(session, request, onTabChange) => (
+                  <ChatTab
+                    client={client}
+                    handle={session.teamHandle ?? sessionName(session)}
+                    headless
+                    key={session.id}
+                    live={agentLive(session.id)}
+                    liveOf={agentLive}
+                    onError={setError}
+                    onOpenLink={openTerminalLink}
+                    onOpenSession={() => undefined}
+                    onTabChange={onTabChange}
+                    onTerminal={noteWindowTerminal}
+                    renderTerminal={renderAgentTerminal}
+                    request={request}
+                    sessionId={session.id}
+                    terminalRelease={
+                      terminalRelease?.sessionId === session.id
+                        ? terminalRelease.nonce
+                        : undefined
+                    }
+                    workspaceId={session.workspaceId}
+                  />
+                )}
+                runOf={(id) => workflowRunsBySession.get(id)}
+                selectedId={highlightedSessionId}
+                startOptionsOf={startOptionsOf}
+                statusOf={statusViewFor}
+                teams={snapshot?.teams ?? []}
+                workspaces={orderedWorkspaces}
+              />
+            </Suspense>
+          </div>
+        )}
+        {agentPageAway && snapshot?.settings.agentPage && (
+          <button
+            className="agent-page-back"
+            onClick={() => setAgentPageAway(false)}
+            type="button"
+          >
+            Back to the agent page
+          </button>
+        )}
         <div
           className={`workspace-shell mode-${view} ${workspacePanelVisible ? "has-workspace-panel" : ""}`}
+          style={agentPageShown ? { display: "none" } : undefined}
         >
           <aside
             aria-label="Sidebar"
@@ -9680,28 +9797,7 @@ export function WorkspaceApp({
                         onStart={(text, choice) =>
                           startFromFactory(workspace, text, choice)
                         }
-                        startOptions={{
-                          providers: (["claude", "codex"] as const).map(
-                            (id) => ({
-                              id,
-                              // The pod has its own Claude and Codex.
-                              available:
-                                workspace.place === "cloud" ||
-                                Boolean(
-                                  snapshot?.settings.providers.find(
-                                    (item) => item.name === id,
-                                  )?.available,
-                                ),
-                            }),
-                          ),
-                          defaultProvider:
-                            workspace.defaultProvider ?? "claude",
-                          accounts: {
-                            claude: workspace.defaultClaudeAccount ?? "default",
-                            codex: workspace.defaultCodexAccount ?? "default",
-                          },
-                          accountModels: workspace.accountModels,
-                        }}
+                        startOptions={startOptionsOf(workspace)}
                         onStartTerminal={() =>
                           openSessionModal(undefined, workspace)
                         }

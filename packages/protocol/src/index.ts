@@ -955,6 +955,8 @@ export interface DesktopSettingsDto {
   /** The global rebirth threshold, 10 to 100, or null for off. */
   autoRebirthPercent: number | null;
   focusMode: boolean;
+  /** The workspace shows as one agent per page. */
+  agentPage: boolean;
   /** "Get beta updates": the updater also reads the beta feed. */
   betaUpdatesEnabled: boolean;
   providers: ProviderAvailabilityDto[];
@@ -2384,6 +2386,8 @@ export interface DesktopRpcSchema {
         { percent: number | null }
       >;
       focusModeSet: Request<{ enabled: boolean }, { enabled: boolean }>;
+      /** Shows a workspace as one agent per page. */
+      agentPageSet: Request<{ enabled: boolean }, { enabled: boolean }>;
       /** "Get beta updates". Turning it on checks for an update at once. */
       betaUpdatesSet: Request<{ enabled: boolean }, { enabled: boolean }>;
       /**

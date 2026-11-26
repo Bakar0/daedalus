@@ -166,6 +166,12 @@ export interface DaedalusConfig {
    */
   focusMode: boolean;
   /**
+   * Shows a workspace as one agent per page: the agents the user started on
+   * the left, the conversation in the middle, and the agents it created on
+   * the right. Off by default while the page is being built.
+   */
+  agentPage: boolean;
+  /**
    * Whether the updater also reads the beta feed and offers whichever of the
    * newest beta and the newest stable release is higher. Off by default.
    * Turning it off never installs an older version: a beta stays until a
@@ -237,6 +243,7 @@ type StoredConfig = Partial<
     | "trustSessionFoldersEnabled"
     | "autoRebirthPercent"
     | "focusMode"
+    | "agentPage"
     | "betaUpdatesEnabled"
     | "remoteEnabled"
     | "remoteRelay"
@@ -353,6 +360,7 @@ export type SettingsPatch = Partial<
     | "trustSessionFoldersEnabled"
     | "autoRebirthPercent"
     | "focusMode"
+    | "agentPage"
     | "betaUpdatesEnabled"
     | "remoteEnabled"
     | "remoteKeepAwake"
@@ -396,6 +404,7 @@ function settingsFromStored(
         ? stored.autoRebirthPercent
         : null,
     focusMode: stored.focusMode === true,
+    agentPage: stored.agentPage === true,
     betaUpdatesEnabled: stored.betaUpdatesEnabled === true,
     remoteEnabled: stored.remoteEnabled === true,
     remoteKeepAwake: stored.remoteKeepAwake === true,

@@ -2475,3 +2475,9 @@ button.factory-owner:hover {
     offset-distance: 50%;
   }
 }
+
+/* Inside the agent page the page's own top line names the agent and its
+   threads, so the chat draws no header. */
+.chat-window.is-headless > .chat-head {
+  display: none;
+}

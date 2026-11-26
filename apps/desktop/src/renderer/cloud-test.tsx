@@ -222,6 +222,7 @@ const snapshot = {
     trustSessionFoldersEnabled: true,
     autoRebirthPercent: null,
     focusMode: false,
+    agentPage: false,
     accounts: [
       {
         provider: "claude",

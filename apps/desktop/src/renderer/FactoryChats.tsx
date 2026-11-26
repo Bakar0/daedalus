@@ -1309,6 +1309,7 @@ function Chat({
   chat,
   client,
   docked = false,
+  headless = false,
   onChange,
   onClose,
   onError,
@@ -1355,6 +1356,8 @@ function Chat({
   live?: AgentLive | undefined;
   /** Fills its tab instead of floating: no dragging, sizing or closing. */
   docked?: boolean;
+  /** Draws no header: the page around it names the agent and its threads. */
+  headless?: boolean;
   /** Moves the chat to a tab of its own. */
   onOpenTab?: (() => void) | undefined;
   /** In a tab: moves the window back over the Factory, on this thread. */
@@ -1792,7 +1795,7 @@ function Chat({
   return (
     <section
       aria-label={`Threads with @${chat.handle}`}
-      className={`chat-window ${docked ? "is-docked" : ""}`}
+      className={`chat-window ${docked ? "is-docked" : ""} ${headless ? "is-headless" : ""}`}
       onPointerDown={docked ? undefined : onFront}
       onPointerUp={docked ? undefined : keepSize}
       ref={box}
@@ -2777,6 +2780,8 @@ function useWhere(
 export function ChatTab({
   client,
   handle,
+  headless,
+  onTabChange,
   onError,
   onOpenLink,
   live,
@@ -2791,6 +2796,10 @@ export function ChatTab({
   terminalRelease,
   workspaceId,
 }: {
+  /** Draws no header of its own; the page around it has the tabs. */
+  headless?: boolean | undefined;
+  /** The chat moved to another thread by itself. */
+  onTabChange?: ((tab: ChatTabId) => void) | undefined;
   /** Opens the Factory on the agent's box. */
   onShowBox?: (() => void) | undefined;
   /** A thread, and a view of Direct, to show; a new `nonce` asks again. */
@@ -2850,6 +2859,7 @@ export function ChatTab({
           }}
           client={client}
           docked
+          headless={headless ?? false}
           onWhere={onShowBox}
           where={where}
           onChange={(patch) => {
@@ -2868,7 +2878,10 @@ export function ChatTab({
           live={live}
           liveOf={liveOf}
           onSent={addSent}
-          onTab={setTab}
+          onTab={(next) => {
+            setTab(next);
+            onTabChange?.(next);
+          }}
           reloadThreads={reload}
           shownTab={tab}
           sent={sent}

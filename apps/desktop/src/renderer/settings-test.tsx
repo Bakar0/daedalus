@@ -64,6 +64,7 @@ const snapshot = {
     autoRestoreSessionsEnabled: true,
     trustSessionFoldersEnabled: true,
     focusMode: false,
+    agentPage: false,
     betaUpdatesEnabled: false,
     accounts: [
       {

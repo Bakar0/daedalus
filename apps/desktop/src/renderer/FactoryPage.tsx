@@ -468,7 +468,7 @@ function StartPick({
  * the model that start on it. Sending starts that agent with those words
  * and opens its window.
  */
-function StartPrompt({
+export function StartPrompt({
   client,
   compact,
   onStart,

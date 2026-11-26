@@ -73,6 +73,7 @@ const base: DesktopSnapshotDto = {
     trustSessionFoldersEnabled: true,
     autoRebirthPercent: null,
     focusMode: false,
+    agentPage: false,
     betaUpdatesEnabled: false,
     accounts: [],
     providers: [

@@ -67,6 +67,7 @@ const snapshot = {
     tmuxAvailable: true,
     workspaceInstructionFilesEnabled: true,
     focusMode: false,
+    agentPage: false,
     betaUpdatesEnabled: false,
     accounts: [],
     providers: [],
