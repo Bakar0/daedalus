@@ -34,7 +34,7 @@ export interface OldSession {
   name: string;
   startedAt: string;
   spawnedBy: string | null;
-  /** Archived, exited or lost: nobody works in it. */
+  /** Archived: the user put it away, and nobody works in it again. */
   over: boolean;
 }
 
@@ -549,7 +549,7 @@ function readOld(database: Database): {
     sessions: (
       database
         .query(
-          "SELECT id, workspace_id, name, started_at, spawned_by, status, archived_at, resume_on_start FROM agent_sessions",
+          "SELECT id, workspace_id, name, started_at, spawned_by, archived_at FROM agent_sessions",
         )
         .all() as {
         id: string;
@@ -557,9 +557,7 @@ function readOld(database: Database): {
         name: string;
         started_at: string;
         spawned_by: string | null;
-        status: string;
         archived_at: string | null;
-        resume_on_start: number;
       }[]
     ).map((row) => ({
       id: row.id,
@@ -567,13 +565,9 @@ function readOld(database: Database): {
       name: row.name,
       startedAt: row.started_at,
       spawnedBy: row.spawned_by,
-      // One the app starts again when it opens is not over: converting
-      // while the app is closed would otherwise fail everything open.
-      over:
-        !!row.archived_at ||
-        (row.status !== "running" &&
-          row.status !== "starting" &&
-          !row.resume_on_start),
+      // Every session from before was started by the user. Stopped or lost,
+      // it keeps its work until the user archives it.
+      over: !!row.archived_at,
     })),
     runs: all<RunRow>("workflow_runs", "SELECT * FROM workflow_runs").map(
       (row) => ({

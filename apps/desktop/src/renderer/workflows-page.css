@@ -638,3 +638,21 @@
 .wf-detail .workflows-text {
   min-height: 260px;
 }
+
+/* Save and Accept are outlines here too, a shade stronger than Cancel, so
+   the page has no accent-filled button. */
+.wf-page .wf-main .wf-detail button.primary {
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  color: var(--text);
+  font-weight: 600;
+}
+.wf-page .wf-main .wf-detail button.primary:hover:not(:disabled) {
+  background: var(--raised-hover);
+  border-color: var(--text);
+}
+.wf-page .wf-main .wf-detail button.primary:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+}

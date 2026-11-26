@@ -40,6 +40,11 @@ export interface JobPorts {
   clear(sessionId: string): Promise<void> | void;
   /** Whether a session still has an agent that can work. */
   alive(sessionId: string): Promise<boolean> | boolean;
+  /**
+   * Whether a session is still the user's to open again: it exists and is
+   * not archived, whether or not its agent runs now.
+   */
+  kept(sessionId: string): Promise<boolean> | boolean;
   /** Archives a session whose job is finished. */
   retire(sessionId: string): Promise<void> | void;
   /**
@@ -697,6 +702,12 @@ export class JobService {
    * The engine's housekeeping for a workspace: fails the jobs of sessions
    * that are gone, archives agents whose job is finished, and starts what is
    * ready.
+   *
+   * An agent the engine started is gone when it stops running: nobody else
+   * would notice, and the work above it would wait for good. A session the
+   * user started is gone only when it is archived. Stopped or lost, it keeps
+   * its jobs, so that it goes on from the same step when the user opens it
+   * again.
    */
   async tick(workspaceId: string): Promise<void> {
     const { tree, records } = this.repositories.jobs.workspace(workspaceId);
@@ -713,6 +724,20 @@ export class JobService {
       job.parentId && tree.jobs.has(job.parentId)
         ? 1 + depth(tree.jobs.get(job.parentId)!)
         : 0;
+    const engineStarted = new Set(
+      [...tree.jobs.values()]
+        .filter((job) => job.runner.kind === "agent" && job.sessionId)
+        .map((job) => job.sessionId!),
+    );
+    const kept = new Map<string, boolean>();
+    const isGone = async (sessionId: string): Promise<boolean> => {
+      if (engineStarted.has(sessionId)) return !(await isAlive(sessionId));
+      const known = kept.get(sessionId);
+      if (known !== undefined) return !known;
+      const answer = await this.ports.kept(sessionId);
+      kept.set(sessionId, answer);
+      return !answer;
+    };
     const open = [...tree.jobs.values()]
       .filter(
         (job) =>
@@ -725,7 +750,7 @@ export class JobService {
       const record = records.get(job.id);
       const started = Date.parse(record?.startedAt ?? record?.updatedAt ?? "");
       if (Number.isFinite(started) && now - started < START_GRACE_MS) continue;
-      if (!record || (await isAlive(job.sessionId!))) continue;
+      if (!record || !(await isGone(job.sessionId!))) continue;
       try {
         const ran = this.run(
           record.rootId,

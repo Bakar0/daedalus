@@ -21,6 +21,7 @@ let raised: { to: string; message: string }[];
 let cleared: string[];
 let retired: string[];
 let gone: Set<string>;
+let archived: Set<string>;
 let missing: Set<string>;
 let spawn: JobPorts["spawn"];
 let roots: Set<string>;
@@ -69,6 +70,7 @@ beforeEach(async () => {
   cleared = [];
   retired = [];
   gone = new Set();
+  archived = new Set();
   missing = new Set();
   roots = new Set();
   spawn = async (input) => {
@@ -87,6 +89,7 @@ beforeEach(async () => {
       cleared.push(to);
     },
     alive: (sessionId) => !gone.has(sessionId),
+    kept: (sessionId) => !archived.has(sessionId),
     retire: (sessionId) => {
       retired.push(sessionId);
     },
@@ -403,6 +406,24 @@ describe("JobService", () => {
     expect(named(root.id, "a").why).toBe("Its agent is gone.");
     expect(named(root.id, "b").state).toBe("running");
     expect(told.map((item) => item.to)).toEqual([LEAD]);
+  });
+
+  test("keeps the jobs of a user's session that stopped, until it is archived", async () => {
+    const root = await open();
+    await service.add(
+      root.id,
+      [{ name: "a", runner: { kind: "inline" } }],
+      LEAD,
+    );
+    gone.add(LEAD);
+    clock += 5 * 60_000;
+    await service.tick(WORKSPACE);
+    expect(named(root.id, "a").state).toBe("running");
+
+    archived.add(LEAD);
+    await service.tick(WORKSPACE);
+    expect(named(root.id, "a").state).toBe("failed");
+    expect(named(root.id, "a").why).toBe("Its agent is gone.");
   });
 
   test("archives an agent whose job is finished", async () => {

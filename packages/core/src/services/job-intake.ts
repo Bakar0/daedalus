@@ -119,6 +119,10 @@ export function createJobPorts(sources: JobPortSources): JobPorts {
           session.resumeOnStart)
       );
     },
+    kept: (sessionId) => {
+      const session = sources.session(sessionId);
+      return !!session && !session.archivedAt;
+    },
     retire: async (sessionId) => {
       await sources.archive(sessionId);
     },
