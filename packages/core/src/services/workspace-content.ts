@@ -514,10 +514,14 @@ export async function ensureWorkspaceContentFiles(
   daedalusHome: string,
   options: InstructionFileOptions = DEFAULT_INSTRUCTION_FILES,
 ): Promise<void> {
+  // The folders come first: they create the workspace folder itself, and a
+  // file written beside them before it exists fails.
   await Promise.all([
     ensureDirectory(join(path, "artifacts")),
     ensureDirectory(join(path, "repos")),
     ensureDirectory(join(path, "worktrees")),
+  ]);
+  await Promise.all([
     syncBriefFile(join(path, "BRIEF.md")),
     createIfMissing(join(path, "JOURNAL.md"), JOURNAL_TEMPLATE),
     // Workflows are a capability of their own, not instruction files, so
