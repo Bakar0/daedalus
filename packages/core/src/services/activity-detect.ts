@@ -298,7 +298,7 @@ export async function detectAcpActivity(
       activity: "idle",
       source: "hook",
       authoritative: true,
-      ifActivity: ["working", "needs_permission"],
+      ifActivity: ["working", "needs_permission", "unknown"],
     };
   const message = lastText?.kind === "text" ? lastText.text.trim() : "";
   return {

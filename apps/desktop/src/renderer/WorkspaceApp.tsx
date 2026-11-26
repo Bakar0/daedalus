@@ -3965,6 +3965,20 @@ export function WorkspaceApp({
             },
           ]
         : []),
+      // An agent in tmux still has a terminal, where a prompt its provider
+      // draws is answered. One over ACP has none: its chat is all of it.
+      ...(agent &&
+      session.runner !== "acp" &&
+      !session.archivedAt &&
+      (session.status === "running" || session.status === "starting")
+        ? [
+            {
+              id: "open-terminal",
+              label: "Open terminal",
+              run: () => showSession(session.id, session.workspaceId),
+            },
+          ]
+        : []),
       ...(session.status === "lost" && sleep !== "unavailable"
         ? [
             {
