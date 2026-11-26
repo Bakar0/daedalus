@@ -106,6 +106,9 @@ export default {
       "apps/desktop/dist/daedalus-app-icon.png":
         "views/mainview/daedalus-app-icon.png",
       "apps/desktop/dist/cli.js": "cli/daedal.js",
+      // The ACP adapters, one file each, which `daedal acp-host` runs on the
+      // bundled bun. They run the user's own `claude` and `codex`.
+      "apps/desktop/dist/acp": "acp",
       migrations: "migrations",
       // The gateway install in Settings > Cloud runs helm on this chart and
       // the kind scripts for Try it locally.

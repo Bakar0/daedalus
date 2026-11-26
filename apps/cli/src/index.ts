@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 import {
+  AcpHost,
+  type AcpLaunch,
   CLOUD_CALLER_VARIABLE,
   CLOUD_MARK_VARIABLE,
   cloudMark,
@@ -218,7 +220,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
   daedal agent models <codex|claude> [--account <account>]
-  daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--workflow <name>]
+  daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--workflow <name>] [--runner <tmux|acp>]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
   daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
@@ -1077,6 +1079,7 @@ async function agentCommand(
         "ability",
         "color",
         "workflow",
+        "runner",
       ],
       ["refine", "pin", "user"],
     );
@@ -1112,6 +1115,9 @@ async function agentCommand(
         taskId: task?.id,
         name: parsed.values.name,
         model: parsed.values.model,
+        ...(parsed.values.runner === undefined
+          ? {}
+          : { runner: sessionRunner(parsed.values.runner) }),
         ...(parsed.values.account !== undefined
           ? { account: parsed.values.account }
           : {}),
@@ -1420,6 +1426,12 @@ async function agentContinueCommand(
       console.log(`The old session was not archived: ${result.archiveError}`);
   });
   return 0;
+}
+
+function sessionRunner(value: string): "tmux" | "acp" {
+  if (value !== "tmux" && value !== "acp")
+    throw new DaedalusError("VALIDATION", "--runner takes tmux or acp");
+  return value;
 }
 
 /**
@@ -2501,6 +2513,19 @@ export async function runCli(
     } finally {
       context.close();
     }
+  }
+  // An ACP agent's own process: it runs the adapter named in its launch file
+  // until that exits. Daedalus starts it in the session's tmux session; it
+  // opens no database and is not a command for a person.
+  if (inputArgs[0] === "acp-host") {
+    const launchPath = inputArgs[1];
+    if (!launchPath || inputArgs.length !== 2)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Usage: daedal acp-host <launch-file>",
+      );
+    const launch = (await Bun.file(launchPath).json()) as AcpLaunch;
+    return (await new AcpHost(launch).run()) ?? 1;
   }
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");

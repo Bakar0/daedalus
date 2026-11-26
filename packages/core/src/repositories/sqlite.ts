@@ -127,6 +127,7 @@ interface AgentRow {
   team_handle: string | null;
   spawned_by: string | null;
   host_id: string | null;
+  runner: "tmux" | "acp";
 }
 
 interface IntegratedTerminalRow {
@@ -271,6 +272,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   teamHandle: row.team_handle,
   spawnedBy: row.spawned_by,
   hostId: row.host_id,
+  runner: row.runner,
 });
 
 const integratedTerminalFromRow = (
@@ -919,8 +921,9 @@ export class SqliteRepositories {
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
           resume_on_start, handoff_requested_at, position, pinned_at, color,
-          account, team_id, team_handle, spawned_by, auto_rebirth_percent, host_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          account, team_id, team_handle, spawned_by, auto_rebirth_percent, host_id,
+          runner)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -952,6 +955,7 @@ export class SqliteRepositories {
         agent.spawnedBy,
         autoRebirthColumn(agent.autoRebirthPercent),
         agent.hostId,
+        agent.runner ?? "tmux",
       );
   }
 

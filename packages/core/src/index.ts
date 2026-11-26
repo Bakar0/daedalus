@@ -20,6 +20,8 @@ export * from "./services/main-messages";
 export * from "./services/codex-sessions";
 export * from "./services/integrated-terminals";
 export * from "./services/cloud-launch";
+export * from "./services/acp";
+export * from "./services/acp-host";
 export * from "./services/session-host";
 export * from "./services/session-hosts";
 export * from "./services/remote-store";

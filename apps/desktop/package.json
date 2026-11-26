@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build --config vite.config.ts && bun build ../cli/src/packaged.ts --outfile dist/cli.js --target bun",
+    "build": "vite build --config vite.config.ts && bun build ../cli/src/packaged.ts --outfile dist/cli.js --target bun && bun run build:acp",
+    "build:acp": "bun build ../../packages/core/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js --outfile dist/acp/claude.js --target bun && bun build ../../packages/core/node_modules/@agentclientprotocol/codex-acp/dist/index.js --outfile dist/acp/codex.js --target bun",
     "dev": "vite --config vite.config.ts"
   },
   "dependencies": {

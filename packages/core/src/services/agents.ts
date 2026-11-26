@@ -34,6 +34,7 @@ import {
   type AgentSession,
   type AutoRebirth,
   type SessionColor,
+  type SessionRunner,
   type TeamMembership,
   type Workspace,
 } from "../domain";
@@ -50,12 +51,17 @@ import {
   REFINEMENT_SKILL,
   rebirthSessionName,
   modelArgument,
+  type AcpProviderLaunch,
+  daedalExecutable,
+  type LaunchInput,
+  type ProviderLaunch,
   type ProviderModelCatalog,
   removeClaudeSettingsFiles,
   resolveAgentExecutable,
   resolveProvider,
   sessionLaunchModel,
 } from "./providers";
+import { AcpService } from "./acp";
 import { splitLines } from "./cloud-mark";
 import { teamDescendants } from "./team-tree";
 import type { DeliveryResult, SessionChannel } from "./session-channel";
@@ -468,8 +474,13 @@ async function inBatches<T, R>(
 
 /** How long an agent takes to put a stopped message back in its input box. */
 const INTERRUPT_SETTLE_MS = 400;
+/** How long an ACP adapter gets to open its conversation. */
+const ACP_READY_TIMEOUT_MS = 90_000;
 
 export class AgentService {
+  /** The sessions that run over ACP: their hosts' commands and logs. */
+  readonly acp: AcpService;
+
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly workspaces: WorkspaceService,
@@ -514,7 +525,9 @@ export class AgentService {
      */
     private readonly onStartupReady: (sessionId: string) => unknown = () =>
       undefined,
-  ) {}
+  ) {
+    this.acp = new AcpService(this.config.home);
+  }
 
   private teamLaunchLines: (member: TeamMembership) => string[] = () => [];
 
@@ -613,6 +626,39 @@ export class AgentService {
       reasons.length > 0 &&
       reasons.every((reason) => reason.text === asked)
     );
+  }
+
+  /** The tmux launch of a session's ACP host: the bundled CLI on its file. */
+  private acpHostLaunch(
+    sessionId: string,
+    launch: AcpProviderLaunch,
+  ): ProviderLaunch {
+    return {
+      executable: daedalExecutable(this.config),
+      args: ["acp-host", this.acp.paths(sessionId).launch],
+      env: launch.env,
+    };
+  }
+
+  /** Writes what the session's host is to run, before the host starts. */
+  private async writeAcpLaunch(
+    session: AgentSession,
+    launch: AcpProviderLaunch,
+  ): Promise<void> {
+    // A relaunch starts a new log: the adapter replays the conversation
+    // into it when it loads.
+    await this.acp.remove(session.id);
+    await this.acp.writeLaunch({
+      home: this.config.home,
+      sessionId: session.id,
+      cwd: session.workingDirectory,
+      provider: launch.provider,
+      ...(launch.meta ? { meta: launch.meta } : {}),
+      ...(launch.model ? { model: launch.model } : {}),
+      ...(launch.mode ? { mode: launch.mode } : {}),
+      ...(launch.prompt ? { prompt: launch.prompt } : {}),
+      ...(launch.load ? { load: launch.load } : {}),
+    });
   }
 
   /** Records the provider's trust for the session folder, if allowed. */
@@ -1356,6 +1402,12 @@ export class AgentService {
      * message is that job's brief and opens no job of its own.
      */
     forJob?: boolean;
+    /**
+     * How the agent is driven. Only a Claude or Codex agent on this Mac that
+     * is not a fork runs over ACP; anything else runs in tmux whatever this
+     * says. Left out, a successor keeps its predecessor's.
+     */
+    runner?: SessionRunner;
   }): Promise<AgentSession> {
     const workspace = await this.workspaces.getActive(input.workspace);
     // A workspace in the cloud runs every session there.
@@ -1499,34 +1551,46 @@ export class AgentService {
           : "execute",
       note: input.note,
     });
-    const launch = input.terminal
+    const launchInput: LaunchInput = {
+      taskId: task?.id,
+      sessionId: id,
+      sessionName: name,
+      // A fork carries on the conversation it forks: no launch prompt,
+      // only the question it was opened to answer, when there is one.
+      ...(input.forkOf
+        ? {
+            fork: input.forkOf.providerSessionId ?? input.forkOf.id,
+            ...(input.forkPrompt ? { prompt: input.forkPrompt } : {}),
+          }
+        : { prompt: launchPrompt }),
+      model,
+      // Any session may lead a team or join one later.
+      acceptPeerMessages: true,
+      workingDirectory: prepared.workingDirectory,
+      additionalDirectories: [
+        ...sessionDirectories(
+          workspace.path,
+          prepared.references.map(
+            (repository) =>
+              repository.referencePath ?? repository.canonicalPath,
+          ),
+        ),
+      ],
+    };
+    const acpLaunch =
+      !input.terminal &&
+      !input.forkOf &&
+      provider &&
+      provider.name !== "custom" &&
+      provider.adapter.buildAcpLaunch &&
+      (input.runner ?? input.continueFrom?.runner) === "acp"
+        ? await provider.adapter.buildAcpLaunch(launchInput)
+        : undefined;
+    const launch: ProviderLaunch = input.terminal
       ? { executable: shell!, args: ["-l"], env: {} }
-      : await provider!.adapter.buildLaunch({
-          taskId: task?.id,
-          sessionId: id,
-          sessionName: name,
-          // A fork carries on the conversation it forks: no launch prompt,
-          // only the question it was opened to answer, when there is one.
-          ...(input.forkOf
-            ? {
-                fork: input.forkOf.providerSessionId ?? input.forkOf.id,
-                ...(input.forkPrompt ? { prompt: input.forkPrompt } : {}),
-              }
-            : { prompt: launchPrompt }),
-          model,
-          // Any session may lead a team or join one later.
-          acceptPeerMessages: true,
-          workingDirectory: prepared.workingDirectory,
-          additionalDirectories: [
-            ...sessionDirectories(
-              workspace.path,
-              prepared.references.map(
-                (repository) =>
-                  repository.referencePath ?? repository.canonicalPath,
-              ),
-            ),
-          ],
-        });
+      : acpLaunch
+        ? this.acpHostLaunch(id, acpLaunch)
+        : await provider!.adapter.buildLaunch(launchInput);
     const session: AgentSession = {
       id,
       workspaceId: workspace.id,
@@ -1560,6 +1624,7 @@ export class AgentService {
       teamHandle: team?.handle ?? null,
       spawnedBy: input.spawnedBy ?? null,
       hostId: null,
+      runner: acpLaunch ? "acp" : "tmux",
     };
     this.repositories.transaction(() => {
       this.repositories.createAgent(session);
@@ -1576,6 +1641,7 @@ export class AgentService {
       );
     try {
       if (!input.terminal) await this.trustFolder(session);
+      if (acpLaunch) await this.writeAcpLaunch(session, acpLaunch);
       await this.hosts.local.start({
         session: session.tmuxSession,
         cwd: session.workingDirectory,
@@ -1585,11 +1651,26 @@ export class AgentService {
           ? launch.env
           : await this.agentEnvironment(session, launch.env),
       });
+      let runningSession = session;
+      // An ACP agent has no screen to read: its host says when the adapter
+      // opened the conversation, and under which id.
       const startup = input.terminal
         ? "ready"
-        : await this.waitForProviderReady(provider!.name, session.tmuxSession);
-      let runningSession = session;
-      if (provider?.name === "codex") {
+        : acpLaunch
+          ? await this.acp
+              .waitReady(session.id, ACP_READY_TIMEOUT_MS)
+              .then((ready) => {
+                runningSession = {
+                  ...session,
+                  providerSessionId: ready.acpSessionId,
+                };
+                return "ready" as const;
+              })
+          : await this.waitForProviderReady(
+              provider!.name,
+              session.tmuxSession,
+            );
+      if (provider?.name === "codex" && !acpLaunch) {
         const recoveredId = await recoverCodexSessionId({
           sessionsDirectory: this.sessionConfig(session).codexSessionsDirectory,
           workingDirectory: session.workingDirectory,
@@ -2227,6 +2308,17 @@ export class AgentService {
       );
       return agent;
     }
+    if (agent.runner === "acp") {
+      // A turn of its own, after the one the agent is on. What another
+      // session sends says so, as a note left in an inbox does.
+      await this.acp.prompt(
+        agent.id,
+        from && from.id !== agent.id
+          ? `[message from session "${from.name}", not the user] ${text.trim()}`
+          : text,
+      );
+      return agent;
+    }
     await this.sessionHost(agent).send(agent.tmuxSession, text);
     return agent;
   }
@@ -2242,6 +2334,10 @@ export class AgentService {
     options: { clear?: boolean } = {},
   ): Promise<AgentSession> {
     const agent = await this.requireRunning(id);
+    if (agent.runner === "acp") {
+      await this.acp.cancel(agent.id);
+      return agent;
+    }
     const host = this.sessionHost(agent);
     await host.sendKeys(agent.tmuxSession, ["Escape"]);
     if (options.clear) {
@@ -2327,6 +2423,10 @@ export class AgentService {
         "CONFLICT",
         `Agent session '${id}' is not running`,
       );
+    // Asked first, so the adapter closes its conversation; ending the tmux
+    // session then ends a host that did not answer.
+    if (agent.runner === "acp")
+      await this.acp.stop(agent.id).catch(() => undefined);
     await this.sessionHost(agent).stop(agent.tmuxSession, force);
     const stopped: AgentSession = {
       ...agent,
@@ -2765,6 +2865,7 @@ export class AgentService {
     let executable = agent.command;
     let args = agent.args;
     let providerSessionId = agent.providerSessionId;
+    let acpLaunch: AcpProviderLaunch | undefined;
     const scoped = this.sessionConfig(agent);
     const accountEnv = accountEnvironment(
       this.config,
@@ -2792,11 +2893,15 @@ export class AgentService {
         previous: agent,
         workspace,
       });
-      const launch = await resolveProvider(scoped, {
+      const adapter = resolveProvider(scoped, {
         provider: agent.provider,
-      }).adapter.buildLaunch({
+      }).adapter;
+      const overAcp = agent.runner === "acp" && adapter.buildAcpLaunch;
+      const launchInput: LaunchInput = {
         sessionId: agent.id,
-        model: modelArgument(agent.args),
+        model: overAcp
+          ? await this.acp.launchModel(agent.id)
+          : modelArgument(agent.args),
         acceptPeerMessages: true,
         workingDirectory: agent.workingDirectory,
         // A thread's fork comes back still reading main before each turn.
@@ -2823,10 +2928,19 @@ export class AgentService {
             : {}),
           ...(options.fresh ? { fresh: true } : {}),
         },
-      });
-      executable = launch.executable;
-      args = launch.args;
-      providerSessionId = launch.providerSessionId ?? null;
+      };
+      if (overAcp) {
+        // The adapter loads the conversation its host opened; the id stays.
+        acpLaunch = await adapter.buildAcpLaunch!(launchInput);
+        const launch = this.acpHostLaunch(agent.id, acpLaunch);
+        executable = launch.executable;
+        args = launch.args;
+      } else {
+        const launch = await adapter.buildLaunch(launchInput);
+        executable = launch.executable;
+        args = launch.args;
+        providerSessionId = launch.providerSessionId ?? null;
+      }
     }
 
     const restoring: AgentSession = {
@@ -2851,6 +2965,7 @@ export class AgentService {
       );
     try {
       if (agent.kind === "agent") await this.trustFolder(agent);
+      if (acpLaunch) await this.writeAcpLaunch(restoring, acpLaunch);
       await this.hosts.local.start({
         session: restoring.tmuxSession,
         cwd: agent.workingDirectory,
@@ -2858,11 +2973,18 @@ export class AgentService {
         args,
         env:
           agent.kind === "agent"
-            ? await this.agentEnvironment(restoring)
+            ? await this.agentEnvironment(restoring, acpLaunch?.env)
             : undefined,
       });
-      const startup =
-        agent.kind === "agent"
+      let acpSessionId: string | undefined;
+      const startup = acpLaunch
+        ? await this.acp
+            .waitReady(agent.id, ACP_READY_TIMEOUT_MS)
+            .then((ready) => {
+              acpSessionId = ready.acpSessionId;
+              return "ready" as const;
+            })
+        : agent.kind === "agent"
           ? await this.waitForProviderReady(
               agent.provider,
               restoring.tmuxSession,
@@ -2870,6 +2992,7 @@ export class AgentService {
           : "ready";
       let restored: AgentSession = {
         ...restoring,
+        ...(acpSessionId ? { providerSessionId: acpSessionId } : {}),
         status: "running",
         archivedAt: null,
         resumeCount: agent.resumeCount + 1,

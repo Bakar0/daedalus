@@ -153,6 +153,11 @@ export interface AgentSessionDto {
   spawnedBy: string | null;
   /** The cloud host it runs on (`ws:<cloud workspace id>`); null or absent for this Mac. */
   hostId?: string | null;
+  /**
+   * How its agent is driven. `acp` has no terminal: its chat shows the turn
+   * as it streams, asks for permissions and stops it. Absent means `tmux`.
+   */
+  runner?: "tmux" | "acp";
 }
 
 /** One message in a thread. */
