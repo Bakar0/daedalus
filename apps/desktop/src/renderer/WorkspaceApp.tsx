@@ -5692,6 +5692,12 @@ export function WorkspaceApp({
   // from Home's file tree shows in the editor instead, until a page is
   // picked again.
   const [homeOpening, setHomeOpening] = useState(false);
+  // A thread the agent page was asked to show, from outside it.
+  const [pageTabRequest, setPageTabRequest] = useState<{
+    sessionId: string;
+    tab: ChatTabId;
+    nonce: number;
+  }>();
   const [homePage, setHomePage] = useState<
     "routines" | "methods" | "instructions" | "files"
   >("routines");
@@ -6532,6 +6538,13 @@ export function WorkspaceApp({
   };
   /** Shows the Factory with an agent's chat open over it. */
   const openChatPopup = (session: AgentSessionDto, tab: ChatTabId) => {
+    // With the agent page on, an agent has one place: its page in the
+    // middle, on the thread asked for.
+    if (agentPageOn) {
+      showSession(session.id, session.workspaceId);
+      setPageTabRequest({ sessionId: session.id, tab, nonce: Date.now() });
+      return;
+    }
     // The session stays as it is: showing it would bring its terminal's tab
     // to the front, over the Factory.
     if (session.workspaceId !== workspaceId)
@@ -8959,6 +8972,11 @@ export function WorkspaceApp({
                 workspaceId={activeSession.workspaceId}
               />
             )}
+            ask={
+              pageTabRequest?.sessionId === activeSession.id
+                ? pageTabRequest
+                : undefined
+            }
             session={activeSession}
           />
         </Suspense>

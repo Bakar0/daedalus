@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentSessionDto, WorkflowRunDto } from "@daedalus/protocol";
 import { type AgentNode, flattenAgents } from "./agent-tree";
 import type { DesktopClient } from "./client-types";
@@ -41,11 +41,14 @@ function stepLine(run: WorkflowRunDto | undefined): string | undefined {
  * Mount it with the session's id as `key`.
  */
 export function AgentConversation({
+  ask,
   client,
   meta,
   renderChat,
   session,
 }: {
+  /** A thread to show, asked for outside the page; a new `nonce` asks again. */
+  ask?: { tab: ChatTabId; nonce: number } | undefined;
   client: DesktopClient;
   /** `Claude · Opus 5.5 · 34% of context used`. */
   meta: string;
@@ -56,10 +59,20 @@ export function AgentConversation({
   session: AgentSessionDto;
 }) {
   const [request, setRequest] = useState<AgentChatRequest>({
-    tab: "agent",
+    tab: ask?.tab ?? "agent",
     view: "thread",
     nonce: 0,
   });
+  const asked = useRef(ask?.nonce);
+  useEffect(() => {
+    if (!ask || asked.current === ask.nonce) return;
+    asked.current = ask.nonce;
+    setRequest((before) => ({
+      tab: ask.tab,
+      view: "thread",
+      nonce: before.nonce + 1,
+    }));
+  }, [ask]);
   const { threads } = useWorkspaceThreads(client, session.workspaceId);
   const { names } = useConversationNames();
   const forks = openThreads(threads, session.id);
@@ -90,6 +103,21 @@ export function AgentConversation({
               {threadName(thread, names)}
             </button>
           ))}
+          {request.tab === "history" && (
+            <button aria-selected role="tab" type="button">
+              History
+            </button>
+          )}
+          <button
+            aria-label="Ask a fork, without interrupting"
+            aria-selected={request.tab === "new"}
+            onClick={() => show("new")}
+            role="tab"
+            title="Ask a fork of this agent, without interrupting it"
+            type="button"
+          >
+            +
+          </button>
         </div>
         <span className="agent-top-meta">{meta}</span>
         <button
