@@ -43,6 +43,17 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 
 /**
+ * Lets the next sweep read every session again, without the wait between
+ * checks. For the moment after something the app did itself, such as stopping
+ * an agent's turn, when only the transcript or the pane says what happened.
+ * What a file held last time is kept, so an unchanged one is still not read.
+ */
+export function recheckActivityNow(): void {
+  for (const entry of cache.values()) entry.checkedAt = 0;
+  paneChecked.clear();
+}
+
+/**
  * The mtime gate shared by both detectors, and what makes them safe to call on
  * the desktop's 1.2 second tick: an unchanged file is never read, and a file
  * checked moments ago is not even stat'd.

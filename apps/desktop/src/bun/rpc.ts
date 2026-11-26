@@ -1808,7 +1808,19 @@ export function createDesktopRequestHandlers(
     agentSend: ({ id, text }) =>
       mutate(async () => agentDto(await context.agents.send(id, text))),
     agentInterrupt: ({ id }) =>
-      mutate(async () => agentDto(await context.agents.interrupt(id))),
+      mutate(async () => {
+        const agent = agentDto(await context.agents.interrupt(id));
+        // No hook fires for a turn ended with Escape: only the transcript
+        // says it stopped. It is read now, not at the next reconcile tick,
+        // so the window stops showing the agent as working.
+        for (const wait of [500, 1500, 3500])
+          setTimeout(() => {
+            void context.activity
+              .refresh({ now: true })
+              .then(onMutation, () => undefined);
+          }, wait);
+        return agent;
+      }),
     // A lead's members below it stop with it.
     agentStop: ({ id, force }) =>
       mutate(async () => agentDto(await context.agents.stopTree(id, force))),

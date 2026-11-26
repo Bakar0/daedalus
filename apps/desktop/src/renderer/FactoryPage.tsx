@@ -580,6 +580,10 @@ function StartPrompt({
       <div className="chat-foot" hidden={busy}>
         <textarea
           aria-label="Describe the work"
+          autoCapitalize="off"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
           // Over the rows it waits to be clicked: the page's keys stay free.
           autoFocus={!compact}
           disabled={busy}

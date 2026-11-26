@@ -1395,6 +1395,9 @@ button.factory-owner:hover {
   overflow-wrap: anywhere;
   padding: 7px 12px;
 }
+.chat-bubble.chat-typed {
+  white-space: pre-wrap;
+}
 /* What the user typed keeps its line breaks, which markdown would join. */
 .chat-bubble .markdown-body {
   color: inherit;

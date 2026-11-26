@@ -1058,9 +1058,9 @@ function Message({
   if (item.from === "you")
     return (
       <div className="chat-row is-you">
-        <div className="chat-bubble">
-          <MarkdownPreview source={item.text} />
-        </div>
+        {/* What the user typed, as typed: a line that starts with a dash is
+            not a list, and line breaks stay where they were put. */}
+        <div className="chat-bubble chat-typed">{item.text}</div>
         <span className="chat-meta">
           {item.about && (
             <>
@@ -1361,13 +1361,44 @@ function Chat({
     setMenu(false);
   };
   const working = tab === "agent" && live?.state === "working";
+  // What the fork answering in the open conversation does now.
+  const forkSessionId =
+    typeof tab === "number"
+      ? threads.find((thread) => thread.id === tab)?.forkSessionId
+      : undefined;
+  const forkLive = forkSessionId ? liveOf?.(forkSessionId) : undefined;
+  const forkWorking = forkLive?.state === "working";
+  // Stop was asked for: said at once, since the agent's state follows late.
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!stopping) return;
+    if (!working) {
+      setStopping(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setStopping(false), 8000);
+    return () => window.clearTimeout(timer);
+  }, [stopping, working]);
+  const stop = () => {
+    setStopping(true);
+    // Not through `run`: a stop must go out while something else is busy.
+    void client.request
+      .agentInterrupt({ id: chat.sessionId })
+      .then((response) => {
+        if (!response.ok) {
+          setStopping(false);
+          onError(response.error.message);
+        }
+      })
+      .catch(() => setStopping(false));
+  };
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!working) return;
+    if (!working && !forkWorking) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [working]);
+  }, [working, forkWorking]);
   const seen = useSeen();
   // The conversation on screen is read, and stays read once it leaves.
   const showing = typeof tab === "number" && !chat.minimized ? tab : undefined;
@@ -2082,9 +2113,28 @@ function Chat({
           {working && live && (
             <div className="chat-working">
               <span aria-hidden="true" className="chat-spin" />
-              {live.detail ? <code>{live.detail}</code> : <span>Working</span>}
+              {stopping ? (
+                <span>Stopping…</span>
+              ) : live.detail ? (
+                <code>{live.detail}</code>
+              ) : (
+                <span>Working</span>
+              )}
               <span className="chat-working-time">
                 {elapsed(live.since, now)}
+              </span>
+            </div>
+          )}
+          {forkWorking && forkLive && last?.pending && (
+            <div className="chat-working">
+              <span aria-hidden="true" className="chat-spin" />
+              {forkLive.detail ? (
+                <code>{forkLive.detail}</code>
+              ) : (
+                <span>Working</span>
+              )}
+              <span className="chat-working-time">
+                {elapsed(forkLive.since, now)}
               </span>
             </div>
           )}
@@ -2191,6 +2241,11 @@ function Chat({
         <footer className="chat-foot" hidden={tab === "history"}>
           <textarea
             ref={replyBox}
+            // Typed as typed: nothing is corrected or capitalized for the user.
+            autoCapitalize="off"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
             aria-label={`Message @${chat.handle}`}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
@@ -2200,6 +2255,11 @@ function Chat({
               } else if (event.key === "Escape" && takeBack()) {
                 event.preventDefault();
                 event.stopPropagation();
+              } else if (event.key === "Escape" && working) {
+                // As in the agent's own terminal: Escape stops its turn.
+                event.preventDefault();
+                event.stopPropagation();
+                stop();
               }
             }}
             placeholder={
@@ -2223,12 +2283,8 @@ function Chat({
               <button
                 aria-label={`Stop @${chat.handle}`}
                 className="chat-send is-stop"
-                onClick={() =>
-                  void run(() =>
-                    client.request.agentInterrupt({ id: chat.sessionId }),
-                  )
-                }
-                title={`Stop what @${chat.handle} is doing`}
+                onClick={stop}
+                title={`Stop what @${chat.handle} is doing (Esc)`}
                 type="button"
               >
                 <svg aria-hidden="true" viewBox="0 0 16 16">
