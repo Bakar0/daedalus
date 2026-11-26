@@ -4,9 +4,8 @@
  * is in a workflow run, opens in place as another row under its parent,
  * indented, so the path from the plan down stays on screen.
  *
- * The core builds the model (`factoryView`) and this draws it. Over the
- * plans float the chats (`FactoryChats`), one per agent: a box's chat icon
- * or its owner's chip opens one, and several stay open at once.
+ * The core builds the model (`factoryView`) and this draws it. A box's chat
+ * icon or its owner's chip opens that agent's chat, in a tab of its own.
  */
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type {
@@ -30,27 +29,18 @@ import { ToolIcon, providerLabel } from "./session-view";
 import type { DesktopClient } from "./client-types";
 import { MarkdownPreview } from "./markdown-preview";
 import {
-  CHAT_HEIGHT,
-  CHAT_WIDTH,
-  ChatLinks,
-  FactoryChats,
-  placeChat,
   useWorkspaceThreads,
   waitingBySession,
-  type AgentLive,
   type ChatTabId,
-  type ChatWindow,
   type FactoryAgent,
 } from "./FactoryChats";
 
-/** Opens an agent's chat on the page; a new `nonce` asks again. */
+/** Opens an agent's chat; a new `nonce` asks again. */
 export interface ChatRequest {
   sessionId: string;
   handle: string;
   tab: ChatTabId;
-  /** Direct's view to open on, when the asker knows it. */
-  view?: "thread" | "terminal" | undefined;
-  /** The agent's window is a tab: the request is for that tab, not the page. */
+  /** The agent's chat is a tab: the request is for that tab, not the page. */
   docked?: boolean | undefined;
   nonce: number;
 }
@@ -260,26 +250,6 @@ function ChatButton({
       {waiting && <span>{waiting.count}</span>}
     </button>
   );
-}
-
-/** Every agent on the page that can be asked, once each. */
-function agentsOf(page: FactoryPageDto | undefined): FactoryAgent[] {
-  const found = new Map<string, FactoryAgent>();
-  const walk = (level: FactoryLevelDto) => {
-    for (const owner of [
-      level.owner,
-      ...level.blocks.map((block) => block.owner),
-    ])
-      if (canAsk(owner) && !found.has(owner.sessionId!))
-        found.set(owner.sessionId!, {
-          sessionId: owner.sessionId!,
-          handle: owner.handle,
-        });
-    for (const block of level.blocks) if (block.inside) walk(block.inside);
-  };
-  for (const agent of page?.agents ?? []) walk(agent.level);
-  for (const plan of page?.plans ?? []) walk(plan.level);
-  return [...found.values()];
 }
 
 /**
@@ -701,27 +671,6 @@ function StartPrompt({
       )}
     </div>
   );
-}
-
-const CHATS_KEY = "daedalus.factory.chats:";
-
-/** The chat windows as the user left them in this workspace. */
-function storedChats(workspaceId: string): ChatWindow[] {
-  try {
-    const stored: unknown = JSON.parse(
-      localStorage.getItem(CHATS_KEY + workspaceId) ?? "[]",
-    );
-    if (!Array.isArray(stored)) return [];
-    // A window left at the first default size, made for messages alone,
-    // opens at the size that also fits the terminal.
-    return (stored as ChatWindow[]).map((chat) =>
-      chat.width === 400 && chat.height === 460
-        ? { ...chat, width: CHAT_WIDTH, height: CHAT_HEIGHT }
-        : chat,
-    );
-  } catch {
-    return [];
-  }
 }
 
 function OwnerChip({
@@ -1393,20 +1342,14 @@ export function FactoryPage({
   boxRequest,
   chatRequest,
   clickHint,
-  live,
   onError,
-  onFrontChat,
   onOpenChatTab,
-  onOpenLink,
   onOpenPlan,
   onOpenSession,
   onOpenStep,
   onStart,
   onStartTerminal,
   startOptions,
-  onTerminal,
-  renderTerminal,
-  terminalRelease,
 }: {
   /**
    * Starts an agent on what the user typed on the empty page and opens its
@@ -1418,17 +1361,9 @@ export function FactoryPage({
   startOptions?: StartOptions | undefined;
   /** Opens the dialog that starts a session by hand. */
   onStartTerminal?: (() => void) | undefined;
-  renderTerminal?: ((sessionId: string) => React.ReactNode) | undefined;
-  onTerminal?: ((sessionId: string, shown: boolean) => void) | undefined;
-  terminalRelease?: { sessionId: string; nonce: number } | undefined;
   client: DesktopClient;
-  /** A chat to open as a popup, asked for outside the page (the sidebar). */
+  /** A chat to open, asked for outside the page (the sidebar). */
   chatRequest?: ChatRequest | undefined;
-  /**
-   * Told which agent's window is in front, or that none is open, so what
-   * is shown beside the page (its workflow) can follow that agent.
-   */
-  onFrontChat?: ((sessionId: string | undefined) => void) | undefined;
   /**
    * Offers the setting that makes a click on an agent open its chat; absent
    * once it is on or the offer was dismissed.
@@ -1438,17 +1373,8 @@ export function FactoryPage({
     /** Just turned on: says so, with the way back. */
     | { state: "on"; onUndo: () => void; onDismiss: () => void }
     | undefined;
-  /** What an agent is doing now, by session. */
-  live?: ((sessionId: string) => AgentLive | undefined) | undefined;
-  /** Opens a link in a chat message, as a session's terminal does. */
-  onOpenLink: (url: string) => void;
-  /** Moves an agent's chat to a tab of its own. */
-  onOpenChatTab?: (
-    sessionId: string,
-    handle: string,
-    tab: ChatTabId,
-    view: "thread" | "terminal",
-  ) => void;
+  /** Opens an agent's chat in a tab of its own. */
+  onOpenChatTab?: (sessionId: string, handle: string, tab: ChatTabId) => void;
   /** A session whose box to show, asked for outside the page (its tab). */
   boxRequest?: { sessionId: string; nonce: number } | undefined;
   workspaceId: string;
@@ -1478,15 +1404,7 @@ export function FactoryPage({
   const [focus, setFocus] = useState<FactoryWhere & { nonce: number }>();
   const showBox = (sessionId: string) => {
     const where = factoryWhere(page, sessionId);
-    if (!where) return;
-    setFocus({ ...where, nonce: Date.now() });
-    // Its window would cover the box: it goes to the dock, one click away.
-    if (open.current.some((chat) => chat.sessionId === sessionId))
-      keep(
-        open.current.map((chat) =>
-          chat.sessionId === sessionId ? { ...chat, minimized: true } : chat,
-        ),
-      );
+    if (where) setFocus({ ...where, nonce: Date.now() });
   };
   // A request from outside waits for the page to be read.
   const shown = useRef<number | undefined>(undefined);
@@ -1498,95 +1416,21 @@ export function FactoryPage({
     // `showBox` reads the page as it is when the request is met.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boxRequest?.nonce, loaded]);
-  const { threads, reload } = useWorkspaceThreads(client, workspaceId);
-  // With somewhere to open a chat as a tab, no window floats over the
-  // page, also none an earlier version left open.
-  const [chats, setChats] = useState<ChatWindow[]>(() =>
-    onOpenChatTab ? [] : storedChats(workspaceId),
-  );
-  useEffect(
-    () => setChats(onOpenChatTab ? [] : storedChats(workspaceId)),
-    // `onOpenChatTab` is the app's and changes each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [workspaceId],
-  );
-  const frontChat = chats
-    .filter((chat) => !chat.minimized)
-    .reduce<ChatWindow | undefined>(
-      (front, chat) => (!front || chat.order > front.order ? chat : front),
-      undefined,
-    )?.sessionId;
-  useEffect(() => {
-    onFrontChat?.(frontChat);
-    // The page going away leaves no window in front.
-    return () => onFrontChat?.(undefined);
-    // `onFrontChat` is the app's and changes each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frontChat]);
-  // Read through a ref, so two opens in one tick both land.
-  const open = useRef(chats);
-  open.current = chats;
-  const keep = (next: ChatWindow[]) => {
-    open.current = next;
-    setChats(next);
-    try {
-      localStorage.setItem(CHATS_KEY + workspaceId, JSON.stringify(next));
-    } catch {
-      // The layout is a convenience; the chats themselves are stored.
-    }
-  };
-  const openChat = (agent: FactoryAgent, about: string, draft?: string) => {
-    if (onOpenChatTab)
-      return onOpenChatTab(agent.sessionId, agent.handle, "agent", "thread");
-    const now = open.current;
-    const front = Math.max(0, ...now.map((chat) => chat.order)) + 1;
-    keep(
-      now.some((chat) => chat.sessionId === agent.sessionId)
-        ? now.map((chat) =>
-            chat.sessionId === agent.sessionId
-              ? { ...chat, about, draft, minimized: false, order: front }
-              : chat,
-          )
-        : [...now, { ...placeChat(now, agent, about), draft }],
-    );
-  };
+  const { threads } = useWorkspaceThreads(client, workspaceId);
+  const openChat = (agent: FactoryAgent) =>
+    onOpenChatTab?.(agent.sessionId, agent.handle, "agent");
   const requested = chatRequest?.nonce;
   useEffect(() => {
     if (!chatRequest) return;
-    const { sessionId, handle, tab, view } = chatRequest;
-    if (onOpenChatTab)
-      return onOpenChatTab(sessionId, handle, tab, view ?? "thread");
-    const now = open.current;
-    const front = Math.max(0, ...now.map((chat) => chat.order)) + 1;
-    keep(
-      now.some((chat) => chat.sessionId === sessionId)
-        ? now.map((chat) =>
-            chat.sessionId === sessionId
-              ? {
-                  ...chat,
-                  tab,
-                  ...(view ? { view } : {}),
-                  minimized: false,
-                  order: front,
-                }
-              : chat,
-          )
-        : [...now, { ...placeChat(now, { sessionId, handle }, ""), tab, view }],
-    );
-    // One request opens one chat; `keep` and the request are read as they are.
+    onOpenChatTab?.(chatRequest.sessionId, chatRequest.handle, chatRequest.tab);
+    // One request opens one chat; the request is read as it is.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requested]);
   const rows = page ? page.agents.length + page.plans.length : 0;
-  const frontWhere = frontChat ? factoryWhere(page, frontChat) : undefined;
   const rowProps = (key: string) => ({
     focus: focus?.row === key ? focus : undefined,
-    // The box of the window in front, else the one last asked for.
-    front:
-      frontWhere?.row === key
-        ? frontWhere.leaf
-        : !frontWhere && focus?.row === key
-          ? focus.leaf
-          : undefined,
+    // The box last asked for.
+    front: focus?.row === key ? focus.leaf : undefined,
     onOpenPlan,
     onOpenSession,
     onOpenStep,
@@ -1705,36 +1549,6 @@ export function FactoryPage({
             </>
           )}
         </div>
-        <ChatLinks onOpenLink={onOpenLink}>
-          <FactoryChats
-            agents={agentsOf(page)}
-            chats={chats}
-            client={client}
-            live={live}
-            onChats={keep}
-            onError={onError}
-            onOpenChat={openChat}
-            onOpenSession={onOpenSession}
-            onShowBox={showBox}
-            whereOf={(sessionId) => factoryWhere(page, sessionId)?.labels}
-            onOpenTab={
-              onOpenChatTab
-                ? (chat) =>
-                    onOpenChatTab(
-                      chat.sessionId,
-                      chat.handle,
-                      chat.tab ?? "agent",
-                      chat.view ?? "thread",
-                    )
-                : undefined
-            }
-            onTerminal={onTerminal}
-            reloadThreads={reload}
-            renderTerminal={renderTerminal}
-            terminalRelease={terminalRelease}
-            threads={threads}
-          />
-        </ChatLinks>
       </div>
     </ChatContext.Provider>
   );

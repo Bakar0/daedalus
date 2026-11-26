@@ -809,7 +809,7 @@ button.factory-owner:hover {
   width: 12px;
 }
 
-/* A chat: a window over the plans that the user moves and sizes. */
+/* A chat. */
 .chat-window {
   background: var(--panel, #17181b);
   border: 1px solid var(--line-strong);
@@ -847,9 +847,6 @@ button.factory-owner:hover {
   touch-action: none;
   user-select: none;
 }
-.chat-head:active {
-  cursor: grabbing;
-}
 .chat-title {
   align-items: baseline;
   display: flex;
@@ -873,33 +870,6 @@ button.factory-owner:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* Big enough to hit: the whole height of the header, side by side. */
-.factory-shell .chat-icon {
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 8px;
-  color: var(--muted);
-  display: flex;
-  flex: none;
-  height: 32px;
-  justify-content: center;
-  padding: 0;
-  width: 34px;
-}
-.factory-shell .chat-icon svg {
-  fill: none;
-  height: 15px;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.5;
-  width: 15px;
-}
-.factory-shell .chat-icon:hover {
-  background: var(--raised-hover, var(--raised));
-  color: var(--text);
 }
 .factory-shell .chat-agent {
   background: transparent;
@@ -1179,6 +1149,51 @@ button.factory-owner:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* One tool call of the turn an ACP agent is on. */
+.chat-tool .chat-tool-mark {
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+  flex: none;
+  height: 7px;
+  width: 7px;
+}
+.chat-tool.is-in_progress .chat-tool-mark {
+  border-color: var(--accent);
+}
+.chat-tool.is-completed .chat-tool-mark {
+  background: var(--muted);
+}
+.chat-tool.is-failed .chat-tool-mark {
+  background: var(--factory-wait, #ff8282);
+  border-color: var(--factory-wait, #ff8282);
+}
+/* The permission an ACP agent waits on, above the reply box. */
+.chat-permission {
+  padding: 8px 10px;
+}
+.chat-permission-title {
+  align-items: baseline;
+  color: var(--text);
+  display: flex;
+  font-size: 12.5px;
+  gap: 8px;
+  min-width: 0;
+}
+.chat-permission-title span {
+  flex: none;
+}
+.chat-permission-title code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factory-shell .chat-option.is-reject {
+  border-color: var(--line-strong);
+  color: var(--secondary);
 }
 .chat-working-time {
   color: var(--muted);
@@ -1656,66 +1671,6 @@ button.factory-owner:hover {
   padding: 0 16px 12px;
 }
 
-/* Minimized chats, and agents that ask with no chat open. */
-.chat-dock {
-  bottom: 12px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  left: 22px;
-  max-width: calc(100% - 44px);
-  position: absolute;
-  z-index: 5;
-}
-.factory-shell .chat-chip {
-  align-items: center;
-  background: var(--panel, #17181b);
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  box-shadow: 0 6px 18px rgb(0 0 0 / 0.3);
-  color: var(--text);
-  display: flex;
-  font-size: 12px;
-  font-weight: 550;
-  gap: 7px;
-  max-width: 240px;
-  overflow: hidden;
-  padding: 6px 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.factory-shell .chat-chip:hover {
-  border-color: var(--accent);
-}
-.factory-shell .chat-chip.is-waiting {
-  border-color: var(--factory-wait, #ff8282);
-}
-.factory-shell .chat-chip.is-blocking {
-  border-color: #ff8282;
-}
-.chat-chip-dot {
-  background: var(--factory-wait, #ff8282);
-  border-radius: 50%;
-  height: 7px;
-  width: 7px;
-}
-.chat-chip.is-blocking .chat-chip-dot {
-  background: #ff8282;
-}
-.chat-badge {
-  background: var(--factory-wait, #ff8282);
-  border-radius: 999px;
-  color: #1a1206;
-  font-size: 10.5px;
-  font-weight: 700;
-  min-width: 16px;
-  padding: 0 5px;
-  text-align: center;
-}
-.chat-chip.is-blocking .chat-badge {
-  background: #ff8282;
-}
-
 /* One line offering a setting, above the plans. Dismissed for good. */
 .factory-hint {
   align-items: center;
@@ -1990,55 +1945,12 @@ button.factory-owner:hover {
   max-width: none;
 }
 
-/* The thread and the terminal are two views of one window. */
+/* The thread: its messages, and the typing box under them. */
 .chat-thread {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
-}
-.chat-thread[hidden] {
-  display: none;
-}
-.chat-terminal-stage {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  padding: 6px 0 0 8px;
-}
-.chat-terminal-stage > * {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-}
-.chat-views {
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  display: flex;
-  flex: none;
-  margin-right: 4px;
-  overflow: hidden;
-}
-.factory-shell .chat-views button {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1;
-  padding: 5px 9px;
-}
-.factory-shell .chat-views button:hover {
-  color: var(--text);
-}
-.factory-shell .chat-views button[aria-checked="true"] {
-  background: var(--raised-hover, var(--raised));
-  color: var(--text);
-}
-/* With the terminal in it, a docked window uses the tab's whole width. */
-.chat-window.is-docked:has(.chat-terminal-stage) {
-  max-width: none;
 }
 
 /* The empty Factory: one box to say what the work is. */

@@ -1,8 +1,7 @@
 /**
- * The Factory tab's chats. Each agent on a box has one chat, a window that
- * floats over the plans: the user drags it, resizes it and minimizes it to
- * the dock at the bottom, and opens as many as they want, so several flows
- * are talked to at once.
+ * An agent's chat. Each agent has one, and it fills a tab of the workspace;
+ * the user opens as many as they want, so several flows are talked to at
+ * once.
  *
  * A chat holds everything between the user and that agent. What the agent
  * asks arrives as its messages, with the choices under them. What the user
@@ -13,6 +12,7 @@
 import { factoryWhere } from "./factory-where";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  AcpLiveDto,
   MainMessageDto,
   SessionTurnDto,
   ThreadDto,
@@ -39,6 +39,8 @@ const ANSWER_MS = 2_500;
 const WORKING_MS = 1_000;
 /** How long the working row stays for an answer that is still being read. */
 const SETTLE_MS = 6_000;
+/** How much of a running turn shows: its latest messages and tool calls. */
+const ACP_TURN_PARTS = 30;
 /** How long a sent message shows as on its way to an agent that is not working. */
 const SENDING_MS = 30_000;
 
@@ -48,31 +50,13 @@ export interface FactoryAgent {
   handle: string;
 }
 
-/** An open chat and where its window is. */
+/** An agent's chat, as its tab shows it. */
 export interface ChatWindow extends FactoryAgent {
   /** The box it was opened from. */
   about: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  minimized: boolean;
-  /** Stacking order: the highest is in front. */
-  order: number;
   /** Text to put in the typing box once, such as a question a box offers. */
   draft?: string | undefined;
-  /** The conversation it shows: the agent's own, or one with a copy. */
-  tab?: ChatTabId | undefined;
-  /**
-   * What Direct shows: the agent's messages, or its terminal. Both are the
-   * same conversation, so one window holds them and switches between them.
-   */
-  view?: "thread" | "terminal" | undefined;
 }
-
-/** The size a window opens at: enough for an agent's terminal. */
-export const CHAT_WIDTH = 760;
-export const CHAT_HEIGHT = 560;
 
 const isMessage = (message: ThreadMessageDto) => message.kind === "message";
 
@@ -790,6 +774,56 @@ function useMainMessages(
   return messages;
 }
 
+/** How often an ACP agent's running turn is read, and its idle one. */
+const ACP_TURN_MS = 300;
+const ACP_IDLE_MS = 1_500;
+
+/**
+ * The turn an ACP agent is on, read while its chat shows: the answer as it
+ * streams, the turn's tool calls and the permission it waits on.
+ */
+function useAcpLive(client: DesktopClient, sessionId: string, shown: boolean) {
+  const [live, setLive] = useState<AcpLiveDto | undefined>(undefined);
+  const [reads, setReads] = useState(0);
+  useEffect(() => {
+    if (!shown) {
+      setLive(undefined);
+      return;
+    }
+    let stale = false;
+    let timer: number | undefined;
+    const read = () =>
+      void client.request
+        .acpLive({ sessionId })
+        .then(
+          (response) => {
+            if (stale) return false;
+            if (response.ok) setLive(response.data);
+            return response.ok && response.data.working;
+          },
+          () => false,
+        )
+        .then((working) => {
+          if (stale) return;
+          timer = window.setTimeout(
+            () => {
+              if (document.visibilityState === "visible") read();
+              else timer = window.setTimeout(read, ACP_IDLE_MS);
+            },
+            working ? ACP_TURN_MS : ACP_IDLE_MS,
+          );
+        });
+    read();
+    return () => {
+      stale = true;
+      window.clearTimeout(timer);
+    };
+  }, [client, sessionId, shown, reads]);
+  /** Reads now: something was just sent or answered. */
+  const reread = useCallback(() => setReads((count) => count + 1), []);
+  return { live, reread };
+}
+
 /** The agent's turns as its hooks recorded them, read while they show. */
 function useTurns(
   client: DesktopClient,
@@ -1306,42 +1340,34 @@ function forAgent(answer: string): string {
 }
 
 function Chat({
+  acp = false,
   chat,
   client,
-  docked = false,
   onChange,
-  onClose,
   onError,
-  onFront,
-  onMoveBack,
   onOpenSession,
-  onOpenTab,
   onSent,
   onTab,
-  onTerminal,
   live,
   liveOf,
   reloadThreads,
-  renderTerminal,
   sent,
   shownTab,
-  terminalRelease,
   threads,
   where,
   onWhere,
 }: {
+  /**
+   * The agent runs over ACP: its turn shows as it streams, and it asks for
+   * permissions here. It has no terminal.
+   */
+  acp?: boolean;
   /** Where the agent is in the Factory: the plan, the task, the step. */
   where?: readonly string[] | undefined;
   /** Shows that box on the Factory page. */
   onWhere?: (() => void) | undefined;
   /** What any session is doing now, for the marks on copies' answers. */
   liveOf?: ((sessionId: string) => AgentLive | undefined) | undefined;
-  /** Draws the agent's terminal; without it the window has no Terminal view. */
-  renderTerminal?: ((sessionId: string) => React.ReactNode) | undefined;
-  /** Told while this window draws the terminal: it is drawn in one place. */
-  onTerminal?: ((sessionId: string, shown: boolean) => void) | undefined;
-  /** A new number asks this window to give the terminal up. */
-  terminalRelease?: number | undefined;
   chat: ChatWindow;
   client: DesktopClient;
   /**
@@ -1353,16 +1379,8 @@ function Chat({
   onTab?: ((tab: ChatTabId) => void) | undefined;
   /** What the agent is doing now, for the working line of its own chat. */
   live?: AgentLive | undefined;
-  /** Fills its tab instead of floating: no dragging, sizing or closing. */
-  docked?: boolean;
-  /** Moves the chat to a tab of its own. */
-  onOpenTab?: (() => void) | undefined;
-  /** In a tab: moves the window back over the Factory, on this thread. */
-  onMoveBack?: ((tab: ChatTabId) => void) | undefined;
   onChange: (change: Partial<ChatWindow>) => void;
-  onClose: () => void;
   onError: (message: string) => void;
-  onFront: () => void;
   onOpenSession: (sessionId: string) => void;
   onSent: (message: SentMessage) => void;
   reloadThreads: () => void;
@@ -1421,26 +1439,6 @@ function Chat({
     chat.sessionId,
     tab === "history",
   );
-  // The terminal is Direct's other view: a fork is read-only, and an
-  // agent's question is answered in words.
-  const canTerminal = tab === "agent" && renderTerminal !== undefined;
-  const terminalView = canTerminal && chat.view === "terminal";
-  const terminalDrawn = terminalView && !chat.minimized;
-  useEffect(() => {
-    if (!terminalDrawn) return;
-    onTerminal?.(chat.sessionId, true);
-    return () => onTerminal?.(chat.sessionId, false);
-    // `onTerminal` is the app's and changes each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminalDrawn, chat.sessionId]);
-  const released = useRef(terminalRelease);
-  useEffect(() => {
-    if (released.current === terminalRelease) return;
-    released.current = terminalRelease;
-    onChange({ view: "thread" });
-    // `onChange` is the page's and changes each render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terminalRelease]);
   /** The history row whose delete button was pressed once. */
   const [deleting, setDeleting] = useState<number | undefined>(undefined);
   // The agent's asks are answered in Direct, and each in its own thread.
@@ -1496,7 +1494,13 @@ function Chat({
     Boolean(context.target && box.current?.contains(context.target));
   useCommand("session.switch", { enabled: hasFocus, run: () => step(1) });
   useCommand("session.switchBack", { enabled: hasFocus, run: () => step(-1) });
-  const working = tab === "agent" && live?.state === "working";
+  const { live: acpLive, reread: rereadAcp } = useAcpLive(
+    client,
+    chat.sessionId,
+    acp && tab === "agent",
+  );
+  const working =
+    tab === "agent" && (live?.state === "working" || acpLive?.working === true);
   // What the fork answering in the open conversation does now.
   const forkSessionId =
     typeof tab === "number"
@@ -1537,7 +1541,7 @@ function Chat({
   }, [working, forkWorking]);
   const seen = useSeen();
   // The conversation on screen is read, and stays read once it leaves.
-  const showing = typeof tab === "number" && !chat.minimized ? tab : undefined;
+  const showing = typeof tab === "number" ? tab : undefined;
   useEffect(
     () => (showing === undefined ? undefined : showConversation(showing)),
     [showing],
@@ -1601,6 +1605,49 @@ function Chat({
           },
         ]
       : items;
+  // The turn as it happens. Once it ends the agent's transcript has it;
+  // its last words stay for the moment before that is read.
+  const lastPart = acpLive?.parts.at(-1);
+  const lastWords = lastPart?.kind === "text" ? lastPart.text.trim() : "";
+  const turnParts =
+    tab !== "agent" || !acpLive
+      ? []
+      : acpLive.working
+        ? acpLive.parts.slice(-ACP_TURN_PARTS)
+        : settling &&
+            lastPart &&
+            lastWords !== "" &&
+            !shown
+              .slice(-4)
+              .some(
+                (item) =>
+                  item.from === "agent" && item.text.trim() === lastWords,
+              )
+          ? [lastPart]
+          : [];
+  const permission = tab === "agent" ? (acpLive?.permission ?? null) : null;
+  const [permitting, setPermitting] = useState(false);
+  const permit = (optionId: string) => {
+    if (!permission || permitting) return;
+    setPermitting(true);
+    // Not through `run`: a permission is answered while a message is sent.
+    void client.request
+      .acpPermission({
+        sessionId: chat.sessionId,
+        requestId: permission.requestId,
+        optionId,
+      })
+      .then(
+        (response) => {
+          if (!response.ok) onError(response.error.message);
+        },
+        () => undefined,
+      )
+      .finally(() => {
+        setPermitting(false);
+        rereadAcp();
+      });
+  };
   const end = useRef<HTMLDivElement>(null);
   const last = shown.at(-1);
   const awaited = settling && tab === "agent" && last?.from === "you";
@@ -1613,10 +1660,10 @@ function Chat({
     last !== undefined &&
     last.id.startsWith("sent:") &&
     Date.now() - Date.parse(last.at) < SENDING_MS;
-  const tail = `${shown.length}:${last?.id}:${last?.pending}:${last?.text.length}`;
+  const tail = `${shown.length}:${last?.id}:${last?.pending}:${last?.text.length}:${turnParts.length}:${lastWords.length}:${permission?.requestId ?? ""}`;
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
-  }, [tail, chat.minimized]);
+  }, [tail]);
 
   const run = async (
     work: () => Promise<{ ok: boolean; error?: { message: string } }>,
@@ -1750,19 +1797,7 @@ function Chat({
     );
   };
 
-  const drag = useRef<
-    { x: number; y: number; left: number; top: number } | undefined
-  >(undefined);
   const box = useRef<HTMLElement>(null);
-  // The browser's own resize handle sizes the window; keep what it left.
-  const keepSize = () => {
-    const node = box.current;
-    if (!node) return;
-    const width = node.offsetWidth;
-    const height = node.offsetHeight;
-    if (width !== chat.width || height !== chat.height)
-      onChange({ width, height });
-  };
   const tabName = (which: ChatTabId): string =>
     which === "agent"
       ? "Direct"
@@ -1788,67 +1823,19 @@ function Chat({
   const latestReply = rows
     .flatMap((row) => (row.kind === "item" ? [row.item] : []))
     .findLast((item) => item.from !== "you" && !item.pending)?.id;
-  if (chat.minimized) return null;
   return (
     <section
       aria-label={`Threads with @${chat.handle}`}
-      className={`chat-window ${docked ? "is-docked" : ""}`}
-      onPointerDown={docked ? undefined : onFront}
-      onPointerUp={docked ? undefined : keepSize}
+      className="chat-window is-docked"
       ref={box}
-      style={
-        docked
-          ? undefined
-          : {
-              // Kept inside the page when it or the app's window shrinks.
-              left: `clamp(0px, ${chat.x}px, calc(100% - ${chat.width}px - 4px))`,
-              top: `clamp(0px, ${chat.y}px, calc(100% - 120px))`,
-              width: chat.width,
-              height: chat.height,
-              zIndex: 10 + chat.order,
-            }
-      }
     >
-      <header
-        className="chat-head"
-        onPointerDown={(event) => {
-          if (docked || (event.target as HTMLElement).closest("button")) return;
-          drag.current = {
-            x: event.clientX,
-            y: event.clientY,
-            left: chat.x,
-            top: chat.y,
-          };
-          event.currentTarget.setPointerCapture(event.pointerId);
-        }}
-        onPointerMove={(event) => {
-          const from = drag.current;
-          if (!from) return;
-          const shell = box.current?.offsetParent as HTMLElement | null;
-          const maxX = (shell?.clientWidth ?? 4000) - 80;
-          const maxY = (shell?.clientHeight ?? 4000) - 40;
-          onChange({
-            x: Math.min(maxX, Math.max(0, from.left + event.clientX - from.x)),
-            y: Math.min(maxY, Math.max(0, from.top + event.clientY - from.y)),
-          });
-        }}
-        onPointerUp={() => (drag.current = undefined)}
-      >
+      <header className="chat-head">
         <span className="chat-title">
           <button
             className="chat-agent"
-            onClick={() => {
-              // The agent's own conversation, as its terminal when this
-              // window can draw it, else in the session's own tab.
-              if (!renderTerminal) return onOpenSession(chat.sessionId);
-              setPicked("agent");
-              onChange({ view: "terminal" });
-            }}
-            title={
-              renderTerminal
-                ? `Show @${chat.handle}'s terminal`
-                : `Open @${chat.handle}'s session`
-            }
+            disabled={acp}
+            onClick={() => onOpenSession(chat.sessionId)}
+            title={acp ? undefined : `Open @${chat.handle}'s terminal`}
             type="button"
           >
             @{chat.handle}
@@ -1980,85 +1967,6 @@ function Chat({
             </div>
           )}
         </span>
-        {canTerminal && (
-          <div
-            aria-label={`What to show of @${chat.handle}`}
-            className="chat-views"
-            role="radiogroup"
-          >
-            {(["thread", "terminal"] as const).map((view) => (
-              <button
-                aria-checked={terminalView === (view === "terminal")}
-                key={view}
-                onClick={() => onChange({ view })}
-                role="radio"
-                title={
-                  view === "thread"
-                    ? `@${chat.handle}'s messages`
-                    : `@${chat.handle}'s terminal`
-                }
-                type="button"
-              >
-                {view === "thread" ? "Thread" : "Terminal"}
-              </button>
-            ))}
-          </div>
-        )}
-        {docked && onMoveBack && (
-          <button
-            aria-label="Move back to the Factory"
-            className="chat-icon"
-            onClick={() => onMoveBack(tab)}
-            title="Move back to the Factory, as a window over it"
-            type="button"
-          >
-            <svg aria-hidden="true" viewBox="0 0 16 16">
-              <path d="M9.5 12.5h-6v-6M3.5 12.5l7-7M12.5 9.5v-6h-6" />
-            </svg>
-          </button>
-        )}
-        {!docked && (
-          <>
-            {onOpenTab && (
-              <button
-                aria-label="Open as a tab"
-                className="chat-icon"
-                onClick={onOpenTab}
-                title="Open as a tab"
-                type="button"
-              >
-                <svg aria-hidden="true" viewBox="0 0 16 16">
-                  <path d="M6.5 3.5h6v6M12.5 3.5l-7 7M3.5 6.5v6h6" />
-                </svg>
-              </button>
-            )}
-            <button
-              aria-label="Minimize"
-              className="chat-icon"
-              onClick={() => onChange({ minimized: true })}
-              title="Minimize to the bar below"
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 16 16">
-                <path d="M3.5 11.5h9" />
-              </svg>
-            </button>
-            <button
-              aria-label="Close"
-              className="chat-icon"
-              // As closing its tab does: the window leaves the screen and
-              // every thread stays in the list. A thread is put away from
-              // the list, with its ×.
-              onClick={onClose}
-              title="Close the window. Its threads stay in the list."
-              type="button"
-            >
-              <svg aria-hidden="true" viewBox="0 0 16 16">
-                <path d="M4 4l8 8M12 4l-8 8" />
-              </svg>
-            </button>
-          </>
-        )}
       </header>
       {where && where.length > 0 && (
         <button
@@ -2082,13 +1990,7 @@ function Chat({
           )}
         </button>
       )}
-      {terminalDrawn && (
-        <div className="chat-terminal-stage">
-          {renderTerminal?.(chat.sessionId)}
-        </div>
-      )}
-      {/* Hidden, not removed, so the thread is where it was on the way back. */}
-      <div className="chat-thread" hidden={terminalView}>
+      <div className="chat-thread">
         {tab !== "agent" && tab !== "history" && (!own || viaFork) && (
           <p className="chat-note">
             A read-only fork answers here. @{chat.handle} keeps working and does
@@ -2278,6 +2180,28 @@ function Chat({
               <span>Working</span>
             </div>
           )}
+          {turnParts.map((part, index) =>
+            part.kind === "tool" ? (
+              <div
+                className={`chat-working chat-tool is-${part.status}`}
+                key={part.id}
+              >
+                <span aria-hidden="true" className="chat-tool-mark" />
+                <code title={part.title}>{part.title}</code>
+              </div>
+            ) : (
+              part.text.trim() !== "" && (
+                <div className="chat-row is-agent" key={`text:${index}`}>
+                  <span className="chat-meta">
+                    <span className="chat-who">@{chat.handle}</span>
+                  </span>
+                  <div className="chat-text">
+                    <MarkdownPreview source={part.text} />
+                  </div>
+                </div>
+              )
+            ),
+          )}
           {working && live && (
             <div className="chat-working">
               <span aria-hidden="true" className="chat-spin" />
@@ -2307,6 +2231,8 @@ function Chat({
             </div>
           )}
           {tab === "agent" &&
+            // An ACP agent's permission is the bar above the reply box.
+            !(acp && live?.state === "needs_permission") &&
             (live?.state === "needs_permission" ||
               live?.state === "needs_input") && (
               // The question and its choices are drawn in the terminal, where
@@ -2334,10 +2260,10 @@ function Chat({
                     Answer here
                   </button>
                 ) : (
-                  canTerminal && (
+                  !acp && (
                     <button
                       className="chat-ask-go"
-                      onClick={() => onChange({ view: "terminal" })}
+                      onClick={() => onOpenSession(chat.sessionId)}
                       type="button"
                     >
                       Answer in its terminal
@@ -2389,6 +2315,27 @@ function Chat({
                 ))}
               </div>
             )}
+          </div>
+        )}
+        {permission && (
+          <div className="chat-question chat-permission" role="alert">
+            <span className="chat-permission-title">
+              <span>@{chat.handle} asks for permission</span>
+              <code title={permission.title}>{permission.title}</code>
+            </span>
+            <div className="chat-options">
+              {permission.options.map((option) => (
+                <button
+                  className={`chat-option ${option.kind.startsWith("reject") ? "is-reject" : ""}`}
+                  disabled={permitting}
+                  key={option.id}
+                  onClick={() => permit(option.id)}
+                  type="button"
+                >
+                  {option.name}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {tab === "new" && about && (
@@ -2556,194 +2503,6 @@ function Chat({
   );
 }
 
-/** Where a new window opens: stepped down and right from the last one. */
-export function placeChat(
-  open: readonly ChatWindow[],
-  agent: FactoryAgent,
-  about: string,
-): ChatWindow {
-  // Each one stepped down and right of the last, so every header shows.
-  const step = open.length % 6;
-  return {
-    ...agent,
-    about,
-    x: 40 + step * 36,
-    y: 72 + step * 32,
-    width: CHAT_WIDTH,
-    height: CHAT_HEIGHT,
-    minimized: false,
-    order: Math.max(0, ...open.map((chat) => chat.order)) + 1,
-  };
-}
-
-/** The floating chats and, at the bottom, the dock. */
-export function FactoryChats({
-  agents,
-  chats,
-  client,
-  onChats,
-  onError,
-  onOpenChat,
-  onOpenSession,
-  onShowBox,
-  whereOf,
-  live,
-  onOpenTab,
-  onTerminal,
-  reloadThreads,
-  renderTerminal,
-  terminalRelease,
-  threads,
-}: {
-  /** What an agent is doing now, by session. */
-  live?: ((sessionId: string) => AgentLive | undefined) | undefined;
-  renderTerminal?: ((sessionId: string) => React.ReactNode) | undefined;
-  onTerminal?: ((sessionId: string, shown: boolean) => void) | undefined;
-  /** Asks one agent's window to give its terminal up; `nonce` asks again. */
-  terminalRelease?: { sessionId: string; nonce: number } | undefined;
-  /** Moves a chat to a tab of its own; absent where there are no tabs. */
-  onOpenTab?: ((chat: ChatWindow) => void) | undefined;
-  /** The agents on the page, for a chat an ask opens from the dock. */
-  agents: readonly FactoryAgent[];
-  chats: readonly ChatWindow[];
-  client: DesktopClient;
-  onChats: (next: ChatWindow[]) => void;
-  onError: (message: string) => void;
-  onOpenChat: (agent: FactoryAgent, about: string) => void;
-  onOpenSession: (sessionId: string) => void;
-  /** Where an agent is on the page, as names from the plan down. */
-  whereOf?: ((sessionId: string) => readonly string[] | undefined) | undefined;
-  /** Shows an agent's box on the page. */
-  onShowBox?: ((sessionId: string) => void) | undefined;
-  reloadThreads: () => void;
-  threads: readonly ThreadDto[];
-}) {
-  const { sent, add: addSent } = useSent();
-  const seen = useSeen();
-  /** Whether a copy of the agent has an answer the user has not seen. */
-  const unread = (sessionId: string) =>
-    openThreads(threads, sessionId).some(
-      (thread) =>
-        conversationMark(thread.id, copyState(thread, live), seen) === "unread",
-    );
-  const waiting = waitingBySession(threads);
-  const front = Math.max(0, ...chats.map((chat) => chat.order));
-  const change = (sessionId: string, patch: Partial<ChatWindow>) =>
-    onChats(
-      chats.map((chat) =>
-        chat.sessionId === sessionId ? { ...chat, ...patch } : chat,
-      ),
-    );
-  // In the dock: minimized chats, and agents that wait for the user with no
-  // chat open, so an ask is seen without looking for its box.
-  const minimized = chats.filter((chat) => chat.minimized);
-  const knocking = [...waiting.keys()]
-    .filter((sessionId) => !chats.some((chat) => chat.sessionId === sessionId))
-    .map((sessionId) => ({
-      sessionId,
-      handle:
-        agents.find((agent) => agent.sessionId === sessionId)?.handle ??
-        threads.find((thread) => thread.sessionId === sessionId)?.sessionName ??
-        "agent",
-    }));
-  return (
-    <>
-      {chats.map((chat) => (
-        <Chat
-          chat={chat}
-          client={client}
-          key={chat.sessionId}
-          onWhere={onShowBox ? () => onShowBox(chat.sessionId) : undefined}
-          where={whereOf?.(chat.sessionId)}
-          onChange={(patch) => change(chat.sessionId, patch)}
-          onClose={() =>
-            onChats(chats.filter((one) => one.sessionId !== chat.sessionId))
-          }
-          onError={onError}
-          onFront={() => {
-            if (chat.order !== front)
-              change(chat.sessionId, { order: front + 1 });
-          }}
-          onOpenSession={onOpenSession}
-          onOpenTab={
-            onOpenTab
-              ? () => {
-                  onOpenTab(chat);
-                  onChats(
-                    chats.filter((one) => one.sessionId !== chat.sessionId),
-                  );
-                }
-              : undefined
-          }
-          live={live?.(chat.sessionId)}
-          liveOf={live}
-          onSent={addSent}
-          onTab={(tab) => change(chat.sessionId, { tab })}
-          onTerminal={onTerminal}
-          renderTerminal={renderTerminal}
-          terminalRelease={
-            terminalRelease?.sessionId === chat.sessionId
-              ? terminalRelease.nonce
-              : undefined
-          }
-          reloadThreads={reloadThreads}
-          shownTab={chat.tab ?? "agent"}
-          sent={sent}
-          threads={threads}
-        />
-      ))}
-      {(minimized.length > 0 || knocking.length > 0) && (
-        <nav aria-label="Threads" className="chat-dock">
-          {knocking.map((agent) => {
-            const state = waiting.get(agent.sessionId)!;
-            return (
-              <button
-                className={`chat-chip is-waiting ${state.blocking ? "is-blocking" : ""}`}
-                key={agent.sessionId}
-                onClick={() => onOpenChat(agent, `@${agent.handle}`)}
-                title={
-                  state.blocking
-                    ? `@${agent.handle} is stopped until you answer`
-                    : `@${agent.handle} asks you something`
-                }
-                type="button"
-              >
-                <span className="chat-chip-dot" />@{agent.handle}
-                <span className="chat-badge">{state.count}</span>
-              </button>
-            );
-          })}
-          {minimized.map((chat) => {
-            const state = waiting.get(chat.sessionId);
-            return (
-              <button
-                className={`chat-chip ${state ? "is-waiting" : ""} ${state?.blocking ? "is-blocking" : ""}`}
-                key={chat.sessionId}
-                onClick={() =>
-                  change(chat.sessionId, {
-                    minimized: false,
-                    order: front + 1,
-                  })
-                }
-                type="button"
-              >
-                {!state && unread(chat.sessionId) && (
-                  <span
-                    className="chat-unread-dot"
-                    title="A fork has a new answer"
-                  />
-                )}
-                @{chat.handle}
-                {state && <span className="chat-badge">{state.count}</span>}
-              </button>
-            );
-          })}
-        </nav>
-      )}
-    </>
-  );
-}
-
 /** Where an agent is in the Factory, read while its tab shows. */
 function useWhere(
   client: DesktopClient,
@@ -2775,40 +2534,27 @@ function useWhere(
 
 /** One agent's chat filling a tab of the workspace. */
 export function ChatTab({
+  acp = false,
   client,
   handle,
   onError,
   onOpenLink,
   live,
   liveOf,
-  onMoveBack,
   onOpenSession,
   onShowBox,
-  onTerminal,
-  renderTerminal,
   request,
   sessionId,
-  terminalRelease,
   workspaceId,
 }: {
+  /** The agent runs over ACP. */
+  acp?: boolean;
   /** Opens the Factory on the agent's box. */
   onShowBox?: (() => void) | undefined;
-  /** A thread, and a view of Direct, to show; a new `nonce` asks again. */
-  request?:
-    | {
-        tab: ChatTabId;
-        view?: "thread" | "terminal" | undefined;
-        nonce: number;
-      }
-    | undefined;
-  /** Moves the window back over the Factory, on the thread and view shown. */
-  onMoveBack?:
-    ((tab: ChatTabId, view: "thread" | "terminal") => void) | undefined;
+  /** A thread to show; a new `nonce` asks again. */
+  request?: { tab: ChatTabId; nonce: number } | undefined;
   live?: AgentLive | undefined;
   liveOf?: ((sessionId: string) => AgentLive | undefined) | undefined;
-  renderTerminal?: ((sessionId: string) => React.ReactNode) | undefined;
-  onTerminal?: ((sessionId: string, shown: boolean) => void) | undefined;
-  terminalRelease?: number | undefined;
   client: DesktopClient;
   handle: string;
   onError: (message: string) => void;
@@ -2822,48 +2568,23 @@ export function ChatTab({
   const { sent, add: addSent } = useSent();
   const where = useWhere(client, workspaceId, sessionId);
   const [tab, setTab] = useState<ChatTabId>(request?.tab ?? "agent");
-  const [view, setView] = useState<"thread" | "terminal">(
-    request?.view ?? "thread",
-  );
   const asked = useRef(request?.nonce);
   useEffect(() => {
     if (!request || asked.current === request.nonce) return;
     asked.current = request.nonce;
     setTab(request.tab);
-    if (request.view) setView(request.view);
   }, [request]);
   return (
     <div className="factory-shell chat-tab">
       <ChatLinks onOpenLink={onOpenLink}>
         <Chat
-          chat={{
-            sessionId,
-            handle,
-            about: "",
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-            minimized: false,
-            order: 0,
-            view,
-          }}
+          acp={acp}
+          chat={{ sessionId, handle, about: "" }}
           client={client}
-          docked
           onWhere={onShowBox}
           where={where}
-          onChange={(patch) => {
-            if (patch.view) setView(patch.view);
-          }}
-          onMoveBack={
-            onMoveBack ? (shown) => onMoveBack(shown, view) : undefined
-          }
-          onTerminal={onTerminal}
-          renderTerminal={renderTerminal}
-          terminalRelease={terminalRelease}
-          onClose={() => undefined}
+          onChange={() => undefined}
           onError={onError}
-          onFront={() => undefined}
           onOpenSession={onOpenSession}
           live={live}
           liveOf={liveOf}

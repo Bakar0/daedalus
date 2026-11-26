@@ -12,7 +12,6 @@ import {
   type ChatItem,
   type ChatRow,
   type ChatTabId,
-  placeChat,
   openThreads,
   threadMark,
   threadName,
@@ -321,14 +320,6 @@ describe("chatItems", () => {
     ]);
     expect(items[0]!.options).toBeUndefined();
   });
-});
-
-test("a new chat opens in front, stepped away from the ones open", () => {
-  const first = placeChat([], { sessionId: "a", handle: "a" }, "Box A");
-  const second = placeChat([first], { sessionId: "b", handle: "b" }, "Box B");
-  expect(second.order).toBeGreaterThan(first.order);
-  expect([second.x, second.y]).not.toEqual([first.x, first.y]);
-  expect(second).toMatchObject({ about: "Box B", minimized: false });
 });
 
 describe("foldTurns", () => {

@@ -73,6 +73,7 @@ export * from "./services/workflow-jobs";
 export * from "./domain/factory";
 export * from "./domain/plan-flow";
 export * from "./domain/session-steps";
+export * from "./domain/acp-live";
 export * from "./services/factory";
 export * from "./services/search";
 export * from "./services/home";

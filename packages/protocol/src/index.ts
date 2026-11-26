@@ -242,6 +242,35 @@ export interface SessionTurnStepDto {
   at: string;
 }
 
+/**
+ * The turn an ACP agent is on, as far as it has come. Its finished messages
+ * are in `sessionMessages`; this is what is not written there yet.
+ */
+export interface AcpLiveDto {
+  working: boolean;
+  /** What the turn said and did so far, in order. */
+  parts: Array<
+    | { kind: "text"; text: string }
+    | {
+        kind: "tool";
+        id: string;
+        title: string;
+        tool: string;
+        status: "pending" | "in_progress" | "completed" | "failed";
+      }
+  >;
+  /** The permission the agent waits on, when it does. */
+  permission: {
+    requestId: number | string;
+    title: string;
+    options: Array<{ id: string; name: string; kind: string }>;
+  } | null;
+  /** Messages sent during the turn, which run after it. */
+  queued: string[];
+  usage: { used: number; size: number } | null;
+  ended: boolean;
+}
+
 /** One turn of a session: from the user's prompt to the agent's stop. */
 export interface SessionTurnDto {
   startedAt: string;
@@ -1977,6 +2006,13 @@ export interface DesktopRpcSchema {
       /** A session's main messages from its transcript, oldest first. */
       sessionMessages: Request<{ sessionId: string }, MainMessageDto[]>;
       sessionTurns: Request<{ sessionId: string }, SessionTurnDto[]>;
+      /** The live turn of a session that runs over ACP. */
+      acpLive: Request<{ sessionId: string }, AcpLiveDto>;
+      /** Answers the permission an ACP agent waits on with one of its options. */
+      acpPermission: Request<
+        { sessionId: string; requestId: number | string; optionId: string },
+        null
+      >;
       /**
        * Opens a fork: on an open thread (`threadId`), the thread's own fork;
        * otherwise a new thread on a message in a session's main. A fork that

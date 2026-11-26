@@ -1,4 +1,5 @@
 import { chmod, mkdir, open, rm, stat } from "node:fs/promises";
+import { emptyAcpLive, reduceAcpLive, type AcpLive } from "../domain/acp-live";
 import { DaedalusError } from "../errors";
 import {
   acpPaths,
@@ -72,6 +73,11 @@ function sendCommand(
  * `AcpHost` for the other side.
  */
 export class AcpService {
+  private readonly lives = new Map<
+    string,
+    { offset: number; seq: number; live: AcpLive }
+  >();
+
   constructor(private readonly home: string) {}
 
   paths(sessionId: string): AcpPaths {
@@ -158,6 +164,28 @@ export class AcpService {
   }
 
   /**
+   * What the agent is doing now. Each call reads only what the host logged
+   * since the last one.
+   */
+  async live(sessionId: string): Promise<AcpLive> {
+    const known = this.lives.get(sessionId) ?? {
+      offset: 0,
+      seq: 0,
+      live: emptyAcpLive(),
+    };
+    const read = await this.events(sessionId, known.offset);
+    let { seq, live } = known;
+    for (const entry of read.entries) {
+      // The numbers start again: a relaunched host began a new log.
+      if (entry.seq <= seq) live = emptyAcpLive();
+      seq = entry.seq;
+      live = reduceAcpLive(live, entry);
+    }
+    this.lives.set(sessionId, { offset: read.offset, seq, live });
+    return live;
+  }
+
+  /**
    * Waits for the host to open its ACP session and resolves with that
    * session's id. Rejects when the host reports an error or exits first.
    */
@@ -193,6 +221,7 @@ export class AcpService {
 
   /** Removes a session's host files. Its conversation is the provider's own. */
   async remove(sessionId: string): Promise<void> {
+    this.lives.delete(sessionId);
     const paths = this.paths(sessionId);
     await Promise.all(
       [paths.log, paths.socket, paths.launch].map((path) =>

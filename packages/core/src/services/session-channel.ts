@@ -1,3 +1,4 @@
+import { AcpService } from "./acp";
 import type { DaedalusConfig } from "../config";
 import type { AgentActivityState, AgentSession } from "../domain";
 import { DaedalusError } from "../errors";
@@ -85,6 +86,7 @@ const held = (hold: DeliveryHold) => ({ kind: "held", held: hold }) as const;
 export class SessionChannel {
   /** When a line last went in through the gate, per session. */
   private readonly lastDelivered = new Map<string, number>();
+  private readonly acp: AcpService;
 
   constructor(
     private readonly config: DaedalusConfig,
@@ -99,7 +101,9 @@ export class SessionChannel {
       line: string,
     ) => Promise<boolean> = (session, line) =>
       postToInbox(config, session.id, line),
-  ) {}
+  ) {
+    this.acp = new AcpService(config.home);
+  }
 
   deliver(
     session: AgentSession,
@@ -116,6 +120,19 @@ export class SessionChannel {
     line: DeliveryLine,
     options: DeliveryOptions,
   ): Promise<DeliveryResult> {
+    if (session.runner === "acp") {
+      // An ACP agent takes it as a turn, which its host runs after the one
+      // it is on: there is no pane to read and nothing to type.
+      try {
+        await this.acp.prompt(session.id, await resolve(line));
+      } catch {
+        return held({
+          reason: "busy",
+          text: "the session's host did not take the message",
+        });
+      }
+      return DELIVERED;
+    }
     const inbox = usesInbox(session);
     if (inbox && options.when !== "at-prompt") {
       await leaveInInbox(this.config, session.id, await resolve(line));

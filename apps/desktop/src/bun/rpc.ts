@@ -892,6 +892,17 @@ export function createDesktopRequestHandlers(
       result(async () =>
         turnsFromSteps(context.repositories.sessionSteps.forSession(sessionId)),
       ),
+    acpLive: ({ sessionId }) =>
+      result(() => context.agents.acp.live(sessionId)),
+    acpPermission: ({ sessionId, requestId, optionId }) =>
+      mutate(async () => {
+        await context.agents.acp.answerPermission(
+          sessionId,
+          requestId,
+          optionId,
+        );
+        return null;
+      }),
     threadPlan: ({ path }) =>
       result(async () => {
         try {

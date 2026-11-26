@@ -628,6 +628,17 @@ export class AgentService {
     );
   }
 
+  /**
+   * How a new Claude or Codex agent is driven when nothing says: over ACP
+   * wherever its host can run, which is the app's own CLI in this home.
+   * Without that CLI, as when a checkout's CLI runs alone, in tmux.
+   */
+  private async defaultRunner(): Promise<SessionRunner> {
+    return (await Bun.file(daedalExecutable(this.config)).exists())
+      ? "acp"
+      : "tmux";
+  }
+
   /** The tmux launch of a session's ACP host: the bundled CLI on its file. */
   private acpHostLaunch(
     sessionId: string,
@@ -1405,7 +1416,8 @@ export class AgentService {
     /**
      * How the agent is driven. Only a Claude or Codex agent on this Mac that
      * is not a fork runs over ACP; anything else runs in tmux whatever this
-     * says. Left out, a successor keeps its predecessor's.
+     * says. Left out, a successor keeps its predecessor's and a new agent
+     * takes `defaultRunner`.
      */
     runner?: SessionRunner;
   }): Promise<AgentSession> {
@@ -1583,7 +1595,9 @@ export class AgentService {
       provider &&
       provider.name !== "custom" &&
       provider.adapter.buildAcpLaunch &&
-      (input.runner ?? input.continueFrom?.runner) === "acp"
+      (input.runner ??
+        input.continueFrom?.runner ??
+        (await this.defaultRunner())) === "acp"
         ? await provider.adapter.buildAcpLaunch(launchInput)
         : undefined;
     const launch: ProviderLaunch = input.terminal

@@ -2669,26 +2669,6 @@ export function WorkspaceApp({
   const noteMoveError = (workspaceId: string, message: string) =>
     setMoveErrors((current) => ({ ...current, [workspaceId]: message }));
   const [theme, setTheme] = useState<AppTheme>("dark");
-  /** The agents whose terminal a thread window draws: one place at a time. */
-  const [windowTerminals, setWindowTerminals] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
-  const noteWindowTerminal = useCallback(
-    (sessionId: string, shown: boolean) =>
-      setWindowTerminals((current) => {
-        if (current.has(sessionId) === shown) return current;
-        const next = new Set(current);
-        if (shown) next.add(sessionId);
-        else next.delete(sessionId);
-        return next;
-      }),
-    [],
-  );
-  /** Asks an agent's window to give its terminal back to the session tab. */
-  const [terminalRelease, setTerminalRelease] = useState<{
-    sessionId: string;
-    nonce: number;
-  }>();
   // Read as the state is made, so the terminals are built at the stored size
   // rather than refitting to it; a shell rendered outside a window has no
   // storage and gets the default.
@@ -2848,9 +2828,8 @@ export function WorkspaceApp({
     workspaceId: string;
     id: string;
   }>();
-  /** What the tab in front holds, and the agent whose window is over it. */
+  /** What the tab in front holds. */
   const [centerKind, setCenterKind] = useState<CenterPanelKind>();
-  const [frontChatId, setFrontChatId] = useState<string>();
   const followCenterTab = useCallback(
     (
       kind?: CenterPanelKind,
@@ -3001,7 +2980,7 @@ export function WorkspaceApp({
       return next;
     });
   const { names: conversationNames } = useConversationNames();
-  /** A chat the sidebar asked the Factory to open as a popup. */
+  /** A chat asked to open in its tab, on one of its threads. */
   const [chatRequest, setChatRequest] = useState<ChatRequest | undefined>(
     undefined,
   );
@@ -8482,16 +8461,8 @@ export function WorkspaceApp({
     knownTerminalIds.current = current;
   }, [files, terminalIds]);
 
-  // The workflow docked in the side panel is the shown session's, or, with
-  // the Factory in front, that of the agent whose thread window is on top.
-  const frontChatSession =
-    centerKind === "factory" && frontChatId
-      ? sessionsById.get(frontChatId)
-      : undefined;
-  const dockSession =
-    frontChatSession?.workspaceId === workspace?.id && frontChatSession
-      ? frontChatSession
-      : activeSession;
+  // The workflow docked in the side panel is the shown session's.
+  const dockSession = activeSession;
   // Home's side panel is its file tree alone: the Daedalus home folder.
   const shownPanelTab: SidePanelTab = atHome ? "files" : panelTab;
   const sidePanelTabs = SIDE_PANEL_TABS.filter(
@@ -8525,37 +8496,6 @@ export function WorkspaceApp({
     />
   );
   // The session tab shows whichever session the left column has open.
-  /** An agent's terminal, for its window: the same one its session tab draws. */
-  const renderAgentTerminal = (sessionId: string) => {
-    const target = sessionsById.get(sessionId);
-    if (!target) return null;
-    return (
-      <TerminalSurface
-        activity={activityById.get(target.id)}
-        attention={attentionById.get(target.id)}
-        fileLinks={fileLinksFrom([
-          target.workingDirectory,
-          ...(snapshot?.worktrees ?? [])
-            .filter((item) => item.sessionId === target.id)
-            .map((item) => item.path),
-        ])}
-        fitRevision={terminalFitRevision}
-        focused={shouldFocusSession(focusedSessionId, target.id)}
-        id={target.id}
-        key={`${target.id}:${terminalMountRevision}`}
-        label={sessionName(target)}
-        locationLabel={workspace?.name ?? ""}
-        onClearAttention={() => void clearAttention(target.id)}
-        onCopy={copyTerminalText}
-        onFocused={clearSessionFocusRequest}
-        onOpenLink={openTerminalLink}
-        session={target}
-        status={target.status}
-        target="agent"
-        terminalEndpoint={terminalEndpoint}
-      />
-    );
-  };
   /**
    * Starts an agent on what the user typed on the empty Factory, with those
    * words as its first message, and opens its window.
@@ -8646,26 +8586,6 @@ export function WorkspaceApp({
             Quit and stop sessions stopped it; it comes back with its
             conversation, and the terminal opens here as soon as it is ready.
           </span>
-        </div>
-      ) : activeSession && windowTerminals.has(activeSession.id) ? (
-        // A terminal is drawn in one place: two sizes at once would make
-        // the agent's screen reflow to the smaller.
-        <div className="terminal-empty">
-          <strong>
-            {sessionName(activeSession)}&apos;s terminal is open in its window
-          </strong>
-          <span>It shows in one place at a time.</span>
-          <button
-            onClick={() =>
-              setTerminalRelease({
-                sessionId: activeSession.id,
-                nonce: Date.now(),
-              })
-            }
-            type="button"
-          >
-            Show it here
-          </button>
         </div>
       ) : activeSession ? (
         // The drawer sits over the terminal, below the bars above it, so
@@ -9586,6 +9506,7 @@ export function WorkspaceApp({
                   return (
                     <Suspense fallback={null}>
                       <ChatTab
+                        acp={target.runner === "acp"}
                         client={client}
                         handle={handle}
                         onError={setError}
@@ -9607,13 +9528,6 @@ export function WorkspaceApp({
                             ? chatRequest
                             : undefined
                         }
-                        onTerminal={noteWindowTerminal}
-                        renderTerminal={renderAgentTerminal}
-                        terminalRelease={
-                          terminalRelease?.sessionId === sessionId
-                            ? terminalRelease.nonce
-                            : undefined
-                        }
                         sessionId={sessionId}
                         workspaceId={target.workspaceId}
                       />
@@ -9628,9 +9542,7 @@ export function WorkspaceApp({
                       }
                     >
                       <FactoryPage
-                        // Its open chat windows belong to one workspace.
                         key={workspace.id}
-                        onFrontChat={setFrontChatId}
                         boxRequest={
                           boxRequest &&
                           sessionsById.get(boxRequest.sessionId)
@@ -9675,25 +9587,19 @@ export function WorkspaceApp({
                         onStartTerminal={() =>
                           openSessionModal(undefined, workspace)
                         }
-                        onTerminal={noteWindowTerminal}
-                        renderTerminal={renderAgentTerminal}
-                        terminalRelease={terminalRelease}
-                        live={agentLive}
                         onError={setError}
-                        onOpenChatTab={(sessionId, handle, tab, view) =>
+                        onOpenChatTab={(sessionId, handle, tab) =>
                           files.withEditor((editor) => {
                             editor.openChat(sessionId, handle);
                             setChatRequest({
                               sessionId,
                               handle,
                               tab,
-                              view,
                               docked: true,
                               nonce: Date.now(),
                             });
                           })
                         }
-                        onOpenLink={openTerminalLink}
                         onOpenPlan={(path) =>
                           openFileTarget({ workspaceId: workspace.id, path })
                         }
@@ -10067,7 +9973,6 @@ export function WorkspaceApp({
                     enabled={workflowsOn}
                     key={dockSession.id}
                     owner={
-                      dockSession.id === activeSession?.id &&
                       centerKind !== "factory"
                         ? undefined
                         : (dockSession.teamHandle ?? sessionName(dockSession))

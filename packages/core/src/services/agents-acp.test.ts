@@ -283,6 +283,50 @@ describe("AgentService over ACP", () => {
     });
   }, 30_000);
 
+  test("its state comes from the host: working, asking for permission, done", async () => {
+    await withAcpAgent(async ({ context, workspace }) => {
+      const agent = await context.agents.spawn({
+        workspace,
+        provider: "codex",
+        runner: "acp",
+      });
+      const { acp } = context.agents;
+      const state = async () => {
+        await context.activity.refresh({ now: true });
+        return context.activity.get(agent.id);
+      };
+      // A reading left from before this host started is over.
+      await context.activity.record({
+        sessionId: agent.id,
+        activity: "working",
+        source: "hook",
+      });
+      expect((await state())?.activity).toBe("idle");
+      await context.agents.send(agent.id, "permission please");
+      await until(acp, agent.id, (seen) =>
+        seen.some(
+          (entry) =>
+            entry.from === "agent" &&
+            entry.message.method === "session/request_permission",
+        ),
+      );
+      expect(await state()).toMatchObject({
+        activity: "needs_permission",
+        detail: "Write hello.txt",
+      });
+      await acp.answerPermission(agent.id, 900, "yes");
+      await until(acp, agent.id, (seen) => turnEnds(seen).length === 1);
+      expect((await state())?.activity).toBe("done");
+
+      await context.agents.send(agent.id, "slow work");
+      await until(acp, agent.id, (seen) => turnStarts(seen).length === 2);
+      expect((await state())?.activity).toBe("working");
+      await context.agents.interrupt(agent.id);
+      await until(acp, agent.id, (seen) => turnEnds(seen).length === 2);
+      expect((await state())?.activity).toBe("done");
+    });
+  }, 30_000);
+
   test("a Codex agent gets its options through the adapter's configuration", async () => {
     await withAcpAgent(async ({ tmux, context, workspace }) => {
       const agent = await context.agents.spawn({
