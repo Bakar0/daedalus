@@ -1,7 +1,7 @@
 /**
- * Adding an entry to a workflow file's `steps` while the user edits its
- * markdown: the step picker's one job. The text stays the user's; only the
- * `steps` field changes.
+ * Adding an entry to a list in a file's frontmatter while the user edits its
+ * markdown: a workflow's `steps` from the step picker, a step's `tools` from
+ * the tool picker. The text stays the user's; only that field changes.
  */
 
 /**
@@ -9,28 +9,41 @@
  * the end of its `steps`: to a `[a, b]` list, to a block list, or in place
  * of `steps: dynamic` or a missing field.
  */
-export function addToSteps(text: string, entry: string): string {
-  const flow = /^(steps:[ \t]*\[)([^\]\n]*)(\][ \t]*)$/m.exec(text);
+export const addToSteps = (text: string, entry: string): string =>
+  addToList(text, "steps", entry);
+
+/** The file with a tool's name added at the end of its `tools`. */
+export const addToTools = (text: string, entry: string): string =>
+  addToList(text, "tools", entry);
+
+function addToList(text: string, field: string, entry: string): string {
+  const flow = new RegExp(
+    `^(${field}:[ \\t]*\\[)([^\\]\\n]*)(\\][ \\t]*)$`,
+    "m",
+  ).exec(text);
   if (flow) {
     const items = flow[2]!.trim();
     const list = items ? `${items.replace(/,\s*$/, "")}, ${entry}` : entry;
     return text.replace(flow[0], `${flow[1]}${list}${flow[3]}`);
   }
-  const block = /^steps:[ \t]*\n((?:[ \t]+-[^\n]*(?:\n|$))+)/m.exec(text);
+  const block = new RegExp(
+    `^${field}:[ \\t]*\\n((?:[ \\t]+-[^\\n]*(?:\\n|$))+)`,
+    "m",
+  ).exec(text);
   if (block) {
     const items = block[1]!;
     const indent = /^([ \t]+)-/.exec(items)?.[1] ?? "  ";
     const ending = items.endsWith("\n") ? "" : "\n";
     return text.replace(
       block[0],
-      `steps:\n${items}${ending}${indent}- ${entry}${ending ? "" : "\n"}`,
+      `${field}:\n${items}${ending}${indent}- ${entry}${ending ? "" : "\n"}`,
     );
   }
-  if (/^steps:.*$/m.test(text))
-    return text.replace(/^steps:.*$/m, `steps: [${entry}]`);
-  // No steps field: it goes last in the frontmatter.
+  const line = new RegExp(`^${field}:.*$`, "m");
+  if (line.test(text)) return text.replace(line, `${field}: [${entry}]`);
+  // No such field: it goes last in the frontmatter.
   const close = /^(---\r?\n[\s\S]*?\r?\n)(---)/.exec(text);
   return close
-    ? text.replace(close[0], `${close[1]}steps: [${entry}]\n${close[2]}`)
+    ? text.replace(close[0], `${close[1]}${field}: [${entry}]\n${close[2]}`)
     : text;
 }

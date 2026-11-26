@@ -43,7 +43,7 @@
   line-height: 1.55;
   resize: vertical;
 }
-:where(.mac-board) button:not( .workspace-item, .quiet, .danger-link, .skills-group-head, .skills-row-head ):not( :where( .plan-scroll button, .plans-pane button, .palette button, .threads-pane button, .threads-home button ) ) {
+:where(.mac-board) button:not( .workspace-item, .quiet, .danger-link, .skills-group-head, .skills-row-head ):not( :where( .plan-scroll button, .plans-pane button, .palette button, .factory-shell button ) ) {
   background: var(--accent);
   border: 0;
   border-radius: 8px;
@@ -53,7 +53,7 @@
   padding: 8px 12px;
   transition: background 140ms ease;
 }
-:where(.mac-board) button:not( .workspace-item, .quiet, .danger-link, .skills-group-head, .skills-row-head ):not( :where( .plan-scroll button, .plans-pane button, .palette button, .threads-pane button, .threads-home button ) ):hover:not(:disabled) {
+:where(.mac-board) button:not( .workspace-item, .quiet, .danger-link, .skills-group-head, .skills-row-head ):not( :where( .plan-scroll button, .plans-pane button, .palette button, .factory-shell button ) ):hover:not(:disabled) {
   background: var(--accent-hover);
 }
 .quiet {
@@ -756,6 +756,10 @@
   cursor: pointer;
   font-size: 12px;
   padding: 0;
+}
+.step-memory-banner .quiet {
+  color: var(--accent);
+  flex: none;
 }
 :root[data-theme="light"] :where(.mac-board) input,
 :root[data-theme="light"] :where(.mac-board) textarea,

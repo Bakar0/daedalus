@@ -1,16 +1,11 @@
 /**
- * What the Threads pane, the sidebar and a plan's view share about threads:
- * the mark, snoozing, the open counts, and which plan tasks wait on one.
+ * What the sidebar and a plan's view share about threads: the mark, snoozing,
+ * and which plan tasks wait on one.
  */
-import { useEffect, useState } from "react";
 import type { ThreadDto, ThreadPlanDto } from "@daedalus/protocol";
-import type { DesktopClient } from "./client-types";
 
 /** A pulse line: the Threads mark. */
 export const THREADS_ICON_PATH = "M1.5 8h3l2-5 3 10 2-5h3";
-
-/** How often the counts are read again while shown. */
-const REFRESH_MS = 10_000;
 
 /** Put off by the user until a time that has not come yet. */
 export const isSnoozed = (
@@ -41,13 +36,6 @@ export function snoozeChoices(now: Date): { label: string; until: Date }[] {
     { label: "1 hour", until: new Date(now.getTime() + 60 * 60_000) },
     { label: "Tomorrow 9:00", until: tomorrow },
   ];
-}
-
-/** Threads waiting on the user: all, by workspace, and by owner. */
-export interface ThreadCounts {
-  total: number;
-  byWorkspace: ReadonlyMap<string, number>;
-  bySession: ReadonlyMap<string, number>;
 }
 
 /**
@@ -83,76 +71,6 @@ export function handleSession(
       if (member) return member.id;
     }
   return undefined;
-}
-
-/**
- * The threads waiting on the user that a session's Threads pane shows: its
- * own and, for a lead, its members'. The pane's tab dot counts these.
- */
-export const paneThreadCount = (
-  counts: Pick<ThreadCounts, "bySession">,
-  sessionIds: readonly string[],
-): number =>
-  sessionIds.reduce((sum, id) => sum + (counts.bySession.get(id) ?? 0), 0);
-
-const NO_THREADS: ThreadCounts = {
-  total: 0,
-  byWorkspace: new Map(),
-  bySession: new Map(),
-};
-
-/**
- * Threads waiting on the user, counted for the sidebar's Threads and each
- * session's Threads tab. Polls while mounted.
- */
-export function useThreadCounts(client: DesktopClient): ThreadCounts {
-  const [count, setCount] = useState(NO_THREADS);
-  useEffect(() => {
-    let live = true;
-    const read = () =>
-      void client.request.threadList({}).then(
-        (response) => {
-          if (live && response.ok) {
-            const now = Date.now();
-            const open = response.data.filter((thread) =>
-              waitsOnUser(thread, now),
-            );
-            const byWorkspace = new Map<string, number>();
-            const bySession = new Map<string, number>();
-            for (const thread of open) {
-              byWorkspace.set(
-                thread.workspaceId,
-                (byWorkspace.get(thread.workspaceId) ?? 0) + 1,
-              );
-              bySession.set(
-                thread.sessionId,
-                (bySession.get(thread.sessionId) ?? 0) + 1,
-              );
-            }
-            setCount({ total: open.length, byWorkspace, bySession });
-          }
-        },
-        () => undefined,
-      );
-    read();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") read();
-    }, REFRESH_MS);
-    window.addEventListener("focus", read);
-    // A thread written in here, or anywhere, announces a full change: the
-    // count follows it at once instead of on the next poll. Partial ones
-    // (activity, telemetry) never carry threads.
-    const unsubscribe = client.subscribe((change) => {
-      if (!change?.parts?.length) read();
-    });
-    return () => {
-      live = false;
-      window.clearInterval(timer);
-      window.removeEventListener("focus", read);
-      unsubscribe();
-    };
-  }, [client]);
-  return count;
 }
 
 type TaskMark = "wait" | "held" | undefined;

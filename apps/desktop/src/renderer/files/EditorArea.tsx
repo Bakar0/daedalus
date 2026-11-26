@@ -1,4 +1,5 @@
 import "dockview-react/dist/styles/dockview.css";
+import { METHODS_TITLE } from "../WorkflowsEditor";
 import {
   type DockviewApi,
   DockviewReact,
@@ -103,6 +104,8 @@ export interface EditorAreaHandle {
   openWorkflows(): void;
   /** Shows the Plans tab, adding it first if it is not open. */
   openPlans(): void;
+  /** Shows the workspace's Factory tab, adding it first if it is not open. */
+  openFactory(): void;
   /** Shows the Custom instructions tab, adding it first if it is not open. */
   openInstructions(): void;
   /** Shows the Routines page, adding it first if it is not open. */
@@ -114,11 +117,15 @@ export interface EditorAreaHandle {
   showSessionBesideRoutines(): void;
   /** Shows a team's tab, adding it first if it is not open. */
   openTeam(teamId: string, name: string): void;
+  /** Shows the chat with a session's agent in a tab of its own. */
+  openChat(sessionId: string, handle: string): void;
   /**
-   * Shows a session's threads in a tab of their own, or with `threadId` one
-   * thread (its fork) in a tab like a session's.
+   * Brings an agent's tab to the front when it has one, and says whether it
+   * did: an agent's window lives in one place, the Factory or a tab.
    */
-  openThreads(sessionId: string, name: string, threadId?: number): void;
+  focusChat(sessionId: string): boolean;
+  /** Closes an agent's tab, as when its window moves back to the Factory. */
+  closeChat(sessionId: string): void;
   /**
    * Closes every Team tab whose team is not in `teams`, including tabs the
    * saved layout brought back for a team that has since gone.
@@ -134,10 +141,11 @@ type AppPanelKind =
   | "terminal"
   | "workflows"
   | "plans"
+  | "factory"
   | "instructions"
   | "routinesPage"
   | "team"
-  | "sessionThreads";
+  | "agentChat";
 
 /** What a center tab holds, for the app to follow which one is in front. */
 export type CenterPanelKind =
@@ -148,10 +156,11 @@ export type CenterPanelKind =
   | "terminal"
   | "workflows"
   | "plans"
+  | "factory"
   | "instructions"
   | "routinesPage"
   | "team"
-  | "sessionThreads";
+  | "agentChat";
 
 export interface EditorAreaProps {
   client: DesktopClient;
@@ -184,6 +193,8 @@ export interface EditorAreaProps {
   renderWorkflows?(): React.ReactNode;
   /** The Plans tab's content, drawn by the app. */
   renderPlans?(): React.ReactNode;
+  /** The Factory tab's content, drawn by the app. */
+  renderFactory?(): React.ReactNode;
   /** The Custom instructions tab's content, drawn by the app. */
   renderInstructions?(): React.ReactNode;
   /** The Routines page, drawn by the app. */
@@ -191,7 +202,7 @@ export interface EditorAreaProps {
   /** A team tab's content, drawn by the app; `visible` while in front. */
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
   /** A session's threads, in a tab of their own. */
-  renderThreads?(sessionId: string, threadId?: number): React.ReactNode;
+  renderChat?(sessionId: string, handle: string): React.ReactNode;
   /** The current name for a Team tab, so renames show. */
   abilityTabName?(kind: "team", id: string): string | undefined;
   /** The + in the tab strip: a new terminal in a tab. */
@@ -221,10 +232,8 @@ interface FilePanelParams {
   terminalId?: string;
   /** The team a team tab shows. */
   teamId?: string;
-  /** The session a Threads tab shows the threads of. */
+  /** The session whose agent a chat tab talks to. */
   sessionId?: string;
-  /** On a thread's own tab: the thread. */
-  threadId?: number;
   title?: string;
   preview?: boolean;
   mode?: "edit" | "preview";
@@ -249,6 +258,8 @@ const isHtml = (path: string) => /\.html?$/i.test(path);
 export const isImage = (path: string) =>
   /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(path);
 const SESSION_PANEL = "session";
+/** The workspace's home tab: first in the strip and never closed. */
+const FACTORY_PANEL = "factory";
 const TASK_PANEL = "task";
 const panelKind = (params?: FilePanelParams): CenterPanelKind | undefined =>
   !params ? undefined : (params.kind ?? "file");
@@ -267,11 +278,12 @@ interface EditorContextValue {
   renderTerminal?(terminalId: string, active: boolean): React.ReactNode;
   renderWorkflows?(): React.ReactNode;
   renderPlans?(): React.ReactNode;
+  renderFactory?(): React.ReactNode;
   renderInstructions?(): React.ReactNode;
   renderRoutinesPage?(): React.ReactNode;
   renderTeam?(teamId: string, visible: boolean): React.ReactNode;
   /** A session's threads, in a tab of their own. */
-  renderThreads?(sessionId: string, threadId?: number): React.ReactNode;
+  renderChat?(sessionId: string, handle: string): React.ReactNode;
   abilityTabName?(kind: "team", id: string): string | undefined;
   onNewTerminal?(): void;
   onOpenExternal?(url: string): void;
@@ -366,10 +378,11 @@ export default function EditorArea({
   renderTerminal,
   renderWorkflows,
   renderPlans,
+  renderFactory,
   renderInstructions,
   renderRoutinesPage,
   renderTeam,
-  renderThreads,
+  renderChat,
   abilityTabName,
   onNewTerminal,
   onTerminalTabClosed,
@@ -411,6 +424,8 @@ export default function EditorArea({
   };
   const apiRef = useRef<DockviewApi | undefined>(undefined);
   const loading = useRef(new Map<string, Promise<OpenDocument | undefined>>());
+  const hasFactory = useRef(Boolean(renderFactory));
+  hasFactory.current = Boolean(renderFactory);
   const callbacks = useRef({
     onActiveChange,
     onActivePanel,
@@ -477,6 +492,8 @@ export default function EditorArea({
   const close = useCallback(
     async (panel: IDockviewPanel) => {
       const params = panel.params as FilePanelParams | undefined;
+      // The close shortcut does nothing on the pinned Factory tab.
+      if (panel.id === FACTORY_PANEL) return;
       const path = params?.path;
       const doc = path ? getDocument(workspaceId, path) : undefined;
       if (doc && isDirty(doc)) {
@@ -650,21 +667,29 @@ export default function EditorArea({
         if (takesFocus) focusAbilityPanel(id);
         return;
       }
-      // The session tab leads the strip; the others open beside the tab in
-      // front, as files do.
+      // The Factory leads the strip and the session tab comes after it; the
+      // others open beside the tab in front, as files do.
       const first = api.groups[0];
+      const lead =
+        params.kind === "factory"
+          ? 0
+          : params.kind === "session"
+            ? first?.panels[0]?.id === FACTORY_PANEL
+              ? 1
+              : 0
+            : undefined;
       api.addPanel({
         id,
         component: params.kind ?? "session",
         tabComponent: "app",
         title,
         params,
-        ...(params.kind === "session" && first
+        ...(lead !== undefined && first
           ? {
               position: {
                 referenceGroup: first.id,
                 direction: "within",
-                index: 0,
+                index: lead,
               },
             }
           : api.activeGroup
@@ -752,11 +777,15 @@ export default function EditorArea({
         ),
       openWorkflows: () =>
         whenReady(() =>
-          placeApp("workflows", { path: "", kind: "workflows" }, "Workflows"),
+          placeApp("workflows", { path: "", kind: "workflows" }, METHODS_TITLE),
         ),
       openPlans: () =>
         whenReady(() =>
           placeApp("plans", { path: "", kind: "plans" }, "Plans"),
+        ),
+      openFactory: () =>
+        whenReady(() =>
+          placeApp(FACTORY_PANEL, { path: "", kind: "factory" }, "Factory"),
         ),
       openInstructions: () =>
         whenReady(() =>
@@ -807,22 +836,21 @@ export default function EditorArea({
             name,
           ),
         ),
-      openThreads: (sessionId, name, threadId) =>
+      openChat: (sessionId, handle) =>
         whenReady(() =>
           placeApp(
-            threadId === undefined
-              ? `sessionThreads:${sessionId}`
-              : `thread:${threadId}`,
-            {
-              path: "",
-              kind: "sessionThreads",
-              sessionId,
-              title: name,
-              ...(threadId === undefined ? {} : { threadId }),
-            },
-            name,
+            `agentChat:${sessionId}`,
+            { path: "", kind: "agentChat", sessionId, title: handle },
+            `@${handle}`,
           ),
         ),
+      focusChat: (sessionId) => {
+        const panel = apiRef.current?.getPanel(`agentChat:${sessionId}`);
+        panel?.api.setActive();
+        return panel !== undefined;
+      },
+      closeChat: (sessionId) =>
+        apiRef.current?.getPanel(`agentChat:${sessionId}`)?.api.close(),
       closeAbilityTabsExcept: (keep) =>
         whenReady(() => {
           for (const panel of [...(apiRef.current?.panels ?? [])]) {
@@ -1034,7 +1062,12 @@ export default function EditorArea({
           // saved layout may still hold one.
           for (const panel of [...api.panels]) {
             const kind = (panel.params as { kind?: string } | undefined)?.kind;
-            if (kind === "routines" || kind === "threads") panel.api.close();
+            if (
+              kind === "routines" ||
+              kind === "threads" ||
+              kind === "sessionThreads"
+            )
+              panel.api.close();
           }
           restored = api.totalPanels > 0;
         }
@@ -1045,6 +1078,36 @@ export default function EditorArea({
       const waiting = queued.length > 0 ? queued : delivered.current;
       delivered.current = waiting;
       for (const request of waiting) request();
+      // The Factory is the workspace's home: always there, first, and never
+      // taking the front from the tab the user left there.
+      const home = api.getPanel(FACTORY_PANEL);
+      const lead = api.groups[0];
+      // A layout saved before the Factory was pinned has it further along.
+      if (home && lead && lead.panels[0]?.id !== FACTORY_PANEL) {
+        const front = api.activePanel;
+        home.api.moveTo({ group: lead, index: 0 });
+        if (front && front.id !== FACTORY_PANEL) front.api.setActive();
+      }
+      if (hasFactory.current && !home) {
+        const first = api.groups[0];
+        api.addPanel({
+          id: FACTORY_PANEL,
+          component: "factory",
+          tabComponent: "app",
+          title: "Factory",
+          params: { path: "", kind: "factory" },
+          inactive: api.totalPanels > 0,
+          ...(first
+            ? {
+                position: {
+                  referenceGroup: first.id,
+                  direction: "within" as const,
+                  index: 0,
+                },
+              }
+            : {}),
+        });
+      }
       const persist = () => {
         try {
           window.localStorage.setItem(
@@ -1132,10 +1195,11 @@ export default function EditorArea({
     renderTerminal,
     renderWorkflows,
     renderPlans,
+    renderFactory,
     renderInstructions,
     renderRoutinesPage,
     renderTeam,
-    renderThreads,
+    renderChat,
     abilityTabName,
     onNewTerminal,
     onOpenExternal,
@@ -1169,10 +1233,13 @@ export default function EditorArea({
             terminal: TerminalPanel,
             workflows: WorkflowsPanel,
             plans: PlansPanel,
+            factory: FactoryPanel,
             instructions: InstructionsPanel,
             routinesPage: RoutinesPagePanel,
             team: TeamPanel,
-            sessionThreads: SessionThreadsPanel,
+            agentChat: AgentChatPanel,
+            // A session's threads are read in its agent's window now.
+            sessionThreads: RetiredPanel,
             // A session's Routines tab and a lead's Threads tab are gone; a
             // saved layout may still name them, and is restored with them
             // closed.
@@ -1391,26 +1458,26 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
         : params.kind === "terminal"
           ? (params.title ?? "Terminal")
           : params.kind === "workflows"
-            ? "Workflows"
+            ? METHODS_TITLE
             : params.kind === "plans"
               ? "Plans"
-              : params.kind === "instructions"
-                ? "Custom instructions"
-                : params.kind === "routinesPage"
-                  ? "Routines"
-                  : params.kind === "sessionThreads"
-                    ? params.threadId === undefined
-                      ? `Threads · ${params.title ?? ""}`
-                      : `Thread #${params.threadId} · ${params.title ?? ""}`
-                    : params.kind === "team"
-                      ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
-                      : (params.url ?? "Web");
+              : params.kind === "factory"
+                ? "Factory"
+                : params.kind === "instructions"
+                  ? "Custom instructions"
+                  : params.kind === "routinesPage"
+                    ? "Routines"
+                    : params.kind === "agentChat"
+                      ? `@${params.title ?? "agent"}`
+                      : params.kind === "team"
+                        ? `Team · ${context.abilityTabName?.("team", params.teamId ?? "") ?? params.title ?? ""}`
+                        : (params.url ?? "Web");
   return (
     <div
-      className={`file-tab app-tab app-tab-${params.kind ?? "web"}`}
+      className={`file-tab app-tab app-tab-${params.kind ?? "web"} ${params.kind === "factory" ? "file-tab-pinned" : ""}`}
       data-panel-id={api.id}
       onAuxClick={(event) => {
-        if (event.button === 1) api.close();
+        if (event.button === 1 && params.kind !== "factory") api.close();
       }}
       title={title}
     >
@@ -1422,20 +1489,23 @@ function AppTab({ api, params }: IDockviewPanelHeaderProps<FilePanelParams>) {
         )}
       </span>
       <span className="file-tab-name">{title}</span>
-      <button
-        aria-label={`Close ${title}`}
-        className="file-tab-close"
-        onClick={(event) => {
-          event.stopPropagation();
-          if (panel) panel.api.close();
-        }}
-        onPointerDown={(event) => event.stopPropagation()}
-        type="button"
-      >
-        <span aria-hidden="true" className="file-tab-x">
-          ×
-        </span>
-      </button>
+      {/* The Factory is pinned: it has no close button. */}
+      {params.kind !== "factory" && (
+        <button
+          aria-label={`Close ${title}`}
+          className="file-tab-close"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (panel) panel.api.close();
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          type="button"
+        >
+          <span aria-hidden="true" className="file-tab-x">
+            ×
+          </span>
+        </button>
+      )}
     </div>
   );
 }
@@ -1456,8 +1526,10 @@ function AppTabIcon({ kind }: { kind: AppPanelKind }) {
         <path d={WORKFLOW_ICON_PATH} />
       ) : kind === "plans" ? (
         <path d={PLAN_ICON_PATH} />
-      ) : kind === "sessionThreads" ? (
-        <path d={THREADS_ICON_PATH} />
+      ) : kind === "factory" ? (
+        <path d="M1.5 5.5h4v5h-4zM10.5 5.5h4v5h-4zM5.5 8h5" />
+      ) : kind === "agentChat" ? (
+        <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
       ) : kind === "instructions" ? (
         <path d={INSTRUCTIONS_ICON_PATH} />
       ) : kind === "team" ? (
@@ -1518,12 +1590,12 @@ function usePanelVisible(api: IDockviewPanelProps<FilePanelParams>["api"]) {
   return visible;
 }
 
-function SessionThreadsPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
+function AgentChatPanel({ params }: IDockviewPanelProps<FilePanelParams>) {
   const context = useEditorContext();
   return (
-    <div className="app-panel threads-tab-panel">
+    <div className="app-panel agent-chat-panel">
       {params.sessionId &&
-        context.renderThreads?.(params.sessionId, params.threadId)}
+        context.renderChat?.(params.sessionId, params.title ?? "agent")}
     </div>
   );
 }
@@ -1553,6 +1625,15 @@ function RoutinesPagePanel() {
   return (
     <div className="app-panel workflows-panel">
       {context.renderRoutinesPage?.()}
+    </div>
+  );
+}
+
+function FactoryPanel() {
+  const context = useEditorContext();
+  return (
+    <div className="app-panel workflows-panel factory-panel">
+      {context.renderFactory?.()}
     </div>
   );
 }

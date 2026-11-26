@@ -158,8 +158,11 @@ export function PlansPane({
   list,
   onCreate,
   onOpen,
+  onOpenFactory,
   onOpenPlan,
 }: {
+  /** Shows the workspace's plans as boxes of work, in the Factory tab. */
+  onOpenFactory?: () => void;
   list?: PlanListDto;
   /** Asks for a title and makes the plan, as File › New Plan… does. */
   onCreate: () => void;
@@ -179,6 +182,16 @@ export function PlansPane({
           </span>
         </span>
         {groups.length > 0 && <NewPlanLink onCreate={onCreate} />}
+        {onOpenFactory && (
+          <button
+            className="quiet workflow-pane-open"
+            onClick={onOpenFactory}
+            title="The plans as boxes of work, with a chat for each agent"
+            type="button"
+          >
+            Factory <span aria-hidden="true">↗</span>
+          </button>
+        )}
         <button
           className="quiet workflow-pane-open"
           onClick={onOpen}

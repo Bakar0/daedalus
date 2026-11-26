@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { THREAD_HANDOFF_NOTE } from "@daedalus/protocol";
 import {
   AGENT,
   DAEDALUS,
@@ -122,16 +123,42 @@ const indent = (text: string) =>
  * brings a session with open threads ends with a line naming them, so it
  * never has to remember, or repeat, what it asked.
  */
+/** How much of a message a question about it quotes to the copy. */
+const ABOUT_MAX = 200;
+/** A copy that has not taken a turn for this long is stopped. */
+export const COPY_IDLE_MS = 30 * 60_000;
+/**
+ * How long a closed conversation's copy is left alone after its last turn,
+ * so a question sent just before the close is not cut off as it starts.
+ */
+const COPY_SETTLE_MS = 30_000;
+/** What a copy's hooks report once it has finished a turn. */
+const ANSWERED = new Set(["done", "needs_input", "needs_permission"]);
+
 export class ThreadService {
   private readonly listeners = new Set<(thread: Thread) => void>();
   private readonly archiving = new Set<Promise<void>>();
+  private readonly startingForks = new Set<string>();
+
+  /**
+   * The forks this process started, also those no thread names yet. With
+   * them a starting fork never shows as a session of its own.
+   */
+  startingForkIds(): string[] {
+    return [...this.startingForks];
+  }
 
   constructor(
     private readonly repositories: SqliteRepositories,
     private readonly plans: () => Pick<PlanService, "find" | "pinTask">,
     private readonly agents: Pick<
       AgentService,
-      "recoverCodexThread" | "spawn" | "archive" | "restore"
+      | "recoverCodexThread"
+      | "spawn"
+      | "archive"
+      | "restore"
+      | "send"
+      | "interrupt"
     >,
     private readonly transport: () => TeamTransport,
     private readonly now: () => Date = () => new Date(),
@@ -839,6 +866,107 @@ export class ThreadService {
   }
 
   /**
+   * The user asks a working session a question without interrupting it: a
+   * read-only fork answers. Each question is a thread of its own with its
+   * own fork, so several are answered at the same time. With
+   * `threadNumber` the question goes to that thread's fork instead: a
+   * follow-up, or a question about what the agent asked there.
+   */
+  async ask(input: {
+    sessionId: string;
+    question: string;
+    threadNumber?: number;
+    /**
+     * The message in the session's main a new conversation is about, by its
+     * transcript id. Its last agent message when left out or not found.
+     */
+    anchorId?: string;
+  }): Promise<ThreadView> {
+    const question = input.question.trim();
+    if (!question)
+      throw new DaedalusError("VALIDATION", "Write the question to ask");
+    if (input.threadNumber !== undefined) {
+      const thread = this.thread(input.threadNumber);
+      if (thread.resolvedAt)
+        throw new DaedalusError(
+          "CONFLICT",
+          `Thread #${thread.number} is resolved; reopen it first`,
+        );
+      const hadFork =
+        thread.forkSessionId !== null &&
+        this.repositories.findAgent(thread.forkSessionId) !== undefined;
+      if (!hadFork) {
+        // The fork starts on the question, so nothing is typed into it.
+        const fork = await this.spawnFork(thread.ownerSessionId, question);
+        const at = this.at();
+        const attached = this.repositories.conversations.updateThread(
+          thread.id,
+          { forkSessionId: fork.id, forkStartedAt: at, forkSyncedAt: null },
+          at,
+        );
+        if (!attached)
+          throw new DaedalusError(
+            "CONFLICT",
+            `Thread #${thread.number} is gone`,
+          );
+        return this.changed(this.view(attached));
+      }
+      if (!this.liveFork(thread))
+        await this.agents.restore(thread.forkSessionId!);
+      await this.agents.send(thread.forkSessionId!, question);
+      // Asking in a closed conversation brings it back.
+      if (thread.closedAt)
+        this.repositories.conversations.updateThread(
+          thread.id,
+          { closedAt: null },
+          this.at(),
+        );
+      return this.changed(this.get(thread.number));
+    }
+    const main = this.repositories.findAgent(input.sessionId);
+    if (!main || main.archivedAt)
+      throw new DaedalusError("NOT_FOUND", `No session ${input.sessionId}`);
+    this.canFork(main);
+    const messages = await this.read(main);
+    const picked = input.anchorId
+      ? messages.find((message) => message.id === input.anchorId)
+      : undefined;
+    const anchor = picked ?? lastAgentMessage(messages);
+    // The copy holds the whole conversation, so it is told which message
+    // the question is about. The question stays first: it names the thread.
+    const fork = await this.spawnFork(
+      main.id,
+      picked
+        ? `${question}\n\n(About your message that begins: "${firstLine(picked.text, ABOUT_MAX)}")`
+        : question,
+    );
+    const thread = this.repositories.conversations.createThread({
+      workspaceId: main.workspaceId,
+      ownerSessionId: main.id,
+      title: firstLine(question, THREAD_TITLE_MAX),
+      anchorId: anchor?.id ?? null,
+      anchorText: anchor?.text ?? null,
+      planPath: null,
+      taskKey: null,
+      forkSessionId: fork.id,
+      at: this.at(),
+    });
+    return this.changed(this.view(thread));
+  }
+
+  /**
+   * The user takes back a question the copy has not answered: the copy's
+   * turn is stopped and its input box cleared, so the question can be
+   * changed and asked again. False when no copy is running to stop.
+   */
+  async stopAsk(number: number): Promise<boolean> {
+    const thread = this.thread(number);
+    if (!thread.forkSessionId || !this.liveFork(thread)) return false;
+    await this.agents.interrupt(thread.forkSessionId, { clear: true });
+    return true;
+  }
+
+  /**
    * Only Claude and Codex on this Mac fork read-only: a custom command has no
    * fork, and a cloud workspace's pod would start a fresh, writable session.
    */
@@ -858,18 +986,24 @@ export class ThreadService {
   }
 
   /** A read-only fork of a session's conversation, for a thread. */
-  private async spawnFork(sessionId: string) {
+  private async spawnFork(sessionId: string, question?: string) {
     const main = this.repositories.findAgent(sessionId);
     if (!main || main.archivedAt)
       throw new DaedalusError("NOT_FOUND", `No session ${sessionId}`);
     this.canFork(main);
+    // Named before it exists: the session is listed from the moment it is
+    // stored, which is before its thread says it is a fork.
+    const id = crypto.randomUUID();
+    this.startingForks.add(id);
     return this.agents.spawn({
+      id,
       workspace: main.workspaceId,
       provider: main.provider,
       ...(main.account ? { account: main.account } : {}),
       name: `Thread on ${main.name}`,
       spawnedBy: main.id,
       forkOf: main,
+      ...(question ? { forkPrompt: question } : {}),
     });
   }
 
@@ -936,6 +1070,22 @@ export class ThreadService {
   }
 
   /**
+   * Asks a thread's fork to write the handoff to its owner. The owner has
+   * not read the thread, so the fork writes the context too. The user reads
+   * the answer and sends it with `sendForkToMain`.
+   */
+  async askHandoff(number: number): Promise<ThreadView> {
+    const thread = this.thread(number);
+    if (!thread.forkSessionId)
+      throw new DaedalusError("VALIDATION", `Thread #${number} has no fork`);
+    return this.ask({
+      sessionId: thread.ownerSessionId,
+      threadNumber: number,
+      question: `${THREAD_HANDOFF_NOTE} the user wants to hand what you worked out in this thread to main. Reply with only the message for main, under "For main:". Main has not read this thread, so say what was decided, the reasons main needs, and what main should do now. Name the files, commands and values. Write to main, not to the user. The user reads it before it is sent.`,
+    });
+  }
+
+  /**
    * The user sends what they worked out in a thread's fork to its owner: a
    * message from the user in the thread, brought to the owner like any
    * other. Returns the text sent.
@@ -981,6 +1131,88 @@ export class ThreadService {
       throw new DaedalusError("CONFLICT", `Thread #${number} has no open fork`);
     await this.agents.archive(thread.forkSessionId!, true);
     return this.changed(this.get(number));
+  }
+
+  /**
+   * The user puts a conversation with a copy away. It leaves the owner's
+   * list for its history and keeps every message. Its copy is not stopped
+   * here: one still answering finishes, and `tendCopies` stops it after.
+   */
+  closeConversation(number: number): ThreadView {
+    const thread = this.thread(number);
+    if (thread.resolvedAt)
+      throw new DaedalusError("CONFLICT", `Thread #${number} is resolved`);
+    if (!thread.closedAt)
+      this.repositories.conversations.updateThread(
+        thread.id,
+        { closedAt: this.at() },
+        this.at(),
+      );
+    return this.changed(this.get(number));
+  }
+
+  /** Brings a closed conversation back to its owner's list. */
+  reopenConversation(number: number): ThreadView {
+    const thread = this.thread(number);
+    if (thread.closedAt)
+      this.repositories.conversations.updateThread(
+        thread.id,
+        { closedAt: null },
+        this.at(),
+      );
+    return this.changed(this.get(number));
+  }
+
+  /**
+   * Looks after the copies of every open thread, so the user never starts
+   * or stops one. Records when a copy last answered. An answer that came
+   * after its conversation was closed brings the conversation back. A copy
+   * that is not working is archived once its conversation is closed, or
+   * after `COPY_IDLE_MS` without a turn; asking again restores it.
+   */
+  async tendCopies(
+    activityOf: (
+      sessionId: string,
+    ) => { activity: string; since: string } | undefined,
+  ): Promise<void> {
+    const now = this.now().getTime();
+    for (const thread of this.repositories.conversations.threads({
+      open: true,
+    })) {
+      if (!thread.forkSessionId || !this.liveFork(thread)) continue;
+      const state = activityOf(thread.forkSessionId);
+      if (!state || state.activity === "working") continue;
+      const since = Date.parse(state.since);
+      const answered = ANSWERED.has(state.activity);
+      const change: ThreadChange = {};
+      if (
+        answered &&
+        (!thread.forkAnsweredAt || since > Date.parse(thread.forkAnsweredAt))
+      )
+        change.forkAnsweredAt = state.since;
+      const closedAt = thread.closedAt ? Date.parse(thread.closedAt) : null;
+      // The copy finished what it was asked before the user closed it.
+      const back = closedAt !== null && answered && since > closedAt;
+      if (back) change.closedAt = null;
+      const idle = now - since;
+      const stop =
+        closedAt !== null && !back
+          ? idle > COPY_SETTLE_MS
+          : idle > COPY_IDLE_MS;
+      if (Object.keys(change).length) {
+        const changed = this.repositories.conversations.updateThread(
+          thread.id,
+          change,
+          this.at(),
+        );
+        if (changed) this.changed(changed);
+      }
+      if (stop)
+        await this.agents
+          .archive(thread.forkSessionId, true)
+          .then(() => this.changed(thread))
+          .catch(() => undefined);
+    }
   }
 
   /** A reopened thread or a closed fork gets its archived fork back. */
@@ -1038,7 +1270,7 @@ export class ThreadService {
     planPath: string,
     tasks: ReadonlyMap<
       string,
-      "todo" | "doing" | "done" | "blocked" | "dropped"
+      "draft" | "todo" | "doing" | "done" | "blocked" | "dropped"
     >,
   ): Thread[] {
     const ended = this.repositories.conversations

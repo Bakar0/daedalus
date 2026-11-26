@@ -72,14 +72,17 @@ export function FileDetail({
   dirty,
   draft,
   editing,
+  eyebrow,
   hint,
   label,
   onCancel,
+  onClose,
   onDelete,
   onDraft,
   onEdit,
   onSave,
   path,
+  pathBelow = false,
   saving,
   title,
   tools,
@@ -92,15 +95,21 @@ export function FileDetail({
   dirty: boolean;
   draft: string;
   editing: boolean;
+  /** What kind of file this is, over its name, such as "Step". */
+  eyebrow?: string;
   hint: string;
   label: string;
   onCancel: () => void;
+  /** Present where the file can be put away, such as one opened in place. */
+  onClose?: () => void;
   /** Present when the file can be deleted. */
   onDelete?: () => void;
   onDraft: (text: string) => void;
   onEdit: () => void;
   onSave: () => void;
   path: string;
+  /** Shows the path under the file, not under its name. */
+  pathBelow?: boolean;
   saving: boolean;
   title: string;
   /** Shown under the markdown while editing, such as the step picker. */
@@ -112,8 +121,11 @@ export function FileDetail({
     <section aria-label={label} className="workflows-detail">
       <header className="workflows-detail-heading">
         <div>
+          {eyebrow && (
+            <span className="workflows-detail-eyebrow">{eyebrow}</span>
+          )}
           <h2>{title}</h2>
-          <small>{path}</small>
+          {!pathBelow && <small>{path}</small>}
         </div>
         <div className="workflows-detail-actions">
           {onDelete && (
@@ -145,6 +157,17 @@ export function FileDetail({
               </button>
             </>
           )}
+          {onClose && reading && (
+            <button
+              aria-label="Close"
+              className="quiet workflows-detail-close"
+              onClick={onClose}
+              title="Close"
+              type="button"
+            >
+              ×
+            </button>
+          )}
         </div>
       </header>
       {children}
@@ -175,6 +198,11 @@ export function FileDetail({
           <p className="workflows-hint">{hint}</p>
         </>
       )}
+      {pathBelow && (
+        <p className="workflows-detail-path" title={path}>
+          {path}
+        </p>
+      )}
     </section>
   );
 }
@@ -184,11 +212,14 @@ export function FileRow({
   badge,
   meta,
   name,
+  notice,
   onSelect,
   problem,
   selected,
   summary,
 }: {
+  /** Something waiting for the user in this file, such as "2 to review". */
+  notice?: string;
   /** A short tag after the name, such as "gate". */
   badge?: string;
   /** Counts on the right, such as "6 steps · 1 gate". */
@@ -217,6 +248,7 @@ export function FileRow({
               </span>
             )}
           </span>
+          {notice && <span className="workflows-file-notice">{notice}</span>}
           {meta && <span className="workflows-file-meta">{meta}</span>}
         </span>
         {summary && <small>{summary}</small>}

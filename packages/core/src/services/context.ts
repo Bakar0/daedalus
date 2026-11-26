@@ -65,6 +65,10 @@ import { ChannelService } from "./channels";
 import { TelemetryService } from "./telemetry";
 import { WorkspaceService } from "./workspaces";
 import { WorkflowService } from "./workflows";
+import { FactoryService } from "./factory";
+import { convertOldWork } from "./job-convert";
+import { createJobPorts, JobIntakeService } from "./job-intake";
+import { JobService } from "./jobs";
 import { PlanService } from "./plans";
 import { SearchService } from "./search";
 import { HomeService } from "./home";
@@ -112,6 +116,10 @@ export interface ApplicationContext {
   channels: ChannelService;
   /** Workflow runs: which workflow each piece of work follows, and where. */
   workflows: WorkflowService;
+  /** The job engine: every piece of work as a tree of jobs over one log. */
+  jobs: JobService;
+  /** Workflows and plans as jobs under the job a session is on. */
+  jobIntake: JobIntakeService;
   /** Plans: `plans/*.plan.md` in a workspace or at Home, and their owners. */
   plans: PlanService;
   /** The ⌘K palette's file list and content search. */
@@ -121,6 +129,7 @@ export interface ApplicationContext {
   /** A lead marking a team member done. */
   /** Activity: questions for the user that sessions ask once. */
   threads: ThreadService;
+  factory: FactoryService;
   /** The user's custom instructions, as the Custom instructions tab edits them. */
   instructions: InstructionService;
   /** The person's own keys, `keybindings.json` in the home. */
@@ -219,6 +228,12 @@ export async function createApplicationContext(
   const config = await loadConfig(options.env);
   await runMigrations(config.databasePath, migrationsDirectory);
   const repositories = new SqliteRepositories(config.databasePath);
+  // What was recorded before the job engine becomes jobs, once.
+  const conversion = await convertOldWork(
+    repositories,
+    config.databasePath,
+    options.now,
+  );
   const socketSuffix = createHash("sha256")
     .update(config.home)
     .digest("hex")
@@ -330,6 +345,16 @@ export async function createApplicationContext(
     config,
   );
   const logger = new JsonLogger(config.logsDirectory);
+  if (conversion.ran)
+    void logger
+      .write(
+        conversion.error ? "error" : "info",
+        conversion.error
+          ? "The records from before the job engine did not convert. They are as they were, and nothing reads them until they do."
+          : "Converted the records from before the job engine",
+        { ...conversion },
+      )
+      .catch(() => undefined);
   const cloudLog =
     options.cloud?.log ??
     ((event: string, fields?: Record<string, unknown>) =>
@@ -488,6 +513,87 @@ export async function createApplicationContext(
     log: (message, fields) => cloudLog(message, fields),
   });
 
+  const workflows = new WorkflowService(config.home, options.now);
+  const jobs = new JobService(
+    repositories,
+    createJobPorts({
+      spawn: async (input) => {
+        const workspace = await workspaces.getActive(input.workspace);
+        return agents.spawn({
+          ...input,
+          provider: workspace.defaultProvider ?? "claude",
+          forJob: true,
+        });
+      },
+      send: (sessionId, text) => agents.send(sessionId, text),
+      raise: (sessionId, reason) => activity.raise({ sessionId, reason }),
+      clear: (sessionId) => activity.clear(sessionId),
+      session: (sessionId) => repositories.findAgent(sessionId),
+      archive: (sessionId) => agents.archive(sessionId),
+      places: async (workspaceId) => ({
+        path: (await workspaces.getActive(workspaceId)).path,
+        repositories: repositories
+          .listWorkspaceRepositories(workspaceId)
+          .map((repository) => repository.canonicalPath),
+      }),
+      plans: {
+        find: (scope, reference) => plans.find(scope, reference),
+        read: (file) => plans.read(file),
+        setState: (file, task, state, owner) =>
+          plans.setState(file, task, state, owner),
+      },
+      now: () => options.now?.() ?? new Date(),
+    }),
+  );
+  agents.onContinued = (from, to) => jobs.moveSession(from, to);
+  agents.onSpawned = async (session, input) => {
+    const message = input.message?.trim();
+    if (input.forJob || !message || session.kind !== "agent") return;
+    // Work a session hands to another is part of the job it is on.
+    // A team member's work is part of its lead's, whoever typed the command.
+    const from =
+      input.spawnedBy ??
+      (session.teamId
+        ? teams?.list().find((team) => team.id === session.teamId)?.lead.id
+        : undefined);
+    const above = from ? jobs.current(from)?.job : undefined;
+    const parent =
+      above &&
+      repositories.findAgent(from ?? "")?.workspaceId === session.workspaceId
+        ? above.id
+        : null;
+    const name =
+      session.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 40) || "work";
+    const draft = { title: session.name, instructions: message };
+    await jobs
+      .open(session.workspaceId, session.id, { ...draft, name }, parent)
+      .catch(() =>
+        // The name is taken beside it.
+        jobs.open(
+          session.workspaceId,
+          session.id,
+          { ...draft, name: `${name}-${session.id.slice(0, 6)}` },
+          parent,
+        ),
+      );
+  };
+  const jobIntake = new JobIntakeService({
+    jobs,
+    catalog: () => workflows.catalog(),
+    plans: {
+      read: (file) => plans.read(file),
+      pinTask: (file, task) => plans.pinTask(file, task),
+    },
+    session: (sessionId) => repositories.findAgent(sessionId),
+    sessions: (workspace) => agents.list({ workspace }),
+    leads: () => new Set(teams?.list().map((team) => team.lead.id) ?? []),
+    enabled: () => workflowsEnabled(config),
+  });
+
   return {
     config,
     logger,
@@ -513,24 +619,31 @@ export async function createApplicationContext(
     channels: channels!,
     instructions: new InstructionService(customInstructionsPath(config.home)),
     keybindings: new KeybindingService(keybindingsPath(config.home)),
-    workflows: new WorkflowService(
-      repositories,
-      config.home,
-      activity,
-      () => workflowsEnabled(config),
-      options.now,
-    ),
+    workflows,
+    jobs,
+    jobIntake,
     plans: (plans = new PlanService({
       workspaceRoot: config.workspaceRoot,
       workspace: (reference) => workspaces.getActive(reference),
       workspaces: () => workspaces.list(),
       sessions: (workspace) => agents.list({ workspace }),
+      leads: () => teams?.list().map((team) => team.lead.id) ?? [],
       activity: (sessionId) => activity.get(sessionId)?.activity,
       needsAttention: (sessionId) => Boolean(activity.attentionFor(sessionId)),
-      spawn: (input) => agents.spawn(input),
       send: (sessionId, text, from) =>
         agents.send(sessionId, text, from ? { from } : {}),
     })),
+    factory: new FactoryService({
+      jobs: (workspaceId) => jobs.page(workspaceId),
+      sessions: (workspace) =>
+        agents.list({ workspace, includeArchived: true }),
+      activity: (sessionId) => activity.get(sessionId)?.activity,
+      needsAttention: (sessionId) => Boolean(activity.attentionFor(sessionId)),
+      threadTasks: (planPath) =>
+        threads
+          .onPlan(planPath)
+          .flatMap((thread) => (thread.taskKey ? [thread.taskKey] : [])),
+    }),
     search: new SearchService(),
     home,
     threads,

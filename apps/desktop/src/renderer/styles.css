@@ -353,8 +353,7 @@ button:not(
       .plan-scroll button,
       .plans-pane button,
       .palette button,
-      .threads-pane button,
-      .threads-home button
+      .factory-shell button
     )
   ) {
   background: var(--accent);
@@ -377,8 +376,7 @@ button:not(
       .plan-scroll button,
       .plans-pane button,
       .palette button,
-      .threads-pane button,
-      .threads-home button
+      .factory-shell button
     )
   ):hover:not(:disabled) {
   background: var(--accent-hover);
@@ -6387,6 +6385,111 @@ dd {
   min-height: 0;
   position: relative;
 }
+/* Terminal or Chat, for the agent in the middle. */
+.session-shown-switch {
+  align-self: flex-end;
+  background: var(--raised);
+  border-radius: 8px;
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin: 0 0 6px;
+  padding: 2px;
+}
+.session-shown-switch button {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  color: var(--muted) !important;
+  font-size: 11.5px;
+  line-height: 1;
+  padding: 5px 10px !important;
+}
+.session-shown-switch button[aria-pressed="true"] {
+  background: var(--raised-hover) !important;
+  color: var(--text) !important;
+}
+.session-chat-stage {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.session-chat-stage .chat-tab,
+.session-chat-stage .chat-window.is-docked {
+  height: 100%;
+}
+/* An agent's conversations with its copies, under its card in the sidebar. */
+.session-conversations {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 0 4px;
+  padding-left: calc(30px + var(--depth, 0) * 14px);
+}
+.session-conversation {
+  align-items: center;
+  border-radius: 6px;
+  display: flex;
+}
+.session-conversation-main,
+.session-conversation-new {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  color: var(--secondary) !important;
+  display: flex;
+  flex: 1;
+  font-size: 12px;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px !important;
+  text-align: left;
+}
+.session-conversation-new {
+  color: var(--muted) !important;
+  flex: none;
+}
+.session-conversation:hover,
+.session-conversation-new:hover {
+  background: var(--raised-hover) !important;
+}
+.session-conversation.selected,
+.session-conversation-new.selected {
+  background: var(--raised) !important;
+}
+.session-conversation.selected .session-conversation-main,
+.session-conversation-new.selected {
+  color: var(--text) !important;
+}
+.session-conversation-mark {
+  color: var(--muted);
+  flex: none;
+  width: 10px;
+}
+.session-conversation-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-conversation-close {
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--muted) !important;
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  padding: 2px 7px !important;
+}
+.session-conversation:hover .session-conversation-close,
+.session-conversation-close:focus-visible {
+  opacity: 1;
+}
+.session-conversation-close:hover {
+  color: var(--text) !important;
+}
 /* The Team and Routines tabs: a header, an editable field, then content. */
 .ability-panel {
   overflow: hidden;
@@ -8922,6 +9025,14 @@ button.routine-tick:hover {
   height: auto;
   padding: 8px 0;
 }
+/* Opens a tab in the middle: set apart from the panel's own tabs. */
+.side-panel-open {
+  margin-left: auto;
+}
+.side-panel.panel-compact .side-panel-open {
+  margin-left: 0;
+  margin-top: 8px;
+}
 .side-panel.panel-compact .side-panel-tab[aria-selected="true"]::after {
   display: none;
 }
@@ -10446,6 +10557,102 @@ button.routine-tick:hover {
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
 }
+.workflows-file-notice {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 999px;
+  color: var(--accent);
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: auto;
+  padding: 1px 7px;
+}
+.workflows-file-notice + .workflows-file-meta {
+  margin-left: 6px;
+}
+/* Above the file list: step memories waiting for the user. */
+.step-memory-banner {
+  align-items: center;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 8px;
+  color: var(--text);
+  display: flex;
+  font-size: 12px;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 0 0 12px;
+  padding: 6px 8px 6px 12px;
+}
+.step-memory-banner .quiet {
+  color: var(--accent);
+  flex: none;
+}
+/* A step's memory: one card per thing it learned. */
+.step-memory-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.step-memory-item {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px 8px;
+}
+.step-memory-item.status-proposed {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.step-memory-text {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+  line-height: 1.45;
+}
+.step-memory-status {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin-right: 8px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+.step-memory-status.status-proposed {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.step-memory-why {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 4px 0 6px;
+}
+.step-memory-foot {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+.step-memory-seen {
+  color: var(--muted);
+  font-size: 11px;
+}
+.step-memory-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.step-memory-actions button {
+  font-size: 11px;
+  padding: 4px 10px;
+}
 .workflows-file:hover {
   background: var(--raised) !important;
 }
@@ -10526,6 +10733,14 @@ button.routine-tick:hover {
 .workflows-chip:hover {
   color: var(--accent);
 }
+
+.workflows-chip.missing {
+  border-style: dashed;
+  color: var(--muted, inherit);
+  cursor: default;
+  opacity: 0.8;
+}
+
 .workflows-refusal {
   border: 1px solid var(--danger);
   border-radius: 6px;
@@ -11761,825 +11976,165 @@ button.routine-tick:hover {
   color: var(--text) !important;
 }
 
-/* Threads: the side panel's view of one session's threads. The thread body
-   reads like the terminal: monospace, ● for the agent, > for the user. */
-.threads-pane {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-}
-.threads-head {
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  gap: 8px;
-  padding: 8px 12px;
-}
-.threads-head h2 {
-  flex: 1;
-  font-size: 12.5px;
-  font-weight: 600;
-  margin: 0;
-  /* Shrinks with the panel: a long name ends in an ellipsis, never a scroll. */
+/* A conversation with a copy: its answer is unread, or on its way. */
+.session-conversation-main {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.threads-head > button {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.threads-back,
-.threads-link {
-  background: none;
-  border: 0;
-  color: var(--muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  padding: 2px 4px;
-}
-.threads-link {
-  color: var(--accent);
-}
-.threads-empty {
-  color: var(--muted);
-  font-size: 12px;
-  padding: 12px;
-}
-.threads-group {
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  margin: 0;
-  padding: 10px 12px 4px;
-  text-transform: uppercase;
-}
-.threads-text-link {
-  background: none;
-  border: 0;
-  color: var(--accent);
-  cursor: pointer;
-  font: inherit;
-  padding: 0;
-  text-decoration: none;
-  word-break: break-all;
-}
-.threads-text-link:hover {
-  text-decoration: underline;
-}
-.threads-group-toggle {
-  background: none;
-  border: 0;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  letter-spacing: inherit;
-  padding: 0;
-  text-transform: inherit;
-}
-.threads-group-toggle:hover {
+.session-conversation.is-unread .session-conversation-name {
   color: var(--text);
+  font-weight: 600;
 }
-.threads-row {
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  gap: 6px;
-  padding-right: 10px;
-}
-.threads-row:hover {
-  background: var(--raised);
-}
-.threads-row-main {
-  align-items: baseline;
-  background: none;
-  border: 0;
-  color: inherit;
-  cursor: pointer;
-  display: flex;
-  flex: 1;
-  font: inherit;
-  gap: 9px;
-  min-width: 0;
-  padding: 7px 0 7px 12px;
-  text-align: left;
-}
-.threads-dot {
-  background: var(--muted);
+.session-conversation-unread,
+.session-conversation-answering {
   border-radius: 50%;
   flex: none;
   height: 7px;
-  transform: translateY(-1px);
+  margin-left: auto;
+  margin-right: 4px;
   width: 7px;
 }
-.threads-row.blocking .threads-dot {
-  background: var(--danger);
-}
-.threads-row.waiting .threads-dot {
+.session-conversation-unread {
   background: var(--accent);
 }
-.threads-row.fork .threads-dot {
-  background: #3fb2a5;
+.session-conversation-answering {
+  animation: conversation-answering 1.2s ease-in-out infinite;
+  background: var(--muted);
 }
-/* With the agent: the user wrote last; quiet until it replies. */
-.threads-row.replied .threads-dot {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--accent);
+@keyframes conversation-answering {
+  50% {
+    opacity: 0.25;
+  }
 }
-/* Something new from the agent the user has not read. */
-.threads-row.unread .threads-title,
-.threads-card.unread .threads-owner {
+@media (prefers-reduced-motion: reduce) {
+  .session-conversation-answering {
+    animation: none;
+  }
+}
+
+/* A lead's team, folded: a dot per member and how many work or wait. */
+.session-members {
+  align-items: center;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  color: var(--muted) !important;
+  display: flex;
+  font-size: 11.5px;
+  gap: 8px;
+  margin: -2px 0 4px calc(30px + var(--depth, 0) * 14px);
+  min-width: 0;
+  padding: 3px 6px !important;
+  text-align: left;
+}
+.session-members:hover,
+.session-members[aria-expanded="true"] {
+  background: var(--raised-hover) !important;
+  color: var(--secondary) !important;
+}
+.session-member-dots {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: 96px;
+}
+.session-member-dot {
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+  box-sizing: border-box;
+  height: 7px;
+  width: 7px;
+}
+.session-member-dot.is-working {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.session-member-dot.is-waits {
+  background: var(--amber, #f2a65a);
+  border-color: var(--amber, #f2a65a);
+}
+.session-members-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A long conversation name is cut inside the sidebar, not past its edge. */
+.session-conversations,
+.session-conversation,
+.session-members {
+  min-width: 0;
+}
+.session-conversations {
+  overflow: hidden;
+}
+.session-members {
+  max-width: calc(100% - 30px - var(--depth, 0) * 14px);
+}
+.session-conversation-name {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* The line that folds an agent's conversations away. */
+.session-conversations-fold svg {
+  fill: none;
+  flex: none;
+  height: 12px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  transition: transform 0.12s;
+  width: 12px;
+}
+.session-conversations-fold[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+/* An agent's thread that waits for the user's answer, in the sidebar's list. */
+.session-conversation.is-asks .session-conversation-mark {
+  color: var(--amber, #f2a65a);
   font-weight: 700;
 }
-.threads-row.ended .threads-dot,
-.threads-row.snoozed .threads-dot {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--muted);
-}
-.threads-row-text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.threads-title {
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+.session-conversation.is-asks .session-conversation-name {
   color: var(--text);
-  display: -webkit-box;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.35;
-  overflow: hidden;
-}
-.threads-row.ended .threads-title {
-  color: var(--secondary);
-  font-weight: 400;
-}
-.threads-meta {
-  color: var(--muted);
-  font-size: 11.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.threads-row-action {
-  flex: none;
-}
-.threads-quiet {
-  background: none;
-  border: 0;
-  border-radius: 5px;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 2px 6px;
-}
-.threads-quiet:hover {
-  background: var(--raised-hover);
-  color: var(--text);
-}
-.threads-snooze {
-  position: relative;
-}
-.threads-snooze-menu {
-  background: var(--overlay);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
-  z-index: 20;
-}
-.threads-snooze-menu button {
-  background: none;
-  border: 0;
-  border-radius: 5px;
-  color: var(--text);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 5px 10px;
-  text-align: left;
-  white-space: nowrap;
-}
-.threads-snooze-menu button:hover {
-  background: var(--raised-hover);
-}
-.threads-home {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  margin: 0 auto;
-  max-width: 820px;
-  overflow: auto;
-  padding: 24px 24px 40px;
-  width: 100%;
-}
-.threads-home-head h1 {
-  align-items: center;
-  display: flex;
-  font-size: 20px;
   font-weight: 600;
-  gap: 8px;
-  margin: 0;
 }
-.threads-home-head p {
-  color: var(--muted);
-  font-size: 13px;
-  margin: 4px 0 12px;
-}
-.threads-filter {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 4px;
-}
-.threads-filter-chip {
-  align-items: center;
-  background: none;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--muted);
-  cursor: pointer;
-  display: inline-flex;
-  font: inherit;
-  font-size: 12px;
-  gap: 6px;
-  padding: 3px 10px;
-}
-.threads-filter-chip:hover {
-  color: var(--text);
-}
-.threads-filter-chip[aria-checked="true"] {
-  background: var(--threads-card-bg);
-  border-color: var(--accent);
-  color: var(--text);
-}
-.threads-filter-count {
-  background: var(--accent);
-  border-radius: 999px;
-  color: white;
+.session-conversation-asks {
+  color: var(--amber, #f2a65a);
+  flex: none;
   font-size: 10.5px;
-  padding: 0 6px;
-}
-.threads-count {
-  background: var(--accent);
-  border-radius: 999px;
-  color: white;
-  font-size: 12px;
-  padding: 1px 8px;
-}
-.threads-home .threads-row-main {
-  padding-block: 9px;
-}
-.threads-state {
-  white-space: nowrap;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  padding: 1px 6px;
-  text-transform: uppercase;
-  vertical-align: 1px;
-}
-.threads-state.blocking {
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
-  color: var(--danger);
-}
-.threads-state.waiting {
-  background: var(--accent-wash);
-  color: var(--accent);
-}
-.threads-state.ended {
-  background: color-mix(in srgb, var(--success) 14%, transparent);
-  color: var(--success);
-}
-.threads-anchor-text {
-  color: var(--secondary);
-  display: -webkit-box;
-  font-family: "SF Mono", Menlo, monospace;
-  font-size: 12px;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  margin-top: 4px;
-  overflow: hidden;
-  white-space: pre-wrap;
-}
-.threads-term {
-  color: var(--secondary);
-  flex: 1;
-  font-family: "SF Mono", Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  min-height: 0;
-  outline: none;
-  overflow: auto;
-  padding: 10px 12px 12px;
-}
-.threads-line,
-.threads-message {
-  padding-left: 2ch;
-  text-indent: -2ch;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.threads-term .dim,
-.threads-line.dim {
-  color: var(--muted);
-}
-.threads-line.hint {
-  color: var(--muted);
-}
-.threads-term .you,
-.threads-message.user {
-  color: var(--text);
-}
-.threads-message {
-  border-radius: 4px;
-  margin: 0 -6px 6px;
-  padding: 2px 6px 2px calc(6px + 2ch);
-}
-.threads-message.focus {
-  background: var(--accent-wash);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-.threads-details summary {
-  color: var(--muted);
-  cursor: pointer;
-}
-.threads-picker {
-  margin: 6px 0 2px;
-}
-.threads-option {
-  border-radius: 3px;
-  cursor: pointer;
-  display: flex;
-  gap: 0;
-}
-.threads-option-text {
-  flex: 1;
-  min-width: 0;
-  white-space: pre-wrap;
-}
-.threads-option.on {
-  color: var(--accent);
-}
-.threads-caret {
-  flex: none;
-  width: 2ch;
-}
-.threads-prompt {
-  align-items: center;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 5px 8px;
-}
-.threads-prompt:focus-within {
-  border-color: var(--muted);
-}
-.threads-prompt.off {
-  opacity: 0.5;
-}
-.threads-prompt textarea,
-.threads-prompt textarea:focus {
-  line-height: inherit;
-  max-height: 12em;
-  overflow-y: auto;
-  resize: none;
-}
-.threads-prompt {
-  align-items: flex-start;
-}
-.threads-prompt input,
-.threads-prompt input:focus,
-.threads-prompt textarea,
-.threads-prompt textarea:focus {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  color: var(--text);
-  flex: 1;
-  font: inherit;
-  min-width: 0;
-  outline: none;
-  padding: 0;
-}
-/* The prompt's own border is the focus ring, as in the terminal. */
-.threads-prompt input:focus-visible,
-.threads-prompt textarea:focus-visible {
-  box-shadow: none;
-  outline: none;
-}
-.threads-foot {
-  color: var(--muted);
-  font-size: 11px;
-  margin-top: 4px;
-}
-.threads-foot-link {
-  background: none;
-  border: 0;
-  color: var(--muted);
-  cursor: pointer;
-  font: inherit;
-  padding: 0;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.threads-foot-link:hover,
-.threads-open-fork:hover {
-  color: var(--text);
-}
-.threads-message {
-  position: relative;
-}
-.threads-open-fork {
-  background: var(--elevated);
-  border: 1px solid var(--line-strong);
-  border-radius: 5px;
-  color: var(--secondary);
-  cursor: pointer;
-  display: none;
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  font-size: 11px;
-  padding: 1px 7px;
-  position: absolute;
-  right: 4px;
-  text-indent: 0;
-  top: 2px;
-}
-.threads-message:hover .threads-open-fork,
-.threads-message.current .threads-open-fork,
-.threads-open-fork:focus-visible {
-  display: block;
-}
-.threads-action {
-  background: var(--accent);
-  border: 0;
-  border-radius: 6px;
-  color: white;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 10px;
-}
-.threads-state.fork {
-  background: color-mix(in srgb, #3fb2a5 16%, transparent);
-  color: #3fb2a5;
-}
-.threads-state.replied {
-  background: color-mix(in srgb, var(--muted) 14%, transparent);
-  color: var(--muted);
-}
-.threads-scroll {
-  background: var(--threads-feed-bg);
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-.app {
-  --threads-feed-bg: rgb(0 0 0 / 0.28);
-  --threads-card-bg: rgb(255 255 255 / 0.055);
-}
-.app[data-theme="light"] {
-  --threads-feed-bg: rgb(0 0 0 / 0.045);
-  --threads-card-bg: #fff;
-}
-/* Under the title, on a line of its own. */
-.threads-head-sub {
-  color: var(--muted);
-  display: block;
-  font-size: 11.5px;
-  font-weight: 400;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.threads-owner {
-  background: none;
-  border: 0;
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 0;
-  white-space: nowrap;
-}
-.threads-owner:hover {
-  text-decoration: underline;
-}
-.threads-owner-tag {
-  border: 1px solid var(--line-strong);
-  border-radius: 4px;
-  color: var(--muted);
-  font-size: 10px;
-  padding: 0 5px;
-}
-.threads-feed {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px;
-}
-.threads-card {
-  background: var(--threads-card-bg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 9px 11px 10px;
-}
-.threads-card-head {
-  align-items: baseline;
-  display: flex;
-  /* In a narrow panel the actions drop to a line of their own. */
-  flex-wrap: wrap;
-  gap: 4px 7px;
-  min-width: 0;
-}
-.threads-card-head .threads-dot {
-  display: none;
-}
-.threads-card-head .threads-meta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.threads-card-actions {
-  align-items: center;
-  display: flex;
-  gap: 2px;
   margin-left: auto;
-  white-space: nowrap;
+  margin-right: 4px;
 }
-.threads-quote {
-  border-left: 2px solid var(--line-strong);
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 8px 0 2px;
-  padding: 1px 0 1px 10px;
+
+/* A control's `title`, shown in the app's tooltip: its lines are kept. */
+.tooltip-title {
+  display: block;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
-.threads-quote-label {
+
+/* A tooltip is over everything, the sidebar and floating windows included. */
+.tooltip {
+  z-index: 10000;
+}
+
+/* A pinned tab has no close button: its name sits evenly between its edges. */
+.file-tab.file-tab-pinned {
+  padding: 0 12px;
+}
+/* A session's workflow, named by its agent when it is not the shown session. */
+.workflow-pane-owner {
   color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
   font-size: 11px;
-}
-.threads-quote-go {
-  align-self: flex-start;
-  background: none;
-  border: 0;
-  color: var(--accent);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11.5px;
-  margin-top: 3px;
-  padding: 0;
-}
-.threads-quote-go:hover {
-  text-decoration: underline;
-}
-.threads-quote .threads-anchor-text {
-  -webkit-line-clamp: 3;
-  color: var(--muted);
-  font-size: 11.5px;
-  margin-top: 1px;
-}
-.threads-card .threads-term {
-  flex: none;
-  overflow: visible;
-  padding: 6px 0 0;
-}
-.threads-folded {
-  background: var(--threads-card-bg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.threads-folded .threads-row:last-child {
-  border-bottom: 0;
-}
-.threads-folded .threads-card {
-  background: none;
-  border-radius: 0;
-  border-width: 0 0 1px;
-}
-.threads-home .threads-feed {
-  flex: none;
-  margin-top: 12px;
-  padding: 0;
-}
-.threads-home .threads-card {
-  padding: 12px 14px;
-}
-.threads-sent {
-  color: var(--success);
-  font-size: 12px;
-  margin: 8px 12px 0;
-}
-.threads-sent span {
-  font-weight: 600;
-}
-.threads-fork-note {
-  color: var(--muted);
-  font-size: 11.5px;
-  margin: 8px 12px 6px;
-}
-.threads-fork-terminal {
-  border-top: 2px solid #3fb2a5;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-}
-.threads-draft {
-  background: var(--raised);
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 10px 12px 0;
-  padding: 8px 10px;
-}
-.threads-draft-label {
-  color: var(--accent);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.threads-draft textarea {
-  font-family: "SF Mono", Menlo, monospace;
-  font-size: 12px;
-  min-height: 84px;
-  resize: vertical;
-}
-.threads-draft-note {
-  color: var(--muted);
-  font-size: 11.5px;
-  margin: 0;
-}
-.threads-draft-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-.threads-send-bar {
-  align-items: baseline;
-  background: none;
-  border: 1px dashed var(--line-strong);
-  border-radius: 8px;
-  color: var(--accent);
-  cursor: pointer;
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 12px;
-  font-weight: 600;
-  gap: 4px 8px;
-  margin: 8px 12px 0;
-  padding: 6px 10px;
-  text-align: left;
-}
-.threads-send-bar span {
-  color: var(--muted);
   font-weight: 400;
-}
-.threads-send-bar:hover {
-  border-color: var(--accent);
-}
-
-/* The conversation: agent messages as markdown, user prompts as typed. */
-.threads-conversation .threads-message {
-  margin: 0 -6px 10px;
-  padding: 6px 8px 6px 18px;
-  text-indent: 0;
-  white-space: normal;
-}
-.threads-conversation .threads-message::before {
-  color: var(--muted);
-  content: "●";
-  font-size: 9px;
-  left: 6px;
-  position: absolute;
-  top: 10px;
-}
-.threads-conversation .threads-message.user::before {
-  content: ">";
-  font-size: 12px;
-  top: 6px;
-}
-.threads-conversation .threads-user-text {
-  color: var(--text);
-  font-family: "SF Mono", Menlo, monospace;
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.threads-conversation .markdown-body {
-  font-family:
-    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-  font-size: 13px;
-}
-.threads-conversation .markdown-body table {
-  display: block;
-  font-size: 12px;
-  overflow-x: auto;
-}
-.threads-conversation .threads-message.current {
-  background: var(--raised);
-}
-.threads-search {
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  gap: 4px;
-  padding: 6px 10px;
-}
-.threads-search input {
-  flex: 1;
-  font-size: 12px;
   min-width: 0;
-  padding: 4px 8px;
-}
-.threads-search-count {
-  color: var(--muted);
-  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-}
-::highlight(threads-search) {
-  background-color: rgb(250 204 21 / 0.35);
-  color: inherit;
-}
-::highlight(threads-search-current) {
-  background-color: rgb(249 115 22 / 0.75);
-  color: #fff;
-}
-.threads-fork-line button,
-.threads-fork-open {
-  background: none;
-  border: 0;
-  color: #3fb2a5;
-  cursor: pointer;
-  font: inherit;
-  padding: 0;
-  text-align: left;
-}
-.threads-fork-open {
-  display: block;
-}
-.threads-fork-line {
-  color: var(--muted);
-}
-.threads-fork-line button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-.threads-fork-open {
-  margin-top: 6px;
-}
-.threads-fork-question {
-  color: var(--text);
-  font-family: "SF Mono", Menlo, monospace;
-  font-size: 12px;
-  margin-top: 6px;
-}
-/* Threads in a tab of their own: the same pane, with room. */
-.threads-tab-panel,
-.threads-tab {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-.threads-tab .threads-feed {
-  margin: 0 auto;
-  max-width: 980px;
-  width: 100%;
-}
-.threads-fork-top {
-  padding: 4px 12px 0;
-}
-
-/* The message a thread is on is main content: full text, not muted. */
-.threads-card .threads-quote .threads-anchor-text,
-.threads-fork-top .threads-quote .threads-anchor-text {
-  color: var(--text);
-  font-size: 12px;
-}
-/* On your own thread it is the whole subject, so more of it shows. */
-.threads-card.fork .threads-quote .threads-anchor-text {
-  -webkit-line-clamp: 8;
 }

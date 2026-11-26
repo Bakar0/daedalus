@@ -123,6 +123,7 @@ export interface Task {
 
 export type AgentSessionStatus = "starting" | "running" | "exited" | "lost";
 export type SessionKind = "agent" | "terminal";
+export type SessionRunner = "tmux" | "acp";
 
 export interface AgentSession {
   id: UUID;
@@ -193,7 +194,22 @@ export interface AgentSession {
    * workspace root there.
    */
   hostId: string | null;
+  /**
+   * How its agent is driven: the provider's terminal program in tmux, or the
+   * provider's ACP adapter under `daedal acp-host`. Absent means `tmux`.
+   * Fixed at spawn. See `migrations/058_session_runner.sql`.
+   */
+  runner?: SessionRunner;
 }
+
+/**
+ * Whether the session's agent is driven over ACP on this Mac: its host's
+ * socket and log are here. A session moved to a cloud host is not, whatever
+ * it was started as.
+ */
+export const runsOverAcp = (
+  session: Pick<AgentSession, "runner" | "hostId">,
+): boolean => session.runner === "acp" && !session.hostId;
 
 export interface IntegratedTerminal {
   id: UUID;
@@ -587,7 +603,9 @@ export interface PresenceState {
 
 export * from "./abilities";
 export * from "./conversations";
+export * from "./step-memory";
 export * from "./workflows";
+export * from "./jobs";
 export * from "./routines";
 
 /**

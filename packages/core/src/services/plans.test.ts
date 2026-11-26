@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { AgentSession } from "../domain";
-import { findPlanTask } from "../domain/plans";
 import {
   planBoardRank,
   PlanService,
@@ -32,7 +31,6 @@ function session(fields: Partial<AgentSession>): AgentSession {
 let root: string;
 let sessions: AgentSession[];
 let sent: { id: string; text: string }[];
-let spawned: Parameters<PlanPorts["spawn"]>[0][];
 let service: PlanService;
 
 beforeEach(async () => {
@@ -53,7 +51,6 @@ beforeEach(async () => {
     session({ id: "lead", name: "Checkout lead" }),
   ];
   sent = [];
-  spawned = [];
   service = new PlanService({
     workspaceRoot: root,
     workspace: async () => ({
@@ -69,10 +66,6 @@ beforeEach(async () => {
     sessions: async () => sessions,
     activity: (id) => (id === "api-1" ? "working" : "idle"),
     needsAttention: (id) => id === "db-new",
-    spawn: async (input) => {
-      spawned.push(input);
-      return session({ id: "new", name: input.name });
-    },
     send: async (id, text) => {
       sent.push({ id, text });
       return session({ id });
@@ -155,37 +148,6 @@ describe("PlanService", () => {
     const text = await readFile(file.absolutePath, "utf8");
     expect(text).toContain("- [/] Checkout screens @web ^screens");
     expect(text).toContain("  > ? Mobile too?");
-  });
-
-  test("starting a task spawns on the default provider and claims the task", async () => {
-    const file = await service.find({ workspace: "w1" }, "cart-api-v2");
-    const { session: started, plan } = await service.startTask(
-      file,
-      "^screens",
-    );
-    expect(spawned[0]).toMatchObject({
-      workspace: "w1",
-      provider: "claude",
-      name: "Checkout screens",
-    });
-    expect(spawned[0]!.message).toContain(file.absolutePath);
-    expect(spawned[0]!.message).toContain("Cart page and checkout summary");
-    expect(started.id).toBe("new");
-    expect(findPlanTask(plan, "screens")).toMatchObject({
-      state: "doing",
-      owner: "checkout-screens",
-    });
-    await expect(service.startTask(file, "^migrate")).rejects.toThrow(/done/);
-  });
-
-  test("a task without an id gets one when it starts", async () => {
-    const path = join(root, "checkout", "plans", "small.plan.md");
-    await writeFile(path, "## Tasks\n\n- [ ] Write docs\n");
-    const file = await service.find({ workspace: "w1" }, "small");
-    await service.startTask(file, "L3");
-    expect(await readFile(path, "utf8")).toBe(
-      "## Tasks\n\n- [/] Write docs @write-docs ^write-docs\n",
-    );
   });
 
   test("asks the owner with the question first, then where, then the quote", async () => {

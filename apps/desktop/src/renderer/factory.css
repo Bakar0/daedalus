@@ -1,0 +1,2389 @@
+/* The factory page (FactoryPage.tsx). Colors come from the app's theme. */
+.factory-page {
+  /* The sidebar's tones (.agent-dot in styles.css), so a state has one
+     color in the whole app. */
+  --factory-work: #afbaff;
+  --factory-wait: #ff8282;
+  --factory-blocked: #ffb454;
+  --factory-todo: #6b7280;
+  box-sizing: border-box;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  gap: 14px;
+  height: 100%;
+  line-height: 1.4;
+  overflow-y: auto;
+  padding: 18px 22px 40px;
+}
+.app[data-theme="light"] .factory-page {
+  --factory-work: #5560d8;
+  --factory-wait: #d61133;
+  --factory-blocked: #b4740b;
+}
+.factory-page button {
+  cursor: pointer;
+  font: inherit;
+}
+.factory-page button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.factory-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  justify-content: space-between;
+}
+.factory-head h1 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+.factory-head h1 span {
+  color: var(--muted);
+  font-weight: 400;
+}
+.factory-counts {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 4px 16px;
+}
+.factory-count {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+/* One dot, colored by the nearest state class. */
+.factory-dot {
+  background: var(--factory-todo);
+  border-radius: 50%;
+  flex: none;
+  height: 7px;
+  width: 7px;
+}
+.is-working > .factory-dot,
+.is-doing .factory-dot,
+.is-plan-working > .factory-dot {
+  background: var(--factory-work);
+}
+.is-waiting > .factory-dot,
+.is-waiting .factory-dot,
+.is-plan-waiting > .factory-dot {
+  background: var(--factory-wait);
+}
+.is-done > .factory-dot,
+.is-done .factory-dot,
+.is-plan-done > .factory-dot {
+  background: var(--success);
+}
+.is-blocked .factory-dot {
+  background: var(--factory-blocked);
+}
+.is-draft .factory-dot,
+.is-todo .factory-dot,
+.is-dropped .factory-dot,
+.is-plan-idle > .factory-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--factory-todo);
+}
+
+.factory-plan {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  flex: none;
+  overflow: hidden;
+}
+.factory-plan-fold {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-height: 40px;
+  padding: 8px 14px;
+  text-align: left;
+  width: 100%;
+}
+.factory-plan-fold:hover {
+  background: var(--raised-hover);
+}
+.factory-plan-title,
+.factory-level-title {
+  font-weight: 600;
+}
+.factory-plan-summary {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+}
+.factory-plan-summary .factory-segs {
+  width: 72px;
+}
+.factory-state {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+}
+.factory-chevron {
+  fill: none;
+  flex: none;
+  height: 10px;
+  stroke: var(--muted);
+  stroke-width: 1.4;
+  width: 10px;
+}
+
+.factory-level {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+}
+.factory-level + .factory-level,
+.factory-detail {
+  border-top: 1px solid var(--line);
+}
+.factory-level.depth-1 {
+  background: rgb(127 127 127 / 0.05);
+}
+.factory-level.depth-2 {
+  background: rgb(127 127 127 / 0.09);
+}
+.factory-level.depth-3 {
+  background: rgb(127 127 127 / 0.13);
+}
+.factory-level-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.factory-kind {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.factory-level-inside {
+  color: var(--muted);
+  font-size: 12px;
+}
+.factory-level-side {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 4px 12px;
+  margin-left: auto;
+}
+.factory-icon-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  display: flex;
+  height: 22px;
+  justify-content: center;
+  padding: 0;
+  width: 22px;
+}
+.factory-icon-button:hover {
+  background: var(--raised-hover);
+}
+.factory-text-button {
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  padding: 0;
+}
+.factory-text-button:hover {
+  text-decoration: underline;
+}
+.factory-file,
+.factory-owner-handle,
+.factory-detail-links .factory-text-button {
+  font-family: "SF Mono", Menlo, ui-monospace, monospace;
+  font-size: 11.5px;
+}
+.factory-plan-fold .factory-owner-handle {
+  color: var(--muted);
+}
+
+.factory-owner {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 9px;
+}
+button.factory-owner:hover {
+  background: var(--raised-hover);
+}
+.factory-owner.is-none {
+  border-style: dashed;
+  color: var(--muted);
+}
+.factory-owner-dot {
+  background: var(--factory-todo);
+  border-radius: 50%;
+  height: 7px;
+  width: 7px;
+}
+.factory-owner.is-working .factory-owner-dot {
+  background: var(--factory-work);
+}
+.factory-owner.is-waiting .factory-owner-dot {
+  background: var(--factory-wait);
+}
+.factory-owner.is-error .factory-owner-dot {
+  background: var(--danger);
+}
+.factory-owner.is-stopped .factory-owner-dot,
+.factory-owner.is-none .factory-owner-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--factory-todo);
+}
+.factory-owner-state {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.factory-owner .factory-owner-handle {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A level's blocks, left to right, joined by a line. */
+.factory-row-scroll {
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.factory-row {
+  align-items: stretch;
+  display: flex;
+}
+.factory-step {
+  align-items: center;
+  display: flex;
+  flex: 1 1 0;
+  max-width: 260px;
+  min-width: 112px;
+}
+.factory-step:first-child > .factory-link {
+  display: none;
+}
+.factory-link {
+  background: var(--line-strong);
+  flex: 0 0 14px;
+  height: 1px;
+  transition: background 400ms ease;
+}
+/* The line is green as far as the work has come. */
+.factory-step.is-reached > .factory-link {
+  background: color-mix(in srgb, var(--success) 70%, transparent);
+  height: 2px;
+}
+.factory-column {
+  align-self: stretch;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 5px;
+  justify-content: center;
+  min-width: 0;
+}
+/* Without a flow the blocks are only listed: nothing joins them. */
+.factory-row.is-unordered .factory-link {
+  background: transparent;
+  flex-basis: 8px;
+}
+.factory-flow-errors {
+  border-top: 1px solid var(--line);
+  color: var(--danger);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 2px;
+  padding: 8px 16px;
+}
+.factory-block {
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  box-sizing: border-box;
+  color: var(--text);
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 58px;
+  min-width: 0;
+  padding: 7px 9px;
+  position: relative;
+  text-align: left;
+  transition:
+    background 400ms ease,
+    border-color 400ms ease,
+    box-shadow 400ms ease,
+    color 400ms ease;
+}
+.factory-block:hover {
+  background: var(--raised-hover);
+}
+/* Three looks for three states. Done recedes, the current one stands out
+   with an edge in its color, what has not started is an outline. */
+.factory-block.is-done {
+  background: transparent;
+  border-color: var(--line);
+}
+.factory-block.is-done .factory-block-title {
+  color: var(--secondary);
+  font-weight: 500;
+}
+.factory-block.is-todo,
+.factory-block.is-dropped {
+  background: transparent;
+  border-color: var(--line);
+}
+.factory-block.is-doing {
+  background: color-mix(in srgb, var(--factory-work) 11%, transparent);
+  border-color: color-mix(in srgb, var(--factory-work) 60%, transparent);
+  box-shadow: inset 3px 0 0 var(--factory-work);
+}
+.factory-block.is-waiting {
+  background: color-mix(in srgb, var(--factory-wait) 9%, transparent);
+  border-color: color-mix(in srgb, var(--factory-wait) 55%, transparent);
+  box-shadow: inset 3px 0 0 var(--factory-wait);
+}
+/* The box of the agent whose window is in front. Drawn inside the box: the
+   row scrolls sideways, which cuts anything drawn outside it. */
+.factory-shell .factory-block.is-front {
+  border-color: var(--factory-work);
+  box-shadow:
+    inset 3px 0 0 var(--factory-work),
+    inset 0 0 0 1px var(--factory-work);
+}
+/* A box opened under the row is marked at its foot, with no frame: the
+   frame says where work is, and an opened box can be a finished one. */
+.factory-block-foot {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  gap: 5px;
+  margin-top: auto;
+  min-height: 12px;
+  padding-left: 14px;
+  padding-top: 2px;
+}
+/* What a click opens: a level under the row, named by what is in it, or
+   the box's facts. Quiet until the pointer is on the box. */
+.factory-block-opens {
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  margin-left: auto;
+  opacity: 0.7;
+  text-transform: uppercase;
+}
+.factory-block-open,
+.factory-block-facts {
+  fill: none;
+  flex: none;
+  height: 9px;
+  opacity: 0.7;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.4;
+  width: 9px;
+}
+.factory-block-open {
+  stroke-width: 1.6;
+  transition: transform 160ms ease;
+  transform: rotate(-90deg);
+}
+.factory-block:hover .factory-block-foot,
+.factory-block.is-open .factory-block-foot,
+.factory-block.is-picked .factory-block-foot {
+  color: var(--text);
+}
+.factory-block.is-open .factory-block-open {
+  transform: none;
+}
+.factory-block.is-open {
+  border-bottom-color: var(--secondary);
+}
+.factory-block.is-picked {
+  background: var(--raised-hover);
+  border-color: var(--secondary);
+}
+.factory-check {
+  color: var(--success);
+  fill: none;
+  flex: none;
+  height: 9px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 9px;
+}
+.factory-block-time {
+  color: var(--muted);
+  flex: none;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+/* Room for the badge of an agent that asks. */
+.factory-block-wrap:has(.factory-chat-button.is-waiting) .factory-block-time,
+.factory-block-wrap:has(.factory-chat-button.is-waiting) .factory-threads {
+  margin-right: 34px;
+}
+.factory-block-time + .factory-threads {
+  margin-left: 0;
+}
+/* Who works inside a box, so a team shows without opening it. */
+.factory-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding-left: 14px;
+}
+.factory-member {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-family: "SF Mono", Menlo, ui-monospace, monospace;
+  font-size: 10.5px;
+  gap: 4px;
+}
+.factory-member .factory-owner-dot {
+  background: var(--factory-todo);
+  border-radius: 50%;
+  height: 5px;
+  width: 5px;
+}
+.factory-member.is-working .factory-owner-dot {
+  background: var(--factory-work);
+}
+.factory-member.is-waiting .factory-owner-dot {
+  background: var(--factory-wait);
+}
+.factory-member.is-done .factory-owner-dot {
+  background: var(--success);
+}
+/* Movement only on what is being worked on now, and on what waits. */
+@keyframes factory-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulse) 70%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+@keyframes factory-shine {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.factory-block.is-live .factory-block-head > .factory-dot,
+.factory-owner.is-working .factory-owner-dot,
+.factory-member.is-working .factory-owner-dot {
+  --pulse: var(--factory-work);
+  animation: factory-pulse 1.6s ease-out infinite;
+}
+.factory-block.is-waiting .factory-block-head > .factory-dot,
+.factory-owner.is-waiting .factory-owner-dot {
+  --pulse: var(--factory-wait);
+  animation: factory-pulse 1.6s ease-out infinite;
+}
+.factory-block.is-live .factory-seg.is-doing,
+.factory-progress .factory-seg.is-doing {
+  animation: factory-shine 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .factory-block,
+  .factory-block *,
+  .factory-owner-dot,
+  .factory-seg {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+.factory-block-head {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+}
+.factory-block-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factory-block.is-todo .factory-block-title,
+.factory-block.is-dropped .factory-block-title {
+  color: var(--secondary);
+  font-weight: 500;
+}
+.factory-block.is-dropped .factory-block-title {
+  text-decoration: line-through;
+}
+.factory-block.is-draft {
+  border-style: dashed;
+}
+.factory-block.is-draft .factory-block-title {
+  color: var(--muted);
+  font-weight: 500;
+}
+.factory-block-note {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--muted);
+  display: -webkit-box;
+  font-size: 11.5px;
+  overflow: hidden;
+  padding-left: 14px;
+}
+.factory-block.is-waiting .factory-block-note {
+  color: var(--factory-wait);
+}
+.factory-block.is-doing .factory-block-note {
+  color: var(--factory-work);
+}
+.factory-threads {
+  background: color-mix(in srgb, var(--factory-wait) 22%, transparent);
+  border-radius: 8px;
+  color: var(--factory-wait);
+  font-size: 10.5px;
+  font-weight: 600;
+  margin-left: auto;
+  padding: 0 6px;
+}
+.factory-segs {
+  display: flex;
+  gap: 2px;
+}
+.factory-block .factory-segs {
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* Every box keeps room for two lines under its title, so the boxes of a
+   row are one height whatever they say. A box with a team gives one of
+   the lines to it. */
+.factory-block-note {
+  min-height: 2.8em;
+}
+.factory-block:has(.factory-members) .factory-block-note {
+  -webkit-line-clamp: 1;
+  min-height: 1.4em;
+}
+.factory-seg {
+  background: var(--factory-todo);
+  border-radius: 2px;
+  flex: 1 1 0;
+  height: 3px;
+  max-width: 22px;
+  opacity: 0.45;
+}
+.factory-plan-summary .factory-seg {
+  height: 4px;
+}
+.factory-seg.is-doing {
+  background: var(--factory-work);
+  opacity: 1;
+}
+.factory-seg.is-waiting {
+  background: var(--factory-wait);
+  opacity: 1;
+}
+.factory-seg.is-done {
+  background: var(--success);
+  opacity: 1;
+}
+.factory-seg.is-blocked {
+  background: var(--factory-blocked);
+  opacity: 1;
+}
+.factory-progress {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  gap: 7px;
+}
+.factory-progress .factory-segs {
+  width: 64px;
+}
+.factory-progress.is-finished {
+  color: var(--success);
+}
+.factory-empty-row {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 0;
+}
+
+.factory-detail {
+  background: rgb(0 0 0 / 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px 16px;
+}
+.app[data-theme="light"] .factory-detail {
+  background: rgb(0 0 0 / 0.03);
+}
+.factory-detail-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.factory-detail-close {
+  font-size: 15px;
+  margin-left: auto;
+}
+.factory-detail-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.factory-detail-text {
+  color: var(--secondary);
+  font-size: 13.5px;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 78ch;
+  white-space: pre-wrap;
+}
+.factory-result {
+  border-left: 2px solid var(--success);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 10px;
+}
+.factory-result .factory-detail-text {
+  color: var(--text);
+}
+.factory-detail-links {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 4px 16px;
+}
+/* A step's link to its file reads as words, not as a path. */
+.factory-detail-links .factory-text-button.factory-step-link {
+  font-family: inherit;
+  font-size: 12px;
+}
+/* The tools the step's file suggests, as plain tags. */
+.factory-step-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.factory-step-tool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.factory-step-tool {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 12px;
+  padding: 2px 8px;
+}
+
+/* The page and, when an agent is being talked to, the panel on its right. */
+.factory-shell {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  /* Clipped, not hidden: focus in a window near the edge must not scroll
+     the page sideways under it. */
+  overflow: clip;
+  position: relative;
+}
+.factory-shell > .factory-page {
+  flex: 1;
+  min-width: 0;
+}
+.factory-questions {
+  border-left: 2px solid var(--factory-wait);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 10px;
+}
+.factory-questions .factory-detail-text {
+  color: var(--text);
+}
+
+/* On a box: its agent's chat. */
+/* The wrap takes the box's place in its column, so the box still fills the
+   column's width and the icon sits on the box's own corner. */
+.factory-block-wrap {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+}
+.factory-block-wrap > .factory-block {
+  width: 100%;
+}
+.factory-page .factory-chat-button {
+  align-items: center;
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  display: flex;
+  font-size: 10.5px;
+  font-weight: 700;
+  gap: 3px;
+  height: 22px;
+  justify-content: center;
+  min-width: 22px;
+  opacity: 0;
+  padding: 0 5px;
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  transition: opacity 120ms ease;
+}
+.factory-block-wrap:hover .factory-chat-button,
+.factory-page .factory-chat-button:focus-visible,
+.factory-page .factory-chat-button.is-waiting {
+  opacity: 1;
+}
+.factory-page .factory-chat-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.factory-page .factory-chat-button.is-waiting {
+  background: var(--factory-wait);
+  border-color: var(--factory-wait);
+  color: #1a1206;
+}
+.factory-chat-button svg {
+  fill: none;
+  height: 12px;
+  stroke: currentColor;
+  stroke-linejoin: round;
+  stroke-width: 1.4;
+  width: 12px;
+}
+
+/* A chat. */
+.chat-window {
+  background: var(--panel, #17181b);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow:
+    0 18px 50px rgb(0 0 0 / 0.45),
+    0 2px 8px rgb(0 0 0 / 0.3);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  font-size: 13.5px;
+  line-height: 1.5;
+  max-height: calc(100% - 8px);
+  max-width: calc(100% - 8px);
+  min-height: 260px;
+  min-width: 300px;
+  overflow: hidden;
+  position: absolute;
+  resize: both;
+}
+.app[data-theme="light"] .chat-window {
+  background: #fff;
+  box-shadow:
+    0 18px 50px rgb(0 0 0 / 0.16),
+    0 2px 8px rgb(0 0 0 / 0.08);
+}
+.chat-head {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 6px 6px 6px 16px;
+  touch-action: none;
+  user-select: none;
+}
+.chat-title {
+  align-items: baseline;
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+}
+.chat-title strong {
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-title strong {
+  flex: none;
+}
+.chat-title span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factory-shell .chat-agent {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  flex: none;
+  font-size: 13px;
+  font-weight: 650;
+  margin-left: -6px;
+  padding: 4px 6px;
+}
+.factory-shell .chat-agent:hover {
+  background: var(--raised-hover, var(--raised));
+  color: var(--accent);
+}
+/* A chat in a tab of its own fills it. */
+.chat-tab {
+  justify-content: center;
+}
+.chat-window.is-docked {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  height: 100%;
+  max-height: none;
+  max-width: none;
+  position: static;
+  resize: none;
+  width: 100%;
+}
+/* Who is on the other side: the agent itself, or a read-only copy. */
+.chat-kind {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  padding: 3px 6px;
+  text-transform: uppercase;
+}
+.chat-kind.is-agent {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: transparent;
+  color: color-mix(in srgb, var(--accent) 60%, #fff);
+}
+.chat-kind.is-asks {
+  background: color-mix(in srgb, var(--amber, #f2a65a) 20%, transparent);
+  border-color: transparent;
+  color: var(--amber, #f2a65a);
+}
+/* The conversation shown, and the menu of this agent's others. */
+.factory-shell .chat-pick {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--secondary);
+  display: flex;
+  font-size: 12px;
+  gap: 3px;
+  line-height: 1;
+  min-width: 0;
+  padding: 4px 5px 4px 9px;
+}
+.factory-shell .chat-pick:hover {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.chat-pick span {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-pick svg,
+.chat-fold svg {
+  fill: none;
+  flex: none;
+  height: 13px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  width: 13px;
+}
+.chat-head {
+  position: relative;
+}
+.chat-menu {
+  background: color-mix(in srgb, var(--panel, #17181b) 92%, #fff);
+  border: 1px solid color-mix(in srgb, var(--line) 60%, #fff 12%);
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgb(0 0 0 / 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  left: 14px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 5px;
+  position: absolute;
+  top: calc(100% - 2px);
+  width: min(320px, calc(100% - 28px));
+  z-index: 5;
+}
+.factory-shell .chat-menu button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--secondary);
+  display: flex;
+  flex: 1;
+  font-size: 12.5px;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  text-align: left;
+}
+.factory-shell .chat-menu button:hover,
+.factory-shell .chat-menu button[aria-checked="true"] {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.chat-menu-row {
+  align-items: center;
+  display: flex;
+}
+.chat-menu-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-menu small {
+  color: var(--muted);
+  flex: none;
+  font-size: 11px;
+}
+.factory-shell .chat-menu .chat-menu-close {
+  color: var(--muted);
+  flex: none;
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 8px;
+}
+.chat-note {
+  background: var(--raised);
+  color: var(--muted);
+  flex: none;
+  font-size: 11.5px;
+  margin: 0;
+  padding: 6px 16px;
+}
+/* A turn's work, folded: what the agent wrote on the way to its reply. */
+.chat-fold {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.factory-shell .chat-fold > button {
+  align-items: center;
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 5px;
+  padding: 2px 0;
+}
+.factory-shell .chat-fold > button:hover {
+  color: var(--text);
+}
+.chat-fold > button b {
+  color: var(--secondary);
+  font-weight: 500;
+}
+.chat-fold > button[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.chat-fold-item {
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  padding-left: 10px;
+}
+.chat-fold-item .markdown-body {
+  color: inherit;
+  font-size: inherit;
+}
+/* A tool call in an opened turn: its name, then what it ran on. */
+.chat-step {
+  align-items: baseline;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  min-width: 0;
+}
+.chat-step b {
+  color: var(--secondary);
+  flex: none;
+  font-weight: 600;
+}
+.chat-step code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-step span {
+  flex: none;
+}
+.chat-step.is-failed span {
+  color: var(--red, #f07178);
+}
+/* Under a turn's reply: the files it edited. */
+.chat-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: -4px;
+}
+.chat-file {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 1px 6px;
+}
+/* The last row while the agent works: what it is on, and for how long. */
+.chat-working {
+  align-items: center;
+  color: var(--secondary);
+  display: flex;
+  font-size: 12.5px;
+  gap: 8px;
+  min-width: 0;
+}
+.chat-working.is-asking {
+  color: var(--factory-wait, #ff8282);
+  flex-wrap: wrap;
+}
+.chat-working.is-asking .chat-ask-go {
+  background: var(--factory-wait, #ff8282);
+  border: 0;
+  border-radius: 6px;
+  color: #1a0606;
+  cursor: pointer;
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+}
+.chat-ask-dot {
+  --pulse: var(--factory-wait, #ff8282);
+  animation: factory-pulse 1.6s ease-out infinite;
+  background: var(--factory-wait, #ff8282);
+  border-radius: 50%;
+  flex: none;
+  height: 7px;
+  width: 7px;
+}
+.chat-working code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* One tool call of the turn an ACP agent is on. */
+.chat-tool .chat-tool-mark {
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+  flex: none;
+  height: 7px;
+  width: 7px;
+}
+.chat-tool.is-in_progress .chat-tool-mark {
+  border-color: var(--accent);
+}
+.chat-tool.is-completed .chat-tool-mark {
+  background: var(--muted);
+}
+.chat-tool.is-failed .chat-tool-mark {
+  background: var(--factory-wait, #ff8282);
+  border-color: var(--factory-wait, #ff8282);
+}
+/* The permission an ACP agent waits on, above the reply box. */
+.chat-permission {
+  padding: 8px 10px;
+}
+.chat-permission-title {
+  align-items: baseline;
+  color: var(--text);
+  display: flex;
+  font-size: 12.5px;
+  gap: 8px;
+  min-width: 0;
+}
+.chat-permission-title span {
+  flex: none;
+}
+.chat-permission-title code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factory-shell .chat-option.is-reject {
+  border-color: var(--line-strong);
+  color: var(--secondary);
+}
+.chat-working-time {
+  color: var(--muted);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.chat-spin {
+  animation: chat-spin 1.1s linear infinite;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 50%;
+  border-top-color: var(--accent);
+  flex: none;
+  height: 11px;
+  width: 11px;
+}
+@keyframes chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-spin {
+    animation: none;
+  }
+}
+/* What the agent asks, above the typing box where it is answered. */
+.chat-question {
+  border: 1px solid color-mix(in srgb, var(--amber, #f2a65a) 55%, transparent);
+  border-radius: 10px;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0 12px 8px;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 9px 12px;
+}
+.chat-question .markdown-body {
+  color: var(--text);
+  font-size: 12.5px;
+}
+.chat-hint .chat-link {
+  display: inline;
+  padding: 0;
+}
+/* The conversations with one agent: its own tab, then one per copy. */
+.chat-tabs {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex: none;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 5px 10px;
+  scrollbar-width: none;
+}
+.factory-shell .chat-tab-button,
+.factory-shell .chat-tab-button > button[role="tab"] {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  display: flex;
+  flex: none;
+  font-size: 12px;
+  gap: 5px;
+  line-height: 1;
+  padding: 6px 9px;
+}
+.factory-shell span.chat-tab-button {
+  gap: 0;
+  padding: 0 3px 0 0;
+}
+.factory-shell .chat-tab-button:hover {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.factory-shell .chat-tab-button[aria-selected="true"],
+.factory-shell .chat-tab-button.is-selected,
+.factory-shell .chat-tab-button.is-selected > button[role="tab"] {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+.factory-shell .chat-tab-button.is-selected > button[role="tab"] {
+  background: transparent;
+}
+.chat-tab-label {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-tab-told {
+  color: var(--green, #6fcf97);
+  font-size: 11px;
+}
+.chat-tab-dot {
+  background: var(--amber, #f2a65a);
+  border-radius: 50%;
+  height: 6px;
+  width: 6px;
+}
+.factory-shell .chat-tab-close,
+.factory-shell .chat-tab-add {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  display: flex;
+  flex: none;
+  height: 18px;
+  justify-content: center;
+  padding: 0;
+  width: 18px;
+}
+.factory-shell .chat-tab-close {
+  opacity: 0;
+}
+.chat-tab-button:hover .chat-tab-close,
+.chat-tab-button.is-selected .chat-tab-close,
+.chat-tab-close:focus-visible {
+  opacity: 1;
+}
+.factory-shell .chat-tab-add {
+  height: 24px;
+  width: 24px;
+}
+.factory-shell .chat-tab-close:hover,
+.factory-shell .chat-tab-add:hover:not(:disabled) {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.chat-tab-close svg,
+.chat-tab-add svg {
+  fill: none;
+  height: 12px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.5;
+  width: 12px;
+}
+.factory-shell .chat-tab-name {
+  background: var(--panel, #17181b);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  color: var(--text);
+  flex: none;
+  font-size: 12px;
+  padding: 4px 8px;
+  width: 140px;
+}
+.chat-window.is-docked .chat-head {
+  cursor: default;
+}
+.agent-chat-panel {
+  height: 100%;
+}
+.factory-blocked {
+  border-left: 2px solid #ff8282;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 10px;
+}
+.factory-blocked-from {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+.factory-blocked-text {
+  font-size: 13.5px;
+  max-width: 78ch;
+}
+.factory-blocked-text > :first-child {
+  margin-top: 0;
+}
+.factory-blocked-text > :last-child {
+  margin-bottom: 0;
+}
+.factory-blocked .factory-text-button {
+  align-self: flex-start;
+}
+.chat-stream {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 14px 6px;
+}
+.chat-empty {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: auto 0;
+  text-align: center;
+}
+.chat-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.chat-row.is-you {
+  align-items: flex-end;
+}
+.chat-bubble {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 14px 14px 4px 14px;
+  max-width: 86%;
+  overflow-wrap: anywhere;
+  padding: 7px 12px;
+}
+.chat-bubble.chat-typed {
+  white-space: pre-wrap;
+}
+/* What the user typed keeps its line breaks, which markdown would join. */
+.chat-bubble .markdown-body {
+  color: inherit;
+}
+.chat-bubble .markdown-body p,
+.chat-bubble .markdown-body li {
+  white-space: pre-wrap;
+}
+/* Wraps the chats without a box of its own, so their layout is unchanged. */
+.chat-links {
+  display: contents;
+}
+/* A link opens with Cmd held, as in a session's terminal. */
+.chat-links .markdown-body a {
+  cursor: text;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 2px;
+}
+.chat-links.links-armed .markdown-body a {
+  cursor: pointer;
+}
+.chat-links.links-armed .markdown-body a:hover {
+  text-decoration-color: currentColor;
+}
+.chat-window .markdown-body {
+  font-size: inherit;
+}
+.chat-window .markdown-body table {
+  display: block;
+  font-size: 12px;
+  overflow-x: auto;
+}
+.chat-window .markdown-body pre {
+  font-size: 12px;
+  padding: 9px 11px;
+}
+.chat-meta {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 10.5px;
+  gap: 6px;
+}
+.chat-who {
+  color: var(--secondary);
+  font-family: "SF Mono", Menlo, ui-monospace, monospace;
+  font-weight: 600;
+}
+.chat-tag {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  padding: 0 4px;
+  text-transform: uppercase;
+}
+.chat-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chat-text > :first-child,
+.chat-details > :nth-child(2) {
+  margin-top: 0;
+}
+.chat-text > :last-child,
+.chat-details > :last-child {
+  margin-bottom: 0;
+}
+.chat-details {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.chat-details summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11.5px;
+}
+.chat-details[open] summary {
+  margin-bottom: 4px;
+}
+/* A fork's message for the agent: set apart, since it is not sent yet. */
+.chat-handoff {
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.chat-handoff.is-sent {
+  border-style: solid;
+}
+.chat-handoff-title {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.chat-handoff textarea {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  padding: 8px;
+  resize: vertical;
+  width: 100%;
+}
+.chat-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+.factory-shell .chat-option {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  padding: 5px 12px;
+  text-align: left;
+}
+.factory-shell .chat-option:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
+}
+.factory-shell .chat-link {
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 0;
+}
+.factory-shell .chat-link:hover {
+  color: var(--accent);
+}
+.chat-typing {
+  display: flex;
+  gap: 4px;
+  padding: 6px 0;
+}
+.chat-typing i {
+  animation: chat-typing 1.1s ease-in-out infinite;
+  background: var(--muted);
+  border-radius: 50%;
+  height: 6px;
+  width: 6px;
+}
+.chat-typing i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.chat-typing i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes chat-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+.chat-foot {
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 10px 7px;
+  padding: 8px 8px 6px 12px;
+}
+.chat-foot:focus-within {
+  border-color: var(--accent);
+}
+/* The box around it shows the focus; the field itself draws no ring. */
+.factory-shell .chat-foot textarea,
+.factory-shell .chat-foot textarea:focus,
+.factory-shell .chat-foot textarea:focus-visible {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  padding: 0;
+  resize: none;
+}
+.chat-foot-row {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.chat-to {
+  background: rgb(127 127 127 / 0.14);
+  border-radius: 999px;
+  display: flex;
+  margin-left: -6px;
+  padding: 2px;
+}
+.factory-shell .chat-to button {
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+  padding: 4px 12px;
+}
+.factory-shell .chat-to button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 30%, var(--panel, #17181b));
+  color: var(--text);
+}
+.factory-shell .chat-send {
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  display: grid;
+  flex: none;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  width: 28px;
+}
+.factory-shell .chat-send svg {
+  fill: none;
+  height: 16px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 16px;
+}
+.factory-shell .chat-send.is-stop svg {
+  fill: currentColor;
+  stroke: none;
+}
+/* Under the typing box: what sending does, for the way that is chosen. */
+.chat-hint {
+  color: var(--muted);
+  flex: none;
+  font-size: 11.5px;
+  line-height: 1.4;
+  margin: 0;
+  padding: 0 16px 12px;
+}
+
+/* One line offering a setting, above the plans. Dismissed for good. */
+.factory-hint {
+  align-items: center;
+  background: var(--raised, rgb(255 255 255 / 0.04));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--secondary);
+  display: flex;
+  font-size: 12.5px;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 7px 8px 7px 12px;
+}
+.factory-hint span {
+  flex: 1;
+  min-width: 0;
+}
+.factory-shell .factory-hint button {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  flex: none;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+.factory-shell .factory-hint button:hover {
+  border-color: var(--accent);
+}
+.factory-shell .factory-hint .factory-hint-close {
+  border: 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+/* A narrow chat: the agent's name gives way first, cut with an ellipsis. The
+   tag, the conversation menu and the window's buttons keep their size. */
+.factory-shell .chat-agent {
+  flex: 0 100 auto;
+  min-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factory-shell .chat-pick {
+  flex: 0 1 auto;
+  min-width: 64px;
+}
+.chat-pick span {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+/* A copy's answer the user has not seen. */
+.chat-unread-dot {
+  background: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+  height: 7px;
+  width: 7px;
+}
+.chat-menu small.chat-unread {
+  align-items: center;
+  color: color-mix(in srgb, var(--accent) 60%, #fff);
+  display: inline-flex;
+  gap: 5px;
+}
+
+/* An agent's closed conversations: name, last answer, when it was closed. */
+.chat-history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.chat-history li {
+  align-items: center;
+  border-radius: 8px;
+  display: flex;
+  gap: 4px;
+}
+.chat-history li:hover {
+  background: var(--raised-hover, var(--raised));
+}
+.factory-shell .chat-history-open {
+  align-items: baseline;
+  background: transparent;
+  border: 0;
+  color: var(--secondary);
+  display: grid;
+  flex: 1;
+  font-size: 12.5px;
+  gap: 10px;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 64px;
+  min-width: 0;
+  padding: 7px 8px;
+  text-align: left;
+}
+.chat-history-open b,
+.chat-history-open span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-history-open b {
+  color: var(--text);
+  font-weight: 600;
+}
+.chat-history-open span,
+.chat-history-open time {
+  color: var(--muted);
+}
+.chat-history-open time {
+  font-size: 11.5px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.factory-shell .chat-history-delete {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 8px;
+}
+.factory-shell .chat-history-delete:hover {
+  color: var(--text);
+}
+.factory-shell .chat-history-delete.is-armed {
+  color: var(--red, #f07178);
+  font-size: 11.5px;
+}
+.chat-foot[hidden] {
+  display: none;
+}
+
+/* Under an agent's message: its actions, as icons with tooltips. They show
+   on hover, and always under the agent's latest message. */
+.chat-actions {
+  display: flex;
+  gap: 2px;
+  margin: -2px 0 0 -6px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.chat-row:hover .chat-actions,
+.chat-actions:focus-within,
+.chat-actions.is-shown {
+  opacity: 1;
+}
+.factory-shell .chat-action {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  display: flex;
+  height: 26px;
+  justify-content: center;
+  padding: 0;
+  width: 28px;
+}
+.factory-shell .chat-action:hover {
+  background: var(--raised-hover, var(--raised));
+  color: var(--text);
+}
+.chat-action svg {
+  fill: none;
+  height: 15px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.4;
+  width: 15px;
+}
+/* Above the typing box of a new conversation: the message it is about. */
+.chat-about {
+  align-items: center;
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  margin: 0 14px 6px;
+  padding: 2px 4px 2px 10px;
+}
+.chat-about span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-about q {
+  color: var(--secondary);
+}
+.factory-shell .chat-about button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  flex: none;
+  padding: 0 6px;
+}
+
+/* The way from an agent's chat to its session, said in a word. */
+.chat-window {
+  container-type: inline-size;
+}
+.factory-shell .chat-terminal {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--secondary);
+  display: flex;
+  flex: none;
+  font-size: 12px;
+  gap: 5px;
+  line-height: 1;
+  margin-right: 4px;
+  padding: 4px 8px 4px 6px;
+}
+.factory-shell .chat-terminal:hover {
+  background: var(--raised-hover, var(--raised));
+  color: var(--text);
+}
+.chat-terminal svg {
+  fill: none;
+  flex: none;
+  height: 14px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.3;
+  width: 14px;
+}
+/* A narrow chat keeps the icon and drops the word. */
+@container (max-width: 430px) {
+  .chat-terminal span {
+    display: none;
+  }
+  .factory-shell .chat-terminal {
+    padding: 4px 6px;
+  }
+}
+
+/* Snooze lengths, in the line under an agent's question. */
+.chat-snooze {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chat-meta .chat-link {
+  display: inline;
+  font-size: inherit;
+}
+.chat-snooze .chat-link {
+  color: var(--accent);
+}
+
+/* The dot in the thread picker keeps its shape beside the name. */
+.factory-shell .chat-pick .chat-unread-dot {
+  flex: none;
+  margin: 0 3px;
+  max-width: none;
+}
+
+/* The thread: its messages, and the typing box under them. */
+.chat-thread {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* The empty Factory: one box to say what the work is. */
+.factory-start {
+  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12vh auto 0;
+  max-width: 640px;
+  width: 100%;
+}
+.factory-start > strong {
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+  text-align: center;
+}
+.factory-start .chat-foot {
+  margin: 0;
+  padding: 12px 10px 8px 14px;
+}
+.factory-start textarea {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.factory-start-note {
+  align-self: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+.factory-start-note .chat-link {
+  font-size: inherit;
+}
+.factory-start .chat-foot-row {
+  gap: 6px;
+}
+/* The agent and the model, chips at the foot of the box. */
+.factory-start-pick {
+  display: flex;
+  min-width: 0;
+  position: relative;
+}
+.factory-shell .factory-start-pick .chat-pick {
+  gap: 6px;
+  padding: 5px 6px 5px 8px;
+}
+.factory-start-pick .chat-pick[aria-expanded="true"] {
+  background: var(--raised-hover);
+  color: var(--text);
+}
+.factory-start-pick .chat-pick:disabled {
+  opacity: 0.6;
+}
+.factory-start-pick .chat-menu {
+  left: 0;
+  top: calc(100% + 4px);
+  width: 260px;
+}
+.factory-start-pick .chat-menu small {
+  color: var(--muted);
+  flex: none;
+  font-size: 11px;
+  margin-left: auto;
+}
+.factory-start-pick .chat-menu button:disabled {
+  opacity: 0.5;
+}
+.factory-start-pick .chat-pick span {
+  flex: none;
+  overflow: visible;
+}
+.factory-start-tool {
+  display: flex;
+  flex: none;
+}
+.factory-start-tool.tool-claude {
+  color: #d97757;
+}
+.factory-start-tool svg {
+  height: 14px;
+  width: 14px;
+}
+.factory-start-sent .chat-bubble {
+  white-space: pre-wrap;
+}
+.factory-start-sent {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+.factory-start .chat-foot[hidden] {
+  display: none;
+}
+.factory-shell .factory-start > .chat-link {
+  align-self: center;
+}
+
+/* The send button sits at the right end of the typing box. */
+.chat-foot-row .chat-send {
+  margin-left: auto;
+}
+
+/* Where the agent is in the Factory, under the window's header. */
+.factory-shell .chat-where {
+  align-items: center;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--secondary);
+  display: flex;
+  flex: none;
+  font-size: 12px;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 14px;
+  text-align: left;
+  width: 100%;
+}
+.factory-shell .chat-where:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+}
+.chat-where svg {
+  fill: none;
+  flex: none;
+  height: 13px;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  width: 13px;
+}
+.chat-where-part {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.chat-where-part > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-where-part:last-of-type > span:last-child {
+  color: var(--text);
+  font-weight: 600;
+}
+.chat-where-go {
+  color: var(--accent);
+  flex: none;
+  margin-left: auto;
+}
+/* Over the rows: the start box, one line until it is typed in. */
+.factory-start.is-compact {
+  margin: 0;
+  max-width: none;
+}
+.factory-start.is-compact .chat-foot {
+  padding: 10px 10px 8px 14px;
+}
+.factory-start.is-compact textarea {
+  font-size: 13px;
+}
+.factory-shell .factory-start .factory-start-more {
+  align-self: center;
+  flex: none;
+  font-size: 11.5px;
+  margin-left: 4px;
+}
+
+/* The card of a box under the pointer (FactoryTip.tsx). It is put in the
+   page, so the state colors reach it. */
+.factory-tip {
+  background: var(--overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow:
+    0 12px 32px rgb(0 0 0 / 0.38),
+    0 2px 6px rgb(0 0 0 / 0.2);
+  box-sizing: border-box;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 8px;
+  line-height: 1.45;
+  max-height: calc(100vh - 16px);
+  opacity: 0;
+  overflow: hidden;
+  padding: 12px 14px;
+  pointer-events: none;
+  position: fixed;
+  width: 340px;
+  z-index: 10000;
+}
+.factory-tip.is-placed {
+  opacity: 1;
+  transition: opacity 120ms ease;
+}
+.factory-tip-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.factory-tip-state {
+  align-items: center;
+  background: color-mix(in srgb, var(--tip-tone) 14%, transparent);
+  border-radius: 999px;
+  color: var(--tip-tone);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 6px;
+  padding: 2px 9px 2px 7px;
+  --tip-tone: var(--muted);
+}
+.factory-tip.is-doing .factory-tip-state {
+  --tip-tone: var(--factory-work);
+}
+.factory-tip.is-waiting .factory-tip-state {
+  --tip-tone: var(--factory-wait);
+}
+.factory-tip.is-done .factory-tip-state {
+  --tip-tone: var(--success);
+}
+.factory-tip.is-blocked .factory-tip-state {
+  --tip-tone: var(--factory-blocked);
+}
+.factory-tip-kind,
+.factory-tip-label {
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.factory-tip-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.factory-tip-meta {
+  color: var(--secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  gap: 4px 10px;
+  margin-top: -4px;
+}
+.factory-tip-owner {
+  font-family: "SF Mono", Menlo, ui-monospace, monospace;
+}
+.factory-tip-part {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+}
+.factory-tip-text {
+  color: var(--secondary);
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.factory-tip-needs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.factory-tip-need {
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--secondary);
+  font-size: 11.5px;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.factory-tip-outputs {
+  display: grid;
+  gap: 3px 10px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0;
+}
+.factory-tip-outputs > div {
+  display: contents;
+}
+.factory-tip-outputs dt {
+  color: var(--muted);
+}
+.factory-tip-outputs dd {
+  color: var(--text);
+  font-family: "SF Mono", Menlo, ui-monospace, monospace;
+  font-size: 11.5px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+  .factory-tip.is-placed {
+    transition: none;
+  }
+}
+
+/* A box with steps inside is drawn as a stack: two more boxes show behind
+   it, each shifted down and to the right, open or closed. Only their right
+   and bottom edges are drawn, since a finished box is see-through. Every
+   box keeps the room a stack takes, so the boxes of a row stay in line. */
+.factory-column {
+  gap: 0;
+}
+.factory-block-wrap {
+  margin: 0 9px 10px 0;
+}
+.factory-block.is-stack::before,
+.factory-block.is-stack::after {
+  border: solid var(--line-strong);
+  border-radius: 0 7px 7px 7px;
+  border-width: 0 1px 1px 0;
+  content: "";
+  pointer-events: none;
+  position: absolute;
+}
+.factory-block.is-stack::before {
+  inset: 4px -5px -5px 4px;
+}
+.factory-block.is-stack::after {
+  inset: 8px -9px -9px 8px;
+  opacity: 0.6;
+}
+/* The line between two boxes starts at the front box, over the room kept
+   for a stack, and sits at the middle of the boxes, not of that room. */
+.factory-step > .factory-link {
+  flex-basis: 23px;
+  margin-bottom: 10px;
+  margin-left: -9px;
+}
+
+/* The wires (FactoryWires.tsx): curves between the boxes of a row, and
+   from an opened box to the row under it. They take the place of the
+   straight line between two columns, which now only keeps the room. */
+.factory-plan,
+.factory-row {
+  position: relative;
+}
+.factory-row .factory-step > .factory-link {
+  background: transparent;
+  flex-basis: 46px;
+}
+.factory-wires {
+  height: 100%;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+  width: 100%;
+}
+.factory-wires.is-layers {
+  z-index: 2;
+}
+.factory-wire {
+  --wire: var(--factory-todo);
+}
+.factory-wire.is-done {
+  --wire: color-mix(in srgb, var(--success) 75%, transparent);
+}
+.factory-wire.is-doing {
+  --wire: var(--factory-work);
+}
+.factory-wire.is-waiting {
+  --wire: var(--factory-wait);
+}
+.factory-wire path {
+  fill: none;
+  stroke: var(--wire);
+  stroke-width: 2;
+  transition: stroke 400ms ease;
+}
+.factory-wire.is-todo path {
+  opacity: 0.55;
+  stroke-width: 1.25;
+}
+.factory-wire.is-layer path {
+  opacity: 1;
+  stroke-dasharray: 2 5;
+  stroke-linecap: round;
+  stroke-width: 1.75;
+}
+.factory-port {
+  fill: var(--wire);
+}
+.factory-port.is-in {
+  fill: var(--raised);
+  stroke: var(--wire);
+  stroke-width: 1.5;
+}
+.factory-wire-dot {
+  animation: factory-wire-run 1.4s linear infinite;
+  fill: var(--text);
+  offset-rotate: 0deg;
+}
+@keyframes factory-wire-run {
+  from {
+    offset-distance: 0%;
+  }
+  to {
+    offset-distance: 100%;
+  }
+}
+/* Where the wire from the opened box lands, at the head of its row. */
+.factory-level-port {
+  background: var(--factory-todo);
+  border-radius: 50%;
+  flex: none;
+  height: 8px;
+  width: 8px;
+}
+.factory-level-port.is-done {
+  background: var(--success);
+}
+.factory-level-port.is-doing {
+  background: var(--factory-work);
+}
+.factory-level-port.is-waiting {
+  background: var(--factory-wait);
+}
+@media (prefers-reduced-motion: reduce) {
+  .factory-wire-dot {
+    animation: none;
+    offset-distance: 50%;
+  }
+}

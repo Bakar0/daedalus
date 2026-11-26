@@ -8,11 +8,14 @@ import {
   parseStepFile,
   parseWorkflowFile,
   readWorkflowCatalog,
+  readStepMemory,
   readWorkflowFiles,
   renderStepFile,
   renderWorkflowFile,
   saveWorkflowFile,
+  writeStepMemory,
 } from "./workflow-files";
+import { rememberStepMemory } from "../domain/step-memory";
 
 /** The example files in docs/workflows.md, each a path line and a fence. */
 async function docExamples(): Promise<[string, string][]> {
@@ -278,6 +281,86 @@ describe("step and workflow files", () => {
       const files = await readWorkflowFiles(folder);
       expect(files.steps.map((item) => item.name)).not.toContain("spare");
       expect(files.flows.map((item) => item.name)).not.toContain("do");
+    });
+  });
+
+  test("a step's memory follows it to a new name and goes when the step is deleted", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const folder = join(home, "workflows");
+      const step = (name: string) =>
+        `---\nname: ${name}\ndescription: Run the linter\n---\nRun it.\n`;
+      await saveWorkflowFile(folder, { kind: "step", text: step("lint") });
+      await writeStepMemory(
+        folder,
+        rememberStepMemory(
+          { step: "lint", memories: [] },
+          {
+            text: "Run the linter on changed files only",
+            why: "The whole repo takes ten minutes",
+            day: "2026-11-25",
+            workflow: null,
+          },
+        ),
+      );
+      await saveWorkflowFile(folder, {
+        kind: "step",
+        text: step("lint-all"),
+        previousName: "lint",
+      });
+      expect((await readStepMemory(folder, "lint")).memories).toEqual([]);
+      const moved = await readStepMemory(folder, "lint-all");
+      expect(moved.step).toBe("lint-all");
+      expect(moved.memories.map((memory) => memory.text)).toEqual([
+        "Run the linter on changed files only",
+      ]);
+      await deleteWorkflowFile(folder, { kind: "step", name: "lint-all" });
+      expect((await readStepMemory(folder, "lint-all")).memories).toEqual([]);
+      expect(await readdir(join(folder, "steps"))).toEqual([]);
+    });
+  });
+
+  test("the editor saves a tool, lists it on the step that suggests it, and keeps a suggested tool from being renamed or deleted", async () => {
+    await withTemporaryDaedalusHome(async (home) => {
+      const folder = join(home, "workflows");
+      await saveWorkflowFile(folder, {
+        kind: "tool",
+        text: "---\nname: logs\ndescription: Query the logs\n---\nRun cx.\n",
+      });
+      await expect(
+        saveWorkflowFile(folder, {
+          kind: "tool",
+          text: "---\nname: empty\ndescription: Nothing\n---\n",
+        }),
+      ).rejects.toThrow("no instructions");
+      await saveWorkflowFile(folder, {
+        kind: "step",
+        text: "---\nname: look\ndescription: Look\ntools: [logs, gone]\n---\nLook.\n",
+      });
+      const files = await readWorkflowFiles(folder);
+      expect(files.tools).toMatchObject([
+        { name: "logs", description: "Query the logs", body: "Run cx." },
+      ]);
+      expect(files.steps.find((step) => step.name === "look")).toMatchObject({
+        tools: ["logs", "gone"],
+        problem: null,
+      });
+      await expect(
+        saveWorkflowFile(folder, {
+          kind: "tool",
+          previousName: "logs",
+          text: "---\nname: cx\ndescription: Query the logs\n---\nRun cx.\n",
+        }),
+      ).rejects.toThrow("suggested by look");
+      await expect(
+        deleteWorkflowFile(folder, { kind: "tool", name: "logs" }),
+      ).rejects.toThrow("suggested by look");
+      await saveWorkflowFile(folder, {
+        kind: "step",
+        previousName: "look",
+        text: "---\nname: look\ndescription: Look\n---\nLook.\n",
+      });
+      await deleteWorkflowFile(folder, { kind: "tool", name: "logs" });
+      expect((await readWorkflowFiles(folder)).tools).toEqual([]);
     });
   });
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 import {
+  AcpHost,
+  parseAcpLaunch,
   CLOUD_CALLER_VARIABLE,
   CLOUD_MARK_VARIABLE,
   cloudMark,
@@ -30,6 +32,8 @@ import { routineCommand, routineHelp } from "./routines";
 import { sessionCommand, sessionHelp } from "./sessions";
 import { workflowCommand, workflowHelp } from "./workflows";
 import { planCommand, planHelp } from "./plans";
+import { jobCommand, jobHelp } from "./job";
+import { toolCommand, toolHelp } from "./tools";
 import { oldThreadAlias, threadCommand, threadHelp } from "./thread";
 import { spawnTeamMember, takeTeamOption, teamCommand, teamHelp } from "./team";
 import { channelCommand, channelHelp } from "./channel";
@@ -104,8 +108,10 @@ Usage:
   daedal routine <add|list|get|edit|pause|resume|run|remove|runs|log|when> ... [--json]
   daedal team <list|tree|goal|pause|resume|move> ... [--json]
   daedal channel <say|read|find|list> ... [--json]
-  daedal workflow <list|show|start|step|approve|status> ... [--json]
-  daedal plan <new|list|show|start|done|block|drop|ask> ... [--json]
+  daedal workflow <list|show|start|save|remember|memory> ... [--json]
+  daedal tool <list|show> ... [--json]
+  daedal job <next|done|hold|add|skip|redo|retry|tree|approve|release> ... [--json]
+  daedal plan <new|list|show|ask> ... [--json]
   daedal thread <new|say|read|find|list|bump|resolve> ... [--json]
   daedal secret <list|set|remove> ... [--json]
   daedal keys <list|set|unbind|reset> ... [--json]
@@ -125,6 +131,8 @@ const commandHelp: Record<string, string> = {
   team: teamHelp,
   channel: channelHelp,
   workflow: workflowHelp,
+  job: jobHelp,
+  tool: toolHelp,
   plan: planHelp,
   thread: threadHelp,
   account: accountHelp,
@@ -212,7 +220,7 @@ it was cleared, journal entries whose heading names the task, and done.`,
   daedal repo worktree remove --session <agent-id> --repository <name-or-id> [--force]`,
   agent: `Agent commands:
   daedal agent models <codex|claude> [--account <account>]
-  daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--workflow <name>]
+  daedal agent spawn [--workspace <workspace>] (--provider <codex|claude> | --command <command>) [--task <task-ref>] [--name <name>] [--model <model>] [--account <account>] [--message <text>] [--refine] [--workflow <name>] [--runner <tmux|acp>]
   daedal agent spawn ... [--ability <ability>[,<ability>]] [--color <color>] [--pin]
   daedal agent spawn --team [<lead>] --message <instructions> [--name <name>] [--workspace <workspace>] [--task <task-ref>] [--provider claude|codex] [--user]
   daedal agent list [--workspace <workspace>] [--running|--archived]
@@ -1071,6 +1079,7 @@ async function agentCommand(
         "ability",
         "color",
         "workflow",
+        "runner",
       ],
       ["refine", "pin", "user"],
     );
@@ -1106,6 +1115,9 @@ async function agentCommand(
         taskId: task?.id,
         name: parsed.values.name,
         model: parsed.values.model,
+        ...(parsed.values.runner === undefined
+          ? {}
+          : { runner: sessionRunner(parsed.values.runner) }),
         ...(parsed.values.account !== undefined
           ? { account: parsed.values.account }
           : {}),
@@ -1128,7 +1140,7 @@ async function agentCommand(
       });
     const result = parsed.values.workflow
       ? (
-          await context.workflows.spawnWith({
+          await context.jobIntake.spawnWith({
             workflow: parsed.values.workflow,
             ...(parsed.values.message
               ? { message: parsed.values.message }
@@ -1414,6 +1426,12 @@ async function agentContinueCommand(
       console.log(`The old session was not archived: ${result.archiveError}`);
   });
   return 0;
+}
+
+function sessionRunner(value: string): "tmux" | "acp" {
+  if (value !== "tmux" && value !== "acp")
+    throw new DaedalusError("VALIDATION", "--runner takes tmux or acp");
+  return value;
 }
 
 /**
@@ -2496,6 +2514,26 @@ export async function runCli(
       context.close();
     }
   }
+  // An ACP agent's own process: it runs the adapter named in its launch file
+  // until that exits. Daedalus starts it in the session's tmux session; it
+  // opens no database and is not a command for a person.
+  if (inputArgs[0] === "acp-host") {
+    const launchPath = inputArgs[1];
+    if (!launchPath || inputArgs.length !== 2)
+      throw new DaedalusError(
+        "VALIDATION",
+        "Usage: daedal acp-host <launch-file>",
+      );
+    const launch = parseAcpLaunch(await Bun.file(launchPath).json());
+    if (!launch)
+      throw new DaedalusError("VALIDATION", "That is not an ACP launch file");
+    const host = new AcpHost(launch);
+    // Ending the tmux session hangs up on the host: it closes the adapter's
+    // conversation and logs the exit before it goes.
+    for (const signal of ["SIGHUP", "SIGTERM", "SIGINT"] as const)
+      process.on(signal, () => host.shutdown());
+    return (await host.run()) ?? 1;
+  }
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");
   // `daedal activity` and `daedal ask`, the old names of `daedal thread`,
@@ -2600,6 +2638,8 @@ export async function runCli(
       "keys",
       "cloud",
       "workflow",
+      "job",
+      "tool",
       "plan",
       "thread",
     ].includes(args[0]!)
@@ -2646,6 +2686,12 @@ export async function runCli(
       return await workflowCommand(context, args.slice(1), json, (explicit) =>
         currentSessionId(context, explicit),
       );
+    if (args[0] === "job")
+      return await jobCommand(context, args.slice(1), json, (explicit) =>
+        currentSessionId(context, explicit),
+      );
+    if (args[0] === "tool")
+      return await toolCommand(context, args.slice(1), json);
     if (args[0] === "routine")
       return await routineCommand(context, args.slice(1), json);
     if (args[0] === "plan")

@@ -28,7 +28,7 @@ closest threads it finds.
 'new' opens a thread on the last thing you wrote in main, so write one line
 there first that asks the user the question directly ("Which retry budget
 should webhooks get? The options are in the thread."). The user reads that
-line on the thread's card, so talk to them, never about them ("I'm asking
+line too, in your Direct thread, so talk to them, never about them ("I'm asking
 the user in a thread..."). Write the message as one short plain line
 the user can answer, and put ids, logs, dates and links in --details, which
 the user sees folded. --option may be given any number of times, or not at

@@ -3,7 +3,6 @@ import {
   handleSession,
   isSnoozed,
   markPlanTasks,
-  paneThreadCount,
   snoozeChoices,
 } from "./threads-shared";
 
@@ -41,26 +40,6 @@ test("the pinned task waits on the user; later todo siblings are held, up to its
   ).toBe(true);
 });
 
-test("every class the Threads pane uses has a style rule", async () => {
-  const dir = new URL(".", import.meta.url).pathname;
-  const page = await Bun.file(`${dir}ThreadsPane.tsx`).text();
-  const css = await Bun.file(`${dir}styles.css`).text();
-  const used = new Set(
-    [...page.matchAll(/threads-[a-z-]+[a-z]/g)].map((match) => match[0]),
-  );
-  // Element ids, searches and a module name, not classes.
-  for (const id of [
-    "threads-draft",
-    "threads-search-current",
-    "threads-shared",
-  ])
-    used.delete(id);
-  const missing = [...used].filter(
-    (name) => !new RegExp(`\\.${name}(?![a-z-])`).test(css),
-  );
-  expect(missing).toEqual([]);
-});
-
 test("snooze offers 5 minutes, an hour and tomorrow at 9:00", () => {
   const now = new Date(2026, 10, 17, 21, 30);
   const choices = snoozeChoices(now);
@@ -76,21 +55,6 @@ test("snooze offers 5 minutes, an hour and tomorrow at 9:00", () => {
   expect(isSnoozed(thread, now.getTime())).toBe(true);
   expect(isSnoozed(thread, choices[0]!.until.getTime() + 1)).toBe(false);
   expect(isSnoozed({ snoozedUntil: null }, now.getTime())).toBe(false);
-});
-
-test("the Threads tab counts only what its pane shows", () => {
-  const counts = {
-    bySession: new Map([
-      ["lead", 1],
-      ["member", 2],
-      ["elsewhere", 4],
-    ]),
-  };
-  // Another session's question in the workspace lights nothing here.
-  expect(paneThreadCount(counts, ["quiet"])).toBe(0);
-  expect(paneThreadCount(counts, ["lead"])).toBe(1);
-  // A lead's pane shows its members' threads too.
-  expect(paneThreadCount(counts, ["lead", "member"])).toBe(3);
 });
 
 test("a handle names a session in the team the owner leads or is in", () => {

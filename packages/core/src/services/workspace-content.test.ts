@@ -388,14 +388,36 @@ test("every instruction file points at the custom instructions index, which Daed
       expect(await readFile(join(agents, "AGENTS.md"), "utf8")).toContain(
         `7. \`${index}\` holds the user's own instructions`,
       );
-    expect(await readFile(index, "utf8")).toContain("## Topics");
+    expect(await readFile(index, "utf8")).toContain("## Tools");
+    expect(await readFile(join(sessionPath, "AGENTS.md"), "utf8")).toContain(
+      "daedal tool list",
+    );
     // A rule for every request is read with the index, not behind a topic.
     expect(await readFile(index, "utf8")).toContain("## Always");
     expect(await readFile(join(sessionPath, "AGENTS.md"), "utf8")).toContain(
-      'Follow the rules under "Always" on every request',
+      'follow the rules under "Always" on every request',
     );
     // Workflows are their own folder, not instructions.
     expect(await readFile(index, "utf8")).not.toContain("workflow");
+
+    // Files from when subject rules were topic files get the new step 7.
+    for (const agents of [workspacePath, sessionPath]) {
+      const path = join(agents, "AGENTS.md");
+      await Bun.write(
+        path,
+        (await readFile(path, "utf8")).replace(
+          /^7\. .*$/m,
+          `7. \`${index}\` holds the user's own instructions for every workspace. Read it at the start of a session. Follow the rules under "Always" on every request, before its first command. Under "Topics" each line names a topic file in \`${join(home, "instructions")}/\`; open the ones that apply to the task. When the user asks you to remember how they like something done, add it there with the daedalus-instructions skill.`,
+        ),
+      );
+    }
+    await ensureWorkspaceContentFiles(workspacePath, home);
+    await ensureSessionInstructionFiles(sessionPath, workspacePath, home, ON);
+    for (const agents of [workspacePath, sessionPath]) {
+      const text = await readFile(join(agents, "AGENTS.md"), "utf8");
+      expect(text).toContain("daedal tool list");
+      expect(text).not.toContain("topic file");
+    }
     expect(await pathExists(join(home, "workflows", "CHOOSING.md"))).toBe(true);
 
     // Files from before the "Always" section get the new step 7.

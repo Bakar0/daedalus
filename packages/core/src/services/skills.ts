@@ -226,7 +226,7 @@ export const MANAGED_SKILLS: readonly ManagedSkillDefinition[] = [
     id: "daedalus-instructions",
     title: "Custom instructions",
     summary:
-      "Lets an agent save how you like things done when you ask it to, as topic files listed in instructions/INDEX.md in the Daedalus home. Every session reads that index.",
+      "Lets an agent save how you like things done when you ask it to, as rules in instructions/INDEX.md in the Daedalus home, which every session reads, and as tools for rules about one subject.",
     supportsAlways: false,
     defaultEnabled: true,
     defaultMode: "on-demand",
@@ -277,8 +277,8 @@ export const workflowsEnabled = (config: DaedalusConfig): boolean =>
   false;
 
 /**
- * The user's own instructions for every workspace: `INDEX.md` and one file
- * per topic. The generated AGENTS.md only points at the index, so it never
+ * The user's own instructions for every workspace: `INDEX.md`. Rules about
+ * one subject are tools in the workflows folder. The generated AGENTS.md only points at the index, so it never
  * changes when an agent adds an instruction.
  */
 export const customInstructionsPath = (daedalusHome: string): string =>

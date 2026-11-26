@@ -386,6 +386,7 @@ const client = {
               problem: null,
             },
           ],
+          tools: [],
           choosing: { path: "CHOOSING.md", text: "# Choosing a workflow\n" },
         }),
       instructionFiles: async () =>

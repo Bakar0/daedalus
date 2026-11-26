@@ -348,9 +348,15 @@ export function WorkflowPane({
   enabled,
   onOpenEditor,
   onOpenSettings,
+  owner,
   run,
   task,
 }: {
+  /**
+   * The agent whose run this is, named when it is not the shown session's:
+   * the one whose thread window is in front of the Factory.
+   */
+  owner?: string | undefined;
   /** Whether agents run work in workflows at all; off, the pane says so. */
   enabled: boolean;
   /** Opens Settings where workflows are turned on. */
@@ -387,6 +393,7 @@ export function WorkflowPane({
           <span className="workflow-pane-title">
             <WorkflowIcon />
             Workflow
+            {owner && <span className="workflow-pane-owner">@{owner}</span>}
           </span>
           {!open && current && (
             <span className="workflow-pane-current">

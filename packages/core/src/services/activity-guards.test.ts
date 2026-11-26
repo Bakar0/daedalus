@@ -14,6 +14,8 @@ import {
   writeActivityRecord,
   type ApplicationContext,
 } from "../index";
+import { acpPaths } from "./acp-host";
+import { detectAcpActivity } from "./activity-detect";
 
 class FakeTmux implements TmuxClient {
   openPty() {
@@ -1065,6 +1067,69 @@ describe("answering at the terminal", () => {
       tmux.paneText = APPROVED;
       expect(await answer(context, sessionId, tmux)).toBe(false);
       expect(context.activity.attentionFor(sessionId)).toBeDefined();
+    });
+  });
+});
+
+describe("an ACP agent's host log", () => {
+  test("does not reopen a turn the provider's hook already ended", async () => {
+    await withSession(async ({ context, sessionId }) => {
+      const agent = context.repositories.findAgent(sessionId)!;
+      const home = context.config.home;
+      const { log, directory } = acpPaths(home, sessionId);
+      await Bun.write(join(directory, ".keep"), "");
+      const started = Date.now() - 5_000;
+      const entry = (seq: number, at: number, event: object) =>
+        JSON.stringify({
+          seq,
+          at: new Date(at).toISOString(),
+          from: "host",
+          event,
+        });
+      resetRolloutCache();
+      await Bun.write(
+        log,
+        `${entry(1, started, { type: "turn_start", text: "one" })}\n`,
+      );
+      // The hook's Stop came first; the adapter has not answered the prompt.
+      await context.activity.record({
+        sessionId,
+        activity: "working",
+        source: "hook",
+      });
+      await context.activity.record({
+        sessionId,
+        activity: "done",
+        source: "hook",
+      });
+      const stored = () => context.activity.get(sessionId);
+      expect(await detectAcpActivity(home, agent, stored())).toBeUndefined();
+      // The log catches up: the same turn ends there too, and nothing is
+      // written a second time.
+      await Bun.write(
+        log,
+        [
+          entry(1, started, { type: "turn_start", text: "one" }),
+          entry(2, Date.now(), { type: "turn_end", stopReason: "end_turn" }),
+          "",
+        ].join("\n"),
+      );
+      const ended = await detectAcpActivity(home, agent, stored());
+      expect(ended?.activity).toBe("done");
+      expect(ended?.ifActivity).not.toContain("done");
+      // A turn that starts after that "done" is a new one.
+      await Bun.write(
+        log,
+        [
+          entry(1, started, { type: "turn_start", text: "one" }),
+          entry(2, Date.now(), { type: "turn_end", stopReason: "end_turn" }),
+          entry(3, Date.now() + 60_000, { type: "turn_start", text: "two" }),
+          "",
+        ].join("\n"),
+      );
+      expect(await detectAcpActivity(home, agent, stored())).toMatchObject({
+        activity: "working",
+      });
     });
   });
 });

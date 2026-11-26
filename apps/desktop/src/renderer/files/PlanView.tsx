@@ -66,6 +66,7 @@ interface AskTarget {
 }
 
 const STATE_LABEL: Record<PlanTaskStateDto, string> = {
+  draft: "Draft",
   todo: "To do",
   doing: "Doing",
   done: "Done",
@@ -104,6 +105,8 @@ function StateMark({ state }: { state: PlanTaskStateDto }) {
           <circle cx="7" cy="7" r="6" className="ring" />
           <path d="M4 7h6" className="bang" />
         </>
+      ) : state === "draft" ? (
+        <circle cx="7" cy="7" r="6" className="ring" strokeDasharray="2.4 2" />
       ) : (
         <circle cx="7" cy="7" r="6" className="ring" />
       )}

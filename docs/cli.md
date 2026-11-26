@@ -231,18 +231,42 @@ A team talks in its channel, named after its lead's session as a slug (`#checkou
 ```text
 daedal workflow list
 daedal workflow show <workflow>
-daedal workflow start <workflow> [--steps <a,b,...>] [--replace]
-daedal workflow start --steps <a,b,...> [--name <label>] [--loop <step>] [--until "<text>"] [--replace]
-daedal workflow step <step> start|done|skip --note "<line>"
-daedal workflow add <step> [--after <step>] [--description "<text>"] [--gate]
-daedal workflow remove <step>
-daedal workflow approve [--note "<text>"]
-daedal workflow end [--note "<text>"]
+daedal workflow start <workflow> [--steps <a,b,...>] [--replace | --inside]
+daedal workflow start --steps <a,b,...> [--name <label>] [--loop <step>] [--until "<text>"] [--replace | --inside]
 daedal workflow save <name> [--when "<text>"] [--description "<text>"]
-daedal workflow status
+daedal workflow memory <step>
+daedal workflow remember <step> "<instruction>" --why "<what happened>" [--only <workflow>]
+daedal workflow forget|promote <step> <number>
 ```
 
-Every command but `list` and `show` takes `[--session <agent-id>]` and works on that session's run. `start` and `agent spawn --workflow` refuse while workflows are off in Settings › Sessions. `start` refuses while the session has an open run, unless `--replace` ends it first. `step … start` prints one line so it can be chained onto the command the step runs. A step with `gate: result` waits for the user to approve its result: `step … done` leaves it waiting, raises attention and exits 4, and no other step starts until the agent runs `approve` after the user's yes in the conversation. A step with `gate: start` waits the same way on `start`, and `approve` starts it. `user` and `before` are the old names for `result` and `start` and still read. `add --gate` adds a step with `gate: result`. `agent spawn --workflow <name>` checks the workflow can run before the session starts, then starts the session with the run open; with `--team` the member starts in it. The files, their fields and examples are in [workflows.md](workflows.md); `daedal workflow --help` has the details of each command.
+Every command but `list` and `show` takes `[--session <agent-id>]`. `start` and `agent spawn --workflow` refuse while workflows are off in Settings › Sessions. `start` adds the workflow as a job under the job the session is on, with one job per step, and prints the first step's brief; from there the steps are done with `daedal job`. A session is in one workflow at a time: `start` refuses while one is open, unless `--replace` skips what is left of it or `--inside` starts the new one as part of the current step. `save` writes the workflow the session is in as a file. `agent spawn --workflow <name>` checks the workflow can start before the session does, then starts the session in it; with `--team` the member starts in it. `workflow step`, `add`, `remove`, `approve`, `end` and `status` are gone, and each prints the `daedal job` command that replaced it. The files, their fields and examples are in [workflows.md](workflows.md); `daedal workflow --help` has the details of each command.
+
+## Tool
+
+```text
+daedal tool list
+daedal tool show <name>
+```
+
+A tool is a file of the user's instructions for one recurring thing, in `workflows/tools/<name>.md`. `list` prints every tool with what it is for, and `show` prints one tool's instructions. Both work in any session, with or without a workflow. A step file may suggest tools with `tools: [a, b]`; its brief then names them, and `daedal workflow list` prints all of them after the workflows. The fields are in [workflows.md](workflows.md#a-tool-file).
+
+## Job
+
+```text
+daedal job next
+daedal job done --result "<what came out>" [--out <name>=<value> ...] [--job <name>]
+daedal job hold --why "<what you need decided>"
+daedal job add "<title>" [--name <name>] [--needs <a,b>] [--gives <x:kind,y>] [--instructions "<text>" | --file <path>] [--gate start|result] [--me | --to <session>] [--under <job>]
+daedal job add --plan <plan>
+daedal job skip|redo <job> --why "<why>"
+daedal job retry <job>
+daedal job fail --why "<why>"
+daedal job tree
+daedal job approve
+daedal job release [<job>] [--answer "<the user's answer>"]
+```
+
+A job is one piece of work with an owner: a workflow step, a plan task, or work one session handed another. Jobs form a tree, and a session is on one job at a time. Every command takes `[--session <agent-id>]`, as a lead uses for a member, and `--json`. `next` prints the current job's brief: what to do, what the jobs before it handed over, and which outputs it hands on. `done` finishes the current job, refuses when an output the brief lists has no `--out`, and prints the next brief when the same session runs the next job. A job with `gate: result` is held and not finished: `done` raises attention and exits 4, and nothing after it starts until `approve`, which an agent runs after the user's yes in the conversation. A job with `gate: start` is held the same way before it starts. `done --job <name>` finishes another job of the session, which is how a workflow that goes round is ended. `hold` stops the current job until the user decides and raises attention; `release` passes on the answer and starts it again. `add` puts a job under the current one and starts a new agent for it, at most three at a time under one job; `--me` keeps it in the calling session, `--to` gives it to a running session, `--under` names another parent, and `--needs` names jobs beside it that must finish first. `add --plan` adds every task of a plan file that is not a job yet, ordered by the plan's `## Flow`, and Daedalus writes the task marks in the file from then on. `skip` closes a job and everything under it. `redo` puts finished work back to be done again, together with the jobs that needed it; `retry` does the same for a failed job. `fail` closes the current job as not doable and tells the session above it. `tree` prints the whole tree with each job's state, name, result and outputs. `<job>` is a name as `tree` prints it in brackets, or an id. `plan start`, `done`, `submit`, `block` and `drop` are gone, and each prints the `daedal job` command that replaced it.
 
 ## Shutdown
 

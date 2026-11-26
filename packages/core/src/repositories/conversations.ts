@@ -25,6 +25,8 @@ interface ConversationRow {
   fork_session_id: string | null;
   fork_started_at: string | null;
   fork_synced_at: string | null;
+  fork_answered_at: string | null;
+  closed_at: string | null;
   blocked_at: string | null;
   snoozed_until: string | null;
   resolved_at: string | null;
@@ -76,6 +78,8 @@ const threadFromRow = (row: ConversationRow): Thread => ({
   planPath: row.plan_path,
   taskKey: row.task_key,
   forkSessionId: row.fork_session_id,
+  forkAnsweredAt: row.fork_answered_at,
+  closedAt: row.closed_at,
   blockedAt: row.blocked_at,
   snoozedUntil: row.snoozed_until,
   resolvedAt: row.resolved_at,
@@ -141,6 +145,8 @@ export type ThreadChange = Partial<
     | "planPath"
     | "taskKey"
     | "forkSessionId"
+    | "forkAnsweredAt"
+    | "closedAt"
     | "blockedAt"
     | "snoozedUntil"
     | "resolvedAt"
@@ -155,6 +161,8 @@ const THREAD_COLUMNS: Record<keyof ThreadChange, string> = {
   forkSessionId: "fork_session_id",
   forkStartedAt: "fork_started_at",
   forkSyncedAt: "fork_synced_at",
+  forkAnsweredAt: "fork_answered_at",
+  closedAt: "closed_at",
   blockedAt: "blocked_at",
   snoozedUntil: "snoozed_until",
   resolvedAt: "resolved_at",

@@ -21,6 +21,7 @@ import {
   formatKeyGlyphs,
 } from "@daedalus/protocol";
 import { ariaKeyShortcuts, shortcutLabel } from "./commands";
+import { tipHome, TIP_FOCUS_MS, TIP_HOVER_MS } from "./title-tips";
 
 /** A key as glyphs, one `<kbd>` per chord of a sequence. */
 export function KeyGlyphs({ glyphs }: { glyphs: string }) {
@@ -32,10 +33,6 @@ export function KeyGlyphs({ glyphs }: { glyphs: string }) {
     </span>
   );
 }
-
-/** How long a pointer rests, or keyboard focus stays, before it shows. */
-const HOVER_DELAY_MS = 500;
-const FOCUS_DELAY_MS = 300;
 
 type TooltipChildProps = {
   "aria-describedby"?: string;
@@ -116,7 +113,7 @@ export function Tooltip({
     ...(aria ? { "aria-keyshortcuts": aria } : {}),
     onMouseEnter: (event: MouseEvent<HTMLElement>) => {
       own.onMouseEnter?.(event);
-      showLater(event.currentTarget, HOVER_DELAY_MS);
+      showLater(event.currentTarget, TIP_HOVER_MS);
     },
     onMouseLeave: (event: MouseEvent<HTMLElement>) => {
       own.onMouseLeave?.(event);
@@ -131,7 +128,7 @@ export function Tooltip({
     onFocus: (event: FocusEvent<HTMLElement>) => {
       own.onFocus?.(event);
       if (focusVisible(event.currentTarget))
-        showLater(event.currentTarget, FOCUS_DELAY_MS);
+        showLater(event.currentTarget, TIP_FOCUS_MS);
     },
     onBlur: (event: FocusEvent<HTMLElement>) => {
       own.onBlur?.(event);
@@ -168,7 +165,7 @@ export function Tooltip({
   return (
     <>
       {control}
-      {typeof document === "undefined" ? tip : createPortal(tip, document.body)}
+      {typeof document === "undefined" ? tip : createPortal(tip, tipHome())}
     </>
   );
 }

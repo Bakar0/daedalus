@@ -24,9 +24,12 @@ import { DaedalusError } from "../errors";
  * byte for byte, line endings included.
  */
 
-export type PlanTaskState = "todo" | "doing" | "done" | "blocked" | "dropped";
+/** `draft` is a task its lead is still describing: nothing starts on it. */
+export type PlanTaskState =
+  "draft" | "todo" | "doing" | "done" | "blocked" | "dropped";
 
 export const PLAN_TASK_STATES: readonly PlanTaskState[] = [
+  "draft",
   "todo",
   "doing",
   "done",
@@ -35,6 +38,7 @@ export const PLAN_TASK_STATES: readonly PlanTaskState[] = [
 ];
 
 const STATE_OF_MARK: Record<string, PlanTaskState> = {
+  "~": "draft",
   " ": "todo",
   "/": "doing",
   x: "done",
@@ -44,6 +48,7 @@ const STATE_OF_MARK: Record<string, PlanTaskState> = {
 };
 
 export const PLAN_STATE_MARK: Record<PlanTaskState, string> = {
+  draft: "~",
   todo: " ",
   doing: "/",
   done: "x",
@@ -143,7 +148,7 @@ function splitLines(source: string): Line[] {
 }
 
 const TASK_LINE =
-  /^([ \t]*)([-*+]|\d{1,9}[.)])[ \t]+\[([ xX/!-])\](?:[ \t]+(.*?))?[ \t]*$/;
+  /^([ \t]*)([-*+]|\d{1,9}[.)])[ \t]+\[([ xX/!~-])\](?:[ \t]+(.*?))?[ \t]*$/;
 const HEADING = /^(#{1,6})(?:[ \t]+(.*?))?[ \t#]*$/;
 const FENCE = /^[ \t]*(`{3,}|~{3,})/;
 const QUESTION = /^[ \t]*>[ \t]?\?[ \t]*(.*)$/;
@@ -709,6 +714,7 @@ export type PlanOwnerState =
 interface OwnerCandidate {
   id: string;
   name: string;
+  teamId?: string | null;
   teamHandle: string | null;
   status: string;
   archivedAt: string | null;
@@ -723,6 +729,12 @@ interface OwnerCandidate {
 export function resolvePlanOwner<T extends OwnerCandidate>(
   handle: string,
   sessions: readonly T[],
+  /**
+   * The sessions that lead a team. With them `lead` names the one agent
+   * that leads a team and is a member of none, as it calls itself in the
+   * plans it writes, when no session answers to that handle.
+   */
+  leads?: ReadonlySet<string>,
 ): T | undefined {
   const wanted = planHandle(handle).toLowerCase();
   if (!wanted) return undefined;
@@ -737,9 +749,18 @@ export function resolvePlanOwner<T extends OwnerCandidate>(
   return (
     best(live.filter((s) => s.teamHandle?.toLowerCase() === wanted)) ??
     best(live.filter((s) => handleOf(s.name) === wanted)) ??
-    best(live.filter((s) => s.name.trim().toLowerCase() === wanted))
+    best(live.filter((s) => s.name.trim().toLowerCase() === wanted)) ??
+    (wanted === "lead" && leads ? topLead(live, leads) : undefined)
   );
 }
+
+const topLead = <T extends OwnerCandidate>(
+  live: readonly T[],
+  leads: ReadonlySet<string>,
+): T | undefined => {
+  const top = live.filter((s) => leads.has(s.id) && !s.teamId);
+  return top.length === 1 ? top[0] : undefined;
+};
 
 /** A session's chip state from its status, activity and attention badge. */
 export function planOwnerState(
@@ -791,28 +812,6 @@ export function planAskMessage(input: {
     .map((line) => (line ? `> ${line}` : ">"))
     .join("\n");
   return `${input.question.trim()}\n\n${input.path}:${lines}:\n${quoted}`;
-}
-
-/** The first message of an agent started on a plan's task. */
-export function planTaskBrief(input: {
-  planPath: string;
-  planTitle: string | null;
-  task: PlanTask;
-  details: string;
-}): string {
-  const { task } = input;
-  const ref = `^${task.id}`;
-  return [
-    `You own the task "${task.title}" (${ref}) in the plan ${input.planTitle ? `"${input.planTitle}" ` : ""}at ${input.planPath}.`,
-    input.details.trim() ? `\nIts details:\n${input.details.trim()}\n` : "",
-    "Read the whole plan first for context. Keep your task's line current as you go:",
-    `  daedal plan done ${input.planPath} ${ref}     when it is finished`,
-    `  daedal plan block ${input.planPath} ${ref}    when you are stuck`,
-    `  daedal plan ask ${input.planPath} ${ref} "<question>"   to put a question to the user in the plan`,
-    "Nested tasks under yours are yours too; tick them off in the file as you finish them.",
-  ]
-    .filter((line) => line !== "")
-    .join("\n");
 }
 
 /** A task's details as the markdown under its line, nested tasks left out. */

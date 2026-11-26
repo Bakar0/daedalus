@@ -808,6 +808,27 @@ export async function discoverProviderModels(
 export interface AgentProvider {
   probe(): Promise<{ available: boolean; executable: string }>;
   buildLaunch(input: LaunchInput): Promise<ProviderLaunch>;
+  /** What `daedal acp-host` runs for a session driven over ACP. */
+  buildAcpLaunch?(input: LaunchInput): Promise<AcpProviderLaunch>;
+}
+
+/**
+ * A provider's launch over ACP: the same choices `buildLaunch` turns into
+ * command-line arguments, as the options its ACP adapter takes.
+ */
+export interface AcpProviderLaunch {
+  provider: "claude" | "codex";
+  /** For the host's environment: where the adapter finds the provider. */
+  env: Record<string, string>;
+  /** `_meta` of `session/new`. */
+  meta?: Record<string, unknown>;
+  /** The mode to set once the session exists. */
+  mode?: string;
+  /** The model it was launched with, kept for a relaunch. */
+  model?: string;
+  prompt?: string;
+  /** The provider's conversation to load and carry on. */
+  load?: string;
 }
 
 const CHATGPT_CODEX_EXECUTABLE =
@@ -1021,6 +1042,94 @@ class ConfiguredProvider implements AgentProvider {
       args,
       env,
       providerSessionId,
+    };
+  }
+
+  /**
+   * The launch for a session driven over ACP. The adapter runs the user's
+   * own `claude` or `codex`, the one `probe` found, so the session signs in
+   * as their terminal does and the app ships no second copy of either.
+   */
+  async buildAcpLaunch(input: LaunchInput): Promise<AcpProviderLaunch> {
+    if (this.name !== "claude" && this.name !== "codex")
+      throw new DaedalusError(
+        "VALIDATION",
+        "Only Claude and Codex sessions run over ACP",
+      );
+    if (input.fork || input.threadFork || input.target === "cloud")
+      throw new DaedalusError(
+        "VALIDATION",
+        "A fork or a cloud session does not run over ACP",
+      );
+    const model = input.model?.trim();
+    if (model && !isValidModelName(model))
+      throw new DaedalusError("VALIDATION", "Model name is invalid");
+    const executable =
+      resolveAgentExecutable(this.name, this.definition.executable) ??
+      this.definition.executable;
+    const load = input.resume?.nativeId;
+    const shared = {
+      ...(model ? { model } : {}),
+      ...(input.prompt ? { prompt: input.prompt } : {}),
+      ...(load ? { load } : {}),
+    };
+    const inherit = this.definition.permissionMode === "inherit";
+    if (this.name === "claude") {
+      const settings = this.config
+        ? settingsArgumentValue(
+            await claudeDaedalusSettingsArgs(this.config, [], input.sessionId, {
+              acceptPeerMessages: input.acceptPeerMessages,
+              workingDirectory: input.workingDirectory,
+            }),
+          )
+        : undefined;
+      return {
+        provider: "claude",
+        env: { CLAUDE_CODE_EXECUTABLE: executable },
+        meta: {
+          systemPrompt: { append: DAEDALUS_STATUS_INSTRUCTIONS },
+          claudeCode: {
+            options: {
+              ...(model ? { model } : {}),
+              ...(settings ? { settings } : {}),
+              additionalDirectories: input.additionalDirectories ?? [],
+            },
+          },
+        },
+        // As `permissionModeArgs` does for a terminal session.
+        ...(inherit || load ? {} : { mode: "auto" }),
+        ...shared,
+      };
+    }
+    // Writes Daedalus's hook block into the user's Codex configuration; the
+    // arguments it returns are the terminal program's.
+    if (this.config) await ensureCodexHooks(this.config, executable);
+    const ownInstructions = this.config
+      ? /^\s*developer_instructions\s*=/m.test(
+          await Bun.file(codexConfigPath(this.config))
+            .text()
+            .catch(() => ""),
+        )
+      : false;
+    return {
+      provider: "codex",
+      env: {
+        CODEX_PATH: executable,
+        CODEX_CONFIG: JSON.stringify({
+          ...(model ? { model } : {}),
+          ...(ownInstructions
+            ? {}
+            : { developer_instructions: DAEDALUS_STATUS_INSTRUCTIONS }),
+          ...(inherit
+            ? {}
+            : {
+                approvals_reviewer: "auto_review",
+                approval_policy: "on-request",
+              }),
+          features: { hooks: true },
+        }),
+      },
+      ...shared,
     };
   }
 

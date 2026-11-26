@@ -242,6 +242,22 @@ async function lead(context: ApplicationContext) {
 }
 
 describe("teams", () => {
+  test("a member the lead adds gets a job under the lead's", async () => {
+    await withTeams(async ({ context }) => {
+      const { session, team } = await lead(context);
+      const above = await context.jobIntake.standing(session.id);
+      const member = await context.teams.spawnMember({
+        team: team.id,
+        addedBy: "lead",
+        name: "server",
+        instructions: "Build the server.",
+      });
+      const job = context.jobs.current(member.session.id)?.job;
+      expect(job?.parentId).toBe(above.id);
+      expect(job?.instructions).toContain("Build the server.");
+    });
+  });
+
   test("a member in a cloud workspace's pod gets team messages typed in through its host", async () => {
     await withTeams(async ({ context, transport }) => {
       const { team } = await lead(context);

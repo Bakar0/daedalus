@@ -945,6 +945,40 @@ setTimeout(() => {
   }, 60_000);
 }, 20_000);
 
+// The job engine's housekeeping. A command starts what it made ready by
+// itself; this clock fails the jobs of agents that are gone, archives agents
+// whose job is finished, and starts what a crashed command left ready.
+let tickingJobs = false;
+setInterval(() => {
+  if (tickingJobs) return;
+  tickingJobs = true;
+  void context.workspaces
+    .list()
+    .then(async (workspaces) => {
+      for (const workspace of workspaces)
+        await context.jobs.tick(workspace.id).catch(() => undefined);
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      tickingJobs = false;
+    });
+}, 15_000);
+
+// Copies of agents the user talks to stop by themselves: one that has not
+// taken a turn for half an hour, or whose conversation was closed. A late
+// answer brings a closed conversation back.
+let tendingCopies = false;
+setInterval(() => {
+  if (tendingCopies) return;
+  tendingCopies = true;
+  void context.threads
+    .tendCopies((sessionId) => context.activity.get(sessionId))
+    .catch(() => undefined)
+    .finally(() => {
+      tendingCopies = false;
+    });
+}, 15_000);
+
 let checkingForExternalChanges = false;
 setInterval(async () => {
   if (checkingForExternalChanges) return;

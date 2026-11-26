@@ -1,6 +1,7 @@
+import { AcpService } from "./acp";
 import type { DaedalusConfig } from "../config";
 import { accountConfig } from "./account-homes";
-import { isAttentionActivity, type AgentSession } from "../domain";
+import { isAttentionActivity, runsOverAcp, type AgentSession } from "../domain";
 import type { TmuxClient } from "@daedalus/platform";
 import type { SqliteRepositories } from "../repositories";
 import type { ActivityService } from "./activity";
@@ -41,6 +42,17 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>();
+
+/**
+ * Lets the next sweep read every session again, without the wait between
+ * checks. For the moment after something the app did itself, such as stopping
+ * an agent's turn, when only the transcript or the pane says what happened.
+ * What a file held last time is kept, so an unchanged one is still not read.
+ */
+export function recheckActivityNow(): void {
+  for (const entry of cache.values()) entry.checkedAt = 0;
+  paneChecked.clear();
+}
 
 /**
  * The mtime gate shared by both detectors, and what makes them safe to call on
@@ -230,6 +242,87 @@ export async function detectCodexRolloutActivity(
   return text === undefined ? undefined : observeCodexRollout(text);
 }
 
+const acpServices = new Map<string, AcpService>();
+const acpSeen = new Map<string, string>();
+
+/**
+ * What an ACP agent's host says it is doing, or nothing when that has not
+ * changed since the last look. The host's log is the protocol itself: a turn
+ * that started, ended or waits on a permission is a fact, whatever the
+ * provider's hooks did or did not report under its adapter.
+ */
+export async function detectAcpActivity(
+  home: string,
+  agent: AgentSession,
+  /** What is recorded of the agent now, when the caller knows it. */
+  stored?: { activity: string; since: string },
+): Promise<ActivityObservation | undefined> {
+  let acp = acpServices.get(home);
+  if (!acp) acpServices.set(home, (acp = new AcpService(home)));
+  const live = await acp.live(agent.id).catch(() => undefined);
+  if (!live || live.ended) return undefined;
+  const lastTool = live.parts.findLast((part) => part.kind === "tool");
+  const lastText = live.parts.findLast((part) => part.kind === "text");
+  const reading = live.permission
+    ? `permission:${live.permission.requestId}`
+    : live.working
+      ? `working:${lastTool?.kind === "tool" ? lastTool.id : ""}`
+      : `idle:${live.turns}`;
+  const before = acpSeen.get(agent.id);
+  acpSeen.set(agent.id, reading);
+  if (before === reading)
+    return live.working && !live.permission
+      ? {
+          activity: "working",
+          source: "hook",
+          heartbeat: true,
+          ifActivity: ["working"],
+        }
+      : undefined;
+  if (live.permission)
+    return {
+      activity: "needs_permission",
+      detail: live.permission.title,
+      source: "hook",
+      authoritative: true,
+    };
+  // The provider's own hook says a turn is over a moment before its adapter
+  // answers the prompt. A look at the log in that moment still reads the turn
+  // as running, and writing that would end the same turn twice.
+  if (
+    live.working &&
+    stored?.activity === "done" &&
+    live.turnStartedAt &&
+    Date.parse(stored.since) >= Date.parse(live.turnStartedAt)
+  )
+    return undefined;
+  if (live.working)
+    return {
+      activity: "working",
+      ...(lastTool?.kind === "tool" ? { detail: lastTool.title } : {}),
+      source: "hook",
+      authoritative: true,
+    };
+  // No turn has run since this host started, so the agent is not in one:
+  // a reading of a turn from before the host restarted is over.
+  if (live.turns === 0 && before === undefined)
+    return {
+      activity: "idle",
+      source: "hook",
+      authoritative: true,
+      ifActivity: ["working", "needs_permission", "unknown"],
+    };
+  const message = lastText?.kind === "text" ? lastText.text.trim() : "";
+  return {
+    activity: "done",
+    source: "hook",
+    authoritative: true,
+    // A provider whose own hook already said so is not told twice.
+    ifActivity: ["working", "needs_permission", "unknown"],
+    ...(message ? { message } : {}),
+  };
+}
+
 /**
  * One pass over every live session that has a polled detector. There is
  * deliberately nothing here for `custom` — a custom session has no structured
@@ -251,11 +344,20 @@ export async function sweepProviderActivity(input: {
       (agent.provider === "codex" || agent.provider === "claude") &&
       (agent.status === "running" || agent.status === "starting"),
   );
+  // What was read of sessions that are over is forgotten.
+  const liveIds = new Set(live.map((agent) => agent.id));
+  for (const id of acpSeen.keys()) if (!liveIds.has(id)) acpSeen.delete(id);
+  acpServices.get(input.config.home)?.keepOnly(liveIds);
   let applied = 0;
   await Promise.all(
     live.map(async (agent) => {
-      let observation =
-        agent.provider === "claude"
+      let observation = runsOverAcp(agent)
+        ? await detectAcpActivity(
+            input.config.home,
+            agent,
+            input.activity.get(agent.id),
+          )
+        : agent.provider === "claude"
           ? await detectClaudeTranscriptActivity(input.config, agent)
           : await detectCodexRolloutActivity(
               input.config,
@@ -268,6 +370,8 @@ export async function sweepProviderActivity(input: {
       if (
         !observation &&
         input.tmux &&
+        // An ACP agent's pane is its host's, with nothing to read.
+        !runsOverAcp(agent) &&
         agent.provider === "claude" &&
         input.activity.get(agent.id)?.activity === "working"
       )
@@ -286,4 +390,6 @@ export async function sweepProviderActivity(input: {
 export const resetRolloutCache = (): void => {
   cache.clear();
   paneChecked.clear();
+  acpServices.clear();
+  acpSeen.clear();
 };

@@ -55,6 +55,7 @@ const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
 const PLAN_STATE: Record<string, string> = {
+  draft: "draft",
   todo: "to do",
   doing: "in progress",
   done: "done",

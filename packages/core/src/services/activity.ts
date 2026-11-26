@@ -1,3 +1,4 @@
+import { recheckActivityNow } from "./activity-detect";
 import {
   isAttentionActivity,
   type AgentActivity,
@@ -639,7 +640,9 @@ export class ActivityService {
    * tick and the CLI before it reports activity, so both report the same
    * thing whether or not the app is running. Never throws.
    */
-  async refresh(): Promise<void> {
+  async refresh(options: { now?: boolean } = {}): Promise<void> {
+    // `now` skips the wait between checks of one session.
+    if (options.now) recheckActivityNow();
     await this.sweep().catch(() => undefined);
     await this.decay().catch(() => undefined);
   }

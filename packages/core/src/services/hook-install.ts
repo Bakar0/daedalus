@@ -58,7 +58,7 @@ const INBOX_EVENTS = new Set(["Stop", "SessionStart"]);
  * none with this reminder.
  */
 export const WORKFLOW_REMINDER =
-  "Workflows are on: before the first command of this request, start a workflow with the daedalus-workflows skill, or continue the run this session already has.";
+  "Workflows are on: before the first command of this request, start a workflow with the daedalus-workflows skill, or continue the one this session is in (`daedal job next` prints your step).";
 
 /**
  * The reminder as a hook. Unlike the activity hooks it runs in the turn,

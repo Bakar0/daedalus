@@ -6,6 +6,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.112.0",
+    "@agentclientprotocol/codex-acp": "2.12.1",
     "@daedalus/platform": "workspace:*",
     "@daedalus/remote-protocol": "workspace:*"
   }

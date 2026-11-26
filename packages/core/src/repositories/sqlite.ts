@@ -31,7 +31,8 @@ import { RoutineRepository } from "./routines";
 import { SecretRepository } from "./secrets";
 import { ConversationRepository } from "./conversations";
 import { SessionNoteRepository } from "./session-notes";
-import { WorkflowRepository } from "./workflows";
+import { SessionStepRepository } from "./session-steps";
+import { JobRepository } from "./jobs";
 
 /** A gateway account: the gateway's origin and the user's id on it. */
 export interface CloudOwner {
@@ -126,6 +127,7 @@ interface AgentRow {
   team_handle: string | null;
   spawned_by: string | null;
   host_id: string | null;
+  runner: "tmux" | "acp";
 }
 
 interface IntegratedTerminalRow {
@@ -270,6 +272,7 @@ const agentFromRow = (row: AgentRow): AgentSession => ({
   teamHandle: row.team_handle,
   spawnedBy: row.spawned_by,
   hostId: row.host_id,
+  runner: row.runner,
 });
 
 const integratedTerminalFromRow = (
@@ -428,7 +431,8 @@ export class SqliteRepositories {
 
   readonly abilities: AbilityRepository;
   readonly secrets: SecretRepository;
-  readonly workflows: WorkflowRepository;
+  readonly jobs: JobRepository;
+  readonly sessionSteps: SessionStepRepository;
   readonly routines: RoutineRepository;
   readonly conversations: ConversationRepository;
   readonly sessionNotes: SessionNoteRepository;
@@ -440,7 +444,8 @@ export class SqliteRepositories {
     );
     this.abilities = new AbilityRepository(this.database);
     this.secrets = new SecretRepository(this.database);
-    this.workflows = new WorkflowRepository(this.database);
+    this.jobs = new JobRepository(this.database);
+    this.sessionSteps = new SessionStepRepository(this.database);
     this.routines = new RoutineRepository(this.database);
     this.conversations = new ConversationRepository(this.database);
     this.sessionNotes = new SessionNoteRepository(this.database);
@@ -916,8 +921,9 @@ export class SqliteRepositories {
           working_directory, status, exit_code, started_at, ended_at,
           provider_session_id, archived_at, resume_count, lost_reason,
           resume_on_start, handoff_requested_at, position, pinned_at, color,
-          account, team_id, team_handle, spawned_by, auto_rebirth_percent, host_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          account, team_id, team_handle, spawned_by, auto_rebirth_percent, host_id,
+          runner)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -949,6 +955,7 @@ export class SqliteRepositories {
         agent.spawnedBy,
         autoRebirthColumn(agent.autoRebirthPercent),
         agent.hostId,
+        agent.runner ?? "tmux",
       );
   }
 

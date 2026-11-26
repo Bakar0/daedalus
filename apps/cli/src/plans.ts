@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import {
   DaedalusError,
-  findPlanTask,
   planProgress,
   planQuestions,
   sessionPlanHandle,
@@ -20,8 +19,6 @@ export const planHelp = `Plan commands — plans/<slug>.plan.md files people and
   daedal plan new "<title>" [--workspace <workspace> | --home] [--owner <handle>] [--body-file <path>|-]
   daedal plan list [--workspace <workspace> | --home]
   daedal plan show <plan> [--workspace <workspace> | --home]
-  daedal plan start <plan> ^<id> [--owner <handle>]
-  daedal plan done|block|drop <plan> ^<id>
   daedal plan ask <plan> ^<id> "<question>"
 
 <plan> is a plan's slug (cart-api-v2), its path, or its absolute path. A
@@ -35,24 +32,35 @@ A plan file is markdown. Frontmatter names it and its owner:
   ---
 Under '## Tasks' is a nested checklist. Each task is one line:
   - [ ] Title @owner ^id
-States: [ ] todo, [/] doing, [x] done, [!] blocked, [-] dropped. Keep a
+States: [~] draft, [ ] todo, [/] doing, [x] done, [!] blocked, [-] dropped. Keep a
 title short and plain, what the task is in a few words ("Entra scans
 stopped on 11-14"); the app lists titles on one line each. Any
 markdown indented under a task is its details, the place for ids, links
 and numbers; a '> ? ...' line there is a
-question for the user. Every other section is free markdown. Edit the file
-directly for anything these commands do not cover.
+question for the user. Every other section is free markdown.
 
 'new' writes the file with a skeleton, or with the body read from
 --body-file ('-' reads stdin). The owner is --owner, else the calling
 session's handle.
-'start' marks a task [/] and puts the owner on it: --owner, else you.
-'done', 'block' and 'drop' set [x], [!] and [-]. 'ask' opens a thread with the
-user, pinned to the task, as 'daedal thread new --plan' does.
-An @owner is a session's team handle, or its name made into a handle
-(a session called "Cart endpoints" answers to @cart-endpoints).`;
+'ask' opens a thread with the user, pinned to the task, as
+'daedal thread new --plan' does.
+
+A plan is the declaration of work, and its tasks are done as jobs.
+'daedal job add --plan <plan>' adds every task as a job under the job you
+are on. A '## Flow' section holding a mermaid flowchart of task ids says
+which task needs which ("design --> api & page --> proof"). Daedalus starts
+a new agent for each task with no owner once what it needs is done, three
+at a time, hands it the results of the tasks before it, and tells you when
+one finishes, fails or waits. A task with an @owner is given to that
+session. Mark a task [~] while you are still describing it; add the plan
+again to pick up tasks written since.
+Daedalus writes the marks from the jobs' states, so do not tick boxes
+yourself: finish a task with 'daedal job done'. An @owner is a session's
+team handle, or its name made into a handle (a session called "Cart
+endpoints" answers to @cart-endpoints).`;
 
 const MARK: Record<PlanTaskState, string> = {
+  draft: "[~]",
   todo: "[ ]",
   doing: "[/]",
   done: "[x]",
@@ -60,11 +68,19 @@ const MARK: Record<PlanTaskState, string> = {
   dropped: "[-]",
 };
 
-const STATE_OF_ACTION: Record<string, PlanTaskState> = {
-  start: "doing",
-  done: "done",
-  block: "blocked",
-  drop: "dropped",
+/**
+ * The state commands the job engine replaced, each with what to run now. A
+ * session started before the change is told once and goes on.
+ */
+export const REPLACED_PLAN_COMMANDS: Record<string, string> = {
+  start:
+    "Add the plan's tasks as jobs with `daedal job add --plan <plan>`. Daedalus starts each one when what it needs is done and keeps the marks in the file.",
+  done: 'Finish the task you are on with `daedal job done --result "<what came out>"`.',
+  submit:
+    'Hand your task back with `daedal job done --result "<what came out>"`, with an `--out <name>=<value>` for each output your brief lists.',
+  block:
+    'Stop your task until the user decides with `daedal job hold --why "<what you need>"`.',
+  drop: 'Close a task that will not be done with `daedal job skip <id> --why "<why>"`.',
 };
 
 export function printPlan(
@@ -127,9 +143,14 @@ export async function planCommand(
     console.log(planHelp);
     return 0;
   }
+  if (action in REPLACED_PLAN_COMMANDS)
+    throw new DaedalusError(
+      "VALIDATION",
+      `'daedal plan ${action}' is gone. ${REPLACED_PLAN_COMMANDS[action]}`,
+    );
   const parsed = parseArguments(
     args,
-    ["workspace", "owner", "body-file"],
+    ["workspace", "owner", "body-file", "result-file"],
     ["home"],
   );
   if (parsed.flags.has("home") && parsed.values.workspace)
@@ -202,38 +223,6 @@ export async function planCommand(
     const threads = context.threads.onPlan(found.absolutePath);
     printResult({ file: found, plan, owners, threads }, json, () =>
       printPlan(found, plan, owners, threads),
-    );
-    return 0;
-  }
-
-  const state = STATE_OF_ACTION[action];
-  if (state) {
-    expectPositionals(
-      parsed.positionals,
-      2,
-      `daedal plan ${action} <plan> ^<id>`,
-    );
-    const found = await file(parsed.positionals[0]!);
-    let owner: string | undefined;
-    if (action === "start") {
-      owner = parsed.values.owner;
-      if (!owner) {
-        const session = await caller();
-        if (session) owner = sessionPlanHandle(session);
-      }
-    } else if (parsed.values.owner)
-      throw new DaedalusError("VALIDATION", "--owner goes with start");
-    const plan = await context.plans.setState(
-      found,
-      parsed.positionals[1]!,
-      state,
-      owner,
-    );
-    const task = findPlanTask(plan, parsed.positionals[1]!);
-    printResult({ file: found, task }, json, () =>
-      console.log(
-        `${MARK[task.state]} ${task.title}${task.owner ? ` @${task.owner}` : ""}`,
-      ),
     );
     return 0;
   }

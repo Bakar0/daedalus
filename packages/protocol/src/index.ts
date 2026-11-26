@@ -153,6 +153,11 @@ export interface AgentSessionDto {
   spawnedBy: string | null;
   /** The cloud host it runs on (`ws:<cloud workspace id>`); null or absent for this Mac. */
   hostId?: string | null;
+  /**
+   * How its agent is driven. `acp` has no terminal: its chat shows the turn
+   * as it streams, asks for permissions and stops it. Absent means `tmux`.
+   */
+  runner?: "tmux" | "acp";
 }
 
 /** One message in a thread. */
@@ -175,7 +180,7 @@ export interface ThreadMessageDto {
   createdAt: string;
 }
 
-/** A thread between a session and the user, as the Threads pane shows it. */
+/** A thread between a session and the user, as the app shows it. */
 export interface ThreadDto {
   /** The thread's number, `#n`. */
   id: number;
@@ -194,6 +199,10 @@ export interface ThreadDto {
   anchorText: string | null;
   /** The read-only fork the user talks the thread through with. */
   forkSessionId: string | null;
+  /** When that fork last finished a turn: its latest answer. */
+  forkAnsweredAt: string | null;
+  /** When the user put the conversation away, into its agent's history. */
+  closedAt: string | null;
   /** When the owner said it is blocked on it; cleared by the user's reply. */
   blockedAt: string | null;
   /** Put off until then; out of the count while it is in the future. */
@@ -223,6 +232,60 @@ export interface MainMessageDto {
   at: string;
 }
 
+/** A tool call an agent finished, as its hooks reported it. */
+export interface SessionTurnStepDto {
+  tool: string;
+  /** What it ran on: a command or a file's name. */
+  detail: string | null;
+  failed: boolean;
+  durationMs: number | null;
+  at: string;
+}
+
+/**
+ * The turn an ACP agent is on, as far as it has come. Its finished messages
+ * are in `sessionMessages`; this is what is not written there yet.
+ */
+export interface AcpLiveDto {
+  working: boolean;
+  /** How many turns have ended since the agent's host started. */
+  turns: number;
+  /** What the turn said and did so far, in order. */
+  parts: Array<
+    | { kind: "text"; text: string }
+    | {
+        kind: "tool";
+        id: string;
+        title: string;
+        tool: string;
+        status: "pending" | "in_progress" | "completed" | "failed";
+      }
+  >;
+  /** The permission the agent waits on, when it does. */
+  permission: {
+    requestId: number | string;
+    title: string;
+    options: Array<{ id: string; name: string; kind: string }>;
+  } | null;
+  /** Messages sent during the turn, which run after it. */
+  queued: string[];
+  usage: { used: number; size: number } | null;
+  ended: boolean;
+}
+
+/** One turn of a session: from the user's prompt to the agent's stop. */
+export interface SessionTurnDto {
+  startedAt: string;
+  /** Null while the agent still works on it. */
+  endedAt: string | null;
+  /** Every tool call it finished, also those `steps` leaves out. */
+  toolCalls: number;
+  /** Its last tool calls, oldest first. */
+  steps: SessionTurnStepDto[];
+  /** The files it edited, as whole paths, each once. */
+  files: string[];
+}
+
 export interface ThreadPlanDto {
   path: string;
   title: string;
@@ -231,7 +294,7 @@ export interface ThreadPlanDto {
     key: string;
     id: string | null;
     title: string;
-    state: "todo" | "doing" | "done" | "blocked" | "dropped";
+    state: "draft" | "todo" | "doing" | "done" | "blocked" | "dropped";
     owner: string | null;
     depth: number;
   }[];
@@ -504,7 +567,7 @@ export interface WorkspaceFileDto {
 
 /** A plan file (`*.plan.md`) as its interactive view draws it. */
 export type PlanTaskStateDto =
-  "todo" | "doing" | "done" | "blocked" | "dropped";
+  "draft" | "todo" | "doing" | "done" | "blocked" | "dropped";
 
 /** An owner chip: `none` is a handle no session answers to. */
 export type PlanOwnerStateDto =
@@ -647,6 +710,97 @@ export interface PlanViewDto {
   hasTasksSection: boolean;
   absolutePath: string;
   owners: PlanOwnerDto[];
+}
+
+/** A block's state on the factory page. `waiting` waits for the user. */
+export type FactoryStateDto =
+  "draft" | "todo" | "doing" | "waiting" | "done" | "blocked" | "dropped";
+
+/** A task of a plan, or a step of the workflow run a task's session is in. */
+export interface FactoryBlockDto {
+  /** Unique in its plan. */
+  key: string;
+  /** `plan` is a whole plan, `agent` an agent, one block of who made it. */
+  kind: "task" | "step" | "plan" | "agent";
+  title: string;
+  state: FactoryStateDto;
+  owner: PlanOwnerDto | null;
+  /** A task: the step its session is at. A step: what came out of it. */
+  detail: string | null;
+  /** What the work is: a task's details in the plan, or a step's own. */
+  description: string | null;
+  /** What the task's worker handed back when it submitted; null for none. */
+  result: string | null;
+  /** Open threads pinned to the task. */
+  threads: number;
+  /** Questions for the user written under the task, while it is open. */
+  questions: string[];
+  /** The task's line in the plan file; null for a step. */
+  line: number | null;
+  /** Where it is drawn in its level; blocks sharing one run in parallel. */
+  column: number;
+  /** The keys of the blocks in its level it needs done first. */
+  needs: string[];
+  /** When a step was started; null for anything else and before it starts. */
+  startedAt: string | null;
+  inside: FactoryLevelDto | null;
+}
+
+/**
+ * A plan, a task's nested tasks, or a session's workflow run. `agent` is an
+ * agent with no run, `plans` the plans written in one step.
+ */
+export interface FactoryLevelDto {
+  kind: "plan" | "tasks" | "workflow" | "agent" | "plans";
+  title: string;
+  owner: PlanOwnerDto | null;
+  /** A plan's file, relative to the workspace. */
+  file?: string;
+  /** What is wrong with a plan's flow. */
+  flowErrors?: string[];
+  /** Whether the columns say what comes first. */
+  ordered: boolean;
+  blocks: FactoryBlockDto[];
+}
+
+export interface FactoryPlanDto {
+  /** Relative to the workspace. */
+  path: string;
+  absolutePath: string;
+  title: string;
+  state: "waiting" | "working" | "idle" | "done";
+  done: number;
+  total: number;
+  /** Blocks waiting for the user. */
+  waiting: number;
+  /** What is wrong with the plan's flow. */
+  flowErrors: string[];
+  level: FactoryLevelDto;
+}
+
+/** An agent of the workspace: its workflow run, with its plans inside. */
+export interface FactoryAgentRowDto {
+  sessionId: string;
+  title: string;
+  state: "waiting" | "working" | "idle" | "done";
+  waiting: number;
+  level: FactoryLevelDto;
+}
+
+/** A workspace's agents and plans, for the factory page. */
+export interface FactoryPageDto {
+  /**
+   * The agents nobody on the page started. What each wrote and started is
+   * inside it, under the step it came out of.
+   */
+  agents: FactoryAgentRowDto[];
+  /** The plans no listed agent owns. */
+  plans: FactoryPlanDto[];
+  /** Sessions working on some block now. */
+  working: number;
+  waiting: number;
+  /** Plans with every task done. */
+  finished: number;
 }
 
 export interface WorkspaceImageDto {
@@ -1540,6 +1694,8 @@ export interface DesktopSnapshotDto {
   unseenRoutineRuns?: number;
   /** Sessions that are a thread's fork; the sidebar and board leave them out. */
   threadForkIds?: string[];
+  /** Sessions started for one task of a plan; listed under who started them. */
+  planWorkerIds?: string[];
   /** Sign-in pages cloud sessions asked to open; absent outside the app. */
   cloudSignIns?: CloudSignInDto[];
   /** Workspaces whose cloud copy a new session waits for. */
@@ -1598,9 +1754,9 @@ export interface WorkflowStepRecordDto {
 }
 
 /** `index` and `topic` are the user's custom instruction files. */
-export type WorkflowFileKindDto = "flow" | "step" | "choosing";
+export type WorkflowFileKindDto = "flow" | "step" | "tool" | "choosing";
 
-/** One workflow or step file, as written and as Daedalus reads it. */
+/** One workflow, step or tool file, as written and as Daedalus reads it. */
 export interface WorkflowFileDto {
   name: string;
   path: string;
@@ -1617,14 +1773,41 @@ export interface WorkflowFileDto {
   dynamic?: boolean;
   loop?: string | null;
   gate?: "start" | "result" | null;
+  /** For a step: the tools it suggests to the agent, by name. */
+  tools?: string[];
+  /** For a step: what it learned from runs, proposed ones included. */
+  memories?: StepMemoryDto[];
+  /** Why the step's memory file cannot be read, when it cannot. */
+  memoryProblem?: string;
   /** Why the file cannot be used, when it cannot. */
   problem: string | null;
+}
+
+/**
+ * One thing a step learned from a run. Agents starting the step see it only
+ * once the user accepted it.
+ */
+export interface StepMemoryDto {
+  /** The instruction. */
+  text: string;
+  /** One sentence of what happened in the run that taught it. */
+  why: string;
+  runs: number;
+  /** `YYYY-MM-DD`. */
+  lastSeen: string;
+  workflow: string | null;
+  status: "proposed" | "accepted";
+  acceptedOn: string | null;
+  /** The one workflow it applies in; null for wherever the step runs. */
+  only: string | null;
 }
 
 export interface WorkflowFilesDto {
   root: string;
   flows: WorkflowFileDto[];
   steps: WorkflowFileDto[];
+  /** What an agent can use in a step: one file of instructions per tool. */
+  tools: WorkflowFileDto[];
   choosing: { path: string; text: string };
 }
 
@@ -1824,6 +2007,14 @@ export interface DesktopRpcSchema {
       threadPlan: Request<{ path: string }, ThreadPlanDto | null>;
       /** A session's main messages from its transcript, oldest first. */
       sessionMessages: Request<{ sessionId: string }, MainMessageDto[]>;
+      sessionTurns: Request<{ sessionId: string }, SessionTurnDto[]>;
+      /** The live turn of a session that runs over ACP. */
+      acpLive: Request<{ sessionId: string }, AcpLiveDto>;
+      /** Answers the permission an ACP agent waits on with one of its options. */
+      acpPermission: Request<
+        { sessionId: string; requestId: number | string; optionId: string },
+        null
+      >;
       /**
        * Opens a fork: on an open thread (`threadId`), the thread's own fork;
        * otherwise a new thread on a message in a session's main. A fork that
@@ -1833,10 +2024,42 @@ export interface DesktopRpcSchema {
         { sessionId: string; anchorId: string | null; threadId?: number },
         ThreadDto
       >;
+      /**
+       * The user asks a working session a question: a read-only fork
+       * answers and the session is not interrupted. Each question is a new
+       * thread; with `threadId` it goes to that thread's fork instead.
+       */
+      threadAsk: Request<
+        {
+          sessionId: string;
+          question: string;
+          threadId?: number;
+          /** The main message a new conversation is about. */
+          anchorId?: string;
+        },
+        ThreadDto
+      >;
+      /**
+       * Takes back a question its copy has not answered: stops the copy's
+       * turn. `stopped` is false when no copy was running.
+       */
+      threadStopAsk: Request<{ id: number }, { stopped: boolean }>;
+      /** What was said in a thread's fork, oldest first, without main's. */
+      threadConversation: Request<{ id: number }, MainMessageDto[]>;
       /** Archives an open thread's fork; the thread stays open. */
       threadCloseFork: Request<{ id: number }, ThreadDto>;
+      /** Puts a conversation with a copy away, into its agent's history. */
+      threadCloseConversation: Request<{ id: number }, ThreadDto>;
+      /** Brings a closed conversation back to its agent's list. */
+      threadReopenConversation: Request<{ id: number }, ThreadDto>;
       /** The fork's last reply: where a message to main starts. */
       threadForkDraft: Request<{ id: number }, { text: string }>;
+      /**
+       * Asks a thread's fork to write what main should be told: what was
+       * decided, why, and what to do. The answer is the handoff the user
+       * reads and sends with `threadSendToMain`.
+       */
+      threadHandoff: Request<{ id: number }, ThreadDto>;
       /** Sends the user's message from a fork thread to its main. */
       threadSendToMain: Request<{ id: number; text: string }, { text: string }>;
       /** The user resolves a thread; its owner is told, its fork archived. */
@@ -2399,6 +2622,8 @@ export interface DesktopRpcSchema {
        * for the side panel.
        */
       planList: Request<{ workspace: string }, PlanListDto>;
+      /** The workspace's plans as levels of blocks, with live owners. */
+      factoryView: Request<{ workspace: string }, FactoryPageDto>;
       /** Writes `plans/<slug>.plan.md`; the path is workspace-relative. */
       planCreate: Request<
         { workspace: string; title: string },
@@ -2518,7 +2743,7 @@ export interface DesktopRpcSchema {
         },
         AgentSessionDto
       >;
-      /** Every workflow and step and the choosing rules: the Workflows tab. */
+      /** Every workflow, step and tool and the choosing rules: the Workflows tab. */
       workflowFiles: Request<Record<string, never>, WorkflowFilesDto>;
       /**
        * Writes one workflow, step or the choosing rules. The text is checked
@@ -2534,7 +2759,15 @@ export interface DesktopRpcSchema {
         WorkflowFilesDto
       >;
       workflowFileDelete: Request<
-        { kind: "flow" | "step"; name: string },
+        { kind: "flow" | "step" | "tool"; name: string },
+        WorkflowFilesDto
+      >;
+      /**
+       * The user accepts a step's memory, forgets it, or promotes it into
+       * the step's instructions. The memory is named by its text.
+       */
+      stepMemoryChange: Request<
+        { step: string; text: string; action: "accept" | "forget" | "promote" },
         WorkflowFilesDto
       >;
       /** The custom instructions: the Custom instructions tab and pane. */
@@ -2640,6 +2873,8 @@ export interface DesktopRpcSchema {
         { provider: "claude" | "codex"; account: string }
       >;
       agentSend: Request<{ id: string; text: string }, AgentSessionDto>;
+      /** Presses escape in a session: the turn it is on ends. */
+      agentInterrupt: Request<{ id: string }, AgentSessionDto>;
       agentStop: Request<{ id: string; force: boolean }, AgentSessionDto>;
       agentRemove: Request<{ id: string }, AgentSessionDto>;
       /** Archived sessions only; deletes their worktrees and folder. */
@@ -2875,3 +3110,9 @@ export function inviteLink(relay: string, code: string): string {
   link.searchParams.set("invite", code);
   return link.toString();
 }
+
+/**
+ * How the note that asks a thread's fork for its handoff begins. The chat
+ * draws the fork's answer to it as the message to send to main.
+ */
+export const THREAD_HANDOFF_NOTE = "[Threads] Handoff:";
