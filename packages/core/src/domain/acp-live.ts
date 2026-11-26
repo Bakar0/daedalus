@@ -10,6 +10,8 @@ export interface AcpLive {
   working: boolean;
   /** How many turns have ended since the host started. */
   turns: number;
+  /** When the turn that is running, or ran last, started. */
+  turnStartedAt: string | null;
   /** What the turn said and did so far, in order. */
   parts: AcpLivePart[];
   /** The permission the agent waits on, when it does. */
@@ -50,6 +52,7 @@ export interface AcpLivePermission {
 export const emptyAcpLive = (): AcpLive => ({
   working: false,
   turns: 0,
+  turnStartedAt: null,
   parts: [],
   permission: null,
   queued: [],
@@ -140,6 +143,7 @@ export function reduceAcpLive(live: AcpLive, entry: AcpLogEntry): AcpLive {
         return {
           ...live,
           working: true,
+          turnStartedAt: entry.at,
           parts: [],
           permission: null,
           queued: at < 0 ? live.queued : live.queued.toSpliced(at, 1),

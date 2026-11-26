@@ -254,6 +254,8 @@ const acpSeen = new Map<string, string>();
 export async function detectAcpActivity(
   home: string,
   agent: AgentSession,
+  /** What is recorded of the agent now, when the caller knows it. */
+  stored?: { activity: string; since: string },
 ): Promise<ActivityObservation | undefined> {
   let acp = acpServices.get(home);
   if (!acp) acpServices.set(home, (acp = new AcpService(home)));
@@ -284,6 +286,16 @@ export async function detectAcpActivity(
       source: "hook",
       authoritative: true,
     };
+  // The provider's own hook says a turn is over a moment before its adapter
+  // answers the prompt. A look at the log in that moment still reads the turn
+  // as running, and writing that would end the same turn twice.
+  if (
+    live.working &&
+    stored?.activity === "done" &&
+    live.turnStartedAt &&
+    Date.parse(stored.since) >= Date.parse(live.turnStartedAt)
+  )
+    return undefined;
   if (live.working)
     return {
       activity: "working",
@@ -340,7 +352,11 @@ export async function sweepProviderActivity(input: {
   await Promise.all(
     live.map(async (agent) => {
       let observation = runsOverAcp(agent)
-        ? await detectAcpActivity(input.config.home, agent)
+        ? await detectAcpActivity(
+            input.config.home,
+            agent,
+            input.activity.get(agent.id),
+          )
         : agent.provider === "claude"
           ? await detectClaudeTranscriptActivity(input.config, agent)
           : await detectCodexRolloutActivity(
