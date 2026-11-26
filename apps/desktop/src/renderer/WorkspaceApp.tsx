@@ -254,6 +254,7 @@ import {
   waitingLabel,
   type SessionStatusView,
 } from "./session-view";
+import { agentTree } from "./agent-tree";
 import {
   sessionDisplayOrder,
   sessionDisplayRows,
@@ -292,8 +293,13 @@ const ChatTab = lazy(() =>
 const FactoryPage = lazy(() =>
   import("./FactoryPage").then((module) => ({ default: module.FactoryPage })),
 );
-const AgentPage = lazy(() =>
-  import("./AgentPage").then((module) => ({ default: module.AgentPage })),
+const AgentConversation = lazy(() =>
+  import("./AgentPage").then((module) => ({
+    default: module.AgentConversation,
+  })),
+);
+const AgentTreePane = lazy(() =>
+  import("./AgentPage").then((module) => ({ default: module.AgentTreePane })),
 );
 
 export { MarkdownPreview };
@@ -819,12 +825,15 @@ export const isLocalWebUrl = (url: string) => {
  * What the side panel can show, each a tab in its strip. At Home only the
  * file tree.
  */
-export type SidePanelTab = "files" | "git" | "tasks";
+export type SidePanelTab = "agents" | "files" | "git" | "tasks";
 const SIDE_PANEL_TAB_KEY = "daedalus.panel.tab";
 const storedSidePanelTab = (): SidePanelTab => {
   try {
     const stored = window.localStorage.getItem(SIDE_PANEL_TAB_KEY);
-    return stored === "files" || stored === "git" || stored === "tasks"
+    return stored === "agents" ||
+      stored === "files" ||
+      stored === "git" ||
+      stored === "tasks"
       ? stored
       : "tasks";
   } catch {
@@ -843,7 +852,15 @@ function SidePanelTabIcon({ tab }: { tab: SidePanelTab }) {
       strokeWidth="1.3"
       viewBox="0 0 16 16"
     >
-      {tab === "files" ? (
+      {tab === "agents" ? (
+        // One agent and the two it created.
+        <>
+          <circle cx="8" cy="3.5" r="1.8" />
+          <circle cx="4" cy="12.5" r="1.8" />
+          <circle cx="12" cy="12.5" r="1.8" />
+          <path d="M8 5.3v2.7M4 10.7V8h8v2.7" />
+        </>
+      ) : tab === "files" ? (
         <path d="M5.5 1.5h5l3 3v7h-8zM10.5 1.5v3h3M3.5 4.5v10h7" />
       ) : tab === "git" ? (
         // VS Code's Source Control mark: three commits and a branch.
@@ -4206,6 +4223,13 @@ export function WorkspaceApp({
   // A plan's workers sit under the agent that started them.
   const planWorkerIds = new Set(snapshot?.planWorkerIds ?? []);
   const agents = allAgents.filter((session) => !threadForkIds.has(session.id));
+  // The agent page: the sidebar lists the agents the user started, and the
+  // side panel has the tree of agents each of them created.
+  const agentPageOn = Boolean(snapshot?.settings.agentPage);
+  const agentsTree = agentTree(
+    agents.filter((item) => !item.archivedAt),
+    snapshot?.teams ?? [],
+  );
   const inScope = (id: string) => id === workspaceId;
   const allTasks = (snapshot?.tasks ?? []).filter((item) =>
     inScope(item.workspaceId),
@@ -5668,8 +5692,6 @@ export function WorkspaceApp({
   // from Home's file tree shows in the editor instead, until a page is
   // picked again.
   const [homeOpening, setHomeOpening] = useState(false);
-  // The older layout shows over the agent page, for what has not moved yet.
-  const [agentPageAway, setAgentPageAway] = useState(false);
   const [homePage, setHomePage] = useState<
     "routines" | "methods" | "instructions" | "files"
   >("routines");
@@ -6252,7 +6274,9 @@ export function WorkspaceApp({
             // A live agent opens in its window over the Factory: its thread,
             // with its terminal one switch away. One that must be woken or
             // restored first opens as a session.
+            // With the agent page on it opens as its page, in the middle.
             if (
+              !agentPageOn &&
               session.kind === "agent" &&
               !session.archivedAt &&
               session.status === "running"
@@ -6887,9 +6911,19 @@ export function WorkspaceApp({
         }
       >
         {(reorder) => {
-          const ordered = reorder.order.flatMap(
-            (id) => liveSessions.find((session) => session.id === id) ?? [],
-          );
+          const ordered = reorder.order
+            .flatMap(
+              (id) => liveSessions.find((session) => session.id === id) ?? [],
+            )
+            // With the agent page on, an agent another one created shows
+            // in the side panel's tree, and here only when pinned.
+            .filter(
+              (session) =>
+                !agentPageOn ||
+                session.pinnedAt ||
+                agentsTree.rootOf(session.id) === session.id ||
+                agentsTree.rootOf(session.id) === undefined,
+            );
           // Leads keep their rows; a team's members fold into dots on its
           // lead, so a list of many teams reads as its leads.
           const grouped = foldMemberRows(
@@ -8514,10 +8548,16 @@ export function WorkspaceApp({
       ? frontChatSession
       : activeSession;
   // Home's side panel is its file tree alone: the Daedalus home folder.
-  const shownPanelTab: SidePanelTab = atHome ? "files" : panelTab;
-  const sidePanelTabs = SIDE_PANEL_TABS.filter(
-    ([tab]) => !atHome || tab === "files",
-  );
+  const shownPanelTab: SidePanelTab = atHome
+    ? "files"
+    : panelTab === "agents" && !agentPageOn
+      ? "tasks"
+      : panelTab;
+  const sidePanelTabs: readonly (readonly [SidePanelTab, string])[] = [
+    // The agents the one on screen created, with the agent page on.
+    ...(agentPageOn && !atHome ? [["agents", "Agents"] as const] : []),
+    ...SIDE_PANEL_TABS.filter(([tab]) => !atHome || tab === "files"),
+  ];
   /** The Routines page, in its own tab or as Home's page. */
   const renderRoutinesHome = () => (
     <RoutinesHome
@@ -8600,13 +8640,6 @@ export function WorkspaceApp({
     },
     accountModels: target.accountModels,
   });
-  // The agent page takes the whole window; Home's pages and the Factory
-  // still show in the older layout until they move into it.
-  const agentPageShown =
-    Boolean(snapshot?.settings.agentPage) &&
-    view !== "world" &&
-    !atHome &&
-    !agentPageAway;
   const startFromFactory = async (
     target: WorkspaceDto,
     text: string,
@@ -8882,6 +8915,57 @@ export function WorkspaceApp({
     [error],
   );
 
+  // With the agent page on, an agent shows as its conversation, and its
+  // terminal is one button away inside it.
+  const shownSessionPane =
+    agentPageOn && activeSession?.kind === "agent" ? (
+      <section className="terminal-column">
+        <Suspense fallback={null}>
+          <AgentConversation
+            client={client}
+            key={activeSession.id}
+            meta={[
+              providerLabel(activeSession.provider),
+              telemetryById.get(activeSession.id)?.model,
+              telemetryById.get(activeSession.id)?.context?.usedPercent ===
+              undefined
+                ? undefined
+                : `${Math.round(telemetryById.get(activeSession.id)!.context!.usedPercent!)}% of context used`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            renderChat={(request, onTabChange) => (
+              <ChatTab
+                client={client}
+                handle={activeSession.teamHandle ?? sessionName(activeSession)}
+                headless
+                live={agentLive(activeSession.id)}
+                liveOf={agentLive}
+                onError={setError}
+                onOpenLink={openTerminalLink}
+                onOpenSession={(id) =>
+                  showSession(id, activeSession.workspaceId)
+                }
+                onTabChange={onTabChange}
+                onTerminal={noteWindowTerminal}
+                renderTerminal={renderAgentTerminal}
+                request={request}
+                sessionId={activeSession.id}
+                terminalRelease={
+                  terminalRelease?.sessionId === activeSession.id
+                    ? terminalRelease.nonce
+                    : undefined
+                }
+                workspaceId={activeSession.workspaceId}
+              />
+            )}
+            session={activeSession}
+          />
+        </Suspense>
+      </section>
+    ) : (
+      sessionPane
+    );
   return (
     <AppContexts
       dialogError={dialogError}
@@ -8938,94 +9022,8 @@ export function WorkspaceApp({
           )}
         </div>
 
-        {agentPageShown && (
-          <div className="workspace-shell">
-            <Suspense fallback={null}>
-              <AgentPage
-                agents={agents.filter(
-                  (item) => !item.archivedAt && item.kind === "agent",
-                )}
-                client={client}
-                metaOf={(session) => {
-                  const telemetry = telemetryById.get(session.id);
-                  const used = telemetry?.context?.usedPercent;
-                  return [
-                    providerLabel(session.provider),
-                    telemetry?.model,
-                    used === undefined
-                      ? undefined
-                      : `${Math.round(used)}% of context used`,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ");
-                }}
-                onFactory={(session) => {
-                  // Prototype: the Factory opens in the older layout.
-                  setAgentPageAway(true);
-                  enterWorkspace(session.workspaceId, "workspace");
-                  files.withEditor((editor) => {
-                    editor.openFactory();
-                    setBoxRequest({
-                      sessionId: session.id,
-                      nonce: Date.now(),
-                    });
-                  });
-                }}
-                onHome={(page) => void openAtHome(page)}
-                onSettings={() => {
-                  setSettingsSection("general");
-                  setModal("settings");
-                }}
-                onStart={startFromFactory}
-                onWorkspace={(id) => {
-                  if (id !== workspaceId) setWorkspaceId(id);
-                }}
-                renderChat={(session, request, onTabChange) => (
-                  <ChatTab
-                    client={client}
-                    handle={session.teamHandle ?? sessionName(session)}
-                    headless
-                    key={session.id}
-                    live={agentLive(session.id)}
-                    liveOf={agentLive}
-                    onError={setError}
-                    onOpenLink={openTerminalLink}
-                    onOpenSession={() => undefined}
-                    onTabChange={onTabChange}
-                    onTerminal={noteWindowTerminal}
-                    renderTerminal={renderAgentTerminal}
-                    request={request}
-                    sessionId={session.id}
-                    terminalRelease={
-                      terminalRelease?.sessionId === session.id
-                        ? terminalRelease.nonce
-                        : undefined
-                    }
-                    workspaceId={session.workspaceId}
-                  />
-                )}
-                runOf={(id) => workflowRunsBySession.get(id)}
-                selectedId={highlightedSessionId}
-                startOptionsOf={startOptionsOf}
-                statusOf={statusViewFor}
-                teams={snapshot?.teams ?? []}
-                workspaces={orderedWorkspaces}
-              />
-            </Suspense>
-          </div>
-        )}
-        {agentPageAway && snapshot?.settings.agentPage && (
-          <button
-            className="agent-page-back"
-            onClick={() => setAgentPageAway(false)}
-            type="button"
-          >
-            Back to the agent page
-          </button>
-        )}
         <div
           className={`workspace-shell mode-${view} ${workspacePanelVisible ? "has-workspace-panel" : ""}`}
-          style={agentPageShown ? { display: "none" } : undefined}
         >
           <aside
             aria-label="Sidebar"
@@ -9686,7 +9684,7 @@ export function WorkspaceApp({
                 onAppPanelClosed={(kind) => {
                   if (kind === "task") closeTaskDrawer();
                 }}
-                renderSession={() => sessionPane}
+                renderSession={() => shownSessionPane}
                 sessionTitle={
                   activeSession
                     ? sessionName(activeSession)
@@ -9927,7 +9925,9 @@ export function WorkspaceApp({
                 }}
                 loadingContent={
                   view === "session" ? (
-                    <div className="app-panel session-panel">{sessionPane}</div>
+                    <div className="app-panel session-panel">
+                      {shownSessionPane}
+                    </div>
                   ) : view === "board" && selectedTask ? (
                     <div className="app-panel task-panel">{taskPage}</div>
                   ) : view === "board" ? (
@@ -10070,7 +10070,25 @@ export function WorkspaceApp({
                   </button>
                 )}
               </div>
-              {workspacePanelCollapsed ? null : shownPanelTab === "files" ? (
+              {workspacePanelCollapsed ? null : shownPanelTab === "agents" ? (
+                <Suspense fallback={null}>
+                  <AgentTreePane
+                    onSelect={(session) =>
+                      showSession(session.id, session.workspaceId)
+                    }
+                    root={
+                      activeSession
+                        ? agentsTree.nodeOf(
+                            agentsTree.rootOf(activeSession.id) ?? "",
+                          )
+                        : undefined
+                    }
+                    runOf={(id) => workflowRunsBySession.get(id)}
+                    selected={activeSession}
+                    statusOf={statusViewFor}
+                  />
+                </Suspense>
+              ) : shownPanelTab === "files" ? (
                 !workspaceContent ||
                 workspaceContent.workspaceId !== workspace.id ? (
                   <div className="empty">Loading files…</div>
