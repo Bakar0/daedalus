@@ -1,6 +1,5 @@
 import {
   openThreads,
-  closedThreads,
   isAgentThread,
   threadMark,
   waitingBySession,
@@ -6501,22 +6500,21 @@ export function WorkspaceApp({
       </div>
     );
   };
-  /** Shows the Factory with an agent's chat open over it. */
+  /** Shows an agent's chat in its tab, on one of its threads. */
   const openChatPopup = (session: AgentSessionDto, tab: ChatTabId) => {
     // The session stays as it is: showing it would bring its terminal's tab
-    // to the front, over the Factory.
+    // to the front, over the chat.
     if (session.workspaceId !== workspaceId)
       enterWorkspace(session.workspaceId, "workspace");
+    const name = session.teamHandle ?? sessionName(session);
     files.withEditor((handle) => {
-      // An agent's window lives in one place: the tab the user moved it
-      // to, or over the Factory.
-      const docked = handle.focusChat(session.id);
-      if (!docked) handle.openFactory();
+      // An agent's chat lives in one place: its tab.
+      if (!handle.focusChat(session.id)) handle.openChat(session.id, name);
       setChatRequest({
         sessionId: session.id,
-        handle: session.teamHandle ?? sessionName(session),
+        handle: name,
         tab,
-        docked,
+        docked: true,
         nonce: Date.now(),
       });
     });
@@ -6581,8 +6579,9 @@ export function WorkspaceApp({
   const renderConversations = (session: AgentSessionDto, depth = 0) => {
     if (session.kind !== "agent" || session.archivedAt) return null;
     const open = openThreads(allThreads, session.id);
-    const closed = closedThreads(allThreads, session.id);
-    if (open.length === 0 && closed.length === 0) return null;
+    // No row without an open thread. Closed ones are in the chat's own
+    // History.
+    if (open.length === 0) return null;
     const show = (next: ChatTabId) => openChatPopup(session, next);
     const folded = foldedChats.has(session.id);
     const marks = new Map(
@@ -6594,9 +6593,7 @@ export function WorkspaceApp({
     const count = (mark: ThreadMark) =>
       [...marks.values()].filter((one) => one === mark).length;
     const summary = [
-      open.length
-        ? `${open.length} ${open.length === 1 ? "thread" : "threads"}`
-        : "No open threads",
+      `${open.length} ${open.length === 1 ? "thread" : "threads"}`,
       count("asks")
         ? `${count("asks")} ${count("asks") === 1 ? "asks" : "ask"} you`
         : "",
@@ -6685,19 +6682,6 @@ export function WorkspaceApp({
             </div>
           );
         })}
-        {closed.length > 0 && !folded && (
-          <button
-            className="session-conversation-new"
-            onClick={() => show("history")}
-            title={`Threads with ${sessionName(session)} that were closed or resolved`}
-            type="button"
-          >
-            <span aria-hidden="true" className="session-conversation-mark">
-              ◷
-            </span>
-            History ({closed.length})
-          </button>
-        )}
       </div>
     );
   };
@@ -9615,20 +9599,6 @@ export function WorkspaceApp({
                           files.withEditor((editor) => {
                             editor.openFactory();
                             setBoxRequest({ sessionId, nonce: Date.now() });
-                          })
-                        }
-                        onMoveBack={(tab, view) =>
-                          files.withEditor((editor) => {
-                            editor.closeChat(sessionId);
-                            editor.openFactory();
-                            setChatRequest({
-                              sessionId,
-                              handle,
-                              tab,
-                              view,
-                              docked: false,
-                              nonce: Date.now(),
-                            });
                           })
                         }
                         request={

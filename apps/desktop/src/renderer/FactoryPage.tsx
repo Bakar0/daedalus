@@ -1499,10 +1499,17 @@ export function FactoryPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boxRequest?.nonce, loaded]);
   const { threads, reload } = useWorkspaceThreads(client, workspaceId);
+  // With somewhere to open a chat as a tab, no window floats over the
+  // page, also none an earlier version left open.
   const [chats, setChats] = useState<ChatWindow[]>(() =>
-    storedChats(workspaceId),
+    onOpenChatTab ? [] : storedChats(workspaceId),
   );
-  useEffect(() => setChats(storedChats(workspaceId)), [workspaceId]);
+  useEffect(
+    () => setChats(onOpenChatTab ? [] : storedChats(workspaceId)),
+    // `onOpenChatTab` is the app's and changes each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [workspaceId],
+  );
   const frontChat = chats
     .filter((chat) => !chat.minimized)
     .reduce<ChatWindow | undefined>(
@@ -1529,6 +1536,8 @@ export function FactoryPage({
     }
   };
   const openChat = (agent: FactoryAgent, about: string, draft?: string) => {
+    if (onOpenChatTab)
+      return onOpenChatTab(agent.sessionId, agent.handle, "agent", "thread");
     const now = open.current;
     const front = Math.max(0, ...now.map((chat) => chat.order)) + 1;
     keep(
@@ -1545,6 +1554,8 @@ export function FactoryPage({
   useEffect(() => {
     if (!chatRequest) return;
     const { sessionId, handle, tab, view } = chatRequest;
+    if (onOpenChatTab)
+      return onOpenChatTab(sessionId, handle, tab, view ?? "thread");
     const now = open.current;
     const front = Math.max(0, ...now.map((chat) => chat.order)) + 1;
     keep(
