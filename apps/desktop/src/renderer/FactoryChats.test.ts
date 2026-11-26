@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionTurnDto, ThreadDto } from "@daedalus/protocol";
 import {
+  answerPlace,
   chatItems,
   closedThreads,
   firstLine,
@@ -416,4 +417,23 @@ test("a question about a message is shown without the note the copy gets", () =>
     ),
   ).toEqual({ question: "Why 20?", about: "The cap is 20 carts." });
   expect(splitAbout("Why 20?")).toEqual({ question: "Why 20?" });
+});
+
+describe("answerPlace", () => {
+  const live = (state: string, asked: boolean) => ({
+    state,
+    detail: null,
+    since: "2026-11-26T08:00:00Z",
+    asked,
+  });
+
+  test("a question the agent wrote is answered in the chat", () => {
+    expect(answerPlace(live("needs_input", true))).toBe("chat");
+  });
+
+  test("a prompt the provider draws is answered in the terminal", () => {
+    expect(answerPlace(live("needs_input", false))).toBe("terminal");
+    // A permission has keys to press, whatever else the agent asked.
+    expect(answerPlace(live("needs_permission", true))).toBe("terminal");
+  });
 });

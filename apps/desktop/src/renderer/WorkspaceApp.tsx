@@ -6539,6 +6539,14 @@ export function WorkspaceApp({
       state: activity.activity,
       detail: activity.detail,
       since: activity.since,
+      // A reason the agent wrote is its question; one Daedalus inferred
+      // stands for a prompt drawn in the terminal.
+      asked:
+        attentionById
+          .get(sessionId)
+          ?.reasons.some(
+            (reason) => reason.source === "agent" && !reason.generated,
+          ) ?? false,
       step:
         run && at >= 0
           ? `${run.steps[at]!.name} · step ${at + 1} of ${run.steps.length}`

@@ -159,7 +159,20 @@ export interface AgentLive {
   since: string;
   /** Its workflow step, such as `build · step 3 of 7`. */
   step?: string | undefined;
+  /**
+   * The agent raised the wait itself with a question in words (`daedal
+   * attention`), so a typed message answers it.
+   */
+  asked?: boolean | undefined;
 }
+
+/**
+ * Where the user answers a waiting agent. Its own question in words is
+ * answered by a message, written in the chat. A permission, or a question
+ * the provider draws with its choices, exists only in the terminal.
+ */
+export const answerPlace = (live: AgentLive): "chat" | "terminal" =>
+  live.state === "needs_input" && live.asked ? "chat" : "terminal";
 
 /** A row of the agent's own chat: a message, or a turn's work folded away. */
 export type ChatRow =
@@ -1234,6 +1247,8 @@ function Chat({
   threads: readonly ThreadDto[];
 }) {
   const [text, setText] = useState("");
+  // The box a waiting agent's own question is answered in.
+  const replyBox = useRef<HTMLTextAreaElement>(null);
   const [busy, setBusy] = useState(false);
   const draft = chat.draft;
   useEffect(() => {
@@ -2092,14 +2107,24 @@ function Chat({
                     {live.detail ? `: ${live.detail}` : ""}
                   </span>
                 )}
-                {canTerminal && (
+                {answerPlace(live) === "chat" ? (
                   <button
                     className="chat-ask-go"
-                    onClick={() => onChange({ view: "terminal" })}
+                    onClick={() => replyBox.current?.focus()}
                     type="button"
                   >
-                    Answer in its terminal
+                    Answer here
                   </button>
+                ) : (
+                  canTerminal && (
+                    <button
+                      className="chat-ask-go"
+                      onClick={() => onChange({ view: "terminal" })}
+                      type="button"
+                    >
+                      Answer in its terminal
+                    </button>
+                  )
                 )}
                 <span className="chat-working-time">
                   {elapsed(live.since, now)}
@@ -2165,6 +2190,7 @@ function Chat({
         )}
         <footer className="chat-foot" hidden={tab === "history"}>
           <textarea
+            ref={replyBox}
             aria-label={`Message @${chat.handle}`}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
@@ -2181,11 +2207,13 @@ function Chat({
                 ? "Ask the fork…"
                 : waiting
                   ? "Or write your own answer…"
-                  : own
-                    ? `Write to @${chat.handle} in this thread…`
-                    : working
-                      ? `Queue another message for @${chat.handle}…`
-                      : `Tell @${chat.handle} what to do…`
+                  : tab === "agent" && live && answerPlace(live) === "chat"
+                    ? `Answer @${chat.handle}…`
+                    : own
+                      ? `Write to @${chat.handle} in this thread…`
+                      : working
+                        ? `Queue another message for @${chat.handle}…`
+                        : `Tell @${chat.handle} what to do…`
             }
             rows={Math.min(6, Math.max(1, text.split("\n").length))}
             value={text}
