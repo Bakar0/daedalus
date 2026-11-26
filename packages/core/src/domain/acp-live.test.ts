@@ -129,22 +129,24 @@ describe("reduceAcpLive", () => {
     expect(run([host({ type: "turn_end" })], asked).permission).toBeNull();
   });
 
-  test("queued messages wait, run in turn, and are dropped by a stop", () => {
+  test("queued messages wait and run in turn, through a stop too", () => {
     const waiting = run([
       host({ type: "turn_start", text: "one" }),
       host({ type: "queued", text: "two" }),
       host({ type: "queued", text: "three" }),
     ]);
     expect(waiting.queued).toEqual(["two", "three"]);
+    const stopped = run(
+      [client({ method: "session/cancel", params: {} })],
+      waiting,
+    );
+    expect(stopped.queued).toEqual(["two", "three"]);
     expect(
       run(
         [host({ type: "turn_end" }), host({ type: "turn_start", text: "two" })],
-        waiting,
-      ).queued,
-    ).toEqual(["three"]);
-    expect(
-      run([client({ method: "session/cancel", params: {} })], waiting).queued,
-    ).toEqual([]);
+        stopped,
+      ),
+    ).toMatchObject({ queued: ["three"], turns: 1, working: true });
   });
 
   test("reads the context use and the host's exit", () => {

@@ -1,7 +1,7 @@
 import { AcpService } from "./acp";
 import type { DaedalusConfig } from "../config";
 import { accountConfig } from "./account-homes";
-import { isAttentionActivity, type AgentSession } from "../domain";
+import { isAttentionActivity, runsOverAcp, type AgentSession } from "../domain";
 import type { TmuxClient } from "@daedalus/platform";
 import type { SqliteRepositories } from "../repositories";
 import type { ActivityService } from "./activity";
@@ -265,7 +265,7 @@ export async function detectAcpActivity(
     ? `permission:${live.permission.requestId}`
     : live.working
       ? `working:${lastTool?.kind === "tool" ? lastTool.id : ""}`
-      : `idle:${live.parts.length}`;
+      : `idle:${live.turns}`;
   const before = acpSeen.get(agent.id);
   acpSeen.set(agent.id, reading);
   if (before === reading)
@@ -293,7 +293,7 @@ export async function detectAcpActivity(
     };
   // No turn has run since this host started, so the agent is not in one:
   // a reading of a turn from before the host restarted is over.
-  if (live.parts.length === 0 && before === undefined)
+  if (live.turns === 0 && before === undefined)
     return {
       activity: "idle",
       source: "hook",
@@ -332,19 +332,22 @@ export async function sweepProviderActivity(input: {
       (agent.provider === "codex" || agent.provider === "claude") &&
       (agent.status === "running" || agent.status === "starting"),
   );
+  // What was read of sessions that are over is forgotten.
+  const liveIds = new Set(live.map((agent) => agent.id));
+  for (const id of acpSeen.keys()) if (!liveIds.has(id)) acpSeen.delete(id);
+  acpServices.get(input.config.home)?.keepOnly(liveIds);
   let applied = 0;
   await Promise.all(
     live.map(async (agent) => {
-      let observation =
-        agent.runner === "acp"
-          ? await detectAcpActivity(input.config.home, agent)
-          : agent.provider === "claude"
-            ? await detectClaudeTranscriptActivity(input.config, agent)
-            : await detectCodexRolloutActivity(
-                input.config,
-                agent,
-                input.repositories,
-              );
+      let observation = runsOverAcp(agent)
+        ? await detectAcpActivity(input.config.home, agent)
+        : agent.provider === "claude"
+          ? await detectClaudeTranscriptActivity(input.config, agent)
+          : await detectCodexRolloutActivity(
+              input.config,
+              agent,
+              input.repositories,
+            );
       // The pane is asked only when the cheaper tiers had nothing and the
       // session is still reading `working`: the one state it may retract or
       // keep alive, and the one an instant escape leaves behind.
@@ -352,7 +355,7 @@ export async function sweepProviderActivity(input: {
         !observation &&
         input.tmux &&
         // An ACP agent's pane is its host's, with nothing to read.
-        agent.runner !== "acp" &&
+        !runsOverAcp(agent) &&
         agent.provider === "claude" &&
         input.activity.get(agent.id)?.activity === "working"
       )

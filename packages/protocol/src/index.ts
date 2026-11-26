@@ -248,6 +248,8 @@ export interface SessionTurnStepDto {
  */
 export interface AcpLiveDto {
   working: boolean;
+  /** How many turns have ended since the agent's host started. */
+  turns: number;
   /** What the turn said and did so far, in order. */
   parts: Array<
     | { kind: "text"; text: string }

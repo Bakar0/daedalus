@@ -132,6 +132,40 @@ describe("AcpHost", () => {
     );
   });
 
+  test("a conversation that cannot be loaded starts again", async () => {
+    const { service } = await startHost({ load: "never-written" });
+    expect((await service.waitReady(SESSION, 5_000)).acpSessionId).toBe(
+      "fake-1",
+    );
+    const entries = await until(service, () => true);
+    expect(hostEvents(entries)).toContainEqual({
+      type: "error",
+      message: "No such session",
+    });
+  });
+
+  test("stopped in a turn, it logs the turn's end and then its exit, and runs nothing more", async () => {
+    const { service, done } = await startHost({ prompt: "slow work" });
+    await until(service, (seen) => agentText(seen) === "working");
+    await service.prompt(SESSION, "never runs");
+    await service.stop(SESSION);
+    await done;
+    const events = hostEvents(await until(service, () => true)).filter(
+      (event) => event.type !== "stderr",
+    );
+    expect(events.slice(-2)).toEqual([
+      { type: "turn_end", error: "The agent exited" },
+      { type: "exit", code: 0 },
+    ]);
+    expect(events.filter((event) => event.type === "turn_start")).toHaveLength(
+      1,
+    );
+    expect(await service.live(SESSION)).toMatchObject({
+      working: false,
+      ended: true,
+    });
+  });
+
   test("a prompt sent during a turn waits for that turn", async () => {
     const { service } = await startHost();
     await service.waitReady(SESSION, 5_000);
@@ -181,23 +215,20 @@ describe("AcpHost", () => {
     );
   });
 
-  test("cancel ends the turn, answers an open permission and drops what waited", async () => {
+  test("cancel ends the turn only: an open permission is answered and what waited runs", async () => {
     const { service } = await startHost({ prompt: "slow work" });
     await until(service, (seen) => agentText(seen) === "working");
-    await service.prompt(SESSION, "never runs");
+    await service.prompt(SESSION, "after the stop");
     await service.cancel(SESSION);
     const entries = await until(
       service,
-      (seen) => turnsEnded(seen).length === 1,
+      (seen) => turnsEnded(seen).length === 2,
     );
     expect(turnsEnded(entries)).toEqual([
       { type: "turn_end", stopReason: "cancelled" },
+      { type: "turn_end", stopReason: "end_turn" },
     ]);
-    await Bun.sleep(100);
-    const after = await until(service, () => true);
-    expect(
-      hostEvents(after).filter((event) => event.type === "turn_start"),
-    ).toHaveLength(1);
+    expect(agentText(entries)).toBe("workingyou said: after the stop");
 
     await service.prompt(SESSION, "permission please");
     await until(service, (seen) =>
@@ -208,7 +239,7 @@ describe("AcpHost", () => {
       ),
     );
     await service.cancel(SESSION);
-    const last = await until(service, (seen) => turnsEnded(seen).length === 2);
+    const last = await until(service, (seen) => turnsEnded(seen).length === 3);
     expect(
       last.some(
         (entry) =>
@@ -294,6 +325,64 @@ describe("AcpService.events", () => {
     await Bun.write(log, `${line(9)}\n`);
     const again = await service.events(SESSION, second.offset);
     expect(again.entries.map((entry) => entry.seq)).toEqual([9]);
+  });
+
+  test("live starts over on a new log, and skips a line that is not an entry", async () => {
+    const home = await mkdtemp(join(tmpdir(), "daedalus-acp-"));
+    homes.push(home);
+    const { log, directory } = acpPaths(home, SESSION);
+    await Bun.write(join(directory, ".keep"), "");
+    const entry = (seq: number, event: object) =>
+      JSON.stringify({
+        seq,
+        at: "2026-01-01T00:00:00.000Z",
+        from: "host",
+        event,
+      });
+    await Bun.write(
+      log,
+      [
+        entry(1, { type: "turn_start", text: "one" }),
+        '{"seq":2,"from":"host"}',
+        '{"seq":3}',
+        entry(4, { type: "exit", code: 0 }),
+        "",
+      ].join("\n"),
+    );
+    // Two readers, as the app's chat and its state sweep are.
+    const chat = new AcpService(home);
+    const sweep = new AcpService(home);
+    expect(await chat.live(SESSION)).toMatchObject({ ended: true });
+    expect(await sweep.live(SESSION)).toMatchObject({ ended: true });
+    // A relaunch through one of them: a new file, longer than the old one.
+    await chat.remove(SESSION);
+    await Bun.write(
+      log,
+      [
+        ...Array.from({ length: 8 }, (_, index) =>
+          entry(index + 1, { type: "stderr", text: "replaying" }),
+        ),
+        entry(9, { type: "turn_start", text: "two" }),
+        "",
+      ].join("\n"),
+    );
+    for (const reader of [chat, sweep])
+      expect(await reader.live(SESSION)).toMatchObject({
+        working: true,
+        ended: false,
+      });
+    await sweep.remove(SESSION);
+    expect(await chat.live(SESSION)).toMatchObject({
+      working: false,
+      turns: 0,
+    });
+  });
+
+  test("the log is the owner's only", async () => {
+    const { home, service } = await startHost();
+    await service.waitReady(SESSION, 5_000);
+    const { log } = acpPaths(home, SESSION);
+    expect((await Bun.file(log).stat()).mode & 0o777).toBe(0o600);
   });
 
   test("writes the launch file for the owner only", async () => {

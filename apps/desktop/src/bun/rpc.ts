@@ -893,11 +893,14 @@ export function createDesktopRequestHandlers(
         turnsFromSteps(context.repositories.sessionSteps.forSession(sessionId)),
       ),
     acpLive: ({ sessionId }) =>
-      result(() => context.agents.acp.live(sessionId)),
+      // By the session's own id, so nothing a caller sends names a file.
+      result(async () =>
+        context.agents.acp.live((await context.agents.get(sessionId)).id),
+      ),
     acpPermission: ({ sessionId, requestId, optionId }) =>
       mutate(async () => {
         await context.agents.acp.answerPermission(
-          sessionId,
+          (await context.agents.get(sessionId)).id,
           requestId,
           optionId,
         );

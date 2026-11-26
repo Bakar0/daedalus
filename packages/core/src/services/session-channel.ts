@@ -1,6 +1,10 @@
 import { AcpService } from "./acp";
 import type { DaedalusConfig } from "../config";
-import type { AgentActivityState, AgentSession } from "../domain";
+import {
+  runsOverAcp,
+  type AgentActivityState,
+  type AgentSession,
+} from "../domain";
 import { DaedalusError } from "../errors";
 import type { DeliveryGate, DeliveryHold } from "./delivery";
 import { buildSkillInvocation } from "./providers";
@@ -120,11 +124,13 @@ export class SessionChannel {
     line: DeliveryLine,
     options: DeliveryOptions,
   ): Promise<DeliveryResult> {
-    if (session.runner === "acp") {
+    if (runsOverAcp(session)) {
       // An ACP agent takes it as a turn, which its host runs after the one
-      // it is on: there is no pane to read and nothing to type.
+      // it is on: there is no pane to read and nothing to type. Stop does
+      // not drop it, so what is delivered here does arrive.
+      const text = await resolve(line);
       try {
-        await this.acp.prompt(session.id, await resolve(line));
+        await this.acp.prompt(session.id, text);
       } catch {
         return held({
           reason: "busy",

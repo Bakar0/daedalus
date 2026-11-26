@@ -8,6 +8,8 @@ import type { AcpLogEntry } from "../services/acp-host";
 export interface AcpLive {
   /** A turn is running. */
   working: boolean;
+  /** How many turns have ended since the host started. */
+  turns: number;
   /** What the turn said and did so far, in order. */
   parts: AcpLivePart[];
   /** The permission the agent waits on, when it does. */
@@ -47,6 +49,7 @@ export interface AcpLivePermission {
 
 export const emptyAcpLive = (): AcpLive => ({
   working: false,
+  turns: 0,
   parts: [],
   permission: null,
   queued: [],
@@ -143,7 +146,12 @@ export function reduceAcpLive(live: AcpLive, entry: AcpLogEntry): AcpLive {
         };
       }
       case "turn_end":
-        return { ...live, working: false, permission: null };
+        return {
+          ...live,
+          working: false,
+          permission: null,
+          turns: live.turns + 1,
+        };
       case "queued":
         return { ...live, queued: [...live.queued, event.text] };
       case "exit":
@@ -167,8 +175,6 @@ export function reduceAcpLive(live: AcpLive, entry: AcpLogEntry): AcpLive {
       message.id === live.permission.requestId
     )
       return { ...live, permission: null };
-    // Stop drops what waited behind the turn.
-    if (message.method === "session/cancel") return { ...live, queued: [] };
     return live;
   }
   if (message.method === "session/update")

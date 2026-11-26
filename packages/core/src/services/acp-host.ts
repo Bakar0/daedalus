@@ -115,6 +115,77 @@ const isObject = (value: unknown): value is JsonObject =>
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+/** A JSON-RPC message as the adapter sent it, or undefined when it is not one. */
+export function parseAcpMessage(value: unknown): AcpMessage | undefined {
+  if (!isObject(value)) return undefined;
+  const { id, method, params, result, error } = value;
+  if (id !== undefined && typeof id !== "number" && typeof id !== "string")
+    return undefined;
+  if (method !== undefined && typeof method !== "string") return undefined;
+  return {
+    ...(id === undefined ? {} : { id }),
+    ...(method === undefined ? {} : { method }),
+    ...(isObject(params) ? { params } : {}),
+    ...(result === undefined ? {} : { result }),
+    ...(isObject(error)
+      ? {
+          error: {
+            code: typeof error.code === "number" ? error.code : 0,
+            message:
+              typeof error.message === "string"
+                ? error.message
+                : "The agent reported an error",
+          },
+        }
+      : {}),
+  };
+}
+
+/** A launch file's contents, or undefined when they are not a launch. */
+export function parseAcpLaunch(value: unknown): AcpLaunch | undefined {
+  if (!isObject(value)) return undefined;
+  const { home, sessionId, cwd, provider, load, meta, model, mode, prompt } =
+    value;
+  if (
+    typeof home !== "string" ||
+    typeof sessionId !== "string" ||
+    typeof cwd !== "string" ||
+    (provider !== "claude" && provider !== "codex")
+  )
+    return undefined;
+  return {
+    home,
+    sessionId,
+    cwd,
+    provider,
+    ...(typeof load === "string" ? { load } : {}),
+    ...(isObject(meta) ? { meta } : {}),
+    ...(typeof model === "string" ? { model } : {}),
+    ...(typeof mode === "string" ? { mode } : {}),
+    ...(typeof prompt === "string" ? { prompt } : {}),
+  };
+}
+
+/** A line of a host's log, or undefined when it is not a whole entry. */
+export function parseAcpLogEntry(value: unknown): AcpLogEntry | undefined {
+  if (!isObject(value) || typeof value.seq !== "number") return undefined;
+  const at = typeof value.at === "string" ? value.at : "";
+  if (value.from === "host")
+    return isObject(value.event) && typeof value.event.type === "string"
+      ? ({
+          seq: value.seq,
+          at,
+          from: "host",
+          event: value.event,
+        } as AcpLogEntry)
+      : undefined;
+  if (value.from !== "agent" && value.from !== "client") return undefined;
+  const message = parseAcpMessage(value.message);
+  return message
+    ? { seq: value.seq, at, from: value.from, message }
+    : undefined;
+}
+
 /** A command as it came off the socket, or undefined when it is not one. */
 export function parseAcpCommand(value: unknown): AcpCommand | undefined {
   if (!isObject(value)) return undefined;
@@ -247,6 +318,8 @@ export class AcpHost {
   private readonly prompts: string[] = [];
   private turnRunning = false;
   private stopping = false;
+  /** The adapter exited: nothing more is sent to it. */
+  private closed = false;
 
   private readonly paths: AcpPaths;
 
@@ -256,11 +329,15 @@ export class AcpHost {
 
   /** Runs the adapter until it exits, and resolves with its exit code. */
   async run(): Promise<number | null> {
-    mkdirSync(dirname(this.paths.log), { recursive: true });
+    mkdirSync(dirname(this.paths.log), { recursive: true, mode: 0o700 });
     let adapter: AdapterProcess;
     try {
+      // First, so a socket that cannot be made leaves no adapter behind.
+      this.listen();
       adapter = spawnAdapter(this.launch);
     } catch (error) {
+      this.server?.stop(true);
+      rmSync(this.paths.socket, { force: true });
       this.report({ type: "error", message: errorText(error) });
       this.report({ type: "exit", code: null });
       return null;
@@ -270,19 +347,25 @@ export class AcpHost {
     const errors = readLines(adapter.stderr, (line) =>
       this.report({ type: "stderr", text: line.slice(0, 2_000) }),
     );
-    this.listen();
     void this.start().catch((error: unknown) => {
-      this.report({ type: "error", message: errorText(error) });
-      this.stop();
+      // An adapter that exited said why itself, on its stderr.
+      if (!this.closed)
+        this.report({ type: "error", message: errorText(error) });
+      this.shutdown();
     });
     const code = await adapter.exited;
     await Promise.allSettled([output, errors]);
-    // Whoever still waits on the adapter gets an answer.
+    this.closed = true;
+    this.server?.stop(true);
+    rmSync(this.paths.socket, { force: true });
+    // Nothing that waited behind the turn runs now, and whoever still
+    // waits on the adapter gets an answer.
+    this.prompts.length = 0;
     for (const resolve of this.waiting.values())
       resolve({ error: { code: -32000, message: "The agent exited" } });
     this.waiting.clear();
-    this.server?.stop(true);
-    rmSync(this.paths.socket, { force: true });
+    // The turn that was cut short logs its end before the exit does.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     this.report({ type: "exit", code });
     return code;
   }
@@ -296,12 +379,22 @@ export class AcpHost {
       },
       clientInfo: { name: "daedalus", version: "1" },
     });
-    const { load, cwd, meta } = this.launch;
-    const opened = await this.request(load ? "session/load" : "session/new", {
-      ...(load ? { sessionId: load } : {}),
-      cwd,
-      mcpServers: [],
-      ...(meta ? { _meta: meta } : {}),
+    const { cwd, meta } = this.launch;
+    const open = (load: string | undefined) =>
+      this.request(load ? "session/load" : "session/new", {
+        ...(load ? { sessionId: load } : {}),
+        cwd,
+        mcpServers: [],
+        ...(meta ? { _meta: meta } : {}),
+      });
+    let load = this.launch.load;
+    const opened = await open(load).catch((error: unknown) => {
+      if (!load) throw error;
+      // A conversation the provider never wrote down, as when the session
+      // had no turn, cannot be loaded: it starts again.
+      this.report({ type: "error", message: errorText(error) });
+      load = undefined;
+      return open(undefined);
     });
     const result = isObject(opened) ? opened : {};
     const acpSessionId =
@@ -331,7 +424,7 @@ export class AcpHost {
     this.turnRunning = true;
     try {
       for (;;) {
-        const text = this.prompts.shift();
+        const text = this.closed ? undefined : this.prompts.shift();
         if (text === undefined) break;
         this.report({ type: "turn_start", text });
         try {
@@ -358,9 +451,10 @@ export class AcpHost {
 
   private handle(command: AcpCommand): AcpReply {
     if (command.type === "stop") {
-      this.stop();
+      this.shutdown();
       return { ok: true };
     }
+    if (this.closed) return { ok: false, error: "The agent exited" };
     const sessionId = this.acpSessionId;
     if (command.type === "prompt") {
       if (!command.text) return { ok: false, error: "The prompt is empty" };
@@ -373,8 +467,8 @@ export class AcpHost {
     }
     if (!sessionId) return { ok: false, error: "The agent is still starting" };
     if (command.type === "cancel") {
-      // Stop means stop: what waited behind this turn does not run either.
-      this.prompts.length = 0;
+      // Only the turn ends. What waits behind it still runs: some of it is
+      // Daedalus's own, such as a workflow brief, and was promised delivered.
       // The protocol has the client answer every open permission request
       // with `cancelled` when it cancels the turn.
       for (const id of this.permissions)
@@ -403,7 +497,8 @@ export class AcpHost {
     return { ok: true };
   }
 
-  private stop(): void {
+  /** Ends the adapter, and with it `run`. Also what a signal asks for. */
+  shutdown(): void {
     if (this.stopping) return;
     this.stopping = true;
     const adapter = this.adapter;
@@ -417,8 +512,8 @@ export class AcpHost {
   private fromAgent(line: string): void {
     let message: AcpMessage;
     try {
-      const parsed: unknown = JSON.parse(line);
-      if (!isObject(parsed)) return;
+      const parsed = parseAcpMessage(JSON.parse(line));
+      if (!parsed) return;
       message = parsed;
     } catch {
       // An adapter that prints something else to stdout has not spoken.
@@ -446,6 +541,7 @@ export class AcpHost {
 
   private request(method: string, params: JsonObject): Promise<unknown> {
     return new Promise((resolve, reject) => {
+      if (this.closed) return reject(new Error("The agent exited"));
       const id = this.nextId++;
       this.waiting.set(id, (message) =>
         message.error
@@ -477,7 +573,10 @@ export class AcpHost {
   ): void {
     const line = { seq: ++this.seq, at: new Date().toISOString(), ...entry };
     try {
-      appendFileSync(this.paths.log, `${JSON.stringify(line)}\n`);
+      // The owner's only: it holds every prompt and answer.
+      appendFileSync(this.paths.log, `${JSON.stringify(line)}\n`, {
+        mode: 0o600,
+      });
     } catch {
       // A log that cannot be written does not end the agent's turn.
     }

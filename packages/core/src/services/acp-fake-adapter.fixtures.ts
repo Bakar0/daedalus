@@ -105,6 +105,8 @@ function handle(message: Message): void {
         modes: { currentModeId: "default", meta: params._meta ?? null },
       },
     });
+  else if (method === "session/load" && params.sessionId === "never-written")
+    send({ id, error: { code: -32002, message: "No such session" } });
   else if (method === "session/load") {
     update({
       sessionUpdate: "user_message_chunk",

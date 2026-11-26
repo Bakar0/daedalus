@@ -202,6 +202,15 @@ export interface AgentSession {
   runner?: SessionRunner;
 }
 
+/**
+ * Whether the session's agent is driven over ACP on this Mac: its host's
+ * socket and log are here. A session moved to a cloud host is not, whatever
+ * it was started as.
+ */
+export const runsOverAcp = (
+  session: Pick<AgentSession, "runner" | "hostId">,
+): boolean => session.runner === "acp" && !session.hostId;
+
 export interface IntegratedTerminal {
   id: UUID;
   name: string;

@@ -783,9 +783,16 @@ const ACP_IDLE_MS = 1_500;
  * streams, the turn's tool calls and the permission it waits on.
  */
 function useAcpLive(client: DesktopClient, sessionId: string, shown: boolean) {
-  const [live, setLive] = useState<AcpLiveDto | undefined>(undefined);
+  // Kept with the session it was read for: another agent's chat never
+  // shows this one's turn while its own is being read.
+  const [read, setRead] = useState<
+    { sessionId: string; live: AcpLiveDto } | undefined
+  >(undefined);
+  const live = read?.sessionId === sessionId ? read.live : undefined;
   const [reads, setReads] = useState(0);
   useEffect(() => {
+    const setLive = (next: AcpLiveDto | undefined) =>
+      setRead(next ? { sessionId, live: next } : undefined);
     if (!shown) {
       setLive(undefined);
       return;

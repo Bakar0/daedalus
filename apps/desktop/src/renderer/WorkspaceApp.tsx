@@ -5699,6 +5699,14 @@ export function WorkspaceApp({
     sessionWorkspaceId: string,
     { focus = true }: { focus?: boolean } = {},
   ) {
+    // An agent over ACP has no terminal: its chat is where it is shown,
+    // from a notification, a toast or the keyboard as from its card.
+    const shown = sessionsById.get(sessionId);
+    if (shown?.runner === "acp" && !shown.hostId && !shown.archivedAt) {
+      expandWorkspace(sessionWorkspaceId);
+      openChatPopup(shown, "agent");
+      return;
+    }
     expandWorkspace(sessionWorkspaceId);
     enterWorkspace(sessionWorkspaceId, "session");
     if (focus) openSession(sessionId);

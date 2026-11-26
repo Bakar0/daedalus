@@ -1,8 +1,9 @@
-import { chmod, mkdir, open, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, open, rm, stat, writeFile } from "node:fs/promises";
 import { emptyAcpLive, reduceAcpLive, type AcpLive } from "../domain/acp-live";
 import { DaedalusError } from "../errors";
 import {
   acpPaths,
+  parseAcpLogEntry,
   type AcpCommand,
   type AcpHostEvent,
   type AcpLaunch,
@@ -28,10 +29,12 @@ function sendCommand(
   return new Promise((resolve, reject) => {
     let buffer = "";
     let settled = false;
+    let open: { end(): void } | undefined;
     const finish = (reply: AcpReply | Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      open?.end();
       if (reply instanceof Error) reject(reply);
       else resolve(reply);
     };
@@ -43,18 +46,19 @@ function sendCommand(
       unix: socketPath,
       socket: {
         open: (socket) => {
-          socket.write(`${JSON.stringify(command)}\n`);
+          open = socket;
+          // Too late: the wait for it already ended.
+          if (settled) socket.end();
+          else socket.write(`${JSON.stringify(command)}\n`);
         },
-        data: (socket, chunk) => {
+        data: (_socket, chunk) => {
           buffer += chunk.toString();
           const at = buffer.indexOf("\n");
           if (at < 0) return;
-          try {
-            finish(JSON.parse(buffer.slice(0, at)) as AcpReply);
-          } catch {
-            finish(new Error("The agent's host sent no reply"));
-          }
-          socket.end();
+          finish(
+            parseReply(buffer.slice(0, at)) ??
+              new Error("The agent's host sent no reply"),
+          );
         },
         close: () =>
           finish(new Error("The agent's host closed the connection")),
@@ -67,6 +71,20 @@ function sendCommand(
   });
 }
 
+function parseReply(line: string): AcpReply | undefined {
+  try {
+    const reply: unknown = JSON.parse(line);
+    if (typeof reply !== "object" || reply === null) return undefined;
+    const { ok, error } = reply as { ok?: unknown; error?: unknown };
+    if (ok === true) return { ok: true };
+    return ok === false
+      ? { ok: false, error: typeof error === "string" ? error : "Refused" }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The app's side of an agent that runs over ACP: it writes what the host is
  * to run, sends the host commands, and reads what the host logged. See
@@ -75,7 +93,7 @@ function sendCommand(
 export class AcpService {
   private readonly lives = new Map<
     string,
-    { offset: number; seq: number; live: AcpLive }
+    { file: string; offset: number; live: AcpLive }
   >();
 
   constructor(private readonly home: string) {}
@@ -87,9 +105,9 @@ export class AcpService {
   /** Writes the file `daedal acp-host` reads, and returns its path. */
   async writeLaunch(launch: AcpLaunch): Promise<string> {
     const paths = this.paths(launch.sessionId);
-    await mkdir(paths.directory, { recursive: true });
-    await Bun.write(paths.launch, JSON.stringify(launch));
-    // It holds the first prompt and the adapter's options.
+    await mkdir(paths.directory, { recursive: true, mode: 0o700 });
+    // The owner's only from the start: it holds the first prompt.
+    await writeFile(paths.launch, JSON.stringify(launch), { mode: 0o600 });
     await chmod(paths.launch, 0o600);
     return paths.launch;
   }
@@ -152,7 +170,8 @@ export class AcpService {
       for (const line of bytes.subarray(0, end).toString("utf8").split("\n")) {
         if (!line) continue;
         try {
-          entries.push(JSON.parse(line) as AcpLogEntry);
+          const entry = parseAcpLogEntry(JSON.parse(line));
+          if (entry) entries.push(entry);
         } catch {
           // A line the host did not finish before it died.
         }
@@ -168,21 +187,32 @@ export class AcpService {
    * since the last one.
    */
   async live(sessionId: string): Promise<AcpLive> {
-    const known = this.lives.get(sessionId) ?? {
-      offset: 0,
-      seq: 0,
-      live: emptyAcpLive(),
-    };
-    const read = await this.events(sessionId, known.offset);
-    let { seq, live } = known;
-    for (const entry of read.entries) {
-      // The numbers start again: a relaunched host began a new log.
-      if (entry.seq <= seq) live = emptyAcpLive();
-      seq = entry.seq;
-      live = reduceAcpLive(live, entry);
+    // A relaunched host starts a new log file, whoever relaunched it: the
+    // file's own identity says so, where its length and numbers may not.
+    const file = await stat(this.paths(sessionId).log).then(
+      (found) => `${found.ino}:${found.birthtimeMs}`,
+      () => undefined,
+    );
+    if (file === undefined) {
+      this.lives.delete(sessionId);
+      return emptyAcpLive();
     }
-    this.lives.set(sessionId, { offset: read.offset, seq, live });
+    const cached = this.lives.get(sessionId);
+    const known =
+      cached?.file === file
+        ? cached
+        : { file, offset: 0, live: emptyAcpLive() };
+    const read = await this.events(sessionId, known.offset);
+    let { live } = known;
+    for (const entry of read.entries) live = reduceAcpLive(live, entry);
+    this.lives.set(sessionId, { file, offset: read.offset, live });
     return live;
+  }
+
+  /** Forgets what was read of sessions that are not among `sessionIds`. */
+  keepOnly(sessionIds: ReadonlySet<string>): void {
+    for (const id of this.lives.keys())
+      if (!sessionIds.has(id)) this.lives.delete(id);
   }
 
   /**
@@ -196,6 +226,8 @@ export class AcpService {
     const deadline = Date.now() + timeoutMs;
     let offset = 0;
     let lastError: string | undefined;
+    /** The adapter's last line on stderr, which is where it says why it quit. */
+    let lastSaid: string | undefined;
     for (;;) {
       const read = await this.events(sessionId, offset);
       offset = read.offset;
@@ -203,11 +235,11 @@ export class AcpService {
         if (entry.from !== "host") continue;
         if (entry.event.type === "ready") return entry.event;
         if (entry.event.type === "error") lastError = entry.event.message;
-        if (entry.event.type === "stderr") lastError ??= entry.event.text;
+        if (entry.event.type === "stderr") lastSaid = entry.event.text;
         if (entry.event.type === "exit")
           throw new DaedalusError(
             "DEPENDENCY",
-            `The agent did not start: ${lastError ?? `it exited with code ${entry.event.code}`}`,
+            `The agent did not start: ${lastError ?? lastSaid ?? `it exited with code ${entry.event.code}`}`,
           );
       }
       if (Date.now() >= deadline)

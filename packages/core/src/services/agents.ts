@@ -35,6 +35,7 @@ import {
   type AutoRebirth,
   type SessionColor,
   type SessionRunner,
+  runsOverAcp,
   type TeamMembership,
   type Workspace,
 } from "../domain";
@@ -2012,7 +2013,10 @@ export class AgentService {
         model:
           input.model ??
           (provider === predecessor.provider
-            ? sessionLaunchModel(predecessor.args)
+            ? runsOverAcp(predecessor)
+              ? // An ACP agent's model is in its launch file, not its arguments.
+                await this.acp.launchModel(predecessor.id)
+              : sessionLaunchModel(predecessor.args)
             : undefined),
         ...(input.account !== undefined ? { account: input.account } : {}),
         message: input.message,
@@ -2322,7 +2326,7 @@ export class AgentService {
       );
       return agent;
     }
-    if (agent.runner === "acp") {
+    if (runsOverAcp(agent)) {
       // A turn of its own, after the one the agent is on. What another
       // session sends says so, as a note left in an inbox does.
       await this.acp.prompt(
@@ -2348,7 +2352,7 @@ export class AgentService {
     options: { clear?: boolean } = {},
   ): Promise<AgentSession> {
     const agent = await this.requireRunning(id);
-    if (agent.runner === "acp") {
+    if (runsOverAcp(agent)) {
       await this.acp.cancel(agent.id);
       return agent;
     }
@@ -2439,7 +2443,7 @@ export class AgentService {
       );
     // Asked first, so the adapter closes its conversation; ending the tmux
     // session then ends a host that did not answer.
-    if (agent.runner === "acp")
+    if (runsOverAcp(agent))
       await this.acp.stop(agent.id).catch(() => undefined);
     await this.sessionHost(agent).stop(agent.tmuxSession, force);
     const stopped: AgentSession = {
@@ -2534,6 +2538,7 @@ export class AgentService {
         "Running agent sessions must be stopped before removal",
       );
     await removeClaudeSettingsFiles(this.config, id).catch(() => undefined);
+    await this.acp.remove(id).catch(() => undefined);
     this.repositories.deleteAgent(id);
     return agent;
   }
@@ -2570,6 +2575,7 @@ export class AgentService {
     )
       await forgetSessionFolders(this.config, agent.workingDirectory);
     await removeClaudeSettingsFiles(this.config, id).catch(() => undefined);
+    await this.acp.remove(id).catch(() => undefined);
     this.repositories.deleteAgent(id);
     return agent;
   }
@@ -2910,7 +2916,7 @@ export class AgentService {
       const adapter = resolveProvider(scoped, {
         provider: agent.provider,
       }).adapter;
-      const overAcp = agent.runner === "acp" && adapter.buildAcpLaunch;
+      const overAcp = runsOverAcp(agent) && adapter.buildAcpLaunch;
       const launchInput: LaunchInput = {
         sessionId: agent.id,
         model: overAcp

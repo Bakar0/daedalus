@@ -3,7 +3,12 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { runCommand, type CommandResult } from "@daedalus/platform";
 import type { DaedalusConfig } from "../config";
-import type { AgentActivityState, AgentSession } from "../domain";
+import {
+  runsOverAcp,
+  type AgentActivityState,
+  type AgentSession,
+} from "../domain";
+import { AcpService } from "./acp";
 import { accountConfig, accountEnvironment } from "./account-homes";
 import { splitLines } from "./cloud-mark";
 import type { SessionChannel } from "./session-channel";
@@ -99,6 +104,10 @@ export class ProviderTeamTransport implements TeamTransport {
 
   async deliver(delivery: TeamDelivery): Promise<void> {
     const { session } = delivery;
+    // An ACP agent takes a channel message as a turn of its own, through
+    // its host, so the turn shows in its chat like any other.
+    if (runsOverAcp(session))
+      return new AcpService(this.config.home).prompt(session.id, delivery.text);
     if (session.provider === "claude") return this.deliverToClaude(delivery);
     if (session.provider === "codex") return this.deliverToCodex(delivery);
     throw new Error(`A ${session.provider} session has no team inbox`);

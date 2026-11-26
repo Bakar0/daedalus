@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import {
   AcpHost,
-  type AcpLaunch,
+  parseAcpLaunch,
   CLOUD_CALLER_VARIABLE,
   CLOUD_MARK_VARIABLE,
   cloudMark,
@@ -2524,8 +2524,15 @@ export async function runCli(
         "VALIDATION",
         "Usage: daedal acp-host <launch-file>",
       );
-    const launch = (await Bun.file(launchPath).json()) as AcpLaunch;
-    return (await new AcpHost(launch).run()) ?? 1;
+    const launch = parseAcpLaunch(await Bun.file(launchPath).json());
+    if (!launch)
+      throw new DaedalusError("VALIDATION", "That is not an ACP launch file");
+    const host = new AcpHost(launch);
+    // Ending the tmux session hangs up on the host: it closes the adapter's
+    // conversation and logs the exit before it goes.
+    for (const signal of ["SIGHUP", "SIGTERM", "SIGINT"] as const)
+      process.on(signal, () => host.shutdown());
+    return (await host.run()) ?? 1;
   }
   const json = inputArgs.includes("--json");
   const args = inputArgs.filter((argument) => argument !== "--json");
